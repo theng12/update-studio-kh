@@ -1,0 +1,33 @@
+{
+  "feedURL": "http://__PUBLISHER_TAILSCALE_IP__:8790/feed.json",
+  "publicKey": "__PUBLIC_KEY_BASE64__",
+  "stateDir": "__HOME__/Library/KHUpdater/state",
+  "machine": "__MACHINE_ID__",
+  "token": "__TOKEN_FROM_ENROL__",
+  "intervalMinutes": 5,
+  "once": false,
+  "stubBase": "__HOME__/Library/KHUpdater/base",
+  "updaterVersion": "1.0.0",
+  "apps": {
+    "gateway": {
+      "bundlePath": "/Applications/gateway-kh.app",
+      "recipe": "gateway",
+      "automatic": false
+    },
+    "hub": {
+      "bundlePath": "/Applications/Studio Hub.app",
+      "recipe": "hub",
+      "automatic": false
+    },
+    "story": {
+      "bundlePath": "/Applications/Story Studio KH.app",
+      "recipe": "story",
+      "automatic": false
+    },
+    "updater": {
+      "bundlePath": "",
+      "recipe": "updater",
+      "automatic": false
+    }
+  }
+}

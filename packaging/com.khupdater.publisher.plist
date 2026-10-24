@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.khupdater.publisher</string>
+  <!-- Loopback for the owner's status page, the Tailscale address for the Macs. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/Library/KHUpdater/bin/khu</string>
+    <string>serve</string>
+    <string>--feed</string><string>__HOME__/Library/KHUpdater/feed</string>
+    <string>--state</string><string>__HOME__/Library/KHUpdater/state</string>
+    <string>--bind</string><string>127.0.0.1</string>
+    <string>--bind</string><string>__TAILSCALE_IP__</string>
+    <string>--port</string><string>8790</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/khupdater-publisher.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/khupdater-publisher.log</string>
+</dict>
+</plist>

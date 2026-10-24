@@ -1,0 +1,4 @@
+build/
+_trash/
+.DS_Store
+.build/
