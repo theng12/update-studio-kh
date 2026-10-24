@@ -1,78 +1,123 @@
 # Design
 
+Reviewed adversarially on 2026-10-24 (reliability: 35 findings; security: 11). Every finding is
+fixed and has a regression test in `Tests/Runner/main.swift`, named R1–R35 / S1–S11.
+
 ## Feed
 
-A directory containing `feed.json`, `feed.json.sig` (ed25519 detached signature over the
-exact bytes of `feed.json`, via CryptoKit `Curve25519.Signing`) and `artifacts/<file>`.
+A directory holding `release.json` and `artifacts/<sha12>-<file>`. `release.json` is the feed
+and its signature in ONE file, replaced by one rename, so a reader never sees a new feed with an
+old signature: `{ "feed": "<base64 of the exact signed bytes>", "signature": "<base64 ed25519>" }`.
 
-`feed.json` schema v1:
+The feed (schema 1):
 
 ```
 { "schema": 1, "published_at": "<ISO8601>", "apps": { "<app_id>": { "version", "file", "sha256", "bytes", "kind", "notes?" } } }
 ```
 
-`khu keygen <dir>` creates `private.key` (0600) and prints the public key (base64).
+Versions are dotted numbers only (`1.4.355`); anything else is refused, never compared as zero.
+
+`khu keygen <dir>` creates `private.key` created with mode 0600 (never wider, even for an instant)
+and prints the public key. It refuses to overwrite an existing key.
 `khu publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--allow-same]`
-copies the artifact in, hashes it, updates `feed.json` (other apps untouched), re-signs.
-Refuses a version that is not newer than the current one for that app unless `--allow-same`.
+runs under `publish.lock`; verifies the existing release with the key's own public key before
+touching it (a tampered or corrupt release is refused, never re-signed or treated as empty);
+stores the artifact under its own hash, so two apps' files never collide; refuses a version not
+newer than the feed's (`--allow-same` re-publishes the same one); and moves `published_at`
+strictly forward.
 
 ## Server
 
-`khu serve --feed <dir> --state <dir> --bind <ip> --port <p>` runs a minimal HTTP/1.1
-server. Routes:
+`khu serve --feed <dir> --state <dir> --bind <ip> [--bind <ip>…] --port <p>`. Every address is
+bound before any is served. Each connection runs on its own thread (at most 32 at once; more get
+503) with a 15 s total read deadline and a 30 s send timeout, and artifacts stream from disk —
+one slow or stalled Mac never holds up the others.
 
-- `GET /feed.json`, `GET /feed.json.sig`, `GET /artifacts/<file>` (no path traversal; only names listed in the feed)
-- `POST /status` (agent reports; authenticated by per-machine bearer token from enrolment)
-- `GET /commands?machine=<id>` (agent fetches pending commands; same auth)
-- `POST /commands/<id>/result`
-- Owner-only (loopback 127.0.0.1/::1 only): `GET /` status page, `POST /api/request-update`, `POST /api/automatic`
+- `GET /release.json`, `GET /artifacts/<file>` (percent-decoded once; only names in the feed)
+- `POST /status`, `GET /commands?machine=<id>`, `POST /commands/<id>/result` — per-Mac bearer
+  token (stored as sha256 only). An order stays pending until its result arrives (the result is
+  the acknowledgement).
+- Owner-only: `GET /`, `POST /api/request-update`, `POST /api/automatic` — loopback peer, a Host of
+  127.0.0.1/localhost/[::1] with this port (no DNS rebinding), and for changes an Origin or
+  Referer from this page (neither is refused). The page sends CSP, `X-Frame-Options: DENY`,
+  `Cache-Control: no-store`. It shows each Mac's effective Automatic setting (the owner's
+  override, else what the Mac's own config says).
 
-State is persisted as JSON files written atomically (temp + fsync + rename).
+State is `state.json`; every change is one read-modify-write under `state.lock` (flock, shared
+by all processes, `khu enrol` included). An unreadable state file is a 503 that says so and is
+left untouched; a change that could not be saved is a 500, never a 200.
 
 ## Agent
 
-`khu agent --config <file>` loops every N minutes (default 5): fetch feed + sig, verify
-signature against the pinned public key (reject unsigned/invalid/rollback-to-older feeds:
-remember highest `published_at` seen), read installed versions from Info.plist paths given per
-app in config, POST status, GET commands. An update runs when (a) a command asks for it, or
-(b) automatic is on for that app and the feed is newer. Install = download artifact to a
-private temp dir, verify bytes+sha256, then run the app's recipe. Never more than one install
-at a time per machine.
+`khu agent --config <file>`. One run at a time per Mac (`agent.lock`); a second refuses. Each run:
+
+1. finish or undo any install a killed run left behind (the install journal);
+2. fetch `release.json`, verify against the pinned key, require schema 1 and a real date; refuse
+   a feed older than the newest seen, a different feed with the same date, or one dated more than
+   a day ahead (which is then not remembered);
+3. report installed versions, health and its own Automatic defaults;
+4. re-send any result the server did not take last time; fetch orders.
+
+An order runs once (by id; a redelivered one is re-reported, not re-run). An order for the
+version already installed is `current`; for an older one, `refused` (no downgrade). Automatic
+installs a newer version unless that exact artifact already failed here (an order retries it).
+Artifacts stream to `downloads/<app>/`, refused past their signed size, then checked against
+the signed size and SHA-256. The previous download moves to `_trash`.
+
+`khu agent` writes a heartbeat every 30 s on its own thread (so a long install never silences
+it), carrying the nonce the stub gave this child.
 
 ## Recipes
 
-- `app-dmg`: attach DMG read-only/nobrowse, find exactly one `.app`, verify
-  `CFBundleShortVersionString` equals feed version, quit running app politely (bounded
-  wait), move installed bundle to rollback dir (keep ONE previous), copy new bundle with
-  `ditto`, detach, relaunch, health check within bounded time; on failure restore previous
-  bundle + relaunch, report `rolled_back`.
-- `gateway`: app-dmg plus stop the Gateway server process first (PID from
-  `GET http://127.0.0.1:8787/health` → `pid`; SIGTERM, bounded wait, report+abort if it
-  won't stop — never SIGKILL). Health = `/health` returns 200 within 120s after relaunch.
-  Never delete any data directory.
-- `story`, `hub`: status only. "Updated by its own updater." No install from KH Updater.
-- `updater`: self-update via the stub (see below).
+`app-dmg` and `gateway`, in this order:
 
-All shell-outs use absolute paths, bounded timeouts, captured output. No `sudo`.
+1. recover any interrupted install for the app;
+2. attach the DMG (plist output), require exactly one `.app`, the feed's exact version, the
+   expected bundle identifier (`bundleID` in the config, else the installed app's), and a
+   runnable executable; copy it with `ditto` into `.<name>.khu-staging` beside the installed
+   app and check the copy — all before anything is stopped; detach;
+3. write the install journal; quit the app and stop its service. A refusal relaunches what was
+   running and changes nothing;
+4. installed → rollback (the previous rollback to `_trash`), staging → installed, the journal
+   moving forward at each step; any failure restores the previous bundle, relaunches it and says
+   exactly what was restored — or, loudly, that it could not be;
+5. relaunch only if it was running, and require it healthy as the new version;
+6. otherwise quit and stop both again (else `rollback_blocked`, both bundles kept), put the
+   previous bundle back, prove it is the previous version, and require it healthy as that.
+
+A process belongs to an app only if its executable's real path is inside the bundle
+(`proc_pidpath`, never a regex). Quitting passes the bundle id to `osascript` as an argument,
+never inside the script. The Gateway is stopped by the PID its `/health` reports only when that
+PID runs from inside this Gateway's bundle (SIGTERM only), and counts as stopped once the port
+stays quiet; it is healthy when `/health` answers 200 from a process of this bundle, the bundle
+on disk is the expected version, and the app runs.
+
+`story`, `hub`: status only — those apps keep their own updaters. `updater`: self-update (below).
+
+Helpers run with absolute paths and hard deadlines: both pipes are drained while they run; on a
+deadline they get SIGTERM, then SIGKILL, and are reaped before the error is raised. No `sudo`.
+Nothing is deleted: superseded files go to `_trash/`.
 
 ## Stub
 
-`khu-stub` layout under a base dir: `versions/<version>/khu`, `current` -> symlink,
-`previous` -> symlink. The stub runs `current/khu agent ...` as a child. Self-update
-(by the agent's `updater` recipe): place new binary in `versions/<v>/`, verify hash, point
-`previous` at old, `current` at new, exit so stub restarts. Stub rolls back (`current := previous`)
-when the new version exits non-zero 3 times within 5 minutes of a switch OR writes no heartbeat
-within 2 minutes of a switch. Stub is small, has no network code, changes rarely.
+`khu-stub` keeps `current` alive under `versions/<v>/khu`, `current` and `previous` symlinks.
+Links change by renaming a fresh symlink over the old one (old one copied to `_trash`), so a
+kill at any instant leaves whole versions; `previous` moves before `current`. Installing the
+version already running is a no-op, and a version directory is never overwritten.
 
-## Threat notes
+Every new target `current` resolves to — first start, self-update, rollback — starts a probation:
+three non-zero exits within 5 minutes, or no heartbeat from THIS child (matching nonce and pid)
+within 2 minutes, put `previous` back. A quiet window with a heartbeat settles it. A missing or
+unrunnable `current` falls back to a usable `previous`; a dangling or identical `previous` is no
+fallback, and with none the running child is left alone rather than killed for nothing.
+Live waits use a monotonic clock.
 
-- Tailnet-only transport (no public exposure).
-- Signed feed (ed25519 over exact bytes).
-- Owner routes loopback-only (127.0.0.1/::1).
-- Per-machine bearer tokens stored only as sha256 on the server.
-- No sudo, no path traversal, artifacts only served when listed in the feed.
-- Atomic state writes (temp + fsync + rename).
-- Rollback preserved for one previous app bundle.
+## Limits (not fixed, stated)
+
+- Persisted probation times are wall-clock; a clock jump during a probation can lengthen or
+  shorten it once.
+- `_trash` grows with each install (previous downloads and bundles) until the owner empties it.
+- The status page has no CSRF token: it relies on loopback-only, Host and Origin/Referer checks.
 
 ## SwiftPM note
 

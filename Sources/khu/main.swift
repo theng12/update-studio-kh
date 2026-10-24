@@ -20,12 +20,18 @@ struct KHUMain {
         case "keygen":
             guard args.count >= 2 else { usage() }
             let dir = URL(fileURLWithPath: args[1])
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let key = Signing.generateKeyPair()
             let keyFile = dir.appendingPathComponent("private.key")
-            try? Signing.savePrivateKey(key.privateKey, to: keyFile)
-            print("public key: \(key.publicKeyBase64)")
-            print("private key: \(keyFile.path)")
+            do {
+                guard !FileManager.default.fileExists(atPath: keyFile.path) else {
+                    throw khuFail("\(keyFile.path) already exists; a new key would orphan every agent pinned to the old one")
+                }
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                        attributes: [.posixPermissions: 0o700])
+                let key = Signing.generateKeyPair()
+                try Signing.savePrivateKey(key.privateKey, to: keyFile)
+                print("public key: \(key.publicKeyBase64)")
+                print("private key: \(keyFile.path)")
+            } catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) }
         case "publish":
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, allowSame = false
             var i = 1
@@ -77,10 +83,16 @@ struct KHUMain {
                 i+=1
             }
             guard let f=feed, let s=state else { usage() }
+            // Every address is bound before any is served, so a bad --bind fails the start.
+            var servers: [(FeedServer, Int32)] = []
             for address in (binds.isEmpty ? ["127.0.0.1"] : binds) {
                 let srv = FeedServer(feedDir: URL(fileURLWithPath: f), stateDir: URL(fileURLWithPath: s), bind: address, port: port)
-                Thread { do { try srv.serve() } catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) } }.start()
+                do { servers.append((srv, try srv.listen())) }
+                catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) }
                 print("serving on \(address):\(port)")
+            }
+            for (srv, fd) in servers {
+                Thread { do { try srv.serve(on: fd) } catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) } }.start()
             }
             while true { Thread.sleep(forTimeInterval: 3600) }
         case "agent":
@@ -101,21 +113,30 @@ struct KHUMain {
                 loaded.once = once || loaded.once
                 cfg = loaded
             } catch { FileHandle.standardError.write(Data("cannot read the agent config \(c): \(error)\n".utf8)); exit(1) }
-            // The stub rolls a fresh version back unless it hears a heartbeat within 2 minutes, so beat every 30 s.
-            let heartbeat = cfg.stubBase.map { StubLayout(base: URL(fileURLWithPath: $0)).heartbeatFile }
-            func beat() { if let h = heartbeat { try? writeHeartbeat(to: h, at: Date(), version: cfg.updaterVersion, pid: getpid()) } }
+            // The stub rolls a fresh version back unless it hears from this very child within 2 minutes.
+            // The beat runs on its own thread, so a long download or install never silences it.
+            let mine = Agent.selfVersion(config: cfg)
+            if let base = cfg.stubBase {
+                let file = StubLayout(base: URL(fileURLWithPath: base)).heartbeatFile
+                Thread {
+                    while true {
+                        do { try writeHeartbeat(to: file, at: Date(), version: mine, pid: getpid()) }
+                        catch { FileHandle.standardError.write(Data("heartbeat not written: \(error)\n".utf8)) }
+                        Thread.sleep(forTimeInterval: 30)
+                    }
+                }.start()
+            }
             repeat {
-                beat()
                 do {
-                    let r = try Agent.runOnce(config: cfg, http: URLSessionHTTPClient(), shell: SystemShell())
+                    let r = try Agent.runOnce(config: cfg)
                     print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
+                    for note in r.notes { print("note: \(note)") }
                     if r.restartRequested { print("updater switched to a new version; exiting so the stub starts it"); exit(0) }
                 } catch {
                     FileHandle.standardError.write(Data("agent error: \(error)\n".utf8))
                 }
                 if cfg.once { break }
-                let until = Date().addingTimeInterval(Double(max(1, cfg.intervalMinutes) * 60))
-                while Date() < until { beat(); Thread.sleep(forTimeInterval: 30) }
+                Thread.sleep(forTimeInterval: Double(max(1, cfg.intervalMinutes) * 60))
             } while true
         default:
             usage()

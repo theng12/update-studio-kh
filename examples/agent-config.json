@@ -1,5 +1,5 @@
 {
-  "feedURL": "http://__PUBLISHER_TAILSCALE_IP__:8790/feed.json",
+  "feedURL": "http://__PUBLISHER_TAILSCALE_IP__:8790/release.json",
   "publicKey": "__PUBLIC_KEY_BASE64__",
   "stateDir": "__HOME__/Library/KHUpdater/state",
   "machine": "__MACHINE_ID__",
@@ -7,12 +7,12 @@
   "intervalMinutes": 5,
   "once": false,
   "stubBase": "__HOME__/Library/KHUpdater/base",
-  "updaterVersion": "1.0.0",
   "apps": {
     "gateway": {
       "bundlePath": "/Applications/gateway-kh.app",
       "recipe": "gateway",
-      "automatic": false
+      "automatic": false,
+      "bundleID": "__GATEWAY_BUNDLE_ID__"
     },
     "hub": {
       "bundlePath": "/Applications/Studio Hub.app",

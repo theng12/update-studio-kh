@@ -46,6 +46,14 @@ public enum ISO {
     }
 }
 
+/// Seconds on a clock that neither sleep nor a clock correction moves backwards or jumps.
+/// Every live wait (health, stop, shell, poll) is measured on this, never on `Date`.
+public enum Mono {
+    public static func now() -> TimeInterval {
+        TimeInterval(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) / 1_000_000_000
+    }
+}
+
 /// State files are written temp + fsync + rename so a reader never sees a half-written file.
 public enum AtomicFile {
     @discardableResult
@@ -56,23 +64,42 @@ public enum AtomicFile {
         let directory = url.deletingLastPathComponent()
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         let temporary = directory.appendingPathComponent(".\(url.lastPathComponent).khu-tmp-\(UUID().uuidString)")
-        guard fileManager.createFile(atPath: temporary.path, contents: data) else {
-            throw khuFail("cannot create temporary file at \(temporary.path)")
+        // Created with its final mode: a private key must never exist, even for an instant, readable by others.
+        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, permissions ?? 0o644)
+        guard fd >= 0 else { throw khuFail("cannot create temporary file at \(temporary.path) (errno \(errno))") }
+        if let permissions { fchmod(fd, permissions) }  // the umask may have narrowed or widened the open() mode
+        var ok = true
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var sent = 0
+            while sent < data.count {
+                let n = Darwin.write(fd, base + sent, data.count - sent)
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { ok = false; return }
+                sent += n
+            }
         }
-        if let permissions { chmod(temporary.path, permissions) }
-        let handle = try FileHandle(forWritingTo: temporary)
-        try handle.synchronize()
-        try handle.close()
+        if ok && fsync(fd) != 0 { ok = false }
+        close(fd)
+        guard ok else {
+            _ = try? Trash.move(temporary, into: Trash.root(in: directory), fileManager: fileManager)
+            throw khuFail("cannot write \(url.path) (errno \(errno))")
+        }
         if rename(temporary.path, url.path) != 0 {
-            try? fileManager.removeItem(at: temporary)
-            throw khuFail("cannot replace \(url.path) (errno \(errno))")
+            let code = errno
+            _ = try? Trash.move(temporary, into: Trash.root(in: directory), fileManager: fileManager)
+            throw khuFail("cannot replace \(url.path) (errno \(code))")
         }
-        let directoryDescriptor = open(directory.path, O_RDONLY)
-        if directoryDescriptor >= 0 {
-            fsync(directoryDescriptor)
-            close(directoryDescriptor)
-        }
+        syncDirectory(directory)
         return url
+    }
+
+    public static func syncDirectory(_ directory: URL) {
+        let descriptor = open(directory.path, O_RDONLY)
+        if descriptor >= 0 {
+            fsync(descriptor)
+            close(descriptor)
+        }
     }
 
     public static func writeJSON<T: Encodable>(_ value: T,
@@ -93,6 +120,26 @@ public enum AtomicFile {
         } catch {
             throw khuFail("cannot read \(url.path): \(error)")
         }
+    }
+}
+
+/// An exclusive lock shared by every process on this Mac (flock on a file), held for the length
+/// of `body`. Two agents, an agent and `--once`, or `serve` and `enrol` can then never interleave
+/// a read-modify-write or an install. The kernel drops it if the holder dies.
+public enum FileLock {
+    public static func withExclusive<T>(_ url: URL, wait: Bool = true, _ body: () throws -> T) throws -> T {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fd = open(url.path, O_RDWR | O_CREAT, 0o600)
+        guard fd >= 0 else { throw khuFail("cannot open lock \(url.path) (errno \(errno))") }
+        defer { close(fd) }
+        var result: Int32
+        repeat { result = flock(fd, LOCK_EX | (wait ? 0 : LOCK_NB)) } while result != 0 && errno == EINTR
+        guard result == 0 else {
+            throw khuFail(errno == EWOULDBLOCK ? "another KH Updater process holds \(url.lastPathComponent)"
+                                               : "cannot lock \(url.path) (errno \(errno))")
+        }
+        defer { flock(fd, LOCK_UN) }
+        return try body()
     }
 }
 
@@ -137,7 +184,8 @@ public enum Trash {
         try fileManager.createDirectory(at: destination.deletingLastPathComponent(),
                                         withIntermediateDirectories: true)
         var suffix = 1
-        while fileManager.fileExists(atPath: destination.path) {
+        while fileManager.fileExists(atPath: destination.path)
+                || (try? fileManager.destinationOfSymbolicLink(atPath: destination.path)) != nil {
             destination = destination.deletingLastPathComponent()
                 .appendingPathComponent("\(url.lastPathComponent)-\(suffix)")
             suffix += 1

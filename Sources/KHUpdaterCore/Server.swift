@@ -5,85 +5,195 @@ import Darwin
 
 public struct HTTPRequest {
     public var method: String
+    /// The path without its query, percent-decoded once.
     public var path: String
+    public var query: [String: String]
     public var headers: [String: String]
     public var body: Data
+
+    public init(method: String, path: String, headers: [String: String] = [:], body: Data = Data()) {
+        let (decoded, query) = HTTP.split(path)
+        self.method = method; self.path = decoded; self.query = query; self.headers = headers; self.body = body
+    }
+}
+
+public enum HTTPBody {
+    case data(Data)
+    case file(URL, Int64)
+}
+
+public struct HTTPResponse {
+    public var status: Int
+    public var contentType: String
+    public var body: HTTPBody
+    public var headers: [String: String] = [:]
+
+    public init(_ status: Int, _ contentType: String = "text/plain; charset=utf-8", _ text: String) {
+        self.status = status; self.contentType = contentType; self.body = .data(Data(text.utf8))
+    }
+    public init(_ status: Int, _ contentType: String, data: Data) {
+        self.status = status; self.contentType = contentType; self.body = .data(data)
+    }
+    public var data: Data { if case .data(let d) = body { return d }; return Data() }
 }
 
 public enum HTTP {
+    public static func split(_ target: String) -> (String, [String: String]) {
+        let parts = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let path = String(parts.first ?? "").removingPercentEncoding ?? String(parts.first ?? "")
+        var query: [String: String] = [:]
+        if parts.count == 2 {
+            for pair in parts[1].split(separator: "&") {
+                let kv = pair.split(separator: "=", maxSplits: 1).map {
+                    String($0).replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? ""
+                }
+                if kv.count == 2 { query[kv[0]] = kv[1] }
+            }
+        }
+        return (path, query)
+    }
+
     public static func parse(_ data: Data) -> HTTPRequest? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        let parts = text.components(separatedBy: "\r\n\r\n")
-        let head = parts.first ?? ""
-        let body = parts.dropFirst().joined(separator: "\r\n\r\n")
+        guard let end = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
+        let head = String(decoding: data[..<end.lowerBound], as: UTF8.self)
         let lines = head.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return nil }
-        let rl = requestLine.split(separator: " ")
-        guard rl.count >= 2 else { return nil }
+        let requestLine = (lines.first ?? "").split(separator: " ")
+        guard requestLine.count >= 2 else { return nil }
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             if let idx = line.firstIndex(of: ":") {
-                headers[String(line[..<idx]).lowercased().trimmingCharacters(in: .whitespaces)] = String(line[line.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
+                headers[String(line[..<idx]).lowercased().trimmingCharacters(in: .whitespaces)] =
+                    String(line[line.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
             }
         }
-        return HTTPRequest(method: String(rl[0]), path: String(rl[1]), headers: headers, body: Data(body.utf8))
+        return HTTPRequest(method: String(requestLine[0]), path: String(requestLine[1]), headers: headers,
+                           body: Data(data[end.upperBound...]))
     }
 
-    /// Read one request: the headers, then exactly Content-Length body bytes (at most 1 MiB, bounded by
-    /// the socket's receive timeout). nil for a request that never completes or is too large.
-    public static func readRequest(from fd: Int32, limit: Int = 1 << 20) -> Data? {
+    /// Read one request — headers (at most 64 KiB), then exactly Content-Length body bytes (at
+    /// most `limit`) — within `deadline` seconds IN TOTAL. A client trickling one byte at a time
+    /// is cut off at the deadline instead of holding the connection for ever.
+    public static func readRequest(from fd: Int32, limit: Int = 1 << 20, deadline: TimeInterval = 15) -> Data? {
         var data = Data()
         var chunk = [UInt8](repeating: 0, count: 65536)
         let separator = Data("\r\n\r\n".utf8)
-        while data.count <= limit + 65536 {
+        let until = Mono.now() + deadline
+        while true {
             if let end = data.range(of: separator) {
                 let head = String(decoding: data[..<end.lowerBound], as: UTF8.self).lowercased()
                 let length = head.split(separator: "\r\n").first { $0.hasPrefix("content-length:") }
                     .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
                 guard length >= 0, length <= limit else { return nil }
                 if data.count - end.upperBound >= length { return data.prefix(end.upperBound + length) }
+            } else if data.count > 65536 {
+                return nil
             }
+            let remaining = until - Mono.now()
+            guard remaining > 0 else { return nil }
+            var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&pfd, 1, Int32(min(remaining, 15) * 1000))
+            if ready < 0 && errno == EINTR { continue }
+            guard ready > 0 else { return nil }
             let n = read(fd, &chunk, chunk.count)
             if n <= 0 { return nil }
             data.append(contentsOf: chunk[0..<n])
         }
-        return nil
     }
 
-    /// Write every byte (a large artifact does not go out in one write).
-    public static func writeAll(_ fd: Int32, _ data: Data) {
-        data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
+    /// Write every byte; false when the peer stops reading (SO_SNDTIMEO) or goes away.
+    @discardableResult
+    public static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
+        data.withUnsafeBytes { raw -> Bool in
+            guard let base = raw.baseAddress else { return true }
             var sent = 0
             while sent < data.count {
                 let n = write(fd, base + sent, data.count - sent)
-                if n <= 0 { if errno == EINTR { continue }; return }
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { return false }
                 sent += n
             }
+            return true
         }
     }
 
-    public static func response(status: Int, contentType: String = "text/plain", body: Data) -> Data {
-        let statusText: String
-        switch status {
-        case 200: statusText = "OK"
-        case 204: statusText = "No Content"
-        case 303: statusText = "See Other"
-        case 400: statusText = "Bad Request"
-        case 401: statusText = "Unauthorized"
-        case 403: statusText = "Forbidden"
-        case 404: statusText = "Not Found"
-        case 405: statusText = "Method Not Allowed"
-        default: statusText = "Error"
-        }
-        var out = "HTTP/1.1 \(status) \(statusText)\r\n"
-        if status == 303 { out += "Location: \(String(decoding: body, as: UTF8.self))\r\n" }
-        out += "Content-Type: \(contentType)\r\n"
-        out += "Content-Length: \(body.count)\r\n"
+    static let reasons = [200: "OK", 303: "See Other", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+                          404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error", 503: "Service Unavailable"]
+
+    public static func head(_ response: HTTPResponse, length: Int64) -> Data {
+        var out = "HTTP/1.1 \(response.status) \(reasons[response.status] ?? "Error")\r\n"
+        out += "Content-Type: \(response.contentType)\r\n"
+        out += "Content-Length: \(length)\r\n"
+        out += "X-Content-Type-Options: nosniff\r\n"
+        out += "Cache-Control: no-store\r\n"
+        for (k, v) in response.headers.sorted(by: { $0.key < $1.key }) { out += "\(k): \(v)\r\n" }
         out += "Connection: close\r\n\r\n"
-        var d = Data(out.utf8)
-        d.append(body)
-        return d
+        return Data(out.utf8)
+    }
+
+    /// Send a response; a file body is streamed in 1 MiB pieces rather than loaded whole.
+    public static func send(_ fd: Int32, _ response: HTTPResponse) {
+        switch response.body {
+        case .data(let data):
+            var out = head(response, length: Int64(data.count))
+            out.append(data)
+            writeAll(fd, out)
+        case .file(let url, let size):
+            guard let handle = try? FileHandle(forReadingFrom: url) else {
+                send(fd, HTTPResponse(404, "text/plain; charset=utf-8", "not found")); return
+            }
+            defer { try? handle.close() }
+            guard writeAll(fd, head(response, length: size)) else { return }
+            var sent: Int64 = 0
+            while sent < size, let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+                guard writeAll(fd, chunk) else { return }
+                sent += Int64(chunk.count)
+            }
+        }
+    }
+}
+
+public enum OwnerAccess {
+    public static func isSameOrigin(_ origin: String, port: Int) -> Bool {
+        origins(port).contains(origin)
+    }
+
+    static func origins(_ port: Int) -> [String] {
+        ["http://127.0.0.1:\(port)", "http://localhost:\(port)", "http://[::1]:\(port)"]
+    }
+
+    /// The Host a browser sends for this page. Anything else is a rebinding attempt (a name that
+    /// resolves to 127.0.0.1 but is not ours).
+    public static func isAllowedHost(_ host: String?, port: Int) -> Bool {
+        guard let host else { return false }
+        return ["127.0.0.1:\(port)", "localhost:\(port)", "[::1]:\(port)"].contains(host.lowercased())
+    }
+
+    /// A state-changing owner request must say where it came from, and it must be this page:
+    /// Origin when present, else Referer. Neither is refused.
+    public static func isSameSite(_ headers: [String: String], port: Int) -> Bool {
+        if let origin = headers["origin"] { return isSameOrigin(origin, port: port) }
+        if let referer = headers["referer"] { return origins(port).contains { referer == $0 || referer.hasPrefix($0 + "/") } }
+        return false
+    }
+
+    /// The body's fields, from JSON (`on` may be a bool) or a urlencoded form.
+    public static func fields(_ req: HTTPRequest) -> [String: String] {
+        if let obj = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any] {
+            return obj.reduce(into: [:]) { out, kv in
+                if let s = kv.value as? String { out[kv.key] = s } else if let b = kv.value as? Bool { out[kv.key] = b ? "true" : "false" }
+            }
+        }
+        let text = String(decoding: req.body, as: UTF8.self)
+        var out: [String: String] = [:]
+        for pair in text.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1).map { String($0).replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? "" }
+            if kv.count == 2 { out[kv[0]] = kv[1] }
+        }
+        return out
+    }
+
+    public static func isLoopback(_ remote: String) -> Bool {
+        remote == "127.0.0.1" || remote == "::1"
     }
 }
 
@@ -92,154 +202,177 @@ public enum ServerDecision {
     public static func ownerRouteAllowed(remote: String) -> Bool { isLoopbackRemote(remote) }
 }
 
-public final class FeedServer {
+public final class FeedServer: @unchecked Sendable {
     public let feedDir: URL
     public let stateDir: URL
     public let bind: String
     public let port: Int
-    private var listener: Int32 = -1
+    public let maxConnections: Int
 
-    public init(feedDir: URL, stateDir: URL, bind: String, port: Int) {
+    public init(feedDir: URL, stateDir: URL, bind: String, port: Int, maxConnections: Int = 32) {
         self.feedDir = feedDir
         self.stateDir = stateDir
         self.bind = bind
         self.port = port
+        self.maxConnections = maxConnections
     }
 
-    public func handleRequest(_ req: HTTPRequest, remote: String) -> (Int, String, Data) {
-        // auth for agent routes
-        let isOwner = ServerDecision.ownerRouteAllowed(remote: remote)
-        // feed
-        if req.method == "GET" {
-            if req.path == "/feed.json" {
-                if let d = try? Data(contentsOf: feedDir.appendingPathComponent("feed.json")) { return (200, "application/json", d) }
-                return (404, "text/plain", Data("not found".utf8))
+    static func text(_ status: Int, _ message: String) -> HTTPResponse { HTTPResponse(status, "text/plain; charset=utf-8", message) }
+    static let ok = HTTPResponse(200, "application/json", "{}")
+
+    /// A state transaction, answered honestly: an unreadable state file is a 503 that says so (the
+    /// file is left as it is), and a change that could not be saved is a 500 — never a 200.
+    func transact(_ change: (inout ServerState) throws -> HTTPResponse) -> HTTPResponse {
+        do {
+            return try FileLock.withExclusive(StateStore.lockFile(in: stateDir)) {
+                let state: ServerState
+                do { state = try StateStore.load(from: stateDir) } catch {
+                    return Self.text(503, "the publisher's state file cannot be read (\(error)); it was left untouched")
+                }
+                var next = state
+                let response = try change(&next)
+                if next != state {
+                    do { try StateStore.save(next, to: stateDir) } catch {
+                        return Self.text(500, "could not save the publisher's state: \(error)")
+                    }
+                }
+                return response
             }
-            if req.path == "/feed.json.sig" {
-                if let d = try? Data(contentsOf: feedDir.appendingPathComponent("feed.json.sig")) { return (200, "application/octet-stream", d) }
-                return (404, "text/plain", Data("not found".utf8))
+        } catch {
+            return Self.text(500, "\(error)")
+        }
+    }
+
+    func machineToken(_ req: HTTPRequest) -> String? {
+        guard let h = req.headers["authorization"], h.lowercased().hasPrefix("bearer ") else { return nil }
+        return String(h.dropFirst(7))
+    }
+
+    func authorised(_ state: ServerState, _ machine: String, _ token: String) -> Bool {
+        guard let hash = state.machines[machine]?.tokenHash else { return false }
+        return hash == Enrolment.sha256Hex(token)
+    }
+
+    public func handleRequest(_ req: HTTPRequest, remote: String) -> HTTPResponse {
+        if req.method == "GET" {
+            if req.path == "/release.json" {
+                let url = FeedPublisher.releaseFile(in: feedDir)
+                guard let data = try? Data(contentsOf: url) else { return Self.text(404, "nothing published yet") }
+                return HTTPResponse(200, "application/json", data: data)
             }
             if req.path.hasPrefix("/artifacts/") {
                 let name = String(req.path.dropFirst("/artifacts/".count))
-                if let safe = try? SafeName.component(name, what: "artifact") {
-                    // ensure listed
-                    if let feed = FeedPublisher.loadFeed(from: feedDir), feed.apps.values.contains(where: { $0.file == safe }) {
-                        let url = feedDir.appendingPathComponent("artifacts").appendingPathComponent(safe)
-                        if let d = try? Data(contentsOf: url) { return (200, "application/octet-stream", d) }
-                    }
+                guard let safe = try? SafeName.component(name, what: "artifact"),
+                      let feed = FeedPublisher.loadFeed(from: feedDir), feed.apps.values.contains(where: { $0.file == safe }) else {
+                    return Self.text(404, "not found")
                 }
-                return (404, "text/plain", Data("not found".utf8))
-            }
-            if req.path == "/" {
-                if !isOwner { return (403, "text/plain", Data("forbidden".utf8)) }
-                return (200, "text/html", Data(statusHTML().utf8))
+                let url = feedDir.appendingPathComponent("artifacts").appendingPathComponent(safe)
+                guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber else {
+                    return Self.text(404, "not found")
+                }
+                return HTTPResponse(status: 200, contentType: "application/octet-stream", body: .file(url, size.int64Value))
             }
         }
-        // agent auth
-        func authToken() -> String? {
-            if let h = req.headers["authorization"], h.lowercased().hasPrefix("bearer ") {
-                return String(h.dropFirst(7))
-            }
-            return nil
-        }
-        func authMachine() -> (String?, String?) {
-            // returns (machine, error)
-            guard let tok = authToken() else { return (nil, "missing token") }
-            // machine from query or body
-            return (nil, nil)
-        }
+
         if req.method == "POST" && req.path == "/status" {
-            guard let tok = authToken() else { return (401, "text/plain", Data("missing token".utf8)) }
-            // simple: expect machine in body
-            let machine = (try? JSONSerialization.jsonObject(with: req.body) as? [String: Any])?["machine"] as? String
-            guard let m = machine else { return (400, "text/plain", Data("missing machine".utf8)) }
-            let state = try? StateStore.load(from: stateDir)
-            var st = state ?? ServerState()
-            var ms = st.machines[m] ?? MachineState(machine: m)
-            guard ms.tokenHash == Enrolment.sha256Hex(tok) else { return (401, "text/plain", Data("wrong token".utf8)) }
-            // update fields
-            if let inst = (try? JSONSerialization.jsonObject(with: req.body) as? [String: Any])?["installed"] as? [String: String] { ms.installed = inst }
-            if let health = (try? JSONSerialization.jsonObject(with: req.body) as? [String: Any])?["health"] as? [String: String] { ms.health = health }
-            ms.lastSeen = ISO.string(Date())
-            st.machines[m] = ms
-            try? StateStore.save(st, to: stateDir)
-            return (200, "application/json", Data("{}".utf8))
+            guard let token = machineToken(req) else { return Self.text(401, "missing token") }
+            guard let body = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
+                  let machine = body["machine"] as? String else { return Self.text(400, "missing machine") }
+            return transact { state in
+                guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
+                var ms = state.machines[machine]!
+                if let installed = body["installed"] as? [String: String] { ms.installed = installed }
+                if let health = body["health"] as? [String: String] { ms.health = health }
+                if let defaults = body["automatic_default"] as? [String: Bool] { ms.automaticDefault = defaults }
+                ms.lastSeen = ISO.string(Date())
+                state.machines[machine] = ms
+                return Self.ok
+            }
         }
-        if req.method == "GET" && req.path.hasPrefix("/commands") {
-            let machine = queryParam(req.path, "machine")
-            guard let m = machine else { return (400, "text/plain", Data("missing machine".utf8)) }
-            guard let tok = authToken() else { return (401, "text/plain", Data("missing token".utf8)) }
-            var state = (try? StateStore.load(from: stateDir)) ?? ServerState()
-            var ms = state.machines[m] ?? MachineState(machine: m)
-            guard ms.tokenHash == Enrolment.sha256Hex(tok) else { return (401, "text/plain", Data("wrong token".utf8)) }
-            let cmds = ms.pending
-            ms.pending = []
-            state.machines[m] = ms
-            try? StateStore.save(state, to: stateDir)
-            let data = (try? JSON.encode(CommandsReply(commands: cmds, automatic: ms.automatic))) ?? Data("{}".utf8)
-            return (200, "application/json", data)
+        if req.method == "GET" && req.path == "/commands" {
+            guard let machine = req.query["machine"] else { return Self.text(400, "missing machine") }
+            guard let token = machineToken(req) else { return Self.text(401, "missing token") }
+            // Read-only: an order stays pending until its result is reported.
+            return transact { state in
+                guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
+                let ms = state.machines[machine]!
+                return HTTPResponse(200, "application/json", data: JSON.encode(CommandsReply(commands: ms.pending, automatic: ms.automatic)))
+            }
         }
         if req.method == "POST" && req.path.hasPrefix("/commands/") && req.path.hasSuffix("/result") {
             let id = String(req.path.dropFirst("/commands/".count).dropLast("/result".count))
-            guard let tok = authToken() else { return (401, "text/plain", Data("missing token".utf8)) }
-            let machine = (try? JSONSerialization.jsonObject(with: req.body) as? [String: Any])?["machine"] as? String
-            guard let m = machine else { return (400, "text/plain", Data("missing machine".utf8)) }
-            var state = (try? StateStore.load(from: stateDir)) ?? ServerState()
-            var ms = state.machines[m] ?? MachineState(machine: m)
-            guard ms.tokenHash == Enrolment.sha256Hex(tok) else { return (401, "text/plain", Data("wrong token".utf8)) }
-            // store last result
-            if let obj = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any] {
-                let status = obj["status"] as? String ?? ""
-                let reason = obj["reason"] as? String
-                ms.lastResult = CommandResult(commandId: id, status: status, reason: reason)
-                if let app = obj["app"] as? String, !app.isEmpty {
+            guard !id.isEmpty, !id.contains("/") else { return Self.text(404, "not found") }
+            guard let token = machineToken(req) else { return Self.text(401, "missing token") }
+            guard let body = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
+                  let machine = body["machine"] as? String else { return Self.text(400, "missing machine") }
+            return transact { state in
+                guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
+                var ms = state.machines[machine]!
+                let result = CommandResult(commandId: id, status: body["status"] as? String ?? "", reason: body["reason"] as? String)
+                ms.lastResult = result
+                if let app = body["app"] as? String, !app.isEmpty {
                     var all = ms.lastResults ?? [:]
-                    all[app] = CommandResult(commandId: id, status: status, reason: reason)
+                    all[app] = result
                     ms.lastResults = all
                 }
+                ms.pending.removeAll { $0.id == id }  // the acknowledgement
+                state.machines[machine] = ms
+                return Self.ok
             }
-            state.machines[m] = ms
-            try? StateStore.save(state, to: stateDir)
-            return (200, "application/json", Data("{}".utf8))
         }
-        // owner api
-        if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/automatic") {
-            if !isOwner { return (403, "text/plain", Data("forbidden".utf8)) }
-            // A browser sends Origin on a cross-site form post: only this page may drive these buttons.
-            if let origin = req.headers["origin"], !OwnerAccess.isSameOrigin(origin, port: port) {
-                return (403, "text/plain", Data("cross-site request refused".utf8))
+
+        // The owner's page and buttons: this Mac only, under its own name, from its own page.
+        if req.path == "/" || req.path.hasPrefix("/api/") {
+            guard ServerDecision.ownerRouteAllowed(remote: remote), OwnerAccess.isAllowedHost(req.headers["host"], port: port) else {
+                return Self.text(403, "forbidden")
             }
-            let f = OwnerAccess.fields(req)
-            guard let machine = f["machine"], let app = f["app"], !machine.isEmpty, !app.isEmpty else {
-                return (400, "text/plain", Data("send machine and app".utf8))
+            if req.method == "GET" && req.path == "/" {
+                var page = HTTPResponse(200, "text/html; charset=utf-8", statusHTML())
+                page.headers = ["Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+                                "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"]
+                return page
             }
-            var state = (try? StateStore.load(from: stateDir)) ?? ServerState()
-            guard var ms = state.machines[machine], ms.tokenHash != nil else {
-                return (404, "text/plain", Data("no enrolled Mac named \(machine)".utf8))
+            if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/automatic") {
+                guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
+                let f = OwnerAccess.fields(req)
+                guard let machine = f["machine"], let app = f["app"], !machine.isEmpty, !app.isEmpty else {
+                    return Self.text(400, "send machine and app")
+                }
+                let response = transact { state in
+                    guard var ms = state.machines[machine], ms.tokenHash != nil else {
+                        return Self.text(404, "no enrolled Mac named \(machine)")
+                    }
+                    if req.path == "/api/request-update" {
+                        if !ms.pending.contains(where: { $0.app == app }) { ms.pending.append(ServerCommand(machine: machine, app: app)) }
+                    } else {
+                        ms.automatic[app] = f["on"] == "true"
+                    }
+                    state.machines[machine] = ms
+                    return Self.ok
+                }
+                // The page's own buttons post a form: send the owner back to the page.
+                if response.status == 200, (req.headers["content-type"] ?? "").hasPrefix("application/x-www-form-urlencoded") {
+                    var back = HTTPResponse(303, "text/plain; charset=utf-8", "")
+                    back.headers = ["Location": "/"]
+                    return back
+                }
+                return response
             }
-            if req.path == "/api/request-update" {
-                if !ms.pending.contains(where: { $0.app == app }) { ms.pending.append(ServerCommand(machine: machine, app: app)) }
-            } else {
-                ms.automatic[app] = f["on"] == "true"
-            }
-            state.machines[machine] = ms
-            do { try StateStore.save(state, to: stateDir) } catch { return (500, "text/plain", Data("could not save".utf8)) }
-            // The page's own buttons post a form: send the owner back to the page.
-            if (req.headers["content-type"] ?? "").hasPrefix("application/x-www-form-urlencoded") {
-                return (303, "text/plain", Data("/".utf8))
-            }
-            return (200, "application/json", Data("{}".utf8))
         }
-        return (404, "text/plain", Data("not found".utf8))
+        return Self.text(404, "not found")
     }
 
     public func statusHTML() -> String {
-        let state = (try? StateStore.load(from: stateDir)) ?? ServerState()
-        let feed = FeedPublisher.loadFeed(from: feedDir)
         func h(_ s: String) -> String {
             s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
         }
+        let state: ServerState
+        do { state = try StateStore.read(in: stateDir) } catch {
+            return "<!doctype html><meta charset=utf-8><title>KH Updater</title><h1>KH Updater</h1>"
+                + "<p><b>The state file cannot be read</b>: \(h("\(error)")). It was left untouched.</p>"
+        }
+        let feed = FeedPublisher.loadFeed(from: feedDir)
         func form(_ action: String, _ machine: String, _ app: String, _ extra: String, _ label: String) -> String {
             "<form method=post action=\(action)><input type=hidden name=machine value=\"\(h(machine))\"><input type=hidden name=app value=\"\(h(app))\">\(extra)<button>\(label)</button></form>"
         }
@@ -253,7 +386,7 @@ public final class FeedServer {
                 let pending = ms.pending.contains { $0.app == app } ? "waiting for the Mac" : ""
                 let last = ms.lastResults?[app].map { "\($0.status)\($0.reason.map { $0.isEmpty ? "" : ": " + $0 } ?? "") (\($0.at))" } ?? ""
                 let ownUpdater = app == "story" || app == "hub"
-                let auto = ms.automatic[app] ?? false
+                let auto = ms.effectiveAutomatic(app)
                 let update = ownUpdater || feed?.apps[app] == nil ? "" : form("/api/request-update", machine, app, "", "Update")
                 let automatic = ownUpdater || feed?.apps[app] == nil ? "" :
                     form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Automatic: on" : "Automatic: off")
@@ -269,11 +402,8 @@ public final class FeedServer {
         """
     }
 
-
-    // minimal serve
-    public static let stateLock = NSLock()
-
-    public func serve() throws {
+    /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).
+    public func listen() throws -> Int32 {
         signal(SIGPIPE, SIG_IGN)  // a client that disconnects mid-download must not kill the server
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { throw khuFail("socket failed") }
@@ -284,59 +414,63 @@ public final class FeedServer {
         addr.sin_port = in_port_t(port).bigEndian
         if bind == "0.0.0.0" {
             addr.sin_addr.s_addr = INADDR_ANY
-        } else {
-            inet_pton(AF_INET, bind, &addr.sin_addr)
+        } else if inet_pton(AF_INET, bind, &addr.sin_addr) != 1 {
+            close(fd); throw khuFail("\(bind) is not an IPv4 address")
         }
-        if bind != "0.0.0.0" && inet_pton(AF_INET, bind, &addr.sin_addr) != 1 { close(fd); throw khuFail("\(bind) is not an IPv4 address") }
         let bound = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sptr in
-                Darwin.bind(fd, sptr, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         guard bound == 0 else { close(fd); throw khuFail("cannot listen on \(bind):\(port) (errno \(errno))") }
-        guard listen(fd, 16) == 0 else { close(fd); throw khuFail("listen failed on \(bind):\(port)") }
-        self.listener = fd
+        guard Darwin.listen(fd, 64) == 0 else { close(fd); throw khuFail("listen failed on \(bind):\(port)") }
+        return fd
+    }
+
+    public static func boundPort(_ fd: Int32) -> Int {
+        var addr = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+        }
+        return Int(UInt16(bigEndian: addr.sin_port))
+    }
+
+    public func serve() throws { try serve(on: listen()) }
+
+    /// Each connection on its own thread (at most `maxConnections` at once), with a total read
+    /// deadline and a send timeout: one slow or stalled client never holds up the other Macs.
+    public func serve(on fd: Int32) throws {
+        let slots = DispatchSemaphore(value: maxConnections)
         while true {
             var clientAddr = sockaddr_in()
             var len = socklen_t(MemoryLayout<sockaddr_in>.size)
             let cfd = withUnsafeMutablePointer(to: &clientAddr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sptr in
-                    accept(fd, sptr, &len)
-                }
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(fd, $0, &len) }
             }
-            if cfd < 0 { continue }
-            // read request
-            var timeout = timeval(tv_sec: 10, tv_usec: 0)
-            setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-            let data = HTTP.readRequest(from: cfd)
-            let req = data.flatMap(HTTP.parse)
+            if cfd < 0 { if errno == EBADF { return }; continue }
+            var yes: Int32 = 1
+            setsockopt(cfd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
+            var sendTimeout = timeval(tv_sec: 30, tv_usec: 0)
+            setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
             let remote = String(cString: inet_ntoa(clientAddr.sin_addr))
-            let (status, ct, body): (Int, String, Data)
-            if let r = req {
-                // One server process may listen on several addresses; its state file has one writer at a time.
-                FeedServer.stateLock.lock()
-                let res = handleRequest(r, remote: remote)
-                FeedServer.stateLock.unlock()
-                status = res.0; ct = res.1; body = res.2
-            } else {
-                status = 400; ct = "text/plain"; body = Data("bad request".utf8)
+            guard slots.wait(timeout: .now()) == .success else {
+                HTTP.send(cfd, Self.text(503, "busy"))
+                close(cfd)
+                continue
             }
-            let resp = HTTP.response(status: status, contentType: ct, body: body)
-            HTTP.writeAll(cfd, resp)
-            close(cfd)
+            Thread.detachNewThread { [self] in
+                defer { close(cfd); slots.signal() }
+                guard let data = HTTP.readRequest(from: cfd), let req = HTTP.parse(data) else {
+                    HTTP.send(cfd, Self.text(400, "bad request"))
+                    return
+                }
+                HTTP.send(cfd, handleRequest(req, remote: remote))
+            }
         }
     }
 }
 
-// helper to decode arbitrary JSON
-private struct AnyCodable: Codable {}
-func queryParam(_ path: String, _ name: String) -> String? {
-    guard let q = path.split(separator: "?").dropFirst().first else { return nil }
-    for pair in q.split(separator: "&") {
-        let kv = pair.split(separator: "=", maxSplits: 1)
-        if kv.count == 2 && String(kv[0]) == name {
-            return String(kv[1]).removingPercentEncoding
-        }
+extension HTTPResponse {
+    public init(status: Int, contentType: String, body: HTTPBody) {
+        self.status = status; self.contentType = contentType; self.body = body
     }
-    return nil
 }
