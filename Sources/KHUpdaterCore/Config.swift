@@ -81,6 +81,14 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// The capabilities the agent advertised on its most recent /commands fetch. Used by the
     /// status page to warn when a pending rollback order cannot be delivered to an older agent.
     public var capabilities: [String]?
+    /// When this Mac was enrolled, and how. `enrolmentSource` is `MachineState.windowSource` for a
+    /// Mac that claimed its own token over the network during a window the owner opened, so the
+    /// page can list exactly those for the owner to review. Absent for `khu enrol` and for state
+    /// written before a window existed.
+    public var enrolledAt: String?
+    public var enrolmentSource: String?
+    /// The one enrolment source the status page lists.
+    public static let windowSource = "window"
     public init(machine: String) {
         self.machine = machine; self.installed = [:]; self.health = [:]
         self.pending = []; self.automatic = [:]
@@ -136,9 +144,126 @@ public struct CommandResult: Codable, Sendable, Equatable {
     }
 }
 
+/// Everything the publisher decides about a Mac enrolling itself over the network, in one place.
+/// The numbers here are policy, not values published by anybody else: they bound what a device on
+/// the tailnet can write into the owner's state while a window is open.
+public enum EnrolPolicy {
+    /// The most new Macs one open window may enrol. The status page shows this figure beside the
+    /// count, so a limit that refuses is never a limit nobody was told about.
+    public static let maxPerWindow = 200
+    /// The longest window the owner may open, and the default the page offers.
+    public static let maxMinutes = 240
+    public static let defaultMinutes = 30
+    /// A `/enrol` body is two short strings. Anything larger is refused before it is parsed, so a
+    /// flood cannot make the publisher hold or decode megabytes per connection.
+    public static let maxBodyBytes = 4 << 10
+    /// `/enrol` attempts one client address may make per minute. The window's cap bounds the
+    /// enrolments that SUCCEED; this bounds the attempts that do not.
+    public static let attemptsPerMinute = 30
+    /// A nonce is `secrets.token_hex(32)` at the Mac: 64 hexadecimal characters, echoed back
+    /// verbatim inside the signed reply.
+    public static let nonceCharacters = 64
+}
+
+/// A period during which Macs may enrol themselves over the network; closed the rest of the time.
+/// It is stored in state.json under state.lock, and its end time is the only thing that decides
+/// whether it is open — there is no second flag that can disagree with it.
+public struct EnrolWindow: Codable, Sendable, Equatable {
+    public var openedAt: String
+    public var until: String
+    public var minutes: Int
+    /// New enrolments this window has already minted (reset when a window is opened).
+    public var enrolled: Int
+
+    public init(openedAt: String, until: String, minutes: Int, enrolled: Int = 0) {
+        self.openedAt = openedAt; self.until = until; self.minutes = minutes; self.enrolled = enrolled
+    }
+
+    public var untilDate: Date? { ISO.date(until) }
+
+    /// An end time that cannot be read is NOT an open window: "I could not work out the answer" and
+    /// "the answer is yes" must never be the same value.
+    public func isOpen(at now: Date = Date()) -> Bool {
+        guard let end = untilDate else { return false }
+        return end > now
+    }
+
+    public func remaining(at now: Date = Date()) -> TimeInterval {
+        guard let end = untilDate else { return 0 }
+        return max(0, end.timeIntervalSince(now))
+    }
+}
+
+public enum EnrolmentWindow {
+    /// Open a window for `minutes` (1...`EnrolPolicy.maxMinutes`) from now. Opening a window while
+    /// one is already open replaces it and resets its count: the owner asking for a fresh window is
+    /// exactly what a fresh count is for.
+    @discardableResult
+    public static func open(stateDir: URL, minutes: Int, now: Date = Date()) throws -> EnrolWindow {
+        guard (1...EnrolPolicy.maxMinutes).contains(minutes) else {
+            throw khuFail("an enrolment window is 1 to \(EnrolPolicy.maxMinutes) minutes, not \(minutes); 0 closes it")
+        }
+        let window = EnrolWindow(openedAt: ISO.string(now),
+                                 until: ISO.string(now.addingTimeInterval(Double(minutes) * 60)),
+                                 minutes: minutes, enrolled: 0)
+        try StateStore.update(in: stateDir) { $0.enrolWindow = window }
+        return window
+    }
+
+    /// Closing drops the record: a closed window is the absence of one, so nothing can read a stale
+    /// end time as an open door.
+    public static func close(stateDir: URL) throws {
+        try StateStore.update(in: stateDir) { $0.enrolWindow = nil }
+    }
+}
+
+/// A Mac the owner removed. The live record is gone — its token hash with it, so the token can no
+/// longer be used, and its orders are not pending any more — and what it had reported is kept here
+/// with the moment of the removal. Only the owner can add one of these, from this Mac.
+public struct RemovedMachine: Codable, Sendable, Equatable {
+    public var machine: String
+    public var removedAt: String
+    public var installed: [String: String]
+    public var health: [String: String]
+    public var lastSeen: String?
+    public var enrolledAt: String?
+    /// The source the record was enrolled through, when the publisher knows it.
+    public var enrolmentSource: String?
+    /// Orders the Mac never answered, kept as history: they are not pending, and the Mac can no
+    /// longer fetch them.
+    public var droppedOrders: [ServerCommand]
+
+    public init(machine: String, removedAt: String = ISO.string(Date()), installed: [String: String] = [:],
+                health: [String: String] = [:], lastSeen: String? = nil, enrolledAt: String? = nil,
+                enrolmentSource: String? = nil, droppedOrders: [ServerCommand] = []) {
+        self.machine = machine; self.removedAt = removedAt; self.installed = installed; self.health = health
+        self.lastSeen = lastSeen; self.enrolledAt = enrolledAt; self.enrolmentSource = enrolmentSource
+        self.droppedOrders = droppedOrders
+    }
+
+    public init(from state: MachineState, at date: Date) {
+        self.init(machine: state.machine, removedAt: ISO.string(date), installed: state.installed, health: state.health,
+                  lastSeen: state.lastSeen, enrolledAt: state.enrolledAt, enrolmentSource: state.enrolmentSource,
+                  droppedOrders: state.pending)
+    }
+}
+
 public struct ServerState: Codable, Sendable, Equatable {
     public var machines: [String: MachineState]
-    public init(machines: [String: MachineState] = [:]) { self.machines = machines }
+    /// The enrolment window the owner opened, or nil when enrolment is closed (the default, and
+    /// what state written before this existed decodes to).
+    public var enrolWindow: EnrolWindow?
+    /// Every removal the owner has made, newest last. Nothing is lost: a Mac removed by mistake can
+    /// be seen here with what it had reported. A machine id in this list is NOT barred from
+    /// enrolling again — resetting a Mac and enrolling it afresh is the point of removing it.
+    public var removed: [RemovedMachine]
+    public init(machines: [String: MachineState] = [:], enrolWindow: EnrolWindow? = nil,
+                removed: [RemovedMachine] = []) {
+        self.machines = machines; self.enrolWindow = enrolWindow; self.removed = removed
+    }
+
+    /// The newest removal of this machine id, if it has ever been removed.
+    public func removal(of machine: String) -> RemovedMachine? { removed.last { $0.machine == machine } }
 }
 
 /// The publisher's state file. Every change is one read-modify-write under a lock shared by all
@@ -172,25 +297,60 @@ public enum StateStore {
 }
 
 public enum Enrolment {
-    public static func token() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+    /// `bytes` bytes from the system's randomness, base64. The one source of randomness here, used
+    /// for enrolment tokens and for the owner page's CSP nonce.
+    public static func randomBase64(bytes: Int) -> String {
+        var buffer = [UInt8](repeating: 0, count: bytes)
+        guard SecRandomCopyBytes(kSecRandomDefault, buffer.count, &buffer) == errSecSuccess else {
             preconditionFailure("no system randomness")
         }
-        return Data(bytes).base64EncodedString()
+        return Data(buffer).base64EncodedString()
     }
+
+    public static func token() -> String { randomBase64(bytes: 32) }
+
     public static func sha256Hex(_ s: String) -> String {
         let digest = SHA256.hash(data: Data(s.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
-    public static func enrol(stateDir: URL, machine: String) throws -> String {
+
+    /// Store a minted token the way every enrolment does: the sha256 of the token, never the token
+    /// itself, plus when it happened and how it got here. An existing record keeps everything else
+    /// it had (installed versions, health, pending orders).
+    public static func store(_ token: String, for machine: String, at date: Date, source: String?,
+                             in state: inout ServerState) {
+        var record = state.machines[machine] ?? MachineState(machine: machine)
+        record.tokenHash = sha256Hex(token)
+        record.enrolledAt = ISO.string(date)
+        record.enrolmentSource = source
+        state.machines[machine] = record
+    }
+
+    public static func enrol(stateDir: URL, machine: String, now: Date = Date()) throws -> String {
         _ = try SafeName.component(machine, what: "machine id")
         let tok = token()
-        try StateStore.update(in: stateDir) { state in
-            var m = state.machines[machine] ?? MachineState(machine: machine)
-            m.tokenHash = sha256Hex(tok)
-            state.machines[machine] = m
-        }
+        try StateStore.update(in: stateDir) { store(tok, for: machine, at: now, source: nil, in: &$0) }
         return tok
+    }
+
+    /// Drop a Mac's live record — its token hash and its pending orders with it — and keep what it
+    /// reported in the removed list with the moment of the removal. One read-modify-write under
+    /// state.lock, shared with `khu enrol`, the server and the page.
+    ///
+    /// A machine id is NOT barred from enrolling again by this: the owner's day for resetting and
+    /// re-enrolling Macs depends on it. `khu enrol` (or a new enrolment window) is how it comes
+    /// back.
+    @discardableResult
+    public static func remove(stateDir: URL, machine: String, now: Date = Date()) throws -> RemovedMachine {
+        _ = try SafeName.component(machine, what: "machine id")
+        return try StateStore.update(in: stateDir) { state in
+            guard let record = state.machines[machine] else {
+                throw khuFail("no enrolled Mac named \(machine)")
+            }
+            let removal = RemovedMachine(from: record, at: now)
+            state.machines.removeValue(forKey: machine)
+            state.removed.append(removal)
+            return removal
+        }
     }
 }

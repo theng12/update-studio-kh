@@ -70,3 +70,24 @@ public struct SignedReply: Codable, Sendable, Equatable {
     public var replyData: Data? { Data(base64Encoded: reply) }
     public var signatureData: Data? { Data(base64Encoded: signature) }
 }
+
+/// What `POST /enrol` answers with, inside `SignedReply`: the fields the Mac needs to write its own
+/// config, plus a fresh token. It names this Mac and echoes the nonce the Mac sent, so a reply
+/// meant for another Mac, or one replayed at a hardening window that asked a different question, is
+/// refused by the Mac. `issuedAt` is unix seconds, the unit the Mac compares against its own clock.
+///
+/// The Mac writes `feedURL`, `publicKey`, `machine` and `token` into its config and checks that the
+/// first two are what its kit's publisher.json says; anything else in this reply is ignored.
+public struct EnrolReply: Codable, Sendable, Equatable {
+    public var machine: String
+    public var nonce: String
+    public var feedURL: String
+    public var publicKey: String
+    public var issuedAt: Int
+    public var token: String
+
+    public init(machine: String, nonce: String, feedURL: String, publicKey: String, issuedAt: Int, token: String) {
+        self.machine = machine; self.nonce = nonce; self.feedURL = feedURL
+        self.publicKey = publicKey; self.issuedAt = issuedAt; self.token = token
+    }
+}

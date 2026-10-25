@@ -11,6 +11,8 @@ struct KHUMain {
               keygen <dir>
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--allow-same]
               enrol --state <dir> --machine <id>
+              enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
+              remove --state <dir> --machine <id>
               serve --feed <dir> --state <dir> --key <keyfile> --bind <ip> --port <p>
               agent --config <file> [--once]
             """.utf8))
@@ -83,6 +85,48 @@ struct KHUMain {
             guard let s = state, let m = machine else { usage() }
             do { print(try Enrolment.enrol(stateDir: URL(fileURLWithPath: s), machine: m)) }
             catch { fail("\(error)") }
+        case "enrol-window":
+            var state: String?, minutes: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--state": state = value("--state", &i)
+                case "--minutes": minutes = value("--minutes", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let s = state, let m = minutes else { usage() }
+            guard let n = Int(m), n == 0 || (1...EnrolPolicy.maxMinutes).contains(n) else {
+                FileHandle.standardError.write(Data("error: --minutes must be 0 to close the enrolment window, or 1 to \(EnrolPolicy.maxMinutes) to open one, not \(m)\n".utf8))
+                exit(2)
+            }
+            do {
+                let dir = URL(fileURLWithPath: s)
+                if n == 0 {
+                    try EnrolmentWindow.close(stateDir: dir)
+                    print("network enrolment is closed")
+                } else {
+                    let window = try EnrolmentWindow.open(stateDir: dir, minutes: n)
+                    print("network enrolment is open for \(n) minutes, until \(window.until)")
+                }
+            } catch { fail("\(error)") }
+        case "remove":
+            var state: String?, machine: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--state": state = value("--state", &i)
+                case "--machine": machine = value("--machine", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let s = state, let m = machine else { usage() }
+            do {
+                let removal = try Enrolment.remove(stateDir: URL(fileURLWithPath: s), machine: m)
+                print("removed \(removal.machine): its token and \(removal.droppedOrders.count) waiting order(s) are gone; it is kept in the removed list, and enrols again through an open window or `khu enrol`")
+            } catch { fail("\(error)") }
         case "serve":
             var feed: String?, state: String?, key: String?, binds: [String] = [], port: Int = 8790
             var i = 1

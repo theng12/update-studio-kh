@@ -118,7 +118,8 @@ public enum HTTP {
     }
 
     static let reasons = [200: "OK", 303: "See Other", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
-                          404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error", 503: "Service Unavailable"]
+                          404: "Not Found", 405: "Method Not Allowed", 409: "Conflict", 413: "Content Too Large",
+                          429: "Too Many Requests", 500: "Internal Server Error", 503: "Service Unavailable"]
 
     public static func head(_ response: HTTPResponse, length: Int64) -> Data {
         var out = "HTTP/1.1 \(response.status) \(reasons[response.status] ?? "Error")\r\n"
@@ -203,6 +204,36 @@ public enum ServerDecision {
     public static func ownerRouteAllowed(remote: String) -> Bool { isLoopbackRemote(remote) }
 }
 
+/// A modest bound on how often ONE client address may ask to enrol: a `/enrol` body is two short
+/// strings and costs almost nothing to send, while every attempt that gets past the checks costs a
+/// lock, a state read and a signature. The window's own cap bounds the enrolments that succeed;
+/// this bounds the attempts that do not.
+///
+/// Held in memory, per listening server: the limit is a guard against a scripted flood, not a
+/// durable record, and restarting `serve` clearing it is fine.
+final class EnrolRateLimiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [String: [TimeInterval]] = [:]
+    private let attempts: Int
+    private let span: TimeInterval = 60
+
+    init(attempts: Int) { self.attempts = attempts }
+
+    /// Counts the attempt only when it is allowed: a refused address stays refused for the rest of
+    /// the minute instead of pushing its own deadline forward.
+    func allow(_ remote: String, now: Date = Date()) -> Bool {
+        let t = now.timeIntervalSince1970
+        lock.lock()
+        defer { lock.unlock() }
+        if seen.count > 256 { seen = seen.filter { t - ($0.value.last ?? 0) < span } }
+        var hits = (seen[remote] ?? []).filter { t - $0 < span }
+        let allowed = hits.count < attempts
+        if allowed { hits.append(t) }
+        seen[remote] = hits
+        return allowed
+    }
+}
+
 public final class FeedServer: @unchecked Sendable {
     public let feedDir: URL
     public let stateDir: URL
@@ -212,15 +243,25 @@ public final class FeedServer: @unchecked Sendable {
     /// The key that signs every order reply. Without it the server has no way to answer a Mac with
     /// something the Mac can tell apart from a forgery, so it refuses to answer at all.
     public let commandKey: Curve25519.Signing.PrivateKey?
+    /// New Macs one open enrolment window may enrol, and `/enrol` attempts one address may make per
+    /// minute. Both are injectable so a test can prove the bounds without a 200-Mac fixture.
+    public let maxEnrolmentsPerWindow: Int
+    public let enrolAttemptsPerMinute: Int
+    private let enrolLimiter: EnrolRateLimiter
 
     public init(feedDir: URL, stateDir: URL, bind: String, port: Int,
-                commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32) {
+                commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32,
+                maxEnrolmentsPerWindow: Int = EnrolPolicy.maxPerWindow,
+                enrolAttemptsPerMinute: Int = EnrolPolicy.attemptsPerMinute) {
         self.feedDir = feedDir
         self.stateDir = stateDir
         self.bind = bind
         self.port = port
         self.commandKey = commandKey
         self.maxConnections = maxConnections
+        self.maxEnrolmentsPerWindow = maxEnrolmentsPerWindow
+        self.enrolAttemptsPerMinute = enrolAttemptsPerMinute
+        self.enrolLimiter = EnrolRateLimiter(attempts: enrolAttemptsPerMinute)
     }
 
     static func text(_ status: Int, _ message: String) -> HTTPResponse { HTTPResponse(status, "text/plain; charset=utf-8", message) }
@@ -259,7 +300,99 @@ public final class FeedServer: @unchecked Sendable {
         return hash == Enrolment.sha256Hex(token)
     }
 
-    public func handleRequest(_ req: HTTPRequest, remote: String) -> HTTPResponse {
+    /// The feed URL a Mac learning this publisher gets. It is the address THIS listener was bound
+    /// to, which is the address the Mac just reached it at, written the one way `publisher.json`
+    /// writes it — so the Mac's own check that the reply agrees with its kit cannot fail for a
+    /// mistake in a second place. Nothing is guessed: a wildcard or loopback bind names no address a
+    /// Mac can use, and a reply naming one would be a feed URL that does not work, so enrolment is
+    /// refused instead.
+    var enrolFeedURL: String? {
+        guard (1...65535).contains(port), Self.isRoutable(bind) else { return nil }
+        return "http://\(bind):\(port)/release.json"
+    }
+
+    /// An address a Mac could really reach: a unicast IPv4 that is not this Mac's own loopback, not
+    /// link-local, not the unspecified address and not multicast. A list of spellings was not enough
+    /// — `127.0.0.2` is as unreachable from a Mac as `127.0.0.1`, and a reply naming it would be a
+    /// feed URL pointing at the Mac itself. A LAN address is allowed too: it is a real address some
+    /// Macs on the same network can reach.
+    static func isRoutable(_ address: String) -> Bool {
+        var addr = in_addr()
+        guard inet_pton(AF_INET, address, &addr) == 1 else { return false }
+        let host = UInt32(bigEndian: addr.s_addr)
+        if host >> 24 == 127 { return false }                 // 127.0.0.0/8
+        if host >> 28 == 0xE { return false }                 // 224.0.0.0/4 multicast
+        if host >> 16 == 0xA9FE { return false }              // 169.254.0.0/16 link-local
+        return host != 0 && host != 0xFFFF_FFFF               // unspecified / broadcast
+    }
+
+    /// A nonce is 64 hexadecimal characters and is echoed back verbatim. Accepting anything else
+    /// would let a reply name a question the Mac never asked.
+    static func isNonce(_ nonce: String) -> Bool {
+        nonce.utf8.count == EnrolPolicy.nonceCharacters
+            && nonce.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) || ($0 >= 65 && $0 <= 70) }
+    }
+
+    /// `POST /enrol` — a Mac claiming a token for itself while the owner has a window open. Every
+    /// refusal is a plain sentence and leaves the state exactly as it was.
+    func enrol(_ req: HTTPRequest, remote: String, now: Date = Date()) -> HTTPResponse {
+        guard enrolLimiter.allow(remote, now: now) else {
+            return Self.text(429, "too many enrolment requests from this address; wait a minute and try again")
+        }
+        guard req.body.count <= EnrolPolicy.maxBodyBytes else {
+            return Self.text(413, "that enrolment request is too large")
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
+              let machine = object["machine"] as? String, let nonce = object["nonce"] as? String else {
+            return Self.text(400, "send machine and nonce as JSON")
+        }
+        // The id becomes a key in state.json and a name on the owner's page; it is decided here, and
+        // the message never repeats what was sent back to the sender.
+        guard (try? SafeName.component(machine, what: "machine id")) != nil else {
+            return Self.text(400, "that machine id is not one this publisher accepts")
+        }
+        guard Self.isNonce(nonce) else {
+            return Self.text(400, "a nonce is \(EnrolPolicy.nonceCharacters) hexadecimal characters")
+        }
+        guard let commandKey else {
+            return Self.text(403, "this publisher has no signing key, so it cannot enrol a Mac: start `khu serve` with --key")
+        }
+        guard let feedURL = enrolFeedURL else {
+            return Self.text(403, "this publisher is listening on \(bind), which is not an address a Mac can reach: bind the address the Macs use (the LaunchAgent binds the Tailscale address)")
+        }
+        let publicKey = commandKey.publicKey.rawRepresentation.base64EncodedString()
+        let issuedAt = Int(now.timeIntervalSince1970)
+        return transact { state in
+            guard let window = state.enrolWindow, window.isOpen(at: now) else {
+                return Self.text(403, "this publisher is not taking new Macs right now; ask the owner to open an enrolment window")
+            }
+            // A Mac this publisher already has a record of is refused over the network, whatever
+            // else happens: another device on the tailnet must never be able to rotate a real Mac's
+            // token out from under it. Re-enrolment runs on the publisher itself (`khu enrol`), and
+            // a removed Mac enrols again through a window because it has no record left.
+            guard state.machines[machine] == nil else {
+                return Self.text(409, "that Mac is already enrolled with this publisher, so another device on the tailnet cannot take its place; if it was reset, the owner removes it on the publisher first (Remove Mac on the status page, or `khu remove`) and then it enrols again through a window")
+            }
+            guard window.enrolled < maxEnrolmentsPerWindow else {
+                return Self.text(429, "this enrolment window has already enrolled as many Macs as it allows (\(maxEnrolmentsPerWindow)); ask the owner to open a new one")
+            }
+            let token = Enrolment.token()
+            // Signed BEFORE the state changes: a reply that could not be signed must not leave a
+            // token stored that the Mac never received.
+            let body = JSON.encode(EnrolReply(machine: machine, nonce: nonce, feedURL: feedURL,
+                                              publicKey: publicKey, issuedAt: issuedAt, token: token))
+            guard let signature = try? Signing.sign(body, with: commandKey) else {
+                return Self.text(500, "could not sign the enrolment reply")
+            }
+            Enrolment.store(token, for: machine, at: now, source: MachineState.windowSource, in: &state)
+            state.enrolWindow?.enrolled = window.enrolled + 1
+            return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
+        }
+    }
+
+    /// `now` exists so a test can drive the enrolment window's end time and the rate limit without
+    /// waiting; every real caller leaves it alone.
+    public func handleRequest(_ req: HTTPRequest, remote: String, now: Date = Date()) -> HTTPResponse {
         if req.method == "GET" {
             if req.path == "/release.json" {
                 let url = FeedPublisher.releaseFile(in: feedDir)
@@ -280,6 +413,10 @@ public final class FeedServer: @unchecked Sendable {
                 return HTTPResponse(status: 200, contentType: "application/octet-stream", body: .file(url, size.int64Value))
             }
         }
+
+        // A Mac enrolling itself: the one route with no token, open only while the owner's window
+        // is, and refused by the checks inside `enrol`.
+        if req.method == "POST" && req.path == "/enrol" { return enrol(req, remote: remote, now: now) }
 
         if req.method == "POST" && req.path == "/status" {
             guard let token = machineToken(req) else { return Self.text(401, "missing token") }
@@ -370,19 +507,54 @@ public final class FeedServer: @unchecked Sendable {
                 return Self.text(403, "forbidden")
             }
             if req.method == "GET" && req.path == "/" {
-                var page = HTTPResponse(200, "text/html; charset=utf-8", statusHTML())
-                page.headers = ["Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+                // The page's countdown is the one script it runs, allowed by this nonce alone: the
+                // CSP stays `default-src 'none'` with no 'unsafe-inline' for scripts.
+                let nonce = Enrolment.randomBase64(bytes: 16)
+                var page = HTTPResponse(200, "text/html; charset=utf-8", statusHTML(nonce: nonce))
+                page.headers = ["Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-\(nonce)'; form-action 'self'; frame-ancestors 'none'",
                                 "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"]
                 return page
             }
             if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
-                                        || req.path == "/api/automatic") {
+                                        || req.path == "/api/automatic" || req.path == "/api/enrol-window"
+                                        || req.path == "/api/remove-machine") {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
-                guard let machine = f["machine"], let app = f["app"], !machine.isEmpty, !app.isEmpty else {
-                    return Self.text(400, "send machine and app")
-                }
-                let response = transact { state in
+                let response = transact { state -> HTTPResponse in
+                    // Opening and closing the window, and removing a Mac, are decisions about this
+                    // publisher rather than about one app on one Mac.
+                    if req.path == "/api/enrol-window" {
+                        guard let text = f["minutes"], let minutes = Int(text) else {
+                            return Self.text(400, "send minutes: 0 closes the window, 1 to \(EnrolPolicy.maxMinutes) opens one")
+                        }
+                        if minutes == 0 {
+                            state.enrolWindow = nil
+                            return Self.ok
+                        }
+                        guard (1...EnrolPolicy.maxMinutes).contains(minutes) else {
+                            return Self.text(400, "minutes must be 0 (close) or 1 to \(EnrolPolicy.maxMinutes)")
+                        }
+                        let now = Date()
+                        state.enrolWindow = EnrolWindow(openedAt: ISO.string(now),
+                                                        until: ISO.string(now.addingTimeInterval(Double(minutes) * 60)),
+                                                        minutes: minutes, enrolled: 0)
+                        return Self.ok
+                    }
+                    guard let machine = f["machine"], !machine.isEmpty else { return Self.text(400, "send machine") }
+                    if req.path == "/api/remove-machine" {
+                        guard (try? SafeName.component(machine, what: "machine id")) != nil else {
+                            return Self.text(400, "that machine id is not one this publisher accepts")
+                        }
+                        guard let record = state.machines[machine] else {
+                            return Self.text(404, "no enrolled Mac named \(machine)")
+                        }
+                        // The token hash and the pending orders go with the record; what the Mac
+                        // reported stays in the removed list with the moment of the removal.
+                        state.removed.append(RemovedMachine(from: record, at: Date()))
+                        state.machines.removeValue(forKey: machine)
+                        return Self.ok
+                    }
+                    guard let app = f["app"], !app.isEmpty else { return Self.text(400, "send machine and app") }
                     guard var ms = state.machines[machine], ms.tokenHash != nil else {
                         return Self.text(404, "no enrolled Mac named \(machine)")
                     }
@@ -409,7 +581,9 @@ public final class FeedServer: @unchecked Sendable {
         return Self.text(404, "not found")
     }
 
-    public func statusHTML() -> String {
+    /// The owner's page. `nonce` allows the one script that ticks the enrolment countdown; without
+    /// one (a caller that only wants the markup) the server-rendered minutes stand on their own.
+    public func statusHTML(nonce: String = "") -> String {
         func h(_ s: String) -> String {
             s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
@@ -423,6 +597,38 @@ public final class FeedServer: @unchecked Sendable {
         func form(_ action: String, _ machine: String, _ app: String, _ extra: String, _ label: String) -> String {
             "<form method=post action=\(action)><input type=hidden name=machine value=\"\(h(machine))\"><input type=hidden name=app value=\"\(h(app))\">\(extra)<button>\(label)</button></form>"
         }
+        let clock = DateFormatter()
+        clock.dateFormat = "yyyy-MM-dd HH:mm"
+        func stamp(_ iso: String?) -> String { iso.flatMap(ISO.date).map { clock.string(from: $0) } ?? (iso ?? "") }
+        func form(_ action: String, _ fields: [String: String], _ label: String) -> String {
+            let inputs = fields.sorted { $0.key < $1.key }
+                .map { "<input type=hidden name=\"\(h($0.key))\" value=\"\(h($0.value))\">" }.joined()
+            return "<form method=post action=\(action)>\(inputs)<button>\(label)</button></form>"
+        }
+
+        // The enrolment window, its countdown, and how many of the window's allowance are used.
+        let window = state.enrolWindow
+        let isOpen = window?.isOpen() ?? false
+        let openForm = "<form method=post action=/api/enrol-window><input type=number name=minutes value=\(EnrolPolicy.defaultMinutes) min=1 max=\(EnrolPolicy.maxMinutes) size=4><button>Open an enrolment window for that many minutes</button></form>"
+        var enrol = "<h2>Network enrolment</h2>"
+        var countdown = ""
+        if let window, isOpen {
+            let seconds = Int(window.remaining())
+            let endUnix = window.untilDate.map { Int($0.timeIntervalSince1970) } ?? 0
+            enrol += "<p><b>Open</b> until \(h(stamp(window.until))), <span id=left data-until=\"\(endUnix)\">\(seconds / 60) min \(seconds % 60) s</span> left"
+                + " — \(window.enrolled) of \(maxEnrolmentsPerWindow) new Macs enrolled in this window. A Mac that is not enrolled yet may claim a token for itself.</p>"
+                + form("/api/enrol-window", ["minutes": "0"], "Close the window now")
+            countdown = "<script nonce=\"\(h(nonce))\">var e=document.getElementById('left'),u=Number(e.getAttribute('data-until'));"
+                + "function t(){var s=Math.round(u-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'}"
+                + "t();setInterval(t,1000)</script>"
+        } else if let window {
+            enrol += "<p><b>Closed</b>: the window that ended \(h(stamp(window.until))) is over, so the publisher is not taking new Macs. It enrolled \(window.enrolled) of \(maxEnrolmentsPerWindow).</p>\(openForm)"
+        } else {
+            enrol += "<p><b>Closed</b>: no Mac can enrol itself. Open a window to let a Mac that is not enrolled yet claim a token for itself.</p>\(openForm)"
+        }
+        // Only rendered when a nonce allows it; the minutes above are the no-script answer.
+        let script = isOpen && !nonce.isEmpty ? countdown : ""
+
         var rows = ""
         for machine in state.machines.keys.sorted() {
             guard let ms = state.machines[machine], ms.tokenHash != nil else { continue }
@@ -445,10 +651,34 @@ public final class FeedServer: @unchecked Sendable {
                 rows += "<tr><td>\(h(machine))</td><td>\(h(app))</td><td>\(h(installed))</td><td>\(h(latest))</td><td>\(h(ms.health[app] ?? ""))</td><td>\(h(ms.lastSeen ?? "never"))</td><td>\(h(pending))</td><td>\(h(last))</td><td>\(update)\(rollback)\(h(note))</td><td>\(automatic)</td></tr>"
             }
         }
+
+        // Which Macs enrolled themselves, when — the owner's review list — and how to remove one.
+        var macRows = ""
+        var windowRows = 0
+        for machine in state.machines.keys.sorted() {
+            guard let ms = state.machines[machine], ms.tokenHash != nil else { continue }
+            let via = ms.enrolmentSource == MachineState.windowSource ? "a window" : "the publisher"
+            if ms.enrolmentSource == MachineState.windowSource { windowRows += 1 }
+            macRows += "<tr><td>\(h(machine))</td><td>\(h(via))</td><td>\(h(stamp(ms.enrolledAt)))</td><td>\(h(ms.lastSeen.map(stamp) ?? "never"))</td><td>\(ms.pending.count)</td>"
+                + "<td>\(form("/api/remove-machine", ["machine": machine], "Remove Mac"))</td></tr>"
+        }
+        let macs = macRows.isEmpty ? "<p>No Mac is enrolled.</p>"
+            : "<table><tr><th>Mac</th><th>Enrolled via</th><th>Enrolled</th><th>Last seen</th><th>Orders waiting</th><th></th></tr>\(macRows)</table>"
+        var removedRows = ""
+        for removal in state.removed.sorted(by: { $0.removedAt > $1.removedAt }) {
+            let live = state.machines[removal.machine] != nil ? "enrolled again since" : "not enrolled"
+            removedRows += "<tr><td>\(h(removal.machine))</td><td>\(h(stamp(removal.removedAt)))</td><td>\(h(stamp(removal.lastSeen)))</td><td>\(h(live))</td></tr>"
+        }
+        let removed = state.removed.isEmpty ? "<p>No Mac has been removed.</p>"
+            : "<table><tr><th>Mac</th><th>Removed</th><th>Last seen then</th><th>Now</th></tr>\(removedRows)</table>"
         return """
         <!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=30><title>KH Updater</title>
-        <style>body{font:14px -apple-system,sans-serif;margin:24px}table{border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:6px 10px;text-align:left}form{display:inline}</style></head>
-        <body><h1>KH Updater</h1><p>Every Mac and app, refreshed every 30 s. Update installs the feed's version on that Mac; Roll back puts the version that Mac kept back in place; Automatic does it whenever the feed is newer.</p>
+        <style>body{font:14px -apple-system,sans-serif;margin:24px}table{border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:6px 10px;text-align:left}form{display:inline}input[type=number]{width:5em}</style></head>
+        <body><h1>KH Updater</h1><p>Every Mac and app, refreshed every 30 s. Update installs the feed's version on that Mac; Roll back puts the version that Mac kept back in place; Automatic does it whenever the feed is newer; Remove Mac drops a Mac's token and its waiting orders, and that Mac enrols again through an open window.</p>
+        \(enrol)\(script)
+        <h2>Macs enrolled\(windowRows > 0 ? " (\(windowRows) through a window)" : "")</h2>\(macs)
+        <h2>Macs removed</h2>\(removed)
+        <h2>Apps</h2>
         <table><tr><th>Mac</th><th>App</th><th>Installed</th><th>Feed</th><th>Health</th><th>Last seen</th><th>Pending</th><th>Last result</th><th></th><th></th></tr>\(rows)</table></body></html>
         """
     }

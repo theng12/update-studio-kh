@@ -14,6 +14,13 @@ the `capabilities` gate is read off the wire and the journal is written as JSON 
 builds against both) — the base has no `ServerCommand.action`, no journal order/intent, no
 `/api/request-rollback` and no owner swap at all.
 
+Network enrolment windows and Mac removal were added on 2026-10-25 (owner) and are covered by E1–E16
+in `Tests/Runner/main.swift` (`enrolWindowTests`): a closed window, a window's expiry, the minted
+reply as Studio Hub's client verifies it, an already-enrolled id, bad ids and nonces and oversize
+bodies, the window's cap, the per-address rate limit, `/enrol` without `--key` and on a bind no Mac
+can reach, the owner route's loopback/Host/Origin checks, the CLI, the page, and removal with its
+re-enrolment and its concurrency.
+
 ## Feed
 
 A directory holding `release.json` and `artifacts/<sha12>-<file>`. `release.json` is the feed
@@ -61,13 +68,55 @@ one slow or stalled Mac never holds up the others.
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
   defaults to `update` when absent, so an order signed before the field existed decodes unchanged
   and still means what it meant when the owner gave it.
-- Owner-only: `GET /`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic` — loopback peer, a Host of
+- Owner-only: `GET /`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic`,
+  `POST /api/enrol-window`, `POST /api/remove-machine` — loopback peer, a Host of
   127.0.0.1/localhost/[::1] with this port (no DNS rebinding), and for changes an Origin or
   Referer from this page (neither is refused). The page sends CSP, `X-Frame-Options: DENY`,
   `Cache-Control: no-store`. It shows each Mac's effective Automatic setting (the owner's
   override, else what the Mac's own config says). Each row with an app of its own has an Update
   button, a Roll back button and its Automatic toggle; the rollback route needs no feed entry
   for that app, because it puts back a version the Mac already keeps.
+
+**Enrolment is closed until the owner opens a window.** `POST /enrol` is the one route with no
+token, and it is the only way a Mac gets a token without the owner touching the publisher:
+
+- Body `{"machine": <id>, "nonce": <64 hex>}`, answer `SignedReply` of
+  `{machine, nonce, feedURL, publicKey, issuedAt, token}`. The `X-Hub-Token` header the Hub sends is
+  **ignored**: nothing on the publisher can verify it, so it is not part of any decision here.
+- The **window** is opened from the page (`POST /api/enrol-window`, `minutes` 0 to close, 1–240 to
+  open) or with `khu enrol-window --state <dir> --minutes N`. Its end time is stored in state.json
+  under state.lock and is the **only** thing that decides: there is no second flag that can disagree
+  with it, and an end time that cannot be read is closed, never open. Opening a window resets its
+  count. The page shows the state, how much of the window's allowance is used, how many Macs enrolled
+  through a window, and a per-second countdown — the page's one script, allowed by a per-response CSP
+  nonce rather than `'unsafe-inline'`.
+- While it is open, a machine id this publisher has **no record of at all** is minted a token exactly
+  as `Enrolment.enrol` mints one — the sha256 is stored, never the token — and the reply is signed
+  with the `--key` key, after the reply is signed and only then written to state. The machine id goes
+  through `SafeName`, the nonce must be exactly 64 hexadecimal characters, and a body over 4 KiB is
+  refused before it is parsed.
+- An id that already has a record is refused **409**, whatever else is true: a device on the tailnet
+  can never rotate a real Mac's token out from under it. Re-enrolment stays on the publisher
+  (`khu enrol`), and a Mac the owner removed has no record, so it enrols again through a window.
+- Closed window: **403**. No `--key`: **403** (it could not sign a reply, and an unsigned reply is
+  one the Mac must refuse). Past the window's cap of `EnrolPolicy.maxPerWindow`: **429**. `/enrol`
+  attempts are rate-limited per client address (`EnrolPolicy.attemptsPerMinute`, in memory) so the
+  attempts a window's cap does not count cannot be made for free. **Every refusal leaves the state
+  byte for byte as it was**; the numbers the page shows are the numbers the server enforces.
+- `feedURL` is the address **this listener was bound to**, written the one way `publisher.json`
+  writes it (`http://<bind>:<port>/release.json`). That is the address the Mac just reached the
+  publisher at, so it cannot drift from what the Mac's kit says. A wildcard or loopback bind names no
+  address a Mac can use, and a reply naming one would be a feed URL that does not work, so enrolment
+  is refused there (403) instead of guessing.
+
+**Removing a Mac is what makes re-enrolment possible.** `POST /api/remove-machine` (`Remove Mac` on
+the page) or `khu remove --state <dir> --machine <id>` drops the live record — its token hash and its
+waiting orders with it, so the old token cannot report or fetch orders — and appends
+`{machine, removedAt, installed, health, lastSeen, enrolledAt, enrolmentSource, droppedOrders}` to
+`state.removed`, newest last. One read-modify-write under state.lock, like every other change, so
+removals and enrolments from different processes never lose each other. A removed id is **not** barred
+from enrolling: that day of resetting Macs and enrolling them afresh is exactly what removing is for.
+The removal stays in the list as history, and the page says whether that Mac is enrolled again since.
 
 State is `state.json`; every change is one read-modify-write under `state.lock` (flock, shared
 by all processes, `khu enrol` included). An unreadable state file is a 503 that says so and is
@@ -234,6 +283,35 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
   the app itself untouched on the version it was running; a later rollback order then refuses until
   a new install keeps a bundle again.
 - The status page has no CSRF token: it relies on loopback-only, Host and Origin/Referer checks.
+- **An open enrolment window is not a proof of identity, and this is what it does not protect
+  against:** any device that can reach the tailnet address while a window is open can claim a *new*
+  machine id and get a token. It cannot take an existing Mac's id (409), cannot rotate a real Mac's
+  token, cannot reopen the window, and cannot reach the owner's route from off this Mac. What bounds
+  it is the window's own end time (240 minutes at most, opened deliberately, closed by hand or by the
+  clock), the `EnrolPolicy.maxPerWindow` cap on new ids per window, the page listing every Mac that
+  enrolled through a window with its time, and Remove Mac dropping any of them in one click.
+- During an open window a device on the tailnet can learn **whether a given machine id is already
+  enrolled**: an id with a record answers 409 and one without is enrolled. The fleet's names are not
+  secret from the tailnet; nothing else about an enrolled Mac — its token, its apps, its orders — is
+  answered to anything but that Mac's own token.
+- The reply crosses the tailnet with the token inside it, signed but not encrypted: the signature
+  proves *who* answered, Tailscale's own transport encryption is the confidentiality there. A token
+  read off the wire by something that can already see a Mac's tailnet traffic would be usable.
+- The window's end time is wall-clock, and the rate limit lives in memory in each `serve` process:
+  a clock jump can close or extend a window early, and restarting `serve` clears the rate limit (the
+  window's per-window cap and the 409 for an enrolled id do not depend on either). The rate limit is
+  per client address, so several addresses each get their own allowance; the cap on new enrolments
+  per window is the bound that does not depend on anyone's address.
+- A flood inside an open window can therefore use up that window's allowance of new ids — a Mac part
+  way through enrolling may get 429 until the owner opens a new window or removes what a device
+  claimed. It cannot touch a Mac that is already enrolled, cannot stop the owner opening a new
+  window, and is visible on the page as it happens.
+- `state.removed` grows by one record per removal and nothing trims it. Only the owner can add to it,
+  and only from this Mac.
+- A body larger than 4 KiB is refused with 413 once read; the transport's own 1 MiB cap is what stops
+  a larger one, which is refused as a bad request instead.
+- Removing a Mac abandons any order it had not answered, and its agent will report 401 until it is
+  enrolled again: the owner's intent in removing it is that it stops being served.
 
 ## SwiftPM note
 

@@ -56,6 +56,16 @@ A version not newer than the feed's is refused (`--allow-same` to re-publish the
 On the publisher: `~/Library/KHUpdater/bin/khu enrol --state ~/Library/KHUpdater/state --machine <id>` prints the
 Mac's token (only its sha256 is stored). Then on the Mac:
 
+**Or let the Mac enrol itself**: open a window on the publisher's page
+(`http://127.0.0.1:8790`) — or `~/Library/KHUpdater/bin/khu enrol-window --state ~/Library/KHUpdater/state --minutes 30`
+— and the Mac's setup claims a token for itself while the window is open. Enrolment is closed the rest
+of the time. Only a Mac the publisher does not already know can do this: an id that is already enrolled
+is refused over the network, so a device on the tailnet can never take a real Mac's place. A Mac that
+was reset is removed first — `Remove Mac` on the page, or
+`khu remove --state ~/Library/KHUpdater/state --machine <id>` — and then enrols again through the next
+window. The page lists every Mac that enrolled through a window, with the time, so the owner can see
+who claimed one.
+
 ```bash
 K="$HOME/Library/KHUpdater"; mkdir -p "$K/bin" "$K/state" "$K/base/versions/1.0.0" ~/Library/Logs ~/Library/LaunchAgents
 # khu and khu-stub are this repository's build/ outputs, copied to the Mac
