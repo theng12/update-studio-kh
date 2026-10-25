@@ -1867,6 +1867,21 @@ func enrolPost(_ server: FeedServer, machine: String, nonce: String, remote: Str
                                 remote: remote, now: now ?? Date())
 }
 
+/// The report a Mac's agent posts each run.
+func enrolStatusPost(_ server: FeedServer, machine: String, token: String,
+                     body: [String: Any]) -> HTTPResponse {
+    server.handleRequest(HTTPRequest(method: "POST", path: "/status",
+        headers: ["authorization": "Bearer \(token)", "content-type": "application/json"],
+        body: (try? JSONSerialization.data(withJSONObject: body)) ?? Data()), remote: "100.64.0.9")
+}
+
+/// A result post, on either the order route or the automatic one.
+func enrolResultPost(_ server: FeedServer, path: String, token: String, body: [String: Any]) -> HTTPResponse {
+    server.handleRequest(HTTPRequest(method: "POST", path: path,
+        headers: ["authorization": "Bearer \(token)", "content-type": "application/json"],
+        body: (try? JSONSerialization.data(withJSONObject: body)) ?? Data()), remote: "100.64.0.9")
+}
+
 /// Verify a reply the way the Hub does and decode it.
 func enrolReply(_ response: HTTPResponse, key: Curve25519.Signing.PrivateKey) -> EnrolReply? {
     guard let signed = try? JSON.decode(SignedReply.self, from: response.data),
@@ -2332,6 +2347,269 @@ func enrolWindowTests() {
                "E17 a body past the transport's 1 MiB cap is refused before it is read in (\(banned.0))")
         let oversize = overSocket(Data(repeating: 32, count: 64 << 10))
         expect(oversize.0 == 413 && r.machines.isEmpty, "E17 a body past the request's own cap is a 413 (\(oversize.0))")
+    }
+
+    // E18. A state file written by a publisher from BEFORE network enrolment and Remove Mac existed
+    // still decodes. The delivered defect: `removed` was non-optional with a synthesized decoder, so
+    // `{"machines":{…}}` threw, `StateStore.load` reported it, and EVERY route answered 503 for ever
+    // — an upgrade would have silenced the whole fleet with no way back but a hand-edited file.
+    do {
+        let r = EnrolRig("e18-oldstate")
+        let token = "T2xkU3RhdGVUb2tlblR3ZW50eVR3b0J5dGVzMTIzNDU="
+        let hash = Enrolment.sha256Hex(token)
+        // The literal shape `2eaae0c` wrote: no `removed`, no `enrolWindow`, and no MachineState
+        // field added since (`enrolledAt`, `enrolmentSource`, `enrolNonceHash`).
+        let old = """
+        {"machines":{"old-mac":{"machine":"old-mac","tokenHash":"\(hash)","installed":{"demo":"1.2.3"},"health":{"demo":"healthy"},"lastSeen":"2026-10-24T10:00:00.000Z","pending":[],"automatic":{}}}}
+        """
+        try! Data(old.utf8).write(to: StateStore.stateFile(in: r.rig.state))
+        let loaded = try? StateStore.load(from: r.rig.state)
+        expect(loaded?.machines["old-mac"]?.installed["demo"] == "1.2.3"
+               && loaded?.machines["old-mac"]?.tokenHash == hash
+               && loaded?.machines["old-mac"]?.enrolmentSource == nil
+               && loaded?.removed.isEmpty == true && loaded?.enrolWindow == nil,
+               "E18 a state file written before `removed` existed decodes, with its Macs and fields intact")
+        let s = r.server
+        let status = enrolStatusPost(s, machine: "old-mac", token: token,
+                                     body: ["machine": "old-mac", "installed": ["demo": "1.2.4"]])
+        expect(status.status == 200, "E18 /status works against that old state (\(status.status))")
+        let orders = s.handleRequest(HTTPRequest(method: "GET", path: "/commands?machine=old-mac",
+                                                 headers: ["authorization": "Bearer \(token)"]), remote: "100.64.0.9")
+        expect(orders.status == 200, "E18 /commands answers too (\(orders.status))")
+        let page = s.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": r.host]), remote: "127.0.0.1")
+        expect(page.status == 200 && (String(data: page.data, encoding: .utf8) ?? "").contains("old-mac"),
+               "E18 the owner's page renders the old MachineState (\(page.status))")
+        expect(r.machines["old-mac"]?.installed["demo"] == "1.2.4" && r.removed.isEmpty,
+               "E18 the rewrite keeps the Mac and writes the new fields with their empty defaults")
+        // The window too: absent in the old file, present and readable once it is opened.
+        r.openWindow(5)
+        expect(r.window?.minutes == 5 && r.window?.enrolled == 0,
+               "E18 a state written without an `enrolWindow` gains one, and its Mac survives the write")
+        // And the same rule for the other records: a removed Mac and a window written by a build
+        // with fewer fields decode with their empty values instead of making the file unreadable.
+        let sparse = #"{"machines":{},"removed":[{"machine":"gone"}],"enrolWindow":{"until":"2099-01-01T00:00:00.000Z"}}"#
+        try! Data(sparse.utf8).write(to: StateStore.stateFile(in: r.rig.state))
+        let loose = try? StateStore.load(from: r.rig.state)
+        expect(loose?.removed.first?.machine == "gone" && loose?.removed.first?.droppedOrders.isEmpty == true
+               && loose?.enrolWindow?.enrolled == 0 && loose?.enrolWindow?.minutes == 0,
+               "E18 a removed record and a window written with fewer fields decode with their empty values")
+    }
+
+    // E19. A Mac — possibly one that claimed a token through a window and has never been inspected —
+    // cannot grow state.json without limit through /status or the result routes. Every report is a
+    // whole-file rewrite under the one lock every other Mac waits on.
+    do {
+        let r = EnrolRig("e19-bounds")
+        let token = try! Enrolment.enrol(stateDir: r.rig.state, machine: "reporting")
+        // Generous on purpose: this half of E19 is about the entry and value bounds, and the rate
+        // limit has its own server below.
+        let s = FeedServer(feedDir: r.rig.feed, stateDir: r.rig.state, bind: "100.64.0.7", port: 8790,
+                           commandKey: r.rig.pair.privateKey, reportPostsPerMinute: 1000)
+        let apps = Dictionary(uniqueKeysWithValues: (0..<ReportPolicy.maxApps).map { ("app\($0)", "1.0.0") })
+        expect(enrolStatusPost(s, machine: "reporting", token: token,
+                               body: ["machine": "reporting", "installed": apps]).status == 200,
+               "E19 a report with exactly the allowed number of apps is accepted")
+        var over = apps; over["one-more"] = "1.0.0"
+        var longName = apps; longName[String(repeating: "n", count: ReportPolicy.maxNameCharacters + 1)] = "1.0.0"
+        var longVersion = apps; longVersion["app0"] = String(repeating: "v", count: ReportPolicy.maxVersionCharacters + 1)
+        let health = Dictionary(uniqueKeysWithValues: (0..<ReportPolicy.maxApps).map { ("app\($0)", "healthy") })
+        var longHealth = health; longHealth["app0"] = String(repeating: "h", count: ReportPolicy.maxHealthCharacters + 1)
+        var defaults = Dictionary(uniqueKeysWithValues: (0..<ReportPolicy.maxApps).map { ("app\($0)", true) })
+        defaults["one-more"] = true
+        let before = r.stateBytes
+        let refusals = [enrolStatusPost(s, machine: "reporting", token: token, body: ["machine": "reporting", "installed": over]),
+                        enrolStatusPost(s, machine: "reporting", token: token, body: ["machine": "reporting", "installed": longName]),
+                        enrolStatusPost(s, machine: "reporting", token: token, body: ["machine": "reporting", "installed": longVersion]),
+                        enrolStatusPost(s, machine: "reporting", token: token, body: ["machine": "reporting", "health": longHealth]),
+                        enrolStatusPost(s, machine: "reporting", token: token, body: ["machine": "reporting", "automatic_default": defaults])].map { $0.status }
+        expect(refusals == [400, 400, 400, 400, 400], "E19 an oversized report is refused before it is stored (\(refusals))")
+        expect(r.stateBytes == before && r.machines["reporting"]?.installed.count == ReportPolicy.maxApps,
+               "E19 the refused reports wrote nothing: the state and its report are what the last accepted one left")
+        // A result is kept for at most one entry per app and at most maxApps apps: a Mac that keeps
+        // naming new apps evicts the oldest instead of growing the file for ever.
+        for i in 0..<ReportPolicy.maxApps {
+            _ = enrolResultPost(s, path: "/automatic/auto-\(i)/result", token: token,
+                                body: ["machine": "reporting", "app": "invented\(i)", "status": "installed"])
+        }
+        expect((r.machines["reporting"]?.lastResults ?? [:]).count == ReportPolicy.maxApps,
+               "E19 the map holds exactly its allowance of apps (\((r.machines["reporting"]?.lastResults ?? [:]).count))")
+        let overCap = enrolResultPost(s, path: "/automatic/auto-new/result", token: token,
+                                      body: ["machine": "reporting", "app": "one-more", "status": "installed"])
+        let capped = r.machines["reporting"]?.lastResults ?? [:]
+        expect(overCap.status == 200 && capped.count == ReportPolicy.maxApps && capped["one-more"] != nil,
+               "E19 one more app is stored and the OLDEST entry goes: the map never grows past its bound (\(capped.count))")
+        expect(r.stateBytes.count < 64 * 1024,
+               "E19 the whole state a Mac can write that way stays small (\(r.stateBytes.count) bytes)")
+        for _ in 0..<3 {
+            _ = enrolResultPost(s, path: "/automatic/auto-invented5/result", token: token,
+                                body: ["machine": "reporting", "app": "invented5", "status": "installed"])
+        }
+        expect((r.machines["reporting"]?.lastResults ?? [:]).count == ReportPolicy.maxApps
+               && r.machines["reporting"]?.lastResults?["invented5"]?.commandId == "auto-invented5",
+               "E19 three reports for the same app leave ONE entry: the map is keyed by app, never appended")
+        let longId = enrolResultPost(s, path: "/automatic/auto-\(String(repeating: "i", count: ReportPolicy.maxCommandIdCharacters))/result",
+                                     token: token, body: ["machine": "reporting", "app": "app0", "status": "installed"])
+        expect(longId.status == 404, "E19 an order id past its bound is a 404, which the agent reads as no such order (\(longId.status))")
+        let long = [enrolResultPost(s, path: "/automatic/auto-x/result", token: token,
+                                    body: ["machine": "reporting", "app": "app1", "status": String(repeating: "s", count: ReportPolicy.maxStatusCharacters + 1)]),
+                    enrolResultPost(s, path: "/automatic/auto-y/result", token: token,
+                                    body: ["machine": "reporting", "app": "app1", "status": "failed",
+                                           "reason": String(repeating: "r", count: ReportPolicy.maxReasonCharacters + 1)])].map { $0.status }
+        expect(long == [400, 400], "E19 a status or reason past its bound is refused (\(long))")
+        // A loop is bounded too, and the bound is per Mac.
+        let other = try! Enrolment.enrol(stateDir: r.rig.state, machine: "other-2")
+        let limited = FeedServer(feedDir: r.rig.feed, stateDir: r.rig.state, bind: "100.64.0.7", port: 8790,
+                                 commandKey: r.rig.pair.privateKey, reportPostsPerMinute: 3)
+        let codes = (0..<4).map { _ in
+            enrolStatusPost(limited, machine: "reporting", token: token, body: ["machine": "reporting"]).status
+        }
+        expect(codes == [200, 200, 200, 429], "E19 one Mac may report three times a minute and is refused past it (\(codes))")
+        let shared = enrolResultPost(limited, path: "/automatic/auto-z/result", token: token,
+                                     body: ["machine": "reporting", "app": "app1", "status": "installed"])
+        expect(shared.status == 429, "E19 the same limit covers the result routes (\(shared.status))")
+        expect(enrolStatusPost(limited, machine: "other-2", token: other, body: ["machine": "other-2"]).status == 200,
+               "E19 the limit is per machine: one Mac's loop does not silence another")
+    }
+
+    // E20. /enrol cannot be driven by a web page. A `text/plain` POST is a "simple request" a
+    // browser sends cross-site without a preflight, and any browser that sends one also sends
+    // Origin or Referer — which a Mac's own agent never does.
+    do {
+        let r = EnrolRig("e20-csrf")
+        r.openWindow(30)
+        let n = enrolNonce()
+        let json = try! JSONSerialization.data(withJSONObject: ["machine": "csrf-mac", "nonce": n])
+        let plain = r.server.handleRequest(HTTPRequest(method: "POST", path: "/enrol",
+            headers: ["content-type": "text/plain", "origin": "http://evil.test"], body: json), remote: "100.64.0.9")
+        expect(plain.status == 403 && r.machines.isEmpty,
+               "E20 a text/plain fetch from a page is refused (\(plain.status))")
+        let form = r.server.handleRequest(HTTPRequest(method: "POST", path: "/enrol",
+            headers: ["content-type": "application/x-www-form-urlencoded", "referer": "http://evil.test/x"],
+            body: Data("machine=csrf-mac&nonce=\(n)".utf8)), remote: "100.64.0.9")
+        expect(form.status == 403 && r.machines.isEmpty,
+               "E20 a form post from a page is refused before its body is parsed (\(form.status))")
+        expect(enrolPost(r.server, machine: "csrf-mac", nonce: n).status == 200,
+               "E20 the same machine and nonce enrol when no Origin or Referer is present: the agent's own request")
+    }
+
+    // E21. A window is not left full of claims nobody made good on: closing it, or opening a new
+    // one, drops the window-enrolled records that never reported once. A Mac that HAS reported is
+    // never dropped this way, and a squatter's id stops blocking the real Mac.
+    do {
+        let r = EnrolRig("e21-prune")
+        r.openWindow(60)
+        _ = enrolPost(r.server, machine: "claimed", nonce: enrolNonce())
+        let reported = enrolReply(enrolPost(r.server, machine: "reported", nonce: enrolNonce()),
+                                  key: r.rig.pair.privateKey)?.token ?? ""
+        _ = enrolStatusPost(r.server, machine: "reported", token: reported, body: ["machine": "reported"])
+        expect(r.machines.keys.sorted() == ["claimed", "reported"], "E21 setup: one claim that never reported, one Mac that did")
+        try! EnrolmentWindow.close(stateDir: r.rig.state)
+        expect(r.machines.keys.sorted() == ["reported"] && r.window == nil,
+               "E21 closing the window drops the claim that never reported and keeps the Mac that did")
+        r.openWindow(60)
+        _ = enrolPost(r.server, machine: "claimed2", nonce: enrolNonce())
+        _ = enrolOwnerPost(r, "/api/enrol-window", ["minutes": "0"])
+        expect(r.machines.keys.sorted() == ["reported"] && r.window == nil,
+               "E21 the page's own Close drops it as well")
+        r.openWindow(60)
+        _ = enrolPost(r.server, machine: "claimed3", nonce: enrolNonce())
+        r.openWindow(60)
+        expect(r.machines["claimed3"] == nil && r.machines["reported"] != nil && r.window?.enrolled == 0,
+               "E21 opening a new window drops the abandoned claim that belonged to the old one")
+        let slot = EnrolRig("e21-slot", cap: 1)
+        slot.openWindow(60)
+        _ = enrolPost(slot.server, machine: "squatter", nonce: enrolNonce())
+        slot.openWindow(60)
+        expect(enrolPost(slot.server, machine: "real-mac", nonce: enrolNonce()).status == 200
+               && slot.machines["squatter"] == nil,
+               "E21 a new window frees the cap slot an abandoned claim was holding")
+    }
+
+    // E22. A Mac whose signed reply was lost resends the SAME machine and nonce and gets a fresh
+    // token, instead of a 409 that would strand it until the owner removed it by hand.
+    do {
+        let r = EnrolRig("e22-retry", cap: 1)
+        r.openWindow(60)
+        let n = enrolNonce()
+        let first = enrolPost(r.server, machine: "retry-mac", nonce: n)
+        let firstToken = enrolReply(first, key: r.rig.pair.privateKey)?.token ?? ""
+        let again = enrolPost(r.server, machine: "retry-mac", nonce: n)
+        let againToken = enrolReply(again, key: r.rig.pair.privateKey)?.token ?? ""
+        expect(first.status == 200 && again.status == 200 && againToken.count >= 32 && againToken != firstToken,
+               "E22 a resend of the same machine and nonce gets a fresh signed reply (\(again.status))")
+        expect(r.machines["retry-mac"]?.tokenHash == Enrolment.sha256Hex(againToken) && r.window?.enrolled == 1,
+               "E22 the stored hash is the token this Mac now holds, and the resend spent no second slot")
+        expect(enrolStatusPost(r.server, machine: "retry-mac", token: againToken,
+                               body: ["machine": "retry-mac"]).status == 200, "E22 the re-minted token reports")
+        expect(enrolStatusPost(r.server, machine: "retry-mac", token: firstToken,
+                               body: ["machine": "retry-mac"]).status == 401,
+               "E22 the token only the lost reply carried no longer works")
+        expect(enrolPost(r.server, machine: "retry-mac", nonce: enrolNonce()).status == 409,
+               "E22 the same machine with a DIFFERENT nonce is refused: another device cannot rotate it")
+        expect(enrolPost(r.server, machine: "retry-mac", nonce: n).status == 409,
+               "E22 once the Mac has reported, the same nonce is refused as well")
+        try! EnrolmentWindow.close(stateDir: r.rig.state)
+        expect(enrolPost(r.server, machine: "retry-mac", nonce: n).status == 403,
+               "E22 with the window closed nothing is re-minted")
+        let owned = EnrolRig("e22-owner")
+        owned.openWindow(60)
+        _ = try! Enrolment.enrol(stateDir: owned.rig.state, machine: "owner-mac")
+        expect(enrolPost(owned.server, machine: "owner-mac", nonce: enrolNonce()).status == 409,
+               "E22 a Mac the owner enrolled has no nonce to match, so it is never re-minted over the network")
+    }
+
+    // E23. /enrol is the one route anything on the tailnet may reach, so it says nothing about this
+    // Mac: no state path, no decoder text, no bind, no port. The detail stays where the owner reads it.
+    do {
+        let r = EnrolRig("e23-generic")
+        r.openWindow(30)
+        try! Data("{not json".utf8).write(to: StateStore.stateFile(in: r.rig.state))
+        let broken = enrolPost(r.server, machine: "mac1", nonce: enrolNonce())
+        let brokenText = String(data: broken.data, encoding: .utf8) ?? ""
+        expect(broken.status == 503 && !brokenText.contains(r.rig.state.path) && !brokenText.contains("state.json")
+               && !brokenText.lowercased().contains("decode"),
+               "E23 an unreadable state file is a 503 with a sentence, never the path or the decoder's words (\(broken.status): \(brokenText))")
+        let page = r.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": r.host]), remote: "127.0.0.1")
+        expect((String(data: page.data, encoding: .utf8) ?? "").contains("state.json"),
+               "E23 the owner's own page still names the file it could not read")
+        try? fm.removeItem(at: StateStore.stateFile(in: r.rig.state))
+        r.openWindow(30)
+        let unroutable = FeedServer(feedDir: r.rig.feed, stateDir: r.rig.state, bind: "127.0.0.1", port: 8790,
+                                    commandKey: r.rig.pair.privateKey)
+        let bindText = String(data: enrolPost(unroutable, machine: "mac1", nonce: enrolNonce()).data, encoding: .utf8) ?? ""
+        expect(!bindText.contains("127.0.0.1") && !bindText.contains("8790") && !bindText.contains("0.0.0.0"),
+               "E23 the unroutable-bind refusal does not echo the bind or the port (\(bindText))")
+    }
+
+    // E24. One window constructor, and one address range. `EnrolWindow.starting` is what the route
+    // and the CLI both store, so the window the page shows and the server enforces cannot drift;
+    // and /enrol names only the Tailscale range the Hub's own `publisher_config` accepts, because a
+    // LAN feed URL would be one the Mac's Hub refuses to adopt.
+    do {
+        let now = Date()
+        let made = EnrolWindow.starting(minutes: 7, now: now)
+        expect(made.minutes == 7 && made.enrolled == 0
+               && abs((made.untilDate?.timeIntervalSince(now) ?? 0) - 420) < 1,
+               "E24 EnrolWindow.starting is the one constructor: seven minutes, none enrolled")
+        let r = EnrolRig("e24-window")
+        _ = enrolOwnerPost(r, "/api/enrol-window", ["minutes": "7"])
+        let opened = r.window
+        let span = opened?.untilDate?.timeIntervalSince(opened.flatMap { ISO.date($0.openedAt) } ?? now) ?? 0
+        expect(opened?.minutes == 7 && abs(span - 420) < 1,
+               "E24 the owner route stores a window of exactly seven minutes from its own openedAt (\(span) s)")
+        let accepted = ["100.64.0.0", "100.64.0.7", "100.127.255.255"]
+        let refused = ["192.168.1.5", "10.0.0.7", "172.16.0.7", "100.63.255.255", "100.128.0.0",
+                       "127.0.0.1", "0.0.0.0", "169.254.1.1"]
+        expect(accepted.allSatisfy { FeedServer.isTailnet($0) } && refused.allSatisfy { !FeedServer.isTailnet($0) },
+               "E24 only the Tailscale range the Hub accepts counts as reachable")
+        r.openWindow(30)
+        for bind in ["192.168.1.5", "10.0.0.7"] {
+            let server = FeedServer(feedDir: r.rig.feed, stateDir: r.rig.state, bind: bind, port: 8790,
+                                    commandKey: r.rig.pair.privateKey)
+            expect(enrolPost(server, machine: "lan-mac", nonce: enrolNonce()).status == 403,
+                   "E24 a LAN bind of \(bind) refuses enrolment instead of naming a URL the Hub refuses")
+        }
+        expect(r.machines.isEmpty, "E24 no LAN bind enrolled anything")
     }
 }
 

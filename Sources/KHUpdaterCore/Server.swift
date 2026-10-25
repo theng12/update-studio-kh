@@ -204,14 +204,14 @@ public enum ServerDecision {
     public static func ownerRouteAllowed(remote: String) -> Bool { isLoopbackRemote(remote) }
 }
 
-/// A modest bound on how often ONE client address may ask to enrol: a `/enrol` body is two short
-/// strings and costs almost nothing to send, while every attempt that gets past the checks costs a
-/// lock, a state read and a signature. The window's own cap bounds the enrolments that succeed;
-/// this bounds the attempts that do not.
+/// A bound on how often ONE key may ask for something that costs a lock, a state read and a
+/// signature. `/enrol` is keyed by client address (a body is two short strings and costs almost
+/// nothing to send, while the window's own cap bounds the enrolments that succeed); the report
+/// routes are keyed by machine id (a Mac posts status once per run, but nothing stops a loop).
 ///
 /// Held in memory, per listening server: the limit is a guard against a scripted flood, not a
 /// durable record, and restarting `serve` clearing it is fine.
-final class EnrolRateLimiter: @unchecked Sendable {
+final class RateLimiter: @unchecked Sendable {
     private let lock = NSLock()
     private var seen: [String: [TimeInterval]] = [:]
     private let attempts: Int
@@ -219,17 +219,17 @@ final class EnrolRateLimiter: @unchecked Sendable {
 
     init(attempts: Int) { self.attempts = attempts }
 
-    /// Counts the attempt only when it is allowed: a refused address stays refused for the rest of
+    /// Counts the attempt only when it is allowed: a refused key stays refused for the rest of
     /// the minute instead of pushing its own deadline forward.
-    func allow(_ remote: String, now: Date = Date()) -> Bool {
+    func allow(_ key: String, now: Date = Date()) -> Bool {
         let t = now.timeIntervalSince1970
         lock.lock()
         defer { lock.unlock() }
         if seen.count > 256 { seen = seen.filter { t - ($0.value.last ?? 0) < span } }
-        var hits = (seen[remote] ?? []).filter { t - $0 < span }
+        var hits = (seen[key] ?? []).filter { t - $0 < span }
         let allowed = hits.count < attempts
         if allowed { hits.append(t) }
-        seen[remote] = hits
+        seen[key] = hits
         return allowed
     }
 }
@@ -247,12 +247,16 @@ public final class FeedServer: @unchecked Sendable {
     /// minute. Both are injectable so a test can prove the bounds without a 200-Mac fixture.
     public let maxEnrolmentsPerWindow: Int
     public let enrolAttemptsPerMinute: Int
-    private let enrolLimiter: EnrolRateLimiter
+    /// `/status` and result posts one Mac may make per minute.
+    public let reportPostsPerMinute: Int
+    private let enrolLimiter: RateLimiter
+    private let reportLimiter: RateLimiter
 
     public init(feedDir: URL, stateDir: URL, bind: String, port: Int,
                 commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32,
                 maxEnrolmentsPerWindow: Int = EnrolPolicy.maxPerWindow,
-                enrolAttemptsPerMinute: Int = EnrolPolicy.attemptsPerMinute) {
+                enrolAttemptsPerMinute: Int = EnrolPolicy.attemptsPerMinute,
+                reportPostsPerMinute: Int = ReportPolicy.perMachinePerMinute) {
         self.feedDir = feedDir
         self.stateDir = stateDir
         self.bind = bind
@@ -261,7 +265,9 @@ public final class FeedServer: @unchecked Sendable {
         self.maxConnections = maxConnections
         self.maxEnrolmentsPerWindow = maxEnrolmentsPerWindow
         self.enrolAttemptsPerMinute = enrolAttemptsPerMinute
-        self.enrolLimiter = EnrolRateLimiter(attempts: enrolAttemptsPerMinute)
+        self.reportPostsPerMinute = reportPostsPerMinute
+        self.enrolLimiter = RateLimiter(attempts: enrolAttemptsPerMinute)
+        self.reportLimiter = RateLimiter(attempts: reportPostsPerMinute)
     }
 
     static func text(_ status: Int, _ message: String) -> HTTPResponse { HTTPResponse(status, "text/plain; charset=utf-8", message) }
@@ -269,24 +275,36 @@ public final class FeedServer: @unchecked Sendable {
 
     /// A state transaction, answered honestly: an unreadable state file is a 503 that says so (the
     /// file is left as it is), and a change that could not be saved is a 500 — never a 200.
-    func transact(_ change: (inout ServerState) throws -> HTTPResponse) -> HTTPResponse {
+    ///
+    /// The detail names the absolute state path and the decoder's own words, which is what the owner
+    /// needs on their own Mac. `/enrol` is the one route anything on the tailnet may call, so it
+    /// asks for `genericFailure`: the sender gets a plain sentence and the detail never leaves this
+    /// Mac.
+    func transact(genericFailure: Bool = false,
+                  _ change: (inout ServerState) throws -> HTTPResponse) -> HTTPResponse {
         do {
             return try FileLock.withExclusive(StateStore.lockFile(in: stateDir)) {
                 let state: ServerState
                 do { state = try StateStore.load(from: stateDir) } catch {
-                    return Self.text(503, "the publisher's state file cannot be read (\(error)); it was left untouched")
+                    FileHandle.standardError.write(Data("publisher: state unreadable: \(error)\n".utf8))
+                    return genericFailure
+                        ? Self.text(503, "the publisher cannot read its own state right now; ask its owner to check it")
+                        : Self.text(503, "the publisher's state file cannot be read (\(error)); it was left untouched")
                 }
                 var next = state
                 let response = try change(&next)
                 if next != state {
                     do { try StateStore.save(next, to: stateDir) } catch {
-                        return Self.text(500, "could not save the publisher's state: \(error)")
+                        FileHandle.standardError.write(Data("publisher: state not saved: \(error)\n".utf8))
+                        return genericFailure
+                            ? Self.text(500, "the publisher could not record that just now; try again shortly")
+                            : Self.text(500, "could not save the publisher's state: \(error)")
                     }
                 }
                 return response
             }
         } catch {
-            return Self.text(500, "\(error)")
+            return genericFailure ? Self.text(500, "the publisher could not answer that just now") : Self.text(500, "\(error)")
         }
     }
 
@@ -303,27 +321,23 @@ public final class FeedServer: @unchecked Sendable {
     /// The feed URL a Mac learning this publisher gets. It is the address THIS listener was bound
     /// to, which is the address the Mac just reached it at, written the one way `publisher.json`
     /// writes it — so the Mac's own check that the reply agrees with its kit cannot fail for a
-    /// mistake in a second place. Nothing is guessed: a wildcard or loopback bind names no address a
-    /// Mac can use, and a reply naming one would be a feed URL that does not work, so enrolment is
-    /// refused instead.
+    /// mistake in a second place. Nothing is guessed: an address the Mac's Hub would refuse is one
+    /// the reply must not name, so enrolment is refused instead.
     var enrolFeedURL: String? {
-        guard (1...65535).contains(port), Self.isRoutable(bind) else { return nil }
+        guard (1...65535).contains(port), Self.isTailnet(bind) else { return nil }
         return "http://\(bind):\(port)/release.json"
     }
 
-    /// An address a Mac could really reach: a unicast IPv4 that is not this Mac's own loopback, not
-    /// link-local, not the unspecified address and not multicast. A list of spellings was not enough
-    /// — `127.0.0.2` is as unreachable from a Mac as `127.0.0.1`, and a reply naming it would be a
-    /// feed URL pointing at the Mac itself. A LAN address is allowed too: it is a real address some
-    /// Macs on the same network can reach.
-    static func isRoutable(_ address: String) -> Bool {
+    /// An address the Hub's own `publisher_config` will accept: 100.64.0.0/10, the Tailscale CGNAT
+    /// range and the only range a Mac in this fleet is told to use. The two sides must agree or the
+    /// publisher hands out a feed URL the Hub refuses to adopt — a Mac that enrolled successfully
+    /// and still cannot report. The macOS listener refuses loopback, wildcard, link-local, multicast
+    /// and ordinary LAN addresses alike, rather than guessing which of them some Mac could reach.
+    static func isTailnet(_ address: String) -> Bool {
         var addr = in_addr()
         guard inet_pton(AF_INET, address, &addr) == 1 else { return false }
         let host = UInt32(bigEndian: addr.s_addr)
-        if host >> 24 == 127 { return false }                 // 127.0.0.0/8
-        if host >> 28 == 0xE { return false }                 // 224.0.0.0/4 multicast
-        if host >> 16 == 0xA9FE { return false }              // 169.254.0.0/16 link-local
-        return host != 0 && host != 0xFFFF_FFFF               // unspecified / broadcast
+        return host >> 24 == 100 && (64...(127)).contains((host >> 16) & 0xFF)   // 100.64.0.0/10
     }
 
     /// A nonce is 64 hexadecimal characters and is echoed back verbatim. Accepting anything else
@@ -333,11 +347,42 @@ public final class FeedServer: @unchecked Sendable {
             && nonce.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) || ($0 >= 65 && $0 <= 70) }
     }
 
+    /// A `/status` report is bounded before it is stored, so one Mac — possibly one that claimed a
+    /// token through a window and has never been inspected — cannot make `state.json` grow without
+    /// limit. Returns the refusal sentence, or nil when the report fits.
+    static func reportRefusal(installed: [String: String]?, health: [String: String]?,
+                              defaults: [String: Bool]?) -> String? {
+        func fits(_ names: [String], _ values: [String], _ valueLimit: Int) -> Bool {
+            names.count <= ReportPolicy.maxApps && values.count <= ReportPolicy.maxApps
+                && names.allSatisfy { !$0.isEmpty && $0.utf8.count <= ReportPolicy.maxNameCharacters }
+                && values.allSatisfy { $0.utf8.count <= valueLimit }
+        }
+        if let installed, !fits(Array(installed.keys), Array(installed.values), ReportPolicy.maxVersionCharacters) {
+            return "that Mac reported more apps, or longer names or versions, than this publisher accepts (at most \(ReportPolicy.maxApps) apps, \(ReportPolicy.maxNameCharacters) characters for a name, \(ReportPolicy.maxVersionCharacters) for a version)"
+        }
+        if let health, !fits(Array(health.keys), Array(health.values), ReportPolicy.maxHealthCharacters) {
+            return "that Mac reported more health entries, or longer ones, than this publisher accepts (at most \(ReportPolicy.maxApps), \(ReportPolicy.maxHealthCharacters) characters each)"
+        }
+        if let defaults, defaults.count > ReportPolicy.maxApps
+            || !defaults.keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= ReportPolicy.maxNameCharacters }) {
+            return "that Mac reported more Automatic defaults, or longer app names, than this publisher accepts (at most \(ReportPolicy.maxApps) apps, \(ReportPolicy.maxNameCharacters) characters for a name)"
+        }
+        return nil
+    }
+
     /// `POST /enrol` — a Mac claiming a token for itself while the owner has a window open. Every
     /// refusal is a plain sentence and leaves the state exactly as it was.
     func enrol(_ req: HTTPRequest, remote: String, now: Date = Date()) -> HTTPResponse {
         guard enrolLimiter.allow(remote, now: now) else {
             return Self.text(429, "too many enrolment requests from this address; wait a minute and try again")
+        }
+        // This is the one route with no token, so it is the one a web page could reach: a
+        // `text/plain` POST is a "simple request" that a browser sends cross-site without a
+        // preflight, and spending the owner's enrolment window would be the whole effect. Browsers
+        // send Origin (and usually Referer); a Mac's own agent sends neither, so a request that
+        // carries one is refused before its body is touched.
+        guard req.headers["origin"] == nil, req.headers["referer"] == nil else {
+            return Self.text(403, "a web page cannot enrol a Mac: this route is for a Mac's own agent, which sends no Origin or Referer")
         }
         guard req.body.count <= EnrolPolicy.maxBodyBytes else {
             return Self.text(413, "that enrolment request is too large")
@@ -357,12 +402,14 @@ public final class FeedServer: @unchecked Sendable {
         guard let commandKey else {
             return Self.text(403, "this publisher has no signing key, so it cannot enrol a Mac: start `khu serve` with --key")
         }
+        // A sentence for the sender, never the bind or the port this listener was given: `/enrol`
+        // is open to anything on the tailnet, and where the publisher listens is not its business.
         guard let feedURL = enrolFeedURL else {
-            return Self.text(403, "this publisher is listening on \(bind), which is not an address a Mac can reach: bind the address the Macs use (the LaunchAgent binds the Tailscale address)")
+            return Self.text(403, "this publisher is not listening on an address a Mac can reach, so it cannot enrol one: its owner must bind the Tailscale address (the LaunchAgent does)")
         }
         let publicKey = commandKey.publicKey.rawRepresentation.base64EncodedString()
         let issuedAt = Int(now.timeIntervalSince1970)
-        return transact { state in
+        return transact(genericFailure: true) { state in
             guard let window = state.enrolWindow, window.isOpen(at: now) else {
                 return Self.text(403, "this publisher is not taking new Macs right now; ask the owner to open an enrolment window")
             }
@@ -370,10 +417,23 @@ public final class FeedServer: @unchecked Sendable {
             // else happens: another device on the tailnet must never be able to rotate a real Mac's
             // token out from under it. Re-enrolment runs on the publisher itself (`khu enrol`), and
             // a removed Mac enrols again through a window because it has no record left.
-            guard state.machines[machine] == nil else {
+            //
+            // The one exception is the SAME claim arriving twice: a Mac that enrolled through a
+            // window and never reported, resending its own machine and nonce because the signed
+            // reply was lost on the way back. It cannot use the token it never received, so a plain
+            // 409 would strand it until the owner removed it by hand. The nonce is what makes it
+            // the same claim — a different nonce, or a record that has reported, is still 409 —
+            // and the resend mints a fresh token, so a reply that WAS seen and kept is replaced by
+            // one this Mac asked for with the same question.
+            let retry = state.machines[machine].map { record in
+                record.enrolmentSource == MachineState.windowSource && record.lastSeen == nil
+                    && record.enrolNonceHash == Enrolment.sha256Hex(nonce)
+            } ?? false
+            guard state.machines[machine] == nil || retry else {
                 return Self.text(409, "that Mac is already enrolled with this publisher, so another device on the tailnet cannot take its place; if it was reset, the owner removes it on the publisher first (Remove Mac on the status page, or `khu remove`) and then it enrols again through a window")
             }
-            guard window.enrolled < maxEnrolmentsPerWindow else {
+            // A resend is the same enrolment, not a second one: it must not spend another slot.
+            guard retry || window.enrolled < maxEnrolmentsPerWindow else {
                 return Self.text(429, "this enrolment window has already enrolled as many Macs as it allows (\(maxEnrolmentsPerWindow)); ask the owner to open a new one")
             }
             let token = Enrolment.token()
@@ -382,10 +442,12 @@ public final class FeedServer: @unchecked Sendable {
             let body = JSON.encode(EnrolReply(machine: machine, nonce: nonce, feedURL: feedURL,
                                               publicKey: publicKey, issuedAt: issuedAt, token: token))
             guard let signature = try? Signing.sign(body, with: commandKey) else {
-                return Self.text(500, "could not sign the enrolment reply")
+                FileHandle.standardError.write(Data("publisher: could not sign an enrolment reply\n".utf8))
+                return Self.text(500, "the publisher could not answer that just now; try again")
             }
-            Enrolment.store(token, for: machine, at: now, source: MachineState.windowSource, in: &state)
-            state.enrolWindow?.enrolled = window.enrolled + 1
+            Enrolment.store(token, for: machine, at: now, source: MachineState.windowSource,
+                            nonce: nonce, in: &state)
+            if !retry { state.enrolWindow?.enrolled = window.enrolled + 1 }
             return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
         }
     }
@@ -422,12 +484,22 @@ public final class FeedServer: @unchecked Sendable {
             guard let token = machineToken(req) else { return Self.text(401, "missing token") }
             guard let body = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
                   let machine = body["machine"] as? String else { return Self.text(400, "missing machine") }
+            let installed = body["installed"] as? [String: String]
+            let health = body["health"] as? [String: String]
+            let defaults = body["automatic_default"] as? [String: Bool]
+            if let refusal = Self.reportRefusal(installed: installed, health: health, defaults: defaults) {
+                return Self.text(400, refusal)
+            }
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
+                // Counted only for the Mac the token proves: a limit keyed on a machine id the
+                // body names, before the token is checked, would let anything on the tailnet
+                // silence a Mac's reports by sending them with its id.
+                guard reportLimiter.allow(machine) else { return Self.text(429, "this Mac is reporting too often; try again in a minute") }
                 var ms = state.machines[machine]!
-                if let installed = body["installed"] as? [String: String] { ms.installed = installed }
-                if let health = body["health"] as? [String: String] { ms.health = health }
-                if let defaults = body["automatic_default"] as? [String: Bool] { ms.automaticDefault = defaults }
+                if let installed { ms.installed = installed }
+                if let health { ms.health = health }
+                if let defaults { ms.automaticDefault = defaults }
                 ms.lastSeen = ISO.string(Date())
                 state.machines[machine] = ms
                 return Self.ok
@@ -468,13 +540,28 @@ public final class FeedServer: @unchecked Sendable {
             let prefix = automatic ? "/automatic/" : "/commands/"
             let id = String(req.path.dropFirst(prefix.count).dropLast("/result".count))
             guard !id.isEmpty, !id.contains("/") else { return Self.text(404, "not found") }
+            // An id is stored with its result and comes out of the path. 404, not 400: the agent
+            // reads that as an order the publisher no longer has, which is the truthful answer for
+            // an id this publisher would never have issued.
+            guard id.utf8.count <= ReportPolicy.maxCommandIdCharacters else { return Self.text(404, "not found") }
             guard let token = machineToken(req) else { return Self.text(401, "missing token") }
             guard let body = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
                   let machine = body["machine"] as? String else { return Self.text(400, "missing machine") }
+            let status = body["status"] as? String ?? ""
+            let reason = body["reason"] as? String
+            // `status` and `reason` are rendered on the owner's page, and both are the reporting
+            // Mac's own words: a bounded sentence, not a place to grow state.json.
+            guard status.utf8.count <= ReportPolicy.maxStatusCharacters,
+                  (reason?.utf8.count ?? 0) <= ReportPolicy.maxReasonCharacters else {
+                return Self.text(400, "that result's status or reason is too long")
+            }
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
+                // As on /status: counted for the Mac the token proves, never for a name the body
+                // chose.
+                guard reportLimiter.allow(machine) else { return Self.text(429, "this Mac is reporting too often; try again in a minute") }
                 var ms = state.machines[machine]!
-                let result = CommandResult(commandId: id, status: body["status"] as? String ?? "", reason: body["reason"] as? String)
+                let result = CommandResult(commandId: id, status: status, reason: reason)
                 let named = (body["app"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 var all = ms.lastResults ?? [:]
                 // An order is looked up by id for this Mac, and it is the order — never the body —
@@ -491,8 +578,21 @@ public final class FeedServer: @unchecked Sendable {
                     ms.pending.removeAll { $0.id == id }  // the acknowledgement
                 } else {
                     // Automatic reports have their own route and never acknowledge pending orders.
+                    // The Mac mints its own `auto-` ids, so there is no stored order to match one
+                    // by; what bounds this map instead is the number of apps it may hold, below.
                     guard id.hasPrefix("auto-"), let named else { return Self.text(400, "an automatic result needs an auto id and app") }
+                    guard (try? SafeName.component(named, what: "app")) != nil else {
+                        return Self.text(404, "that app name is not one this publisher accepts")
+                    }
                     all[named] = result
+                }
+                // One result per app — the map is keyed by app — and at most `maxApps` apps. A Mac
+                // that keeps naming new ones evicts the oldest rather than growing the file for
+                // ever; with `installed`, `health` and the value bounds capped at the same figure,
+                // everything a Mac can write has a size that does not depend on how long it runs.
+                if all.count > ReportPolicy.maxApps {
+                    let oldest = all.min { ($0.value.at, $0.key) < ($1.value.at, $1.key) }?.key
+                    if let oldest { all.removeValue(forKey: oldest) }
                 }
                 ms.lastResult = result
                 ms.lastResults = all
@@ -528,16 +628,18 @@ public final class FeedServer: @unchecked Sendable {
                             return Self.text(400, "send minutes: 0 closes the window, 1 to \(EnrolPolicy.maxMinutes) opens one")
                         }
                         if minutes == 0 {
+                            // The same close the CLI performs: a window-enrolled record that never
+                            // reported goes with it, so the cap is not left full of claims nobody
+                            // made good on.
+                            state.pruneUnreportedWindowEnrolments()
                             state.enrolWindow = nil
                             return Self.ok
                         }
                         guard (1...EnrolPolicy.maxMinutes).contains(minutes) else {
                             return Self.text(400, "minutes must be 0 (close) or 1 to \(EnrolPolicy.maxMinutes)")
                         }
-                        let now = Date()
-                        state.enrolWindow = EnrolWindow(openedAt: ISO.string(now),
-                                                        until: ISO.string(now.addingTimeInterval(Double(minutes) * 60)),
-                                                        minutes: minutes, enrolled: 0)
+                        state.pruneUnreportedWindowEnrolments()
+                        state.enrolWindow = EnrolWindow.starting(minutes: minutes)
                         return Self.ok
                     }
                     guard let machine = f["machine"], !machine.isEmpty else { return Self.text(400, "send machine") }

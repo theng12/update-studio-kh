@@ -87,11 +87,42 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// written before a window existed.
     public var enrolledAt: String?
     public var enrolmentSource: String?
+    /// The sha256 of the nonce a window enrolment was minted for, never the nonce itself (it is not
+    /// a secret, but nothing here needs it and a hash cannot be confused with a token). A Mac whose
+    /// signed reply was lost resends the SAME machine and nonce; matching this lets the publisher
+    /// answer that resend with a fresh token instead of a 409 that would strand the Mac for ever.
+    public var enrolNonceHash: String?
     /// The one enrolment source the status page lists.
     public static let windowSource = "window"
     public init(machine: String) {
         self.machine = machine; self.installed = [:]; self.health = [:]
         self.pending = []; self.automatic = [:]
+    }
+
+    /// Every field this record has ever had decodes as optional, with the empty value it had when it
+    /// was absent. A state file written before a field existed (a field added by a later build) must
+    /// keep loading: a publisher that cannot decode its own state serves 503 to every Mac for ever,
+    /// which is a worse fault than any single missing field.
+    private enum CodingKeys: String, CodingKey {
+        case machine, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
+             automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        machine = try c.decode(String.self, forKey: .machine)
+        tokenHash = try c.decodeIfPresent(String.self, forKey: .tokenHash)
+        installed = try c.decodeIfPresent([String: String].self, forKey: .installed) ?? [:]
+        health = try c.decodeIfPresent([String: String].self, forKey: .health) ?? [:]
+        lastSeen = try c.decodeIfPresent(String.self, forKey: .lastSeen)
+        pending = try c.decodeIfPresent([ServerCommand].self, forKey: .pending) ?? []
+        lastResult = try c.decodeIfPresent(CommandResult.self, forKey: .lastResult)
+        lastResults = try c.decodeIfPresent([String: CommandResult].self, forKey: .lastResults)
+        automatic = try c.decodeIfPresent([String: Bool].self, forKey: .automatic) ?? [:]
+        automaticDefault = try c.decodeIfPresent([String: Bool].self, forKey: .automaticDefault)
+        capabilities = try c.decodeIfPresent([String].self, forKey: .capabilities)
+        enrolledAt = try c.decodeIfPresent(String.self, forKey: .enrolledAt)
+        enrolmentSource = try c.decodeIfPresent(String.self, forKey: .enrolmentSource)
+        enrolNonceHash = try c.decodeIfPresent(String.self, forKey: .enrolNonceHash)
     }
 
     /// The setting the agent will actually follow.
@@ -165,6 +196,32 @@ public enum EnrolPolicy {
     public static let nonceCharacters = 64
 }
 
+/// What an enrolled Mac may write into the owner's state through `/status`, `/commands/<id>/result`
+/// and `/automatic/<id>/result`. A token minted through a window is held by a Mac nobody has
+/// inspected yet, so every collection it can add to has a bound: without one, a single Mac's
+/// reports grow `state.json` for ever, and every write is a whole-file rewrite under the one state
+/// lock that every other Mac is waiting on.
+public enum ReportPolicy {
+    /// Distinct apps one Mac's report may name, in `installed`, `health`, `automatic_default` and
+    /// the per-app results together. A real Mac runs a handful.
+    public static let maxApps = 64
+    /// The longest app id accepted in a report's maps or in a result. `SafeName` is the harder rule
+    /// for a name that becomes a file name; this bounds the rest.
+    public static let maxNameCharacters = 128
+    public static let maxVersionCharacters = 64
+    public static let maxHealthCharacters = 64
+    /// A result's `status` and `reason`, which the page shows. A reason is one sentence.
+    public static let maxStatusCharacters = 64
+    public static let maxReasonCharacters = 400
+    /// The order id a result names: a UUID, or `auto-` and a UUID, and nothing longer. It is stored
+    /// with the result and comes out of the URL path, so it needs a bound of its own.
+    public static let maxCommandIdCharacters = 128
+    /// `/status` plus result posts one Mac may make per minute. The agent posts status once per run
+    /// (every five minutes) and a result per order, so this is far above any real Mac's rate and
+    /// only bounds a loop.
+    public static let perMachinePerMinute = 60
+}
+
 /// A period during which Macs may enrol themselves over the network; closed the rest of the time.
 /// It is stored in state.json under state.lock, and its end time is the only thing that decides
 /// whether it is open — there is no second flag that can disagree with it.
@@ -180,6 +237,27 @@ public struct EnrolWindow: Codable, Sendable, Equatable {
     }
 
     public var untilDate: Date? { ISO.date(until) }
+
+    /// A window written by a build with fewer fields is still a window: a field it does not have is
+    /// the value it had when it was absent. An absent `until` is an end time that cannot be read,
+    /// which `isOpen` already treats as closed — never as open.
+    private enum CodingKeys: String, CodingKey { case openedAt, until, minutes, enrolled }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        openedAt = try c.decodeIfPresent(String.self, forKey: .openedAt) ?? ""
+        until = try c.decodeIfPresent(String.self, forKey: .until) ?? ""
+        minutes = try c.decodeIfPresent(Int.self, forKey: .minutes) ?? 0
+        enrolled = try c.decodeIfPresent(Int.self, forKey: .enrolled) ?? 0
+    }
+
+    /// A window of `minutes` starting at `now`. One constructor for every caller (the owner route,
+    /// the CLI and the page): two copies of this arithmetic are two chances for the window the page
+    /// shows and the window the server enforces to disagree.
+    public static func starting(minutes: Int, now: Date = Date()) -> EnrolWindow {
+        EnrolWindow(openedAt: ISO.string(now),
+                    until: ISO.string(now.addingTimeInterval(Double(minutes) * 60)),
+                    minutes: minutes, enrolled: 0)
+    }
 
     /// An end time that cannot be read is NOT an open window: "I could not work out the answer" and
     /// "the answer is yes" must never be the same value.
@@ -198,22 +276,33 @@ public enum EnrolmentWindow {
     /// Open a window for `minutes` (1...`EnrolPolicy.maxMinutes`) from now. Opening a window while
     /// one is already open replaces it and resets its count: the owner asking for a fresh window is
     /// exactly what a fresh count is for.
+    ///
+    /// Opening also drops every window-enrolled record that never reported (`/status` once). Such a
+    /// record is either a Mac whose signed reply was lost on the way — it cannot use the token it
+    /// never received — or an id a device on the tailnet claimed and abandoned. Either way it holds
+    /// one of the window's cap slots and 409s the real Mac that wants that id, and nothing but the
+    /// owner's removal would ever free it. A record that HAS reported is never dropped here.
     @discardableResult
     public static func open(stateDir: URL, minutes: Int, now: Date = Date()) throws -> EnrolWindow {
         guard (1...EnrolPolicy.maxMinutes).contains(minutes) else {
             throw khuFail("an enrolment window is 1 to \(EnrolPolicy.maxMinutes) minutes, not \(minutes); 0 closes it")
         }
-        let window = EnrolWindow(openedAt: ISO.string(now),
-                                 until: ISO.string(now.addingTimeInterval(Double(minutes) * 60)),
-                                 minutes: minutes, enrolled: 0)
-        try StateStore.update(in: stateDir) { $0.enrolWindow = window }
+        let window = EnrolWindow.starting(minutes: minutes, now: now)
+        try StateStore.update(in: stateDir) { state in
+            state.pruneUnreportedWindowEnrolments()
+            state.enrolWindow = window
+        }
         return window
     }
 
     /// Closing drops the record: a closed window is the absence of one, so nothing can read a stale
-    /// end time as an open door.
+    /// end time as an open door. It drops unreported window enrolments too — a close is the owner
+    /// saying this round is over, so the cap is not left full of claims nobody ever made good on.
     public static func close(stateDir: URL) throws {
-        try StateStore.update(in: stateDir) { $0.enrolWindow = nil }
+        try StateStore.update(in: stateDir) { state in
+            state.pruneUnreportedWindowEnrolments()
+            state.enrolWindow = nil
+        }
     }
 }
 
@@ -246,6 +335,24 @@ public struct RemovedMachine: Codable, Sendable, Equatable {
                   lastSeen: state.lastSeen, enrolledAt: state.enrolledAt, enrolmentSource: state.enrolmentSource,
                   droppedOrders: state.pending)
     }
+
+    /// Same rule as every other record in the state file: a field this build does not find is the
+    /// value it had when it was absent, so a newer build's file (or an older one) never makes the
+    /// whole publisher unreadable.
+    private enum CodingKeys: String, CodingKey {
+        case machine, removedAt, installed, health, lastSeen, enrolledAt, enrolmentSource, droppedOrders
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        machine = try c.decode(String.self, forKey: .machine)
+        removedAt = try c.decodeIfPresent(String.self, forKey: .removedAt) ?? ""
+        installed = try c.decodeIfPresent([String: String].self, forKey: .installed) ?? [:]
+        health = try c.decodeIfPresent([String: String].self, forKey: .health) ?? [:]
+        lastSeen = try c.decodeIfPresent(String.self, forKey: .lastSeen)
+        enrolledAt = try c.decodeIfPresent(String.self, forKey: .enrolledAt)
+        enrolmentSource = try c.decodeIfPresent(String.self, forKey: .enrolmentSource)
+        droppedOrders = try c.decodeIfPresent([ServerCommand].self, forKey: .droppedOrders) ?? []
+    }
 }
 
 public struct ServerState: Codable, Sendable, Equatable {
@@ -262,8 +369,30 @@ public struct ServerState: Codable, Sendable, Equatable {
         self.machines = machines; self.enrolWindow = enrolWindow; self.removed = removed
     }
 
+    private enum CodingKeys: String, CodingKey { case machines, enrolWindow, removed }
+    /// A state file written before a field existed keeps decoding: `removed` (added with Remove Mac)
+    /// and `enrolWindow` (added with network enrolment) are absent in everything a publisher wrote up
+    /// to `2eaae0c`, and a synthesized decoder would throw on them — which `StateStore.load` turns
+    /// into a 503 on every route, for ever. The machines themselves are what must survive.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        machines = try c.decodeIfPresent([String: MachineState].self, forKey: .machines) ?? [:]
+        enrolWindow = try c.decodeIfPresent(EnrolWindow.self, forKey: .enrolWindow)
+        removed = try c.decodeIfPresent([RemovedMachine].self, forKey: .removed) ?? []
+    }
+
     /// The newest removal of this machine id, if it has ever been removed.
     public func removal(of machine: String) -> RemovedMachine? { removed.last { $0.machine == machine } }
+
+    /// Drop every record that enrolled through a window and never reported once. The one record a
+    /// window should never be able to strand: a Mac that lost its signed reply cannot use the token
+    /// it never saw, and a claimed id nobody ever used holds a cap slot and blocks the real Mac.
+    /// A record that has reported (`lastSeen`) is left alone, whatever its source.
+    public mutating func pruneUnreportedWindowEnrolments() {
+        for (machine, record) in machines where record.enrolmentSource == MachineState.windowSource && record.lastSeen == nil {
+            machines.removeValue(forKey: machine)
+        }
+    }
 }
 
 /// The publisher's state file. Every change is one read-modify-write under a lock shared by all
@@ -316,13 +445,15 @@ public enum Enrolment {
 
     /// Store a minted token the way every enrolment does: the sha256 of the token, never the token
     /// itself, plus when it happened and how it got here. An existing record keeps everything else
-    /// it had (installed versions, health, pending orders).
+    /// it had (installed versions, health, pending orders). `nonce` is recorded for a window
+    /// enrolment so a resend of the same machine and nonce can be recognised as the same claim.
     public static func store(_ token: String, for machine: String, at date: Date, source: String?,
-                             in state: inout ServerState) {
+                             nonce: String? = nil, in state: inout ServerState) {
         var record = state.machines[machine] ?? MachineState(machine: machine)
         record.tokenHash = sha256Hex(token)
         record.enrolledAt = ISO.string(date)
         record.enrolmentSource = source
+        record.enrolNonceHash = nonce.map(sha256Hex)
         state.machines[machine] = record
     }
 

@@ -14,12 +14,15 @@ the `capabilities` gate is read off the wire and the journal is written as JSON 
 builds against both) — the base has no `ServerCommand.action`, no journal order/intent, no
 `/api/request-rollback` and no owner swap at all.
 
-Network enrolment windows and Mac removal were added on 2026-10-25 (owner) and are covered by E1–E16
+Network enrolment windows and Mac removal were added on 2026-10-25 (owner) and are covered by E1–E24
 in `Tests/Runner/main.swift` (`enrolWindowTests`): a closed window, a window's expiry, the minted
 reply as Studio Hub's client verifies it, an already-enrolled id, bad ids and nonces and oversize
 bodies, the window's cap, the per-address rate limit, `/enrol` without `--key` and on a bind no Mac
 can reach, the owner route's loopback/Host/Origin checks, the CLI, the page, and removal with its
-re-enrolment and its concurrency.
+re-enrolment and its concurrency (E1–E17); then the 2026-10-26 adversarial review's findings: a state
+file written before `removed` existed still decoding, the bounded report routes, `/enrol` refused to
+a web page, abandoned window enrolments pruned and a lost reply re-minted, `/enrol`'s generic
+refusals, and the single window constructor with the Tailscale-only bind (E18–E24).
 
 ## Feed
 
@@ -63,6 +66,17 @@ one slow or stalled Mac never holds up the others.
   acknowledges an order by id only when it is pending for this Mac and the body's app matches.
   Unknown IDs return 404 without changing state; the agent treats this as an already absent order.
   Automatic results use `POST /automatic/auto-<id>/result`, which never clears pending orders.
+  Every report a Mac can write is bounded, because one Mac — possibly one that claimed a token
+  through a window and has never been inspected — must not grow `state.json` without limit, and
+  every change is a whole-file rewrite under the one lock every other Mac waits on:
+  `installed`, `health` and `automatic_default` carry at most `ReportPolicy.maxApps` entries with
+  bounded names and values; a result keeps its order id, `status` and `reason` within their own
+  bounds, at most one result per app (the map is keyed by app) and at most `maxApps` apps — a Mac
+  that keeps naming new ones evicts the oldest, so what one Mac can write never depends on how long
+  it runs. `/status` and both result routes share one per-machine rate limit
+  (`ReportPolicy.perMachinePerMinute`), counted only after the Mac's token is checked — a limit keyed
+  on a name the body chooses, before the token, would let anything on the tailnet silence a Mac's
+  reports by sending them with its id — and set far above any real agent's rate.
   A **rollback** order is handed out only to an agent that names `owner-rollback-v1` in
   `capabilities`: an agent built before `ServerCommand.action` existed would read the same order as
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
@@ -83,11 +97,18 @@ token, and it is the only way a Mac gets a token without the owner touching the 
 - Body `{"machine": <id>, "nonce": <64 hex>}`, answer `SignedReply` of
   `{machine, nonce, feedURL, publicKey, issuedAt, token}`. The `X-Hub-Token` header the Hub sends is
   **ignored**: nothing on the publisher can verify it, so it is not part of any decision here.
+- A request that carries **Origin or Referer is refused (403)** before its body is parsed. `/enrol`
+  is the one route with no token, and a `text/plain` POST is a "simple request" a browser sends
+  cross-site without a preflight — so a page the owner happened to visit could otherwise spend the
+  window they opened. A Mac's own agent sends neither header (it is an `httpx` POST with no browser
+  in front of it), so the refusal can never reach the Mac it is meant to enrol.
 - The **window** is opened from the page (`POST /api/enrol-window`, `minutes` 0 to close, 1–240 to
   open) or with `khu enrol-window --state <dir> --minutes N`. Its end time is stored in state.json
   under state.lock and is the **only** thing that decides: there is no second flag that can disagree
   with it, and an end time that cannot be read is closed, never open. Opening a window resets its
-  count. The page shows the state, how much of the window's allowance is used, how many Macs enrolled
+  count, and both callers build it with the one `EnrolWindow.starting(minutes:now:)` — two copies of
+  that arithmetic are two chances for the window the page shows and the server enforces to disagree.
+  The page shows the state, how much of the window's allowance is used, how many Macs enrolled
   through a window, and a per-second countdown — the page's one script, allowed by a per-response CSP
   nonce rather than `'unsafe-inline'`.
 - While it is open, a machine id this publisher has **no record of at all** is minted a token exactly
@@ -98,6 +119,13 @@ token, and it is the only way a Mac gets a token without the owner touching the 
 - An id that already has a record is refused **409**, whatever else is true: a device on the tailnet
   can never rotate a real Mac's token out from under it. Re-enrolment stays on the publisher
   (`khu enrol`), and a Mac the owner removed has no record, so it enrols again through a window.
+  **One exception, and it is the same claim arriving twice:** a window-enrolled record that has never
+  reported (`/status` once), resent with the **same nonce**, is answered with a freshly signed reply
+  carrying a new token instead of a 409. The token it was sent the first time may have died with a
+  reply that never arrived, and a permanent 409 would strand that Mac until the owner removed it by
+  hand. The nonce is what makes it the same claim — a different nonce is still 409, a record that has
+  reported is still 409, and a closed window mints nothing — and the resend spends no second slot of
+  the window's cap. The stored hash is replaced, so the token from the lost reply stops working.
 - Closed window: **403**. No `--key`: **403** (it could not sign a reply, and an unsigned reply is
   one the Mac must refuse). Past the window's cap of `EnrolPolicy.maxPerWindow`: **429**. `/enrol`
   attempts are rate-limited per client address (`EnrolPolicy.attemptsPerMinute`, in memory) so the
@@ -105,9 +133,12 @@ token, and it is the only way a Mac gets a token without the owner touching the 
   byte for byte as it was**; the numbers the page shows are the numbers the server enforces.
 - `feedURL` is the address **this listener was bound to**, written the one way `publisher.json`
   writes it (`http://<bind>:<port>/release.json`). That is the address the Mac just reached the
-  publisher at, so it cannot drift from what the Mac's kit says. A wildcard or loopback bind names no
-  address a Mac can use, and a reply naming one would be a feed URL that does not work, so enrolment
-  is refused there (403) instead of guessing.
+  publisher at, so it cannot drift from what the Mac's kit says. Only the **Tailscale range the Hub
+  itself accepts** (`100.64.0.0/10`) is such an address: the Hub's `publisher_config` refuses any
+  other one, so a publisher bound to a LAN address would enrol a Mac and then hand it a feed URL its
+  own Hub refuses to adopt. Loopback, wildcard, link-local, multicast and ordinary LAN binds are all
+  refused (403) instead of guessed at — fail closed, and the launch agent binds the Tailscale
+  address.
 
 **Removing a Mac is what makes re-enrolment possible.** `POST /api/remove-machine` (`Remove Mac` on
 the page) or `khu remove --state <dir> --machine <id>` drops the live record — its token hash and its
@@ -117,10 +148,26 @@ waiting orders with it, so the old token cannot report or fetch orders — and a
 removals and enrolments from different processes never lose each other. A removed id is **not** barred
 from enrolling: that day of resetting Macs and enrolling them afresh is exactly what removing is for.
 The removal stays in the list as history, and the page says whether that Mac is enrolled again since.
+**Removing a Mac and enrolling it again drops everything the record held**, including the owner's
+per-app Automatic overrides (`state.machines[<id>].automatic`): the fresh record starts with none, so
+the Mac's own config decides again until the owner sets them. The history in `state.removed` keeps
+what the Mac had reported, but not those overrides — the removed record is the one that had them.
+
+**A window cannot be left full of claims nobody made good on.** Closing a window — from the page, the
+CLI, or by opening a new one over it — drops every record that enrolled through a window and never
+reported once. Such a record is either a Mac whose signed reply was lost (it cannot use a token it
+never saw; its next run enrols again through the next window) or an id a device claimed and
+abandoned, and either way it holds one of the window's cap slots and would 409 the real Mac that
+wants that id. A record that has reported (`lastSeen`) is never dropped this way — only Remove Mac
+does that.
 
 State is `state.json`; every change is one read-modify-write under `state.lock` (flock, shared
 by all processes, `khu enrol` included). An unreadable state file is a 503 that says so and is
-left untouched; a change that could not be saved is a 500, never a 200.
+left untouched; a change that could not be saved is a 500, never a 200. **Every field of the state
+file is optional when it is read**, with the empty value it had when it was absent: a publisher
+upgraded across a release must keep reading the file its previous build wrote (`{"machines":{…}}`
+with no `removed` and no `enrolWindow`) — a decoder that throws on a missing field turns every route
+into a permanent 503 for the whole fleet.
 
 ## Agent
 
@@ -293,15 +340,29 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
 - During an open window a device on the tailnet can learn **whether a given machine id is already
   enrolled**: an id with a record answers 409 and one without is enrolled. The fleet's names are not
   secret from the tailnet; nothing else about an enrolled Mac — its token, its apps, its orders — is
-  answered to anything but that Mac's own token.
+  answered to anything but that Mac's own token. The one record that can be re-minted over the
+  network is one that has never reported, and only by repeating the nonce it enrolled with: there is
+  no working token on a Mac that has never reported, so nothing is displaced that a Mac was using.
+- `/enrol` is the one route anything on the tailnet may reach, so its refusals are sentences and
+  never diagnostics: no state path, no decoder text, no bind, no port. The detail of a state file
+  that cannot be read or saved goes to the publisher's stderr and to the owner's page, which is
+  where the owner can act on it.
+- The report bounds are policy, not measurements: 64 apps and their names and values, a
+  128-character order id, a 64-character status, a 400-character reason, and 60 report posts a minute
+  per Mac. A real agent stays far under all of them; a Mac that somehow exceeds one is refused with a
+  400 or a 429 and its own agent reports the failure, rather than the publisher silently truncating
+  what it was told. The one silent action is the oldest-result eviction at 64 apps, because a result
+  the owner can no longer see beside its app has no reader.
+
 - The reply crosses the tailnet with the token inside it, signed but not encrypted: the signature
   proves *who* answered, Tailscale's own transport encryption is the confidentiality there. A token
   read off the wire by something that can already see a Mac's tailnet traffic would be usable.
-- The window's end time is wall-clock, and the rate limit lives in memory in each `serve` process:
-  a clock jump can close or extend a window early, and restarting `serve` clears the rate limit (the
-  window's per-window cap and the 409 for an enrolled id do not depend on either). The rate limit is
-  per client address, so several addresses each get their own allowance; the cap on new enrolments
-  per window is the bound that does not depend on anyone's address.
+- The window's end time is wall-clock, and the rate limits live in memory in each `serve` process:
+  a clock jump can close or extend a window early, and restarting `serve` clears them (the window's
+  per-window cap, the 409 for an enrolled id and the report bounds do not depend on either). The
+  `/enrol` limit is per client address, so several addresses each get their own allowance, and the
+  report limit is per machine id; the cap on new enrolments per window is the bound that does not
+  depend on anyone's address.
 - A flood inside an open window can therefore use up that window's allowance of new ids — a Mac part
   way through enrolling may get 429 until the owner opens a new window or removes what a device
   claimed. It cannot touch a Mac that is already enrolled, cannot stop the owner opening a new
