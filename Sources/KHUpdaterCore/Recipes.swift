@@ -404,8 +404,10 @@ public enum Recipe {
                                    arguments: ["attach", "-readonly", "-nobrowse", "-noautoopen", "-plist", artifactPath], timeout: 180)
         guard attach.exitCode == 0 else { throw khuFail("hdiutil attach failed: \(attach.stderr.prefix(200))") }
         guard let mount = mountPoint(fromPlist: attach.stdout) else {
-            // Attached but unreadable: detach whatever this DMG became before giving up.
-            _ = try? shell.run("/usr/bin/hdiutil", arguments: ["detach", "-force", artifactPath], timeout: 60)
+            // Attached but no mount point: detach the device it became (detaching the .dmg path does nothing).
+            for device in devEntries(fromPlist: attach.stdout) {
+                _ = try? shell.run("/usr/bin/hdiutil", arguments: ["detach", "-force", device], timeout: 60)
+            }
             throw khuFail("could not determine the DMG mount point")
         }
         return mount
@@ -424,6 +426,16 @@ public enum Recipe {
               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
               let entities = plist["system-entities"] as? [[String: Any]] else { return nil }
         return entities.compactMap { $0["mount-point"] as? String }.first { $0.hasPrefix("/") }
+    }
+
+    /// The whole-disk device nodes an attach created (`/dev/diskN`), for detaching without a mount point.
+    static func devEntries(fromPlist output: String) -> [String] {
+        guard let data = output.data(using: .utf8),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let entities = plist["system-entities"] as? [[String: Any]] else { return [] }
+        let devices = entities.compactMap { $0["dev-entry"] as? String }.filter { $0.hasPrefix("/dev/disk") }
+        let whole = devices.filter { !$0.dropFirst("/dev/disk".count).contains("s") }
+        return Array(Set(whole.isEmpty ? devices : whole)).sorted()
     }
 
     static func singleApp(in mount: String, fileManager fm: FileManager) throws -> String {

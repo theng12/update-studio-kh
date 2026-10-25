@@ -1315,6 +1315,28 @@ func round2Tests(only: Int? = nil) {
         } catch { accepted = false }
         expect(accepted, "R2-20 maximum accepted name fits the longest atomic derived filename")
         expectThrows("R2-20 overlong wire name rejected before filesystem use") { _ = try SafeName.component(String(repeating: "a", count: 240)) }
+        // R3-1: an attach with no mount point is detached by its device, never by the .dmg path.
+        do {
+            final class AttachNoMount: Shell, @unchecked Sendable {
+                var calls: [[String]] = []
+                func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+                    calls.append(arguments)
+                    if arguments.first == "attach" {
+                        let plist = """
+                        <?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>system-entities</key><array>
+                        <dict><key>dev-entry</key><string>/dev/disk9</string></dict>
+                        <dict><key>dev-entry</key><string>/dev/disk9s1</string></dict></array></dict></plist>
+                        """
+                        return ShellResult(exitCode: 0, stdout: plist, stderr: "")
+                    }
+                    return ShellResult(exitCode: 0, stdout: "", stderr: "")
+                }
+            }
+            let shell = AttachNoMount()
+            expectThrows("R3-1 attach without a mount point fails", contains: "mount point") { _ = try Recipe.attach(shell, "/tmp/x.dmg") }
+            let detaches = shell.calls.filter { $0.first == "detach" }
+            expect(detaches == [["detach", "-force", "/dev/disk9"]], "R3-1 attach without a mount point detaches its whole-disk device, not the .dmg path")
+        }
     }
 }
 
