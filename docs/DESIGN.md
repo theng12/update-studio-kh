@@ -6,6 +6,14 @@ Reviewed adversarially on 2026-10-24 (reliability: 35 findings; security: 11) an
 Round-2 finding 20 was already safe in the reviewed base; its explicit derived-name budget
 and boundary coverage are documented below. A monotonic-clock test for round 1's R28 is also present.
 
+Owner-ordered rollback was added on 2026-10-25 and reviewed the same day, adversarially, against
+every way it could leave a Mac with no working app or run an unsigned or foreign bundle: 32 checks,
+named R6-1–R6-12 (`ownerRollbackTests`). Each of them fails against the reviewed base `a216932`
+(27 fail; the 5 that pass there are the paired post-conditions and guards a base satisfies anyway —
+the `capabilities` gate is read off the wire and the journal is written as JSON so the same file
+builds against both) — the base has no `ServerCommand.action`, no journal order/intent, no
+`/api/request-rollback` and no owner swap at all.
+
 ## Feed
 
 A directory holding `release.json` and `artifacts/<sha12>-<file>`. `release.json` is the feed
@@ -41,18 +49,25 @@ one slow or stalled Mac never holds up the others.
 - `GET /release.json`, `GET /artifacts/<file>` (percent-decoded once; any `SafeName` file stored
   under `artifacts/` is served, so a Mac already downloading a verified release is never cut off
   by the next publish; the agent checks signed size and SHA-256 before using a byte).
-- `POST /status`, `GET /commands?machine=<id>`, `POST /commands/<id>/result` — per-Mac bearer
+- `POST /status`, `GET /commands?machine=<id>[&capabilities=<a,b>]`, `POST /commands/<id>/result` — per-Mac bearer
   token (stored as sha256 only). `GET /commands` answers with `SignedReply` (the reply and its
   Ed25519 signature in ONE body), signed with `--key`, naming the Mac and the moment it was made;
   the agent refuses one it cannot verify, one for another Mac, or one not fresh. A result
   acknowledges an order by id only when it is pending for this Mac and the body's app matches.
   Unknown IDs return 404 without changing state; the agent treats this as an already absent order.
   Automatic results use `POST /automatic/auto-<id>/result`, which never clears pending orders.
-- Owner-only: `GET /`, `POST /api/request-update`, `POST /api/automatic` — loopback peer, a Host of
+  A **rollback** order is handed out only to an agent that names `owner-rollback-v1` in
+  `capabilities`: an agent built before `ServerCommand.action` existed would read the same order as
+  an update and install the feed's version — the opposite of what the owner asked. `action` itself
+  defaults to `update` when absent, so an order signed before the field existed decodes unchanged
+  and still means what it meant when the owner gave it.
+- Owner-only: `GET /`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic` — loopback peer, a Host of
   127.0.0.1/localhost/[::1] with this port (no DNS rebinding), and for changes an Origin or
   Referer from this page (neither is refused). The page sends CSP, `X-Frame-Options: DENY`,
   `Cache-Control: no-store`. It shows each Mac's effective Automatic setting (the owner's
-  override, else what the Mac's own config says).
+  override, else what the Mac's own config says). Each row with an app of its own has an Update
+  button, a Roll back button and its Automatic toggle; the rollback route needs no feed entry
+  for that app, because it puts back a version the Mac already keeps.
 
 State is `state.json`; every change is one read-modify-write under `state.lock` (flock, shared
 by all processes, `khu enrol` included). An unreadable state file is a 503 that says so and is
@@ -77,7 +92,23 @@ left untouched; a change that could not be saved is a 500, never a 200.
 An order runs once (by id; a redelivered one is re-reported, not re-run). Done records are not
 trimmed before fetching orders, and IDs in the latest reply are protected from trimming. An order for the
 version already installed is `current`; for an older one, `refused` (no downgrade). Automatic
-installs a newer version unless that exact artifact already failed here (an order retries it).
+installs a newer version unless that exact artifact already failed here (an update order retries it).
+
+**Ordered rollback.** An order whose `action` is `rollback` puts this app's kept previous version
+back (see Recipes). Anything else than `update` or `rollback` is `refused` and nothing is touched.
+It runs under the same one-run-at-a-time lock and the same outbox as an install, so its result
+survives a lost report and a redelivered order is answered, never carried out twice. It is refused
+for an app this Mac does not run, for `story`/`hub` (their own updaters) and for `updater` itself:
+the stub only restores a version it watched fail, so there is no order to give it here. After a
+successful rollback the version rolled back FROM is marked rejected by the SHA the feed names for
+that same version — Automatic will not put it straight back, and a new artifact or an update order
+clears that, exactly as for a version that failed here. When the feed does not name that version,
+nothing is marked: an invented SHA would suppress an artifact nobody identified. An owner swap a
+killed run left in the journal is finished or undone by the next run's recovery, which then answers
+that order by id from what is on disk (`rolled_back_by_owner`, or `rollback_failed` when the swap
+did not land) instead of running it again; while it cannot be settled the order stays unanswered and
+the next run tries again.
+
 Artifacts stream to `downloads/<app>/`, refused past their signed size, then checked against
 the signed size and SHA-256. The previous download moves to `_trash`. Transport failures (no
 data, connection reset, deadline exceeded) are NOT artifact rejections — they retry next run. Bytes
@@ -128,6 +159,24 @@ it), carrying the nonce the stub gave this child.
    A legacy journal without a target version needs a readable staged bundle to prove its new
    version; otherwise it stays unresolved instead of guessing from an installed path.
 
+**An owner-ordered rollback is the same swap from the other side.** The source is the bundle this
+Mac kept at `rollback-<app>/<name>.app`, not a DMG, and what has to come up healthy is the OLDER
+version. Before anything running is touched it is proven: a readable bundle whose identifier is the
+configured one (else the installed app's), the kept version strictly older than the installed one
+by `VersionCompare` (equal or newer is refused), a real runnable executable inside the bundle, and
+the same code-signed app as the one installed — `codesign --verify --strict` must pass on both and
+their `Identifier|TeamIdentifier` must match, so an unsigned, altered or foreign bundle is never
+what a rollback runs. The verified bundle is then copied into the usual staging path **with its
+signature re-checked on the copy**, and only then does the install's own journaled path take over:
+quit, stop the service, promote, launch, and require the older version healthy through the same
+settle window. The version it displaced is the fallback, so an unhealthy rollback puts this Mac's
+current version back and health-checks it — reported as `rollback_failed`, since what the owner
+asked for did not come up. The journal records the order id and `intent: owner_rollback`, so
+recovery answers that order instead of running it again, and it keeps the journal whenever the
+swap could not be settled. `RecipeResult.version` carries the version the app moved away from, so
+the agent can reject exactly that artifact. The owner's rollback needs no feed entry, and a version
+that is already installed, has no kept bundle, or is not older is refused in one sentence.
+
 A process belongs to an app only if its executable's real path (`realpath(3)`, never
 Foundation's `resolvingSymlinksInPath`) is inside the bundle's real path. Config validation
 uses real paths and folds case on case-insensitive volumes to reject duplicate bundle entries.
@@ -176,6 +225,14 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
   and measures live deadlines with a monotonic clock. Crash timestamps remain wall-clock
   records, so a wall-clock jump can affect which exits belong to the crash window.
 - `_trash` grows with each install (previous downloads and bundles) until the owner empties it.
+- The signature check tells one signed app from another, not who published it: two bundles can be
+  ad-hoc signed locally under the same identifier, so it proves "this is the same app this Mac is
+  running, unaltered", which is the question a rollback has to answer. The feed's own signed SHA-256
+  remains the only statement about which bytes a version is.
+- An owner rollback that is interrupted in the instant between freeing the rollback slot and moving
+  the displaced bundle into it leaves the kept bundle in state `_trash/` (moved, never deleted) with
+  the app itself untouched on the version it was running; a later rollback order then refuses until
+  a new install keeps a bundle again.
 - The status page has no CSRF token: it relies on loopback-only, Host and Origin/Referer checks.
 
 ## SwiftPM note

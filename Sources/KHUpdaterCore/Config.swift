@@ -78,6 +78,9 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var automatic: [String: Bool]
     /// What the Mac's own config says when there is no override (reported by the agent).
     public var automaticDefault: [String: Bool]?
+    /// The capabilities the agent advertised on its most recent /commands fetch. Used by the
+    /// status page to warn when a pending rollback order cannot be delivered to an older agent.
+    public var capabilities: [String]?
     public init(machine: String) {
         self.machine = machine; self.installed = [:]; self.health = [:]
         self.pending = []; self.automatic = [:]
@@ -88,13 +91,39 @@ public struct MachineState: Codable, Sendable, Equatable {
 }
 
 public struct ServerCommand: Codable, Sendable, Equatable {
+    /// What this order asks for. Absent means `update`: an order signed before the field existed
+    /// must keep meaning what it meant when the owner gave it, and an agent that does not know an
+    /// action refuses it rather than guessing.
+    public static let update = "update"
+    public static let rollback = "rollback"
+
     public var id: String
     public var machine: String
     public var app: String
     public var createdAt: String
-    public init(id: String = UUID().uuidString, machine: String, app: String, createdAt: String = ISO.string(Date())) {
-        self.id = id; self.machine = machine; self.app = app; self.createdAt = createdAt
+    public var action: String
+    public init(id: String = UUID().uuidString, machine: String, app: String, createdAt: String = ISO.string(Date()),
+                action: String = ServerCommand.update) {
+        self.id = id; self.machine = machine; self.app = app; self.createdAt = createdAt; self.action = action
     }
+
+    private enum CodingKeys: String, CodingKey { case id, machine, app, createdAt, action }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        machine = try c.decode(String.self, forKey: .machine)
+        app = try c.decode(String.self, forKey: .app)
+        createdAt = try c.decode(String.self, forKey: .createdAt)
+        action = try c.decodeIfPresent(String.self, forKey: .action) ?? ServerCommand.update
+    }
+}
+
+/// What an agent tells the publisher it can carry out, on `GET /commands`. A rollback order is
+/// handed out only to an agent that names this capability: an older agent, which has no notion of
+/// `ServerCommand.action`, would read the same order as an update and install the feed's version
+/// instead — the opposite of what the owner asked for.
+public enum AgentCapability {
+    public static let ownerRollback = "owner-rollback-v1"
 }
 
 public struct CommandResult: Codable, Sendable, Equatable {

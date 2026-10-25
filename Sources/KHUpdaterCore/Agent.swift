@@ -243,13 +243,20 @@ public enum Agent {
         var result = AgentRunResult()
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
+        var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key }) where ["app-dmg", "gateway"].contains(cfg.recipe) {
+            let before = try? AtomicFile.readJSON(InstallJournal.self, from: Recipe.journalURL(stateDir: stateDir.path, app: app))
             let note = try Recipe.recover(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app,
                                           control: control(app, cfg), controlForPath: { path in
                 var original = cfg; original.bundlePath = path
                 return control(app, original)
             })
             if !note.isEmpty { result.notes.append("\(app): \(note)") }
+            // A swap the owner ordered is the recovery's own business too: the order it belonged to
+            // is answered from what is on disk, not run a second time.
+            if let journal = before, journal.intent == "owner_rollback", let order = journal.order {
+                interruptedOrders[order] = (app, journal)
+            }
         }
 
         // 1. What is installed and running here — none of this needs the feed.
@@ -320,8 +327,36 @@ public enum Agent {
             try remember()
         }
 
+        // 4b. An owner rollback this Mac was killed in the middle of: the recovery above has now
+        // finished it (or undone it), so the order it belonged to is answered from what is on disk.
+        for (order, entry) in interruptedOrders.sorted(by: { $0.key < $1.key }) where memory.done[order] == nil {
+            // Still unresolved: nothing is claimed, and the order stays pending for the next run.
+            guard !Recipe.isUnresolved(stateDir: stateDir.path, app: entry.app) else { continue }
+            let installedNow = (try? BundleInfo.read(entry.journal.installed))?.version
+            let done: AgentMemory.Done
+            if let target = entry.journal.version, installedNow == target {
+                done = AgentMemory.Done(app: entry.app, status: "rolled_back_by_owner",
+                                        reason: "an interrupted rollback was finished on this run; \(target) was found installed",
+                                        at: ISO.string(Date()), sent: false)
+                if let sha = rejectRolledBackFrom(app: entry.app, displaced: entry.journal.previousVersion, feed: feed, memory: &memory) {
+                    result.notes.append("\(entry.app): \(entry.journal.previousVersion ?? "the version rolled back from") is rejected (\(sha.prefix(12)))")
+                }
+            } else {
+                done = AgentMemory.Done(app: entry.app, status: "rollback_failed",
+                                        reason: "an interrupted rollback of \(entry.app) left \(installedNow ?? "nothing") installed, not "
+                                        + "\(entry.journal.version ?? "the kept version")", at: ISO.string(Date()), sent: false)
+            }
+            memory.done[order] = done
+            try remember()
+            if delivered(post(order, done)) { memory.done[order]?.sent = true; try remember() }
+            result.commandsRun += 1
+        }
+
         // 5. Orders, signed by the publisher's key and naming this Mac and the moment it signed.
-        let reply = try get(http, serverBase.appendingPathComponent("commands").appendingQuery("machine", config.machine), headers: headers)
+        // This Mac says which order actions it can carry out; the publisher withholds the rest, so
+        // an agent that does not understand a rollback is never handed one to misread.
+        let reply = try get(http, serverBase.appendingPathComponent("commands")
+            .appendingQuery("machine", config.machine).appendingQuery("capabilities", AgentCapability.ownerRollback), headers: headers)
         let signed = try JSON.decode(SignedReply.self, from: reply)
         let publisherKey = try Signing.loadPublicKey(base64: config.publicKey)
         guard let ordersBody = signed.replyData, let signature = signed.signatureData,
@@ -335,7 +370,7 @@ public enum Agent {
         }
         reportedIDs = Set(orders.commands.map { $0.id })
 
-        var todo: [(app: String, id: String, explicit: Bool)] = []
+        var todo: [(app: String, id: String, action: String, explicit: Bool)] = []
         for command in orders.commands where command.machine == config.machine {
             if let done = memory.done[command.id] {
                 // Already carried out; only the report was lost.
@@ -343,7 +378,7 @@ public enum Agent {
                 continue
             }
             if !todo.contains(where: { $0.app == command.app || $0.id == command.id }) {
-                todo.append((command.app, command.id, true))
+                todo.append((command.app, command.id, command.action, true))
             }
         }
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
@@ -352,7 +387,7 @@ public enum Agent {
             guard memory.rejected[app] != entry.sha256 else { continue }  // failed here before: wait for a new artifact
             let current = installed[app]
             if current == nil || VersionCompare.isNewer(entry.version, than: current!) {
-                todo.append((app, "auto-\(app)-\(UUID().uuidString)", false))
+                todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false))
             }
         }
         try remember()
@@ -360,14 +395,26 @@ public enum Agent {
         // 6. One install at a time; a failure is reported and the next app still runs.
         for item in todo {
             var res: RecipeResult
-            if item.explicit { memory.rejected[item.app] = nil; memory.deliveryMismatches?[item.app] = nil }  // the owner asked: try it again
+            // An order to update is the owner asking for that artifact again, so what failed here
+            // before is cleared. A rollback is not: it puts the version he rejected back on purpose.
+            if item.explicit && item.action == ServerCommand.update {
+                memory.rejected[item.app] = nil; memory.deliveryMismatches?[item.app] = nil
+            }
             if config.apps[item.app]?.recipe == "updater", let entry = feed.apps[item.app] {
                 memory.updaterArtifacts = (memory.updaterArtifacts ?? [:]).merging([entry.version: entry.sha256]) { _, new in new }
                 try remember()
             }
             do {
-                res = try install(app: item.app, feed: feed, installed: installed[item.app], config: config,
-                                  serverBase: serverBase, stateDir: stateDir, http: http, shell: shell, control: control)
+                switch item.action {
+                case ServerCommand.update:
+                    res = try install(app: item.app, feed: feed, installed: installed[item.app], config: config,
+                                      serverBase: serverBase, stateDir: stateDir, http: http, shell: shell, control: control)
+                case ServerCommand.rollback:
+                    res = try orderedRollback(app: item.app, order: item.id, installed: installed[item.app], config: config,
+                                              stateDir: stateDir, shell: shell, control: control)
+                default:
+                    res = RecipeResult(status: "refused", reason: "this Mac does not know the order action \"\(item.action)\"; refused")
+                }
             } catch let error as ArtifactFailure {
                 res = RecipeResult(status: "failed", reason: "\(error)")
             } catch {
@@ -382,9 +429,23 @@ public enum Agent {
             } else if res.status != "download_failed" {
                 memory.deliveryMismatches?[item.app] = nil
             }
+            // A version the owner just rolled back FROM must not be reinstalled by Automatic on the
+            // next run: it is remembered rejected by the SHA the feed names for it, exactly like a
+            // version that failed here. A new artifact, or an update order, clears it.
+            if res.status == "rolled_back_by_owner" {
+                if let sha = rejectRolledBackFrom(app: item.app, displaced: res.version, feed: feed, memory: &memory) {
+                    result.notes.append("\(item.app): rolled back by the owner; \(res.version ?? "the version rolled back from") is rejected (\(sha.prefix(12))) until a new artifact arrives")
+                } else {
+                    result.notes.append("\(item.app): rolled back by the owner; the feed does not name \(res.version ?? "the version rolled back from"), so no artifact was marked rejected")
+                }
+            }
             // Only an artifact that is unusable *itself* is remembered as rejected. A download or
             // transport failure says nothing about the artifact, so the next run tries it again.
-            if ["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status),
+            // A rollback order that fails must NOT mark the feed's current artifact rejected:
+            // that artifact may be a newer release this Mac never tried, and suppressing it
+            // silently breaks Automatic. Only rolled_back_by_owner marks the displaced version.
+            if item.action == ServerCommand.update,
+               ["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status),
                let sha = feed.apps[item.app]?.sha256 {
                 memory.rejected[item.app] = sha
             }
@@ -422,6 +483,42 @@ public enum Agent {
         memory.feedPublishedAt = feed.published_at
         memory.feedSHA256 = sha
         return feed
+    }
+
+    /// The owner's rollback order: the version this Mac kept goes back through the same journaled,
+    /// health-settled path an install uses. Nothing is downloaded and the feed is not consulted —
+    /// what runs is the bundle already on this Mac, verified before anything is stopped.
+    static func orderedRollback(app: String, order: String, installed: String?, config: AgentConfig, stateDir: URL,
+                                shell: Shell, control: (String, AppConfig) -> AppControl) throws -> RecipeResult {
+        guard let cfg = config.apps[app] else {
+            return RecipeResult(status: "refused", reason: "\(app) is not configured on this Mac")
+        }
+        if statusOnly.contains(cfg.recipe) {
+            return RecipeResult(status: "refused", reason: "\(app) is updated by its own updater; KH Updater will not roll it back")
+        }
+        switch cfg.recipe {
+        case "app-dmg", "gateway":
+            guard installed != nil || FileManager.default.fileExists(atPath: cfg.bundlePath) else {
+                return RecipeResult(status: "refused", reason: "\(app) is not installed at \(cfg.bundlePath), so there is nothing to roll back from")
+            }
+            return try Recipe.ownerRollback(shell: shell, installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app,
+                                            expectedBundleID: cfg.bundleID, order: order, control: control(app, cfg))
+        case "updater":
+            // The stub is the updater's own fallback, and it only puts back a version it saw fail.
+            return RecipeResult(status: "refused", reason: "KH Updater does not roll itself back in this version: "
+                               + "the stub only restores a previous version after a probation, so there is no order for it here")
+        default:
+            return RecipeResult(status: "refused", reason: "the \(cfg.recipe) recipe cannot be rolled back")
+        }
+    }
+
+    /// The artifact this Mac rolled back FROM, marked rejected by its signed SHA. Only the feed can
+    /// say which bytes a version is, so when it does not name that version nothing is marked: an
+    /// invented SHA would suppress an artifact nobody identified.
+    static func rejectRolledBackFrom(app: String, displaced: String?, feed: Feed, memory: inout AgentMemory) -> String? {
+        guard let sha = feed.apps[app].flatMap({ $0.version == displaced ? $0.sha256 : nil }) else { return nil }
+        memory.rejected[app] = sha
+        return sha
     }
 
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,

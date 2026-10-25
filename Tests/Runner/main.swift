@@ -1421,6 +1421,405 @@ func round2Tests(only: Int? = nil) {
     }
 }
 
+// Owner rollback regressions. Every fixture is a real, ad-hoc-signed app bundle: an unsigned or
+// altered bundle is exactly what a rollback must refuse, so the tests have to be able to tell the
+// difference. The wire fixtures are raw JSON, so an order without `action` decodes as an update.
+func r6App(_ url: URL, version: String, id: String = "com.example.foo", sign: Bool = true) {
+    let contents = url.appendingPathComponent("Contents")
+    try! fm.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
+    let plist: [String: Any] = ["CFBundleShortVersionString": version, "CFBundleIdentifier": id, "CFBundleExecutable": "Foo"]
+    try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        .write(to: contents.appendingPathComponent("Info.plist"))
+    let exe = contents.appendingPathComponent("MacOS/Foo")
+    try! "#!/bin/sh\nexit 0\n".write(to: exe, atomically: true, encoding: .utf8)
+    chmod(exe.path, 0o755)
+    guard sign else { return }
+    let signed = try! SystemShell().run("/usr/bin/codesign", arguments: ["--force", "--sign", "-", url.path], timeout: 20)
+    precondition(signed.exitCode == 0, "fixture could not be signed: \(signed.stderr)")
+}
+func r6Version(_ url: URL) -> String { (try? BundleInfo.read(url.path))?.version ?? "none" }
+
+struct R6Rig {
+    let rig: Rig
+    let config: AgentConfig
+    let client: InProcessClient
+    let installed: URL
+    let previous: URL
+    let fake: FakeApp
+    init(_ tag: String, kept: String? = "1.0.0", id: String = "com.example.foo", signed: Bool = true,
+         recipe: String = "app-dmg", healthy: Set<String> = ["1.0.0", "2.0.0"], automatic: Bool = false) {
+        rig = Rig("r6-" + tag)
+        installed = rig.root.appendingPathComponent("Applications/Foo.app")
+        r6App(installed, version: "2.0.0")
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        config = agentConfig(rig, token: token, apps: ["foo": AppConfig(bundlePath: installed.path, recipe: recipe,
+                                                                        automatic: automatic, bundleID: "com.example.foo")])
+        previous = URL(fileURLWithPath: config.stateDir).appendingPathComponent("rollback-foo/Foo.app")
+        if let kept { r6App(previous, version: kept, id: id, sign: signed) }
+        try! rig.publish("foo", "2.0.0", rig.artifact("foo.dmg", "current-artifact"), kind: "app-dmg")
+        client = InProcessClient(server: rig.server)
+        fake = FakeApp(installed: installed, healthy: healthy)
+    }
+    var memoryFile: URL { URL(fileURLWithPath: config.stateDir).appendingPathComponent("agent-memory.json") }
+    var journal: URL { Recipe.journalURL(stateDir: config.stateDir, app: "foo") }
+    var control: AppControl {
+        var c = fake.control
+        c.healthSettle = 0.08; c.healthTimeout = 0.15; c.pollInterval = 0.01
+        return c
+    }
+    /// Queue an order the way the publisher stores one — through the wire type, so the JSON shape
+    /// is what an agent really receives.
+    func order(_ action: String? = "rollback", app: String = "foo", id: String = UUID().uuidString) {
+        var wire: [String: Any] = ["id": id, "machine": "mac1", "app": app, "createdAt": ISO.string(Date())]
+        if let action { wire["action"] = action }
+        var state = try! JSONSerialization.jsonObject(with: JSON.encode(try! StateStore.load(from: rig.state))) as! [String: Any]
+        var machines = state["machines"] as! [String: Any]
+        var mac = machines["mac1"] as! [String: Any]
+        mac["pending"] = [wire]
+        machines["mac1"] = mac
+        state["machines"] = machines
+        try! AtomicFile.write(JSONSerialization.data(withJSONObject: state), to: StateStore.stateFile(in: rig.state))
+    }
+    @discardableResult func run() -> AgentRunResult? {
+        try? Agent.runOnce(config: config, http: client, shell: RecordingShell(mount: rig.root.appendingPathComponent("empty")),
+                           control: { _, _ in control })
+    }
+    var last: CommandResult? { (try? StateStore.load(from: rig.state))?.machines["mac1"]?.lastResults?["foo"] }
+    var memory: AgentMemory? { try? AtomicFile.readJSON(AgentMemory.self, from: memoryFile) }
+}
+
+func ownerRollbackTests() {
+    // 1. The previous version goes back, through the settled health window, and the version it
+    // replaced is kept as the fallback.
+    do {
+        let r = R6Rig("happy")
+        r.order()
+        let result = r.run()
+        expect(result?.commandsRun == 1 && r.last?.status == "rolled_back_by_owner" && r6Version(r.installed) == "1.0.0"
+               && r.control.healthy("1.0.0") && r.fake.events == ["quit", "stop", "launch"],
+               "R6-1 owner rollback puts the previous version back and waits for health (\(r.last?.status ?? "none"))")
+        expect(r6Version(r.previous) == "2.0.0" && !fm.fileExists(atPath: r.journal.path),
+               "R6-1 the version rolled back from is kept as the fallback and the journal is acknowledged")
+    }
+    // 2. Everything the rollback needs is proven before anything running is touched.
+    for (tag, kept, id, phrase) in [("absent", nil, "com.example.foo", "no previous version is kept on this Mac"),
+                                    ("wrong-id", "1.0.0", "com.evil.other", "kept bundle is com.evil.other"),
+                                    ("equal", "2.0.0", "com.example.foo", "is not older than"),
+                                    ("newer", "3.0.0", "com.example.foo", "is not older than")] as [(String, String?, String, String)] {
+        let r = R6Rig(tag, kept: kept, id: id)
+        r.order()
+        r.run()
+        expect(r.last?.status == "refused" && r.last?.reason?.contains(phrase) == true && r.fake.events.isEmpty
+               && r6Version(r.installed) == "2.0.0",
+               "R6-2 \(tag) kept bundle refused before the running app is stopped (\(r.last?.reason ?? "none"))")
+    }
+    // 3. An unhealthy previous version: the version this Mac was running goes back and is healthy.
+    do {
+        let r = R6Rig("unhealthy", healthy: ["2.0.0"])
+        r.order()
+        r.run()
+        expect(r.last?.status == "rollback_failed" && r6Version(r.installed) == "2.0.0" && r.control.healthy("2.0.0")
+               && !fm.fileExists(atPath: r.journal.path),
+               "R6-3 an unhealthy previous version restores the current one and settles (\(r.last?.status ?? "none"))")
+    }
+    // 4. One shot by id: the report is redelivered, the swap is not repeated.
+    do {
+        let r = R6Rig("redelivery")
+        r.order(id: "r6-once")
+        r.client.resultStatus = 500
+        r.run()
+        let events = r.fake.events
+        r.client.resultStatus = nil
+        let again = r.run()
+        expect(again?.commandsRun == 0 && r.fake.events == events && r.last?.status == "rolled_back_by_owner"
+               && r.memory?.done["r6-once"]?.sent == true,
+               "R6-4 a redelivered order re-reports the stored result and never swaps twice")
+    }
+    // 5. An order signed before `action` existed still means update.
+    do {
+        let r = R6Rig("legacy")
+        r.order(nil)
+        r.run()
+        let old = Data(#"{"id":"old","machine":"mac1","app":"foo","createdAt":"2026-10-25T00:00:00Z"}"#.utf8)
+        let decoded = try! JSON.decode(ServerCommand.self, from: old)
+        let encoded = try! JSONSerialization.jsonObject(with: JSON.encode(decoded)) as! [String: Any]
+        expect(encoded["action"] as? String == "update" && r.last?.status == "current" && r.fake.events.isEmpty,
+               "R6-5 an order without action decodes as update (\(r.last?.status ?? "none"))")
+    }
+    // 6. Automatic must not put the version the owner rolled away from straight back.
+    do {
+        let r = R6Rig("automatic", automatic: true)
+        r.order()
+        r.run()
+        let sha = FeedPublisher.loadFeed(from: r.rig.feed)!.apps["foo"]!.sha256
+        let next = r.run()
+        expect(r.memory?.rejected["foo"] == sha && next?.commandsRun == 0 && r.client.downloads == 0
+               && r6Version(r.installed) == "1.0.0", "R6-6 the rolled-back-from SHA suppresses Automatic")
+        try! r.rig.publish("foo", "3.0.0", r.rig.artifact("foo.dmg", "new-artifact"), kind: "app-dmg")
+        let mount = r.rig.root.appendingPathComponent("new-mount")
+        makeApp(mount.appendingPathComponent("Foo.app"), version: "3.0.0")
+        r.fake.healthyVersions.insert("3.0.0")
+        let fresh = try? Agent.runOnce(config: r.config, http: r.client, shell: RecordingShell(mount: mount),
+                                       control: { _, _ in r.control })
+        expect(fresh?.updates == 1 && r6Version(r.installed) == "3.0.0", "R6-6 a new artifact lets Automatic install again")
+    }
+    do {
+        let r = R6Rig("explicit-retry", automatic: true)
+        r.order()
+        r.run()
+        r.order("update")
+        let mount = r.rig.root.appendingPathComponent("retry-mount")
+        makeApp(mount.appendingPathComponent("Foo.app"), version: "2.0.0")
+        let retry = try? Agent.runOnce(config: r.config, http: r.client, shell: RecordingShell(mount: mount),
+                                       control: { _, _ in r.control })
+        expect(retry?.updates == 1 && r.memory?.rejected["foo"] == nil && r6Version(r.installed) == "2.0.0",
+               "R6-6 an explicit update order clears the rollback rejection")
+    }
+    // 7. Status-only apps and the updater itself: refused, and the app is not touched.
+    for recipe in ["story", "hub", "status", "updater"] {
+        let r = R6Rig("refuse-" + recipe, recipe: recipe)
+        r.order()
+        r.run()
+        expect(r.last?.status == "refused" && r.fake.events.isEmpty && r6Version(r.installed) == "2.0.0"
+               && (recipe != "updater" || r.last?.reason?.contains("stub") == true),
+               "R6-7 \(recipe) refuses an owner rollback (\(r.last?.reason ?? "none"))")
+    }
+    // 8. An app this Mac does not run, and an action this build does not know: both refused.
+    do {
+        let r = R6Rig("unknown-app")
+        r.order(app: "other")
+        r.run()
+        let done = r.memory?.done.values.first
+        expect(done?.status == "refused" && done?.reason.contains("not configured") == true && r.fake.events.isEmpty,
+               "R6-8 a rollback for an app this Mac does not run is refused")
+        r.order("explode")
+        r.run()
+        expect(r.last?.status == "refused" && r.last?.reason?.contains("action") == true && r.fake.events.isEmpty,
+               "R6-8 an unknown action fails closed")
+        // An app whose earlier swap is still owed is not swapped again on top of it.
+        let owed = R6Rig("unresolved")
+        r6App(owed.installed, version: "1.0.0")     // the swap that landed before the kill
+        r6App(owed.previous, version: "2.0.0")      // the fallback it still owes
+        try! AtomicFile.writeJSON(InstallJournal(phase: "rolling_back", installed: owed.installed.path, staged: "",
+                                                 rollback: owed.previous.path, previousVersion: "2.0.0",
+                                                 wasRunning: true, version: "1.0.0"), to: owed.journal)
+        owed.fake.quits = [false]                   // and a version that will not stop
+        owed.order()
+        owed.run()
+        expect(owed.last?.status == "unresolved" && !owed.fake.events.contains("launch")
+               && fm.fileExists(atPath: owed.journal.path) && r6Version(owed.installed) == "1.0.0",
+               "R6-8 a rollback waits for the swap already owing work on that app (\(owed.last?.status ?? "none"))")
+    }
+    // 9. The owner route, and who is allowed to receive a rollback order at all.
+    do {
+        let r = R6Rig("auth")
+        let good = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        let body = JSON.encode(["machine": "mac1", "app": "foo"])
+        for (name, remote, headers) in [("a remote peer", "100.64.0.9", good),
+                                       ("a foreign Host", "127.0.0.1", good.merging(["host": "evil.test"]) { _, b in b }),
+                                       ("a foreign Origin", "127.0.0.1", good.merging(["origin": "http://evil.test"]) { _, b in b }),
+                                       ("no Origin or Referer", "127.0.0.1", good.filter { $0.key != "origin" })] {
+            let reply = r.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-rollback", headers: headers, body: body), remote: remote)
+            expect(reply.status == 403, "R6-9 the rollback route refuses \(name)")
+        }
+        let reply = r.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-rollback", headers: good, body: body), remote: "127.0.0.1")
+        expect(reply.status == 200, "R6-9 the owner can queue a rollback")
+        func orders(_ suffix: String) -> CommandsReply? {
+            let response = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/commands?machine=mac1" + suffix,
+                headers: ["authorization": "Bearer \(r.config.token)"]), remote: "100.64.0.9")
+            let signed = try? JSON.decode(SignedReply.self, from: response.data)
+            guard let data = signed?.replyData, let sig = signed?.signatureData,
+                  Signing.verify(data, signature: sig, publicKey: r.rig.pair.privateKey.publicKey) else { return nil }
+            return try? JSON.decode(CommandsReply.self, from: data)
+        }
+        expect(orders("")?.commands.isEmpty == true && orders("&capabilities=owner-rollback-v1")?.commands.first?.action == "rollback",
+               "R6-10 a rollback order is delivered only to an agent that understands one")
+    }
+    // 11. An unsigned, altered or unrunnable bundle is never what a rollback runs.
+    do {
+        let r = R6Rig("unsigned", signed: false)
+        r.order()
+        r.run()
+        expect(r.last?.status == "refused" && r.fake.events.isEmpty && r6Version(r.installed) == "2.0.0",
+               "R6-11 an unsigned kept bundle is refused before anything stops")
+        let tampered = R6Rig("tampered")
+        let exe = tampered.previous.appendingPathComponent("Contents/MacOS/Foo")
+        try! ("#!/bin/sh\nexit 0\n# altered\n").write(to: exe, atomically: true, encoding: .utf8)
+        tampered.order()
+        tampered.run()
+        expect(tampered.last?.status == "refused" && tampered.fake.events.isEmpty,
+               "R6-11 an altered kept bundle is refused before anything stops")
+        let noexe = R6Rig("noexe")
+        try! Trash.move(noexe.previous.appendingPathComponent("Contents/MacOS/Foo"), into: Trash.root(in: noexe.rig.root))
+        noexe.order()
+        noexe.run()
+        expect(noexe.last?.status == "refused" && noexe.fake.events.isEmpty, "R6-11 a kept bundle with no executable is refused")
+    }
+    // 12. Killed mid-swap: the next run finishes it from the journal, answers the same order, and
+    // never swaps a second time.
+    do {
+        let r = R6Rig("kill")
+        r.order(id: "r6-killed")
+        let setup = r.rig.root.appendingPathComponent("child-config.json")
+        try! AtomicFile.writeJSON(r.config, to: setup, permissions: 0o600)
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        var environment = ProcessInfo.processInfo.environment
+        environment["R6_KILL_CONFIG"] = setup.path
+        environment["R6_KILL_PUBLISHER"] = r.rig.root.path
+        child.environment = environment
+        child.standardOutput = FileHandle.nullDevice
+        child.standardError = FileHandle.nullDevice
+        try! child.run()
+        child.waitUntilExit()
+        expect(child.terminationReason == .uncaughtSignal && child.terminationStatus == SIGKILL
+               && fm.fileExists(atPath: r.journal.path),
+               "R6-12 a run killed as the swapped bundle launched leaves the owner swap in the journal")
+        r.run()
+        expect(r6Version(r.installed) == "1.0.0" && r.control.healthy("1.0.0") && r.last?.status == "rolled_back_by_owner"
+               && !fm.fileExists(atPath: r.journal.path),
+               "R6-12 the next run finishes the interrupted swap and answers its order (\(r.last?.status ?? "none"))")
+        let events = r.fake.events
+        r.order(id: "r6-killed")
+        r.run()
+        expect(r.fake.events == events, "R6-12 the recovered order is never carried out a second time")
+        // Killed BEFORE the swap: the journal is undone, and the order is answered with what really
+        // happened rather than a claim that the previous version is back.
+        let early = R6Rig("kill-early")
+        early.order(id: "r6-kill-early")
+        try! AtomicFile.writeJSON(InstallJournal(phase: "staged", installed: early.installed.path, staged: "",
+                                                 rollback: early.previous.path, previousVersion: "2.0.0",
+                                                 wasRunning: true, version: "1.0.0", order: "r6-kill-early",
+                                                 intent: "owner_rollback"), to: early.journal)
+        early.run()
+        expect(early.last?.status == "rollback_failed" && r6Version(early.installed) == "2.0.0"
+               && early.control.healthy("2.0.0") && !fm.fileExists(atPath: early.journal.path)
+               && early.memory?.rejected["foo"] == nil,
+               "R6-12 a swap interrupted before it ran is undone and reported as failed, not as done (\(early.last?.status ?? "none"))")
+    }
+
+    // === Defect fixes from independent adversarial review (7 findings) ===
+
+    // F1 (major): A failed owner rollback must not mark the feed's current artifact rejected.
+    do {
+        let r = R6Rig("f1-fail-no-reject", healthy: ["2.0.0"]) // only current version is healthy
+        // Publish a NEWER version 3.0.0 in the feed so we can test whether it gets suppressed
+        try! r.rig.publish("foo", "3.0.0", r.rig.artifact("foo3.dmg", "artifact-3"), kind: "app-dmg")
+        r.fake.healthyVersions.insert("3.0.0")
+        r.order()
+        r.run()
+        // Rollback tried to go to 1.0.0 but failed (only 2.0.0 is healthy).
+        expect(r.last?.status == "rollback_failed" && r6Version(r.installed) == "2.0.0",
+               "F1 setup: rollback failed as intended (\(r.last?.status ?? "none"))")
+        // The feed's current artifact (3.0.0) must NOT be marked rejected
+        let feed3SHA = FeedPublisher.loadFeed(from: r.rig.feed)!.apps["foo"]!.sha256
+        expect(r.memory?.rejected["foo"] != feed3SHA,
+               "F1 failed rollback does NOT mark the feed's current (newer) artifact rejected")
+        // Automatic should still be able to install 3.0.0
+        var autoCfg = r.config; autoCfg.apps["foo"]?.automatic = true
+        let mount3 = r.rig.root.appendingPathComponent("f1-mount")
+        makeApp(mount3.appendingPathComponent("Foo.app"), version: "3.0.0")
+        let autoRun = try? Agent.runOnce(config: autoCfg, http: r.client,
+                                         shell: RecordingShell(mount: mount3),
+                                         control: { _, _ in r.control })
+        expect(autoRun?.updates == 1 && r6Version(r.installed) == "3.0.0",
+               "F1 Automatic installs newer artifact after failed rollback (\(r6Version(r.installed)))")
+    }
+
+    // F2 (major): An installed bundle whose seal is broken must still allow rollback to a valid kept bundle.
+    do {
+        let r = R6Rig("f2-broken-seal")
+        let exe = r.installed.appendingPathComponent("Contents/MacOS/Foo")
+        try! ("#!/bin/sh\nexit 0\n# altered after signing\n").write(to: exe, atomically: true, encoding: .utf8)
+        let verifyBroken = try! SystemShell().run("/usr/bin/codesign",
+                                                  arguments: ["--verify", "--strict", r.installed.path], timeout: 20)
+        expect(verifyBroken.exitCode != 0, "F2 setup: installed bundle seal is broken")
+        r.order()
+        r.run()
+        expect(r.last?.status == "rolled_back_by_owner" && r6Version(r.installed) == "1.0.0",
+               "F2 rollback succeeds when installed bundle has broken seal (\(r.last?.status ?? "none"), reason: \(r.last?.reason ?? "none"))")
+    }
+
+    // F2b: An altered KEPT bundle is still refused, with a message naming the kept bundle.
+    do {
+        let r = R6Rig("f2b-altered-kept")
+        let keptExe = r.previous.appendingPathComponent("Contents/MacOS/Foo")
+        try! ("#!/bin/sh\nexit 0\n# altered\n").write(to: keptExe, atomically: true, encoding: .utf8)
+        r.order()
+        r.run()
+        expect(r.last?.status == "refused" && r.last?.reason?.contains("kept bundle") == true
+               && r.last?.reason?.contains(r.previous.path) == true
+               && r.fake.events.isEmpty && r6Version(r.installed) == "2.0.0",
+               "F2b altered kept bundle refused with message naming kept path (\(r.last?.reason ?? "none"))")
+    }
+
+    // F3+F4 (minor): Recovery records the owed answer using journal.installed, before journal is trashed.
+    do {
+        let r = R6Rig("f3f4-recovery-early-record")
+        r.order(id: "f3f4-order")
+        try! AtomicFile.writeJSON(InstallJournal(phase: "promoted", installed: r.installed.path, staged: "",
+                                                 rollback: r.previous.path, previousVersion: "2.0.0",
+                                                 wasRunning: true, version: "1.0.0", order: "f3f4-order",
+                                                 intent: "owner_rollback"), to: r.journal)
+        r6App(r.installed, version: "1.0.0")
+        r.run()
+        expect(r.memory?.done["f3f4-order"]?.status == "rolled_back_by_owner",
+               "F3 recovery records owed answer before journal is trashed (\(r.memory?.done["f3f4-order"]?.status ?? "none"))")
+        let reason = r.memory?.done["f3f4-order"]?.reason ?? ""
+        expect(!reason.contains("is running") || reason.contains("was verified") || reason.contains("found"),
+               "F4 recovered answer states only what was verified: \(reason)")
+    }
+
+    // F5 (minor): A kill in the "moving" phase preserves the staged bundle for retry.
+    do {
+        let r = R6Rig("f5-kill-moving")
+        r.order(id: "f5-order")
+        let stagedURL = r.installed.deletingLastPathComponent().appendingPathComponent(".Foo.app.khu-staging")
+        r6App(stagedURL, version: "1.0.0")
+        r6App(r.previous, version: "2.0.0")
+        try! fm.removeItem(at: r.installed)
+        try! AtomicFile.writeJSON(InstallJournal(phase: "moving", installed: r.installed.path, staged: stagedURL.path,
+                                                 rollback: r.previous.path, previousVersion: "2.0.0",
+                                                 wasRunning: true, version: "1.0.0", order: "f5-order",
+                                                 intent: "owner_rollback"), to: r.journal)
+        r.run()
+        let installedVersion = r6Version(r.installed)
+        let stagedSurvived = fm.fileExists(atPath: stagedURL.path)
+        let previousHas100 = r6Version(r.previous) == "1.0.0"
+        expect(installedVersion == "1.0.0" || stagedSurvived || previousHas100,
+               "F5 staged bundle preserved when killed in moving phase (installed=\(installedVersion), staged=\(stagedSurvived), prev=\(r6Version(r.previous)))")
+    }
+
+    // F6 (minor): Roll back button is hidden for updater and feed-only apps.
+    do {
+        let r = R6Rig("f6-updater-btn", recipe: "updater")
+        let page = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: [:]), remote: "127.0.0.1")
+        let html = String(data: page.data, encoding: .utf8) ?? ""
+        let hasRollbackForm = html.contains("action=/api/request-rollback") && html.contains("name=app value=\"foo\"")
+        let hasDisabledOrHidden = html.contains("disabled") && html.contains("Roll back")
+        expect(!hasRollbackForm || hasDisabledOrHidden,
+               "F6 Roll back button hidden or disabled for updater app (form=\(hasRollbackForm), disabled=\(hasDisabledOrHidden))")
+    }
+
+    // F7 (minor): Server page shows when an agent is too old for rollback.
+    do {
+        let r = R6Rig("f7-old-agent")
+        _ = r.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-rollback",
+                                                   headers: ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790",
+                                                             "content-type": "application/json"],
+                                                   body: JSON.encode(["machine": "mac1", "app": "foo"])), remote: "127.0.0.1")
+        _ = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/commands?machine=mac1",
+                                                   headers: ["authorization": "Bearer \(r.config.token)"]), remote: "100.64.0.9")
+        let page = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": "127.0.0.1:8790"]), remote: "127.0.0.1")
+        let html = String(data: page.data, encoding: .utf8) ?? ""
+        let showsLimitation = html.contains("too old") || html.contains("does not support")
+            || html.contains("not capable") || html.contains("upgrade")
+            || html.contains("older agent") || html.contains("cannot roll back")
+        expect(showsLimitation,
+               "F7 Server page indicates agent cannot perform rollback")
+    }
+}
+
 @main
 struct RunnerMain {
     static func main() {
@@ -1437,6 +1836,22 @@ struct RunnerMain {
             }
         }
         if ProcessInfo.processInfo.environment["R2_GATEWAY_MENU"] == "1" { while true { Thread.sleep(forTimeInterval: 1) } }
+        if let file = ProcessInfo.processInfo.environment["R6_KILL_CONFIG"],
+           let root = ProcessInfo.processInfo.environment["R6_KILL_PUBLISHER"] {
+            let config = try! JSON.decode(AgentConfig.self, from: Data(contentsOf: URL(fileURLWithPath: file)))
+            let base = URL(fileURLWithPath: root)
+            let key = try! Signing.loadPrivateKey(from: base.appendingPathComponent("private.key"))
+            let server = FeedServer(feedDir: base.appendingPathComponent("feed"), stateDir: base.appendingPathComponent("state"),
+                                    bind: "127.0.0.1", port: 8790, commandKey: key)
+            let ctl = AppControl(isRunning: { true }, quit: { true }, launch: { kill(getpid(), SIGKILL) }, healthy: { _ in false }, healthSettle: 0)
+            _ = try? Agent.runOnce(config: config, http: InProcessClient(server: server), control: { _, _ in ctl })
+            exit(2)
+        }
+        if ProcessInfo.processInfo.environment["R6_ONLY"] == "1" {
+            ownerRollbackTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         // Signing basics stay covered.
         let key = Signing.generateKeyPair()
         let data = Data("hello".utf8)
@@ -1463,6 +1878,7 @@ struct RunnerMain {
         r28MonotonicWait()
 r41HealthMustHold()
         round2Tests()
+        ownerRollbackTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

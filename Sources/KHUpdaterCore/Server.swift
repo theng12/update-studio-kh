@@ -305,10 +305,21 @@ public final class FeedServer: @unchecked Sendable {
             // Read-only: an order stays pending until its result is reported.
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
-                let ms = state.machines[machine]!
+                var ms = state.machines[machine]!
+                // Record the capabilities this agent advertised, so the status page can warn when
+                // a pending rollback order cannot be delivered to an older agent.
+                let capabilities = Set((req.query["capabilities"] ?? "").split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) })
+                ms.capabilities = Array(capabilities)
+                state.machines[machine] = ms
+                // A rollback order is withheld from an agent that does not say it understands one:
+                // an older agent would carry the same order out as an update.
+                let deliverable = ms.pending.filter {
+                    $0.action == ServerCommand.update || capabilities.contains(AgentCapability.ownerRollback)
+                }
                 // Signed with the key every agent is pinned to, and naming this Mac and the moment
                 // it was made: a forged or replayed reply is refused at the Mac.
-                let body = JSON.encode(CommandsReply(machine: machine, commands: ms.pending, automatic: ms.automatic), pretty: false)
+                let body = JSON.encode(CommandsReply(machine: machine, commands: deliverable, automatic: ms.automatic), pretty: false)
                 guard let signature = try? Signing.sign(body, with: commandKey) else {
                     return Self.text(500, "could not sign the orders")
                 }
@@ -364,7 +375,8 @@ public final class FeedServer: @unchecked Sendable {
                                 "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"]
                 return page
             }
-            if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/automatic") {
+            if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
+                                        || req.path == "/api/automatic") {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
                 guard let machine = f["machine"], let app = f["app"], !machine.isEmpty, !app.isEmpty else {
@@ -374,10 +386,13 @@ public final class FeedServer: @unchecked Sendable {
                     guard var ms = state.machines[machine], ms.tokenHash != nil else {
                         return Self.text(404, "no enrolled Mac named \(machine)")
                     }
-                    if req.path == "/api/request-update" {
-                        if !ms.pending.contains(where: { $0.app == app }) { ms.pending.append(ServerCommand(machine: machine, app: app)) }
-                    } else {
+                    if req.path == "/api/automatic" {
                         ms.automatic[app] = f["on"] == "true"
+                    } else {
+                        let action = req.path == "/api/request-rollback" ? ServerCommand.rollback : ServerCommand.update
+                        if !ms.pending.contains(where: { $0.app == app && $0.action == action }) {
+                            ms.pending.append(ServerCommand(machine: machine, app: app, action: action))
+                        }
                     }
                     state.machines[machine] = ms
                     return Self.ok
@@ -415,21 +430,25 @@ public final class FeedServer: @unchecked Sendable {
             for app in apps {
                 let installed = ms.installed[app] ?? "not installed"
                 let latest = feed?.apps[app]?.version ?? "—"
-                let pending = ms.pending.contains { $0.app == app } ? "waiting for the Mac" : ""
+                let hasPendingRollback = ms.pending.contains { $0.app == app && $0.action == ServerCommand.rollback }
+                let agentTooOld = hasPendingRollback && ms.capabilities != nil && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false)
+                let pending = ms.pending.contains { $0.app == app } ? (agentTooOld ? "waiting for the Mac (agent too old for rollback)" : "waiting for the Mac") : ""
                 let last = ms.lastResults?[app].map { "\($0.status)\($0.reason.map { $0.isEmpty ? "" : ": " + $0 } ?? "") (\($0.at))" } ?? ""
                 let ownUpdater = app == "story" || app == "hub"
                 let auto = ms.effectiveAutomatic(app)
                 let update = ownUpdater || feed?.apps[app] == nil ? "" : form("/api/request-update", machine, app, "", "Update")
+                // Rollback needs no feed entry: it puts back the version this Mac kept.
+                let rollback = ownUpdater ? "" : form("/api/request-rollback", machine, app, "", "Roll back")
                 let automatic = ownUpdater || feed?.apps[app] == nil ? "" :
                     form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Automatic: on" : "Automatic: off")
                 let note = ownUpdater ? "updated by its own updater" : ""
-                rows += "<tr><td>\(h(machine))</td><td>\(h(app))</td><td>\(h(installed))</td><td>\(h(latest))</td><td>\(h(ms.health[app] ?? ""))</td><td>\(h(ms.lastSeen ?? "never"))</td><td>\(h(pending))</td><td>\(h(last))</td><td>\(update)\(h(note))</td><td>\(automatic)</td></tr>"
+                rows += "<tr><td>\(h(machine))</td><td>\(h(app))</td><td>\(h(installed))</td><td>\(h(latest))</td><td>\(h(ms.health[app] ?? ""))</td><td>\(h(ms.lastSeen ?? "never"))</td><td>\(h(pending))</td><td>\(h(last))</td><td>\(update)\(rollback)\(h(note))</td><td>\(automatic)</td></tr>"
             }
         }
         return """
         <!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=30><title>KH Updater</title>
         <style>body{font:14px -apple-system,sans-serif;margin:24px}table{border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:6px 10px;text-align:left}form{display:inline}</style></head>
-        <body><h1>KH Updater</h1><p>Every Mac and app, refreshed every 30 s. Update installs the feed's version on that Mac; Automatic does it whenever the feed is newer.</p>
+        <body><h1>KH Updater</h1><p>Every Mac and app, refreshed every 30 s. Update installs the feed's version on that Mac; Roll back puts the version that Mac kept back in place; Automatic does it whenever the feed is newer.</p>
         <table><tr><th>Mac</th><th>App</th><th>Installed</th><th>Feed</th><th>Health</th><th>Last seen</th><th>Pending</th><th>Last result</th><th></th><th></th></tr>\(rows)</table></body></html>
         """
     }

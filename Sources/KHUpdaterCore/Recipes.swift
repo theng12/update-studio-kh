@@ -6,7 +6,12 @@ import Darwin
 public struct RecipeResult: Sendable, Equatable {
     public var status: String
     public var reason: String?
-    public init(status: String, reason: String? = nil) { self.status = status; self.reason = reason }
+    /// The version the app was on *before* this result, when the recipe knows it: an owner rollback
+    /// names the version it moved away from, so the agent can reject that exact artifact.
+    public var version: String?
+    public init(status: String, reason: String? = nil, version: String? = nil) {
+        self.status = status; self.reason = reason; self.version = version
+    }
 }
 
 /// What a recipe does to the outside world, injectable so tests never touch real apps.
@@ -86,6 +91,11 @@ public struct InstallJournal: Codable, Sendable, Equatable {
     /// The version this install is putting in place, so a recovered journal can prove which side it
     /// found at `installed`. Absent in a journal written before it existed.
     public var version: String? = nil
+    /// The owner order this swap belongs to, when there was one: recovery answers that order from
+    /// what it finds on disk instead of running it again.
+    public var order: String? = nil
+    /// `owner_rollback` for a swap the owner ordered; absent for an install.
+    public var intent: String? = nil
 }
 
 public enum Recipe {
@@ -131,6 +141,84 @@ public enum Recipe {
         }
         guard info.executableIsRunnable(in: source) else { throw ArtifactFailure(description: "the DMG's app has no runnable executable; nothing was changed") }
 
+        try stage(paths, from: source, info: info, shell: shell, fileManager: fm)
+        mounted = false
+        let detachNote = detach(shell, mount)  // the staged copy is all that is needed from here
+
+        return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
+                                    order: nil, control: control, fileManager: fm, notes: [recovered, detachNote])
+    }
+
+    /// The owner's order to put this app's kept previous version back. It is the same swap as an
+    /// install — the same journal, the same quit/stop, the same promotion and the same health
+    /// window — with two differences: the source is the bundle this Mac already kept instead of a
+    /// DMG, and what has to come up healthy is the OLDER version. Everything is verified before
+    /// anything running is touched, so a refusal costs the app nothing.
+    public static func ownerRollback(shell: Shell, installedPath: String, stateDir: String, app: String,
+                                     expectedBundleID: String?, order: String, control: AppControl,
+                                     fileManager fm: FileManager = .default) throws -> RecipeResult {
+        let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
+        let recovered = try recover(paths, control: control, fileManager: fm)
+        if fm.fileExists(atPath: paths.journal.path) {
+            return RecipeResult(status: "unresolved", reason: "an earlier install of \(app) could not be finished or undone; "
+                               + "\(paths.journal.path) is kept and the next run tries it again")
+        }
+        guard let installedInfo = try? BundleInfo.read(installedPath) else {
+            return RecipeResult(status: "refused", reason: "\(app) has no readable app at \(installedPath), so there is no version to roll back from")
+        }
+        let kept: BundleInfo
+        do { kept = try BundleInfo.read(paths.rollback.path) }
+        catch {
+            return RecipeResult(status: "refused", reason: "no previous version is kept on this Mac for \(app) "
+                               + "(\(paths.rollback.path): \(error))")
+        }
+        let want = expectedBundleID ?? installedInfo.identifier
+        if kept.identifier != want {
+            return RecipeResult(status: "refused", reason: "the kept bundle is \(kept.identifier), this Mac's app is \(want); refused")
+        }
+        guard kept.executableIsRunnable(in: paths.rollback.path) else {
+            return RecipeResult(status: "refused", reason: "the kept bundle at \(paths.rollback.path) has no runnable executable; refused")
+        }
+        guard let order_ = VersionCompare.compare(kept.version, installedInfo.version) else {
+            return RecipeResult(status: "refused", reason: "the kept version \(kept.version) and the installed \(installedInfo.version) cannot be compared; refused")
+        }
+        guard order_ < 0 else {
+            return RecipeResult(status: "refused", reason: "the kept version \(kept.version) is not older than \(installedInfo.version) installed here; refused")
+        }
+        // What goes back is a bundle this Mac stopped running some time ago, so it has to be proven
+        // to be the same signed app — the one the system will let run. The bundle that will RUN is
+        // the one strictly verified here; the installed side only has to be identifiable, because a
+        // locally built or linker-signed app can fail `--verify --strict` while still being exactly
+        // the app this Mac is running.
+        guard let keptIdentity = signingIdentity(paths.rollback.path, shell: shell) else {
+            return RecipeResult(status: "refused", reason: "the kept bundle at \(paths.rollback.path) is not code-signed; refused")
+        }
+        guard signatureVerifies(paths.rollback.path, shell: shell) else {
+            return RecipeResult(status: "refused", reason: "the kept bundle at \(paths.rollback.path) does not verify: it has been altered "
+                               + "since it was signed; refused")
+        }
+        guard let installedIdentity = signingIdentity(installedPath, shell: shell) else {
+            return RecipeResult(status: "refused", reason: "\(installedPath) is not code-signed, so this Mac cannot prove the kept bundle "
+                               + "is the same app; refused")
+        }
+        guard keptIdentity == installedIdentity else {
+            return RecipeResult(status: "refused", reason: "the kept bundle at \(paths.rollback.path) is \(keptIdentity), and the app installed "
+                               + "at \(installedPath) is \(installedIdentity); refused")
+        }
+        try stage(paths, from: paths.rollback.path, info: kept, shell: shell, fileManager: fm)
+        guard signingIdentity(paths.staged.path, shell: shell) == keptIdentity,
+              signatureVerifies(paths.staged.path, shell: shell) else {
+            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            return RecipeResult(status: "refused", reason: "the staged copy of \(kept.version) at \(paths.staged.path) does not verify as "
+                               + "\(keptIdentity); nothing was changed")
+        }
+        return try promoteAndSettle(paths: paths, targetVersion: kept.version, installedInfo: installedInfo,
+                                    order: order, control: control, fileManager: fm, notes: [recovered])
+    }
+
+    /// Copy a verified bundle into the staging path beside the installed one and check the copy —
+    /// always before anything running is stopped. `ditto` carries the bundle's own signature over.
+    static func stage(_ paths: Paths, from source: String, info: BundleInfo, shell: Shell, fileManager fm: FileManager) throws {
         if fm.fileExists(atPath: paths.staged.path) { try Trash.move(paths.staged, into: paths.trash, fileManager: fm) }
         let copy = try shell.run("/usr/bin/ditto", arguments: [source, paths.staged.path], timeout: 900)
         guard copy.exitCode == 0, let stagedInfo = try? BundleInfo.read(paths.staged.path), stagedInfo == info,
@@ -138,15 +226,50 @@ public enum Recipe {
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
             throw khuFail("copying the new app failed (\(copy.stderr.prefix(200))); nothing was changed")
         }
-        mounted = false
-        let detachNote = detach(shell, mount)  // the staged copy is all that is needed from here
+    }
 
+    /// The code signature identity of a bundle (`Identifier|TeamIdentifier`), read from `codesign -dvv`
+    /// whether or not the bundle's seal is intact. A linker-signed or locally-rebuilt app can fail
+    /// `--verify --strict` while still being exactly the app this Mac is running, so identity is
+    /// read without a verify gate; the verify gate is its own call (`signatureVerifies`), applied
+    /// only to the bundle that will actually run.
+    public static func signingIdentity(_ appPath: String, shell: Shell) -> String? {
+        guard let described = try? shell.run("/usr/bin/codesign", arguments: ["-dvv", appPath], timeout: 60) else { return nil }
+        let text = described.stdout + described.stderr
+        func field(_ name: String) -> String? {
+            text.split(separator: "\n").first { $0.hasPrefix(name + "=") }.map { String($0.dropFirst(name.count + 1)) }
+        }
+        guard let identifier = field("Identifier"), !identifier.isEmpty else { return nil }
+        return identifier + "|" + (field("TeamIdentifier") ?? "")
+    }
+
+    /// `codesign --verify --strict` passed on this bundle. The system's own verdict on whether the
+    /// bytes on disk match the signature — applied to the bundle that will RUN (the kept bundle,
+    /// and again on its staged copy), not to the installed one: an installed app that was locally
+    /// rebuilt or linker-signed still has a readable identity, and a rollback must not refuse
+    /// because of it.
+    public static func signatureVerifies(_ appPath: String, shell: Shell) -> Bool {
+        (try? shell.run("/usr/bin/codesign", arguments: ["--verify", "--strict", appPath], timeout: 60))?.exitCode == 0
+    }
+
+    /// From the journal onward: stop what is running, promote the staged bundle, and require the
+    /// version that went in to be healthy and to stay healthy. An owner order runs through exactly
+    /// this path, so its swap and its fallback are the install's own.
+    static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
+                                 order: String?, control: AppControl, fileManager fm: FileManager,
+                                 notes: [String]) throws -> RecipeResult {
+        let installedPath = paths.installedPath
         let wasRunning = control.isRunning() ?? true
         var journal = InstallJournal(phase: "staged", installed: installedPath, staged: paths.staged.path,
                                      rollback: paths.rollback.path,
                                      // Nothing installed: a rollback bundle kept from before is the previous version.
                                      previousVersion: installedInfo?.version ?? (try? BundleInfo.read(paths.rollback.path))?.version,
-                                     wasRunning: wasRunning, version: feedVersion)
+                                     wasRunning: wasRunning, version: targetVersion)
+        journal.order = order
+        journal.intent = order == nil ? nil : "owner_rollback"
+        // The version this swap moves away from: an owner rollback reports it, so the agent can
+        // reject that exact artifact instead of the one it installs.
+        let displaced = journal.previousVersion
         try AtomicFile.writeJSON(journal, to: paths.journal)
 
         // 3. Stop what is running; on refusal, leave the old app as it was.
@@ -183,35 +306,54 @@ public enum Recipe {
 
         func finish(_ result: RecipeResult) -> RecipeResult {
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
-            let notes = [recovered, detachNote].filter { !$0.isEmpty }
-            guard !notes.isEmpty else { return result }
-            return RecipeResult(status: result.status, reason: ([result.reason ?? ""] + notes).filter { !$0.isEmpty }.joined(separator: "; "))
+            let all = notes.filter { !$0.isEmpty }
+            guard !all.isEmpty else { return result }
+            return RecipeResult(status: result.status,
+                                reason: ([result.reason ?? ""] + all).filter { !$0.isEmpty }.joined(separator: "; "),
+                                version: result.version)
+        }
+        /// An owner order reports the owner's question: `\(targetVersion)` coming back, not an
+        /// install of it. The fallback version going back healthy is a failed rollback, not a
+        /// successful install.
+        func settled(_ result: RecipeResult) -> RecipeResult {
+            guard order != nil else { return result }
+            func answered(_ status: String, _ reason: String?) -> RecipeResult {
+                RecipeResult(status: status, reason: reason, version: displaced)
+            }
+            switch result.status {
+            case "updated": return answered("rolled_back_by_owner", result.reason)
+            case "rolled_back": return answered("rollback_failed", "\(targetVersion) was not healthy within "
+                                                + "\(Int(control.healthTimeout)) s, so \(displaced ?? "the version this Mac was running") was put back")
+            case "rollback_unhealthy": return answered("rollback_unhealthy", "\(targetVersion) was not healthy, and putting "
+                                                       + "\(displaced ?? "the version this Mac was running") back did not come up healthy either")
+            default: return result
+            }
         }
 
         // 5. Preserve stopped updates; a first install always needs a live health check.
         guard wasRunning || journal.previousVersion == nil else {
-            return finish(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped"))
+            return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
         }
         control.launch()
-        if waitHealthy(control, version: feedVersion) { return finish(RecipeResult(status: "updated")) }
+        if waitHealthy(control, version: targetVersion) { return finish(settled(RecipeResult(status: "updated"))) }
 
         // 6. Roll back — only once both the app and its service are really gone.
         guard control.quit(), control.stopService() else {
             // Both bundles stay, and so does the journal: the next run asks the bad version to stop
             // again instead of finding the new version in place and calling the app settled.
-            return RecipeResult(status: "rollback_blocked", reason:
-                "the new version was unhealthy and would not stop; both versions were kept (previous at "
-                + "\(paths.rollback.path)) and \(paths.journal.path) with them — the next run tries again")
+            return settled(RecipeResult(status: "rollback_blocked", reason:
+                "\(targetVersion) was unhealthy and would not stop; both versions were kept (previous at "
+                + "\(paths.rollback.path)) and \(paths.journal.path) with them — the next run tries again"))
         }
         do {
             let result = try rollBack(paths, journal: journal, control: control, fileManager: fm)
-            return result.status == "rolled_back" ? finish(result) : result
+            return result.status == "rolled_back" ? finish(settled(result)) : settled(result)
         } catch {
             // Nothing was written away: the journal stays exactly as it is, and a later run picks
             // the rollback up again rather than reporting a Mac whose app is simply the new version.
-            return RecipeResult(status: "rollback_failed", reason:
-                "the new version was unhealthy and the previous one could not be put back (\(error)); "
-                + "nothing was reported as settled and \(paths.journal.path) is kept — the next run tries again")
+            return settled(RecipeResult(status: "rollback_failed", reason:
+                "\(targetVersion) was unhealthy and \(displaced ?? "the version this Mac was running") could not be put back (\(error)); "
+                + "nothing was reported as settled and \(paths.journal.path) is kept — the next run tries again"))
         }
     }
 
@@ -276,9 +418,32 @@ public enum Recipe {
         var note: String
         var resolved = false
         if !fm.fileExists(atPath: journal.installed) {
-            note = try restoreAfterFailure(journal, fileManager: fm)
-            if journal.wasRunning { control.launch() }
-            resolved = !journal.wasRunning || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
+            // F5: For an owner rollback killed in the "moving" phase, the staged copy IS the
+            // rollback target (already verified). Promote it instead of restoring from the
+            // rollback path (which now holds the displaced version). For a regular install,
+            // the staged copy is the new version and must not be promoted when the install
+            // was interrupted — undo it instead.
+            if journal.intent == "owner_rollback",
+               !journal.staged.isEmpty, fm.fileExists(atPath: journal.staged),
+               let stagedInfo = try? BundleInfo.read(journal.staged),
+               let expectedNew = journal.version ?? stagedInfo.version as String?,
+               stagedInfo.version == expectedNew,
+               stagedInfo.executableIsRunnable(in: journal.staged) {
+                do {
+                    try fm.moveItem(atPath: journal.staged, toPath: journal.installed)
+                    note = "an interrupted owner rollback was recovered by promoting the staged \(expectedNew)"
+                    if journal.wasRunning { control.launch() }
+                    resolved = !journal.wasRunning || waitHealthy(control, version: expectedNew)
+                } catch {
+                    note = try restoreAfterFailure(journal, fileManager: fm)
+                    if journal.wasRunning { control.launch() }
+                    resolved = !journal.wasRunning || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
+                }
+            } else {
+                note = try restoreAfterFailure(journal, fileManager: fm)
+                if journal.wasRunning { control.launch() }
+                resolved = !journal.wasRunning || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
+            }
         } else if previousIsInPlace {
             if journal.wasRunning { control.launch() }
             resolved = !journal.wasRunning || waitHealthy(control, version: found!.version)
