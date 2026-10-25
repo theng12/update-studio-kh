@@ -80,9 +80,13 @@ version already installed is `current`; for an older one, `refused` (no downgrad
 installs a newer version unless that exact artifact already failed here (an order retries it).
 Artifacts stream to `downloads/<app>/`, refused past their signed size, then checked against
 the signed size and SHA-256. The previous download moves to `_trash`. Transport failures (no
-data, connection reset, deadline exceeded) are NOT artifact rejections — they retry next run. Only
-artifact-intrinsic failures (wrong version, wrong bundle id, wrong SHA, oversize, health check
-failure, rollback) mark the artifact rejected in `agent-memory.json`. Operational install failures
+data, connection reset, deadline exceeded) are NOT artifact rejections — they retry next run. Bytes
+that arrive but do not match the signed size or SHA (oversize, truncated, corrupt) are a delivery
+mismatch: retried on the next run, and rejected only after `Agent.maxDeliveryMismatches` (3) in a
+row for the same signed SHA, which bounds re-downloads when the server's copy itself is bad (a
+re-publish of identical bytes keeps the same SHA and would not clear a rejection). Only
+artifact-intrinsic failures (wrong version, wrong bundle id, health check failure, rollback, a
+repeated delivery mismatch) mark the artifact rejected in `agent-memory.json`. Operational install failures
 such as a copy timeout are `install_failed` and remain retryable. The installed status says
 `unresolved install` while an install journal remains. A legacy stub rollback without recorded
 artifact SHA uses the matching signed feed version conservatively, then consumes that rollback

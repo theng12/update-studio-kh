@@ -600,7 +600,7 @@ final class InProcessClient: HTTPClient, @unchecked Sendable {
         downloads += 1
         let r = respond("GET", url, headers, Data())
         guard case .file(let source, let size) = r.body else { try r.data.write(to: file); return r.status }
-        guard size + Int64(extraBytes) <= limit else { throw ArtifactFailure(description: "larger than expected") }
+        guard size + Int64(extraBytes) <= limit else { throw DeliveryMismatch(description: "larger than expected") }
         var data = try Data(contentsOf: source); data.append(Data(repeating: 0, count: extraBytes))
         try data.write(to: file)
         return r.status
@@ -683,7 +683,17 @@ func agentAndServerTests() {
         let cfgD = agentConfig(rigD, token: tok, apps: ["d": AppConfig(bundlePath: app.path, recipe: "fake-for-tests", automatic: true)])
         _ = try? Agent.runOnce(config: cfgD, http: c)
         let res = (try? StateStore.load(from: rigD.state))?.machines["mac1"]?.lastResults?["d"]
-        expect(res?.status == "failed" && (res?.reason ?? "").contains("larger"), "R19 an oversized download is refused")
+        expect(res?.status == "download_failed" && (res?.reason ?? "").contains("larger"), "R19 an oversized download is refused")
+        // Live proof R5-1: a bad transfer must not reject the signed release; once the server's
+        // bytes are right again, the next Automatic run installs it.
+        let mem = try? AtomicFile.readJSON(AgentMemory.self, from: URL(fileURLWithPath: cfgD.stateDir).appendingPathComponent("agent-memory.json"))
+        expect(mem != nil && mem?.rejected["d"] == nil && mem?.deliveryMismatches?["d"]?.count == 1,
+               "R5-1 one mismatched download does not reject the release")
+        c.extraBytes = 0
+        let retry = try? Agent.runOnce(config: cfgD, http: c)
+        expect(retry?.updates == 1 && c.downloads == 2, "R5-1 the next run downloads it again and installs")
+        let healed = try? AtomicFile.readJSON(AgentMemory.self, from: URL(fileURLWithPath: cfgD.stateDir).appendingPathComponent("agent-memory.json"))
+        expect(healed != nil && healed?.deliveryMismatches?["d"] == nil, "R5-1 a good install clears the mismatch count")
     }
 
     // R25: the agent's high-water mark.
@@ -1149,11 +1159,16 @@ func round2Tests(only: Int? = nil) {
         let retry = try? Agent.runOnce(config: cfg, http: client)
         expect(retry?.updates == 1 && client.attempts == 2, "R2-10 connection reset retries automatically on next run")
         client.corrupt = true
-        _ = try? Agent.runOnce(config: cfg, http: client)
+        // R5-1: a mismatch is retried (it may be a truncated transfer) until it repeats
+        // Agent.maxDeliveryMismatches times in a row; then the server's copy is treated as bad.
+        try! rig.publish("demo", "3.0.0", rig.artifact("b.bin", "abcd"))
+        let before = client.attempts
+        for _ in 0..<Agent.maxDeliveryMismatches { _ = try? Agent.runOnce(config: cfg, http: client) }
+        expect(client.attempts == before + Agent.maxDeliveryMismatches, "R5-1 a signed SHA mismatch is retried on the next runs")
         let attempts = client.attempts
         let refused = try? Agent.runOnce(config: cfg, http: client)
         expect(refused?.commandsRun == 0 && client.attempts == attempts,
-               "R2-10 signed SHA mismatch is artifact-intrinsic and suppresses automatic retry")
+               "R2-10 a signed SHA mismatch repeated in a row is rejected and suppresses automatic retry")
         let operational = Rig("r2-copy-transport"); let tok = try! Enrolment.enrol(stateDir: operational.state, machine: "mac1")
         let recipe = RecipeRig("r2-copy-timeout")
         recipe.shell.dittoThrows = true

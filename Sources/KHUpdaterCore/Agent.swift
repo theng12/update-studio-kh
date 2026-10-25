@@ -23,6 +23,12 @@ struct ArtifactFailure: Error, CustomStringConvertible {
     let description: String
 }
 
+/// Bytes that arrived but do not match the signed size or SHA-256. One mismatch may be a dropped
+/// or truncated transfer; the same mismatch several runs in a row means the server's copy is bad.
+struct DeliveryMismatch: Error, CustomStringConvertible {
+    let description: String
+}
+
 public struct URLSessionHTTPClient: HTTPClient {
     /// Feed, status and command replies are small; anything bigger is refused, not buffered.
     public var smallLimit = 8 << 20
@@ -92,7 +98,7 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         status = (response as? HTTPURLResponse)?.statusCode ?? 0
         if response.expectedContentLength > limit {
-            error = ArtifactFailure(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
+            error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
             completionHandler(.cancel)
         } else {
             completionHandler(.allow)
@@ -102,7 +108,7 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         received += Int64(data.count)
         guard received <= limit else {
-            error = ArtifactFailure(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
+            error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
             dataTask.cancel()
             return
         }
@@ -131,6 +137,9 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     /// app → sha256 of an artifact that failed or was rolled back here; Automatic skips it until
     /// the artifact changes or the owner asks for it explicitly.
     public var rejected: [String: String] = [:]
+    public struct Mismatch: Codable, Sendable, Equatable { public var sha256: String; public var count: Int }
+    /// app → consecutive downloads of the same signed artifact whose bytes did not match it.
+    public var deliveryMismatches: [String: Mismatch]?
     public var observedStubRollbacks: Int?
     public var updaterArtifacts: [String: String]?
     public var feedPublishedAt: String?
@@ -157,6 +166,8 @@ public enum Agent {
     static let futureSlack: TimeInterval = 24 * 3600
     /// How old a signed order reply may be, in either direction, before it is treated as a replay.
     static let orderFreshness: TimeInterval = 10 * 60
+    /// Mismatched downloads of one artifact in a row before it is rejected like a bad artifact.
+    static let maxDeliveryMismatches = 3
 
     static func get(_ http: HTTPClient, _ url: URL, headers: [String: String] = [:]) throws -> Data {
         let (data, code) = try http.get(url, headers: headers)
@@ -348,8 +359,8 @@ public enum Agent {
 
         // 6. One install at a time; a failure is reported and the next app still runs.
         for item in todo {
-            let res: RecipeResult
-            if item.explicit { memory.rejected[item.app] = nil }  // the owner asked: try it again
+            var res: RecipeResult
+            if item.explicit { memory.rejected[item.app] = nil; memory.deliveryMismatches?[item.app] = nil }  // the owner asked: try it again
             if config.apps[item.app]?.recipe == "updater", let entry = feed.apps[item.app] {
                 memory.updaterArtifacts = (memory.updaterArtifacts ?? [:]).merging([entry.version: entry.sha256]) { _, new in new }
                 try remember()
@@ -361,6 +372,15 @@ public enum Agent {
                 res = RecipeResult(status: "failed", reason: "\(error)")
             } catch {
                 res = RecipeResult(status: "install_failed", reason: "\(error)")
+            }
+            if res.status == "download_mismatch", let sha = feed.apps[item.app]?.sha256 {
+                let previous = memory.deliveryMismatches?[item.app]
+                let count = (previous?.sha256 == sha ? previous!.count : 0) + 1
+                memory.deliveryMismatches = (memory.deliveryMismatches ?? [:]).merging([item.app: .init(sha256: sha, count: count)]) { _, new in new }
+                res = RecipeResult(status: count >= maxDeliveryMismatches ? "failed" : "download_failed",
+                                   reason: "\(res.reason ?? "") (mismatched download \(count) of \(maxDeliveryMismatches) in a row)")
+            } else if res.status != "download_failed" {
+                memory.deliveryMismatches?[item.app] = nil
             }
             // Only an artifact that is unusable *itself* is remembered as rejected. A download or
             // transport failure says nothing about the artifact, so the next run tries it again.
@@ -428,6 +448,8 @@ public enum Agent {
             artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http)
         } catch let error as ArtifactFailure {
             return RecipeResult(status: "failed", reason: "\(error)")
+        } catch let error as DeliveryMismatch {
+            return RecipeResult(status: "download_mismatch", reason: "\(error)")
         } catch {
             // Transport, not artifact: nothing here says the bytes are bad, so it is not a version
             // this Mac has rejected — the next run downloads it again.
@@ -459,8 +481,8 @@ public enum Agent {
                                      headers: [:], to: part, limit: entry.bytes)
         guard code == 200 else { throw khuFail("artifact download answered \(code); nothing was changed") }
         let (sha, bytes) = try Signing.sha256Hex(fileAt: part)
-        guard bytes == entry.bytes else { throw ArtifactFailure(description: "artifact size mismatch; nothing was changed") }
-        guard sha == entry.sha256 else { throw ArtifactFailure(description: "artifact sha256 mismatch; nothing was changed") }
+        guard bytes == entry.bytes else { throw DeliveryMismatch(description: "artifact size mismatch; nothing was changed") }
+        guard sha == entry.sha256 else { throw DeliveryMismatch(description: "artifact sha256 mismatch; nothing was changed") }
         let artifact = dir.appendingPathComponent(name)
         try fm.moveItem(at: part, to: artifact)
         return artifact
