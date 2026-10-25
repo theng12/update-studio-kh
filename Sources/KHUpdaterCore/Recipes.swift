@@ -23,11 +23,15 @@ public struct AppControl {
     public var healthy: (_ expectedVersion: String) -> Bool
     public var healthTimeout: TimeInterval
     public var pollInterval: TimeInterval
+    /// How long the app must stay healthy without a break before an install is accepted: an app that
+    /// launches and dies a moment later was once reported "updated" (live proof, 2026-10-25).
+    public var healthSettle: TimeInterval
     public init(isRunning: @escaping () -> Bool?, quit: @escaping () -> Bool, launch: @escaping () -> Void,
                 stopService: @escaping () -> Bool = { true }, healthy: @escaping (String) -> Bool,
-                healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1) {
+                healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10) {
         self.isRunning = isRunning; self.quit = quit; self.launch = launch; self.stopService = stopService
         self.healthy = healthy; self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
+        self.healthSettle = healthSettle
     }
 }
 
@@ -391,12 +395,21 @@ public enum Recipe {
     }
 
     static func waitHealthy(_ control: AppControl, version: String, clock: () -> TimeInterval = Mono.now) -> Bool {
+        // Healthy must start within healthTimeout and then hold, unbroken, for healthSettle.
         let deadline = clock() + control.healthTimeout
+        var healthySince: TimeInterval?
         repeat {
-            if control.healthy(version) { return true }
+            let now = clock()
+            if control.healthy(version) {
+                if healthySince == nil { healthySince = now }
+                if now - healthySince! >= control.healthSettle { return true }
+            } else {
+                healthySince = nil
+                if now > deadline { return false }
+            }
             Thread.sleep(forTimeInterval: control.pollInterval)
-        } while clock() < deadline
-        return control.healthy(version)
+        } while clock() < deadline + control.healthSettle
+        return false
     }
 
     static func attach(_ shell: Shell, _ artifactPath: String) throws -> String {

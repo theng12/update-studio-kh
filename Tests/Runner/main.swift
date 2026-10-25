@@ -829,6 +829,30 @@ func socketTests() {
     close(slow); close(stalled)
 }
 
+// R4-1 (live proof, 2026-10-25): an app that is healthy for a moment and then dies is NOT healthy.
+func r41HealthMustHold() {
+    var t = 0.0
+    var polls = 0
+    let flash = AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in
+        polls += 1; return polls == 1   // up for one look, then gone (exit(1) right after launch)
+    }, healthTimeout: 5, pollInterval: 0, healthSettle: 3)
+    expect(!Recipe.waitHealthy(flash, version: "1.0.2", clock: { t += 1; return t }),
+           "R4-1 an app healthy for one poll and then dead is not accepted")
+    t = 0
+    let steady = AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in true },
+                            healthTimeout: 5, pollInterval: 0, healthSettle: 3)
+    expect(Recipe.waitHealthy(steady, version: "1.0.1", clock: { t += 1; return t }),
+           "R4-1 an app that stays healthy through the settle window is accepted")
+    t = 0; polls = 0
+    let flapping = AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in
+        polls += 1; return polls % 2 == 1
+    }, healthTimeout: 5, pollInterval: 0, healthSettle: 3)
+    expect(!Recipe.waitHealthy(flapping, version: "1.0.2", clock: { t += 1; return t }),
+           "R4-1 a flapping app never accumulates a settle window")
+    expect(AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in true }).healthSettle >= 5,
+           "R4-1 live controls hold health for a real settle window by default")
+}
+
 // Inject a jumping wall clock into the observation and a separate monotonic deadline source.
 func r28MonotonicWait() {
     let start = Mono.now()
@@ -1380,6 +1404,7 @@ struct RunnerMain {
         agentAndServerTests()
         socketTests()
         r28MonotonicWait()
+r41HealthMustHold()
         round2Tests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
