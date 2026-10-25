@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -208,12 +209,17 @@ public final class FeedServer: @unchecked Sendable {
     public let bind: String
     public let port: Int
     public let maxConnections: Int
+    /// The key that signs every order reply. Without it the server has no way to answer a Mac with
+    /// something the Mac can tell apart from a forgery, so it refuses to answer at all.
+    public let commandKey: Curve25519.Signing.PrivateKey?
 
-    public init(feedDir: URL, stateDir: URL, bind: String, port: Int, maxConnections: Int = 32) {
+    public init(feedDir: URL, stateDir: URL, bind: String, port: Int,
+                commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32) {
         self.feedDir = feedDir
         self.stateDir = stateDir
         self.bind = bind
         self.port = port
+        self.commandKey = commandKey
         self.maxConnections = maxConnections
     }
 
@@ -262,10 +268,11 @@ public final class FeedServer: @unchecked Sendable {
             }
             if req.path.hasPrefix("/artifacts/") {
                 let name = String(req.path.dropFirst("/artifacts/".count))
-                guard let safe = try? SafeName.component(name, what: "artifact"),
-                      let feed = FeedPublisher.loadFeed(from: feedDir), feed.apps.values.contains(where: { $0.file == safe }) else {
-                    return Self.text(404, "not found")
-                }
+                // Everything the publisher ever stored is served, not only what the newest feed
+                // names: a Mac already downloading the release it verified must not be cut off by
+                // the next publish. The name can never leave `artifacts/` (SafeName), and the agent
+                // checks the signed size and SHA-256 before it uses one byte of it.
+                guard let safe = try? SafeName.component(name, what: "artifact") else { return Self.text(404, "not found") }
                 let url = feedDir.appendingPathComponent("artifacts").appendingPathComponent(safe)
                 guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber else {
                     return Self.text(404, "not found")
@@ -292,15 +299,26 @@ public final class FeedServer: @unchecked Sendable {
         if req.method == "GET" && req.path == "/commands" {
             guard let machine = req.query["machine"] else { return Self.text(400, "missing machine") }
             guard let token = machineToken(req) else { return Self.text(401, "missing token") }
+            guard let commandKey else {
+                return Self.text(503, "this publisher has no signing key, so it will not send orders: start `khu serve` with --key")
+            }
             // Read-only: an order stays pending until its result is reported.
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
                 let ms = state.machines[machine]!
-                return HTTPResponse(200, "application/json", data: JSON.encode(CommandsReply(commands: ms.pending, automatic: ms.automatic)))
+                // Signed with the key every agent is pinned to, and naming this Mac and the moment
+                // it was made: a forged or replayed reply is refused at the Mac.
+                let body = JSON.encode(CommandsReply(machine: machine, commands: ms.pending, automatic: ms.automatic), pretty: false)
+                guard let signature = try? Signing.sign(body, with: commandKey) else {
+                    return Self.text(500, "could not sign the orders")
+                }
+                return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
             }
         }
-        if req.method == "POST" && req.path.hasPrefix("/commands/") && req.path.hasSuffix("/result") {
-            let id = String(req.path.dropFirst("/commands/".count).dropLast("/result".count))
+        if req.method == "POST" && (req.path.hasPrefix("/commands/") || req.path.hasPrefix("/automatic/")) && req.path.hasSuffix("/result") {
+            let automatic = req.path.hasPrefix("/automatic/")
+            let prefix = automatic ? "/automatic/" : "/commands/"
+            let id = String(req.path.dropFirst(prefix.count).dropLast("/result".count))
             guard !id.isEmpty, !id.contains("/") else { return Self.text(404, "not found") }
             guard let token = machineToken(req) else { return Self.text(401, "missing token") }
             guard let body = try? JSONSerialization.jsonObject(with: req.body) as? [String: Any],
@@ -309,13 +327,27 @@ public final class FeedServer: @unchecked Sendable {
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
                 var ms = state.machines[machine]!
                 let result = CommandResult(commandId: id, status: body["status"] as? String ?? "", reason: body["reason"] as? String)
-                ms.lastResult = result
-                if let app = body["app"] as? String, !app.isEmpty {
-                    var all = ms.lastResults ?? [:]
-                    all[app] = result
-                    ms.lastResults = all
+                let named = (body["app"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                var all = ms.lastResults ?? [:]
+                // An order is looked up by id for this Mac, and it is the order — never the body —
+                // that decides which app the result belongs to and whether anything is cleared. A
+                // body naming another app cannot acknowledge an order that was never carried out.
+                if !automatic {
+                    guard let order = ms.pending.first(where: { $0.id == id && $0.machine == machine }) else {
+                        return Self.text(404, "no order \(id) is pending for \(machine)")
+                    }
+                    guard named == order.app else {
+                        return Self.text(400, "order \(id) is for \(order.app), not \(named ?? "a named app")")
+                    }
+                    all[order.app] = result
+                    ms.pending.removeAll { $0.id == id }  // the acknowledgement
+                } else {
+                    // Automatic reports have their own route and never acknowledge pending orders.
+                    guard id.hasPrefix("auto-"), let named else { return Self.text(400, "an automatic result needs an auto id and app") }
+                    all[named] = result
                 }
-                ms.pending.removeAll { $0.id == id }  // the acknowledgement
+                ms.lastResult = result
+                ms.lastResults = all
                 state.machines[machine] = ms
                 return Self.ok
             }

@@ -11,14 +11,19 @@ public struct StubState: Codable, Sendable, Equatable {
     public var exits: [String]
     public var heartbeat_at: String?
     public var rollbacks: Int
+    /// The version the stub last rolled back *from* (its directory name). It is how the agent
+    /// learns that a version it installed never came up, so Automatic cannot install those same
+    /// bytes here again on every run. Absent in state written before it existed.
+    public var rolledBack: String? = nil
 
     public init(switched_at: String? = nil, target: String? = nil, exits: [String] = [],
-                heartbeat_at: String? = nil, rollbacks: Int = 0) {
+                heartbeat_at: String? = nil, rollbacks: Int = 0, rolledBack: String? = nil) {
         self.switched_at = switched_at
         self.target = target
         self.exits = exits
         self.heartbeat_at = heartbeat_at
         self.rollbacks = rollbacks
+        self.rolledBack = rolledBack
     }
 
     public var switchedAt: Date? { switched_at.flatMap(ISO.date) }
@@ -75,6 +80,7 @@ public struct StubSupervisor: Sendable {
     }
 
     public mutating func recordExit(code: Int32, at date: Date) {
+        clearHeartbeat()
         guard code != 0, let switched = state.switchedAt else { return }
         // A crash after the window can never justify a rollback, and nothing before the switch belongs to it.
         let dates = (state.exitDates + [date])
@@ -82,8 +88,14 @@ public struct StubSupervisor: Sendable {
         state.exits = dates.map(ISO.string)
     }
 
-    public mutating func recordRollback(at date: Date, target: String?) {
+    /// A new child has no heartbeat of its own: a beat the child *before* it wrote must never
+    /// vouch for it. Crashes already recorded stay — they belong to this same probation.
+    public mutating func clearHeartbeat() { state.heartbeat_at = nil }
+
+    /// `rejected` is the version rolled back from, recorded so the agent can stop offering it.
+    public mutating func recordRollback(at date: Date, target: String?, rejected: String? = nil) {
         state.rollbacks += 1
+        if let rejected { state.rolledBack = rejected }
         recordSwitch(at: date, target: target)
     }
 

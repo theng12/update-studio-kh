@@ -10,6 +10,7 @@
     <string>serve</string>
     <string>--feed</string><string>__HOME__/Library/KHUpdater/feed</string>
     <string>--state</string><string>__HOME__/Library/KHUpdater/state</string>
+    <string>--key</string><string>__HOME__/Library/KHUpdater/keys/private.key</string>
     <string>--bind</string><string>127.0.0.1</string>
     <string>--bind</string><string>__TAILSCALE_IP__</string>
     <string>--port</string><string>8790</string>

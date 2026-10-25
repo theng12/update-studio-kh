@@ -58,20 +58,30 @@ public struct BundleInfo: Equatable, Sendable {
         }
     }
 
+    /// A runnable executable, and a real file: a symlinked one runs as its *target*, so
+    /// `proc_pidpath` would report a path outside the bundle — the app could never be seen running,
+    /// asked to quit, or judged healthy, and an install could replace it while it was up.
     public func executableIsRunnable(in appPath: String) -> Bool {
-        FileManager.default.isExecutableFile(atPath: appPath + "/Contents/MacOS/" + executable)
+        let path = appPath + "/Contents/MacOS/" + executable
+        var status = stat()
+        guard lstat(path, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG,
+              RealPath.of(path).hasPrefix(RealPath.of(appPath) + "/Contents/") else { return false }
+        return FileManager.default.isExecutableFile(atPath: path)
     }
 }
 
 /// One install in flight, written before anything running is stopped and moved forward at each
 /// step. A process killed half way leaves this behind, and the next run finishes or undoes it.
 public struct InstallJournal: Codable, Sendable, Equatable {
-    public var phase: String          // staged → moving → promoting → promoted
+    public var phase: String          // staged → moving → promoting → promoted → rolling_back
     public var installed: String
     public var staged: String
     public var rollback: String
     public var previousVersion: String?
     public var wasRunning: Bool
+    /// The version this install is putting in place, so a recovered journal can prove which side it
+    /// found at `installed`. Absent in a journal written before it existed.
+    public var version: String? = nil
 }
 
 public enum Recipe {
@@ -86,28 +96,36 @@ public enum Recipe {
     /// 4. the installed bundle becomes the rollback (the one before it goes to `_trash`), the staged
     ///    one is renamed into place; any failure from here restores the previous bundle;
     /// 5. relaunch (only if it was running) and wait for it to be healthy *as the new version*;
-    /// 6. otherwise both must stop before the previous bundle goes back (else `rollback_blocked`,
-    ///    both kept), and it must then be healthy *as the previous version*.
+    /// 6. otherwise both must stop before the previous bundle goes back, and it must then be healthy
+    ///    *as the previous version*. A rollback that cannot be finished — the bad version will not
+    ///    stop, the previous bundle cannot be put back, or there is no previous bundle at all —
+    ///    leaves the journal in place, so the next run retries instead of reporting an app that is
+    ///    merely the new version as settled.
     public static func appDmg(shell: Shell, installedPath: String, artifactPath: String, feedVersion: String,
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
                               fileManager fm: FileManager = .default) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
+        guard !fm.fileExists(atPath: paths.journal.path) else {
+            throw khuFail("the earlier install is unresolved; journal kept at \(paths.journal.path)")
+        }
 
         // 2. Verify and stage while the old app keeps running.
         let mount = try attach(shell, artifactPath)
         var mounted = true
         defer { if mounted { _ = detach(shell, mount) } }
         let source = try singleApp(in: mount, fileManager: fm)
-        let info = try BundleInfo.read(source)
+        let info: BundleInfo
+        do { info = try BundleInfo.read(source) }
+        catch { throw ArtifactFailure(description: "the DMG's bundle is invalid: \(error)") }
         guard info.version == feedVersion else {
-            throw khuFail("DMG holds \(info.version), the feed says \(feedVersion); nothing was changed")
+            throw ArtifactFailure(description: "DMG holds \(info.version), the feed says \(feedVersion); nothing was changed")
         }
         let installedInfo = fm.fileExists(atPath: installedPath) ? try? BundleInfo.read(installedPath) : nil
         if let want = expectedBundleID ?? installedInfo?.identifier, info.identifier != want {
-            throw khuFail("DMG holds \(info.identifier), this Mac's app is \(want); nothing was changed")
+            throw ArtifactFailure(description: "DMG holds \(info.identifier), this Mac's app is \(want); nothing was changed")
         }
-        guard info.executableIsRunnable(in: source) else { throw khuFail("the DMG's app has no runnable executable; nothing was changed") }
+        guard info.executableIsRunnable(in: source) else { throw ArtifactFailure(description: "the DMG's app has no runnable executable; nothing was changed") }
 
         if fm.fileExists(atPath: paths.staged.path) { try Trash.move(paths.staged, into: paths.trash, fileManager: fm) }
         let copy = try shell.run("/usr/bin/ditto", arguments: [source, paths.staged.path], timeout: 900)
@@ -124,7 +142,7 @@ public enum Recipe {
                                      rollback: paths.rollback.path,
                                      // Nothing installed: a rollback bundle kept from before is the previous version.
                                      previousVersion: installedInfo?.version ?? (try? BundleInfo.read(paths.rollback.path))?.version,
-                                     wasRunning: wasRunning)
+                                     wasRunning: wasRunning, version: feedVersion)
         try AtomicFile.writeJSON(journal, to: paths.journal)
 
         // 3. Stop what is running; on refusal, leave the old app as it was.
@@ -150,10 +168,13 @@ public enum Recipe {
             try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath))
             journal.phase = "promoted"; try AtomicFile.writeJSON(journal, to: paths.journal)
         } catch {
-            let restored = restoreAfterFailure(paths, journal: journal, fileManager: fm)
+            let cause = error
+            let restored: String
+            do { restored = try restoreAfterFailure(journal, fileManager: fm) }
+            catch { throw khuFail("installing failed (\(cause)); \(error); recovery journal kept at \(paths.journal.path)") }
             if wasRunning { control.launch() }
-            _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
-            throw khuFail("installing failed (\(error)); \(restored)")
+            try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
+            throw khuFail("installing failed (\(cause)); \(restored)")
         }
 
         func finish(_ result: RecipeResult) -> RecipeResult {
@@ -163,8 +184,8 @@ public enum Recipe {
             return RecipeResult(status: result.status, reason: ([result.reason ?? ""] + notes).filter { !$0.isEmpty }.joined(separator: "; "))
         }
 
-        // 5. Start it again only if it was running before.
-        guard wasRunning else {
+        // 5. Preserve stopped updates; a first install always needs a live health check.
+        guard wasRunning || journal.previousVersion == nil else {
             return finish(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped"))
         }
         control.launch()
@@ -172,22 +193,22 @@ public enum Recipe {
 
         // 6. Roll back — only once both the app and its service are really gone.
         guard control.quit(), control.stopService() else {
-            return finish(RecipeResult(status: "rollback_blocked", reason:
-                "the new version was unhealthy and would not stop; both versions were kept (previous at \(paths.rollback.path))"))
-        }
-        guard let previousVersion = journal.previousVersion, fm.fileExists(atPath: paths.rollback.path) else {
-            control.launch()
-            return finish(RecipeResult(status: "rollback_failed", reason: "the new version was unhealthy and there was no previous version; it was started again"))
+            // Both bundles stay, and so does the journal: the next run asks the bad version to stop
+            // again instead of finding the new version in place and calling the app settled.
+            return RecipeResult(status: "rollback_blocked", reason:
+                "the new version was unhealthy and would not stop; both versions were kept (previous at "
+                + "\(paths.rollback.path)) and \(paths.journal.path) with them — the next run tries again")
         }
         do {
-            try putBack(paths, expectedVersion: previousVersion, fileManager: fm)
+            let result = try rollBack(paths, journal: journal, control: control, fileManager: fm)
+            return result.status == "rolled_back" ? finish(result) : result
         } catch {
-            return finish(RecipeResult(status: "rollback_failed", reason: "the new version was unhealthy and the previous one could not be put back: \(error)"))
+            // Nothing was written away: the journal stays exactly as it is, and a later run picks
+            // the rollback up again rather than reporting a Mac whose app is simply the new version.
+            return RecipeResult(status: "rollback_failed", reason:
+                "the new version was unhealthy and the previous one could not be put back (\(error)); "
+                + "nothing was reported as settled and \(paths.journal.path) is kept — the next run tries again")
         }
-        control.launch()
-        return finish(waitHealthy(control, version: previousVersion)
-            ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy within \(Int(control.healthTimeout)) s; \(previousVersion) is running again")
-            : RecipeResult(status: "rollback_unhealthy", reason: "the new version was unhealthy, and the restored \(previousVersion) is not healthy either"))
     }
 
     struct Paths {
@@ -204,68 +225,177 @@ public enum Recipe {
             let state = URL(fileURLWithPath: stateDir)
             rollback = state.appendingPathComponent("rollback-\(app)").appendingPathComponent(installed.lastPathComponent)
             trash = Trash.root(in: state)
-            journal = state.appendingPathComponent("install-\(app).json")
+            journal = Recipe.journalURL(stateDir: stateDir, app: app)
         }
+    }
+
+    /// Where one app's install journal lives: `recover` reads it, a rollback that could not be
+    /// finished keeps it, and the agent refuses to call that app settled while it is there.
+    public static func journalURL(stateDir: String, app: String) -> URL {
+        URL(fileURLWithPath: stateDir).appendingPathComponent("install-\(app).json")
+    }
+
+    /// True while an install this Mac could not finish or undo is still outstanding — the journal is
+    /// kept for exactly that reason, so nothing may report that app as settled until it is gone.
+    public static func isUnresolved(stateDir: String, app: String) -> Bool {
+        FileManager.default.fileExists(atPath: journalURL(stateDir: stateDir, app: app).path)
     }
 
     /// Finish or undo what a killed run left behind. Returns a note for the result ("" if nothing).
     @discardableResult
     public static func recover(installedPath: String, stateDir: String, app: String, control: AppControl,
-                               fileManager fm: FileManager = .default) throws -> String {
-        try recover(Paths(installedPath: installedPath, stateDir: stateDir, app: app), control: control, fileManager: fm)
+                               fileManager fm: FileManager = .default,
+                               controlForPath: ((String) -> AppControl)? = nil) throws -> String {
+        let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
+        if let journal = try AtomicFile.readJSON(InstallJournal.self, from: paths.journal),
+           RealPath.of(journal.installed) != RealPath.of(installedPath) {
+            if let controlForPath {
+                return try recover(paths, control: controlForPath(journal.installed), fileManager: fm)
+            }
+            // A control for a different app cannot safely launch or judge the journal's app.
+            if !fm.fileExists(atPath: journal.installed) { _ = try restoreAfterFailure(journal, fileManager: fm) }
+            return "recovery restored or kept the app at \(journal.installed); its journal is kept until a control for that path can verify it"
+        }
+        return try recover(paths, control: control, fileManager: fm)
     }
 
+    /// Recovery is a decision about the *journal's* app, on the journal's own paths: this Mac's
+    /// configuration may have changed since, and that must never make recovery judge, launch or
+    /// replace a different app — nor throw the journal away because the wrong path looked fine.
     static func recover(_ paths: Paths, control: AppControl, fileManager fm: FileManager) throws -> String {
         guard let journal = try AtomicFile.readJSON(InstallJournal.self, from: paths.journal) else { return "" }
+        let found = try? BundleInfo.read(journal.installed)
+        let previousIsInPlace = found?.version == journal.previousVersion && found?.executableIsRunnable(in: journal.installed) == true
+        let expectedNew = journal.version ?? (try? BundleInfo.read(journal.staged).version)
+        let newIsInPlace = expectedNew != nil && expectedNew == found?.version
+            && found?.executableIsRunnable(in: journal.installed) == true
         var note: String
-        if fm.fileExists(atPath: paths.installedPath) {
-            // Either nothing was moved yet, or the new bundle was already in place.
-            note = journal.phase == "staged" ? "an interrupted install was undone before anything moved"
-                                             : "an interrupted install had finished putting the new version in place"
+        var resolved = false
+        if !fm.fileExists(atPath: journal.installed) {
+            note = try restoreAfterFailure(journal, fileManager: fm)
+            if journal.wasRunning { control.launch() }
+            resolved = !journal.wasRunning || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
+        } else if previousIsInPlace {
+            if journal.wasRunning { control.launch() }
+            resolved = !journal.wasRunning || waitHealthy(control, version: found!.version)
+            note = "an interrupted install was undone; the previous app was put back"
+        } else if journal.phase == "rolling_back", newIsInPlace {
+            guard control.quit(), control.stopService() else { return "rollback remains blocked; journal kept" }
+            let result = try rollBack(paths, journal: journal, control: control, fileManager: fm)
+            note = result.reason ?? result.status
+            resolved = result.status == "rolled_back"
+        } else if newIsInPlace, let version = found?.version {
+            (note, resolved) = finishPromotion(paths, journal: journal, newVersion: version,
+                                              control: control, fileManager: fm)
         } else {
-            note = restoreAfterFailure(paths, journal: journal, fileManager: fm)
+            throw khuFail("recovery found \(found?.version ?? "no readable bundle") at \(journal.installed), neither the expected new nor previous version; journal kept")
         }
-        if fm.fileExists(atPath: paths.staged.path) { try Trash.move(paths.staged, into: paths.trash, fileManager: fm) }
-        if journal.wasRunning && control.isRunning() == false { control.launch(); note += "; it was started again" }
-        try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
+        if resolved {
+            if !journal.staged.isEmpty, fm.fileExists(atPath: journal.staged) {
+                try Trash.move(URL(fileURLWithPath: journal.staged), into: paths.trash, fileManager: fm)
+            }
+            try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
+        } else { note += "; unresolved, journal kept for the next run" }
         return note
     }
 
-    /// The installed path is empty or wrong: put the rollback bundle back if there is one.
-    static func restoreAfterFailure(_ paths: Paths, journal: InstallJournal, fileManager fm: FileManager) -> String {
-        guard !fm.fileExists(atPath: paths.installedPath) else {
-            return journal.phase == "promoting" || journal.phase == "promoted"
-                ? "the new version is in place" : "the previous app was not touched"
+    /// The install died with the new version in place (or just as it went in): the same health check
+    /// and the same rollback a live install would do. Returns the note and whether the app is
+    /// settled — a rollback that could not be put back keeps the journal for the next run.
+    static func finishPromotion(_ paths: Paths, journal: InstallJournal, newVersion: String, control: AppControl,
+                                fileManager fm: FileManager) -> (note: String, resolved: Bool) {
+        guard journal.wasRunning || journal.previousVersion == nil else {
+            return ("an interrupted install had finished putting \(newVersion) in place while the app was "
+                    + "not running; it was left stopped", true)
         }
-        guard fm.fileExists(atPath: paths.rollback.path) else {
-            return "NO APP IS INSTALLED at \(paths.installedPath) and there is no previous bundle to put back"
+        control.launch()
+        if waitHealthy(control, version: newVersion) {
+            return ("an interrupted install had finished putting \(newVersion) in place, and it is running and healthy", true)
+        }
+        guard control.quit(), control.stopService() else {
+            return ("\(newVersion) is not healthy and would not stop; both versions were kept (previous at "
+                    + "\(journal.rollback)) and the journal with them, so the next run tries again", false)
         }
         do {
-            try fm.moveItem(at: paths.rollback, to: URL(fileURLWithPath: paths.installedPath))
-            return "the previous app was put back"
+            let result = try rollBack(paths, journal: journal, control: control, fileManager: fm)
+            return (result.reason ?? "\(newVersion) was unhealthy and the previous version was put back", result.status == "rolled_back")
         } catch {
-            return "NO APP IS INSTALLED at \(paths.installedPath): putting the previous one back failed (\(error)); it is at \(paths.rollback.path)"
+            return ("\(newVersion) is not healthy and the previous version could not be put back (\(error)); "
+                    + "the journal is kept and the next run tries again", false)
         }
     }
 
-    /// Unhealthy new bundle to `_trash`, previous bundle back — and proven to be the previous version.
-    static func putBack(_ paths: Paths, expectedVersion: String, fileManager fm: FileManager) throws {
-        if fm.fileExists(atPath: paths.installedPath) {
-            try Trash.move(URL(fileURLWithPath: paths.installedPath), into: paths.trash, fileManager: fm)
+    /// The rollback half of an install, live and in recovery: the unhealthy version is already
+    /// stopped, the previous bundle goes back — proven to be the previous version — and has to come
+    /// up healthy as that version. Throws when the previous bundle could not be put back, and in
+    /// that case nothing was written away: the caller keeps the journal.
+    static func rollBack(_ paths: Paths, journal: InstallJournal, control: AppControl,
+                         fileManager fm: FileManager) throws -> RecipeResult {
+        guard let previousVersion = journal.previousVersion else {
+            throw khuFail("nothing was installed here before, so there is no previous version to put back")
         }
-        try fm.moveItem(at: paths.rollback, to: URL(fileURLWithPath: paths.installedPath))
-        let restored = try BundleInfo.read(paths.installedPath)
-        guard restored.version == expectedVersion else {
-            throw khuFail("the bundle put back is \(restored.version), not \(expectedVersion)")
-        }
+        var pending = journal
+        pending.phase = "rolling_back"
+        try AtomicFile.writeJSON(pending, to: paths.journal)
+        try putBack(paths, journal: pending, expectedVersion: previousVersion, fileManager: fm)
+        control.launch()
+        return waitHealthy(control, version: previousVersion)
+            ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy within \(Int(control.healthTimeout)) s; \(previousVersion) is running again")
+            : RecipeResult(status: "rollback_unhealthy", reason: "the new version was unhealthy, and the restored \(previousVersion) is not healthy either")
     }
 
-    static func waitHealthy(_ control: AppControl, version: String) -> Bool {
-        let deadline = Mono.now() + control.healthTimeout
+    /// The installed path is empty or wrong: put the rollback bundle back if there is one.
+    static func restoreAfterFailure(_ journal: InstallJournal, fileManager fm: FileManager) throws -> String {
+        if fm.fileExists(atPath: journal.installed) {
+            guard let info = try? BundleInfo.read(journal.installed),
+                  info.version == journal.previousVersion,
+                  info.executableIsRunnable(in: journal.installed) else {
+                throw khuFail("the installed bundle is not either journal version; journal kept")
+            }
+            return "the previous app was not touched"
+        }
+        guard let expected = journal.previousVersion,
+              let info = try? BundleInfo.read(journal.rollback), info.version == expected,
+              info.executableIsRunnable(in: journal.rollback) else {
+            throw khuFail("NO APP IS INSTALLED at \(journal.installed); no verified previous bundle to put back at \(journal.rollback); journal kept")
+        }
+        do { try fm.moveItem(atPath: journal.rollback, toPath: journal.installed) }
+        catch { throw khuFail("NO APP IS INSTALLED at \(journal.installed): putting the previous one back failed (\(error)); it is at \(journal.rollback); journal kept") }
+        return "the previous app was put back"
+    }
+
+    /// Keep the rollback untouched until its verified sibling is installed; a failed rename restores
+    /// the unhealthy app too, and a killed run can retry from the original rollback and journal.
+    static func putBack(_ paths: Paths, journal: InstallJournal, expectedVersion: String, fileManager fm: FileManager) throws {
+        let installed = URL(fileURLWithPath: journal.installed)
+        let rollback = URL(fileURLWithPath: journal.rollback)
+        let prepared = installed.deletingLastPathComponent().appendingPathComponent(".\(installed.lastPathComponent).khu-previous")
+        let displaced = installed.deletingLastPathComponent().appendingPathComponent(".\(installed.lastPathComponent).khu-unhealthy")
+        guard let info = try? BundleInfo.read(rollback.path), info.version == expectedVersion,
+              info.executableIsRunnable(in: rollback.path) else { throw khuFail("rollback is not runnable version \(expectedVersion)") }
+        if fm.fileExists(atPath: prepared.path) { try Trash.move(prepared, into: paths.trash, fileManager: fm) }
+        try fm.copyItem(at: rollback, to: prepared)
+        guard (try? BundleInfo.read(prepared.path)) == info else { throw khuFail("the prepared rollback does not match") }
+        if fm.fileExists(atPath: installed.path) {
+            if fm.fileExists(atPath: displaced.path) { try Trash.move(displaced, into: paths.trash, fileManager: fm) }
+            try fm.moveItem(at: installed, to: displaced)
+        }
+        do { try fm.moveItem(at: prepared, to: installed) }
+        catch {
+            if !fm.fileExists(atPath: installed.path), fm.fileExists(atPath: displaced.path) {
+                try? fm.moveItem(at: displaced, to: installed)
+            }
+            throw error
+        }
+        if fm.fileExists(atPath: displaced.path) { try Trash.move(displaced, into: paths.trash, fileManager: fm) }
+    }
+
+    static func waitHealthy(_ control: AppControl, version: String, clock: () -> TimeInterval = Mono.now) -> Bool {
+        let deadline = clock() + control.healthTimeout
         repeat {
             if control.healthy(version) { return true }
             Thread.sleep(forTimeInterval: control.pollInterval)
-        } while Mono.now() < deadline
+        } while clock() < deadline
         return control.healthy(version)
     }
 
@@ -299,7 +429,7 @@ public enum Recipe {
     static func singleApp(in mount: String, fileManager fm: FileManager) throws -> String {
         let names = (try? fm.contentsOfDirectory(atPath: mount)) ?? []
         let apps = names.filter { $0.hasSuffix(".app") && !$0.hasPrefix(".") }
-        guard apps.count == 1 else { throw khuFail("expected exactly one .app in the DMG, found \(apps.count); nothing was changed") }
+        guard apps.count == 1 else { throw ArtifactFailure(description: "expected exactly one .app in the DMG, found \(apps.count); nothing was changed") }
         return mount + "/" + apps[0]
     }
 }
@@ -310,11 +440,7 @@ public enum LiveControl {
     /// Processes whose executable lives inside this bundle, or nil when the table cannot be read.
     /// The kernel's own spelling of a path (`realpath(3)`), which is what `proc_pidpath` reports.
     /// Foundation's `resolvingSymlinksInPath` drops `/private` and would never match.
-    public static func realPath(_ path: String) -> String {
-        guard let resolved = realpath(path, nil) else { return path }
-        defer { free(resolved) }
-        return String(cString: resolved)
-    }
+    public static func realPath(_ path: String) -> String { RealPath.of(path) }
 
     public static func processes(inBundle installedPath: String) -> [pid_t]? {
         let prefix = realPath(installedPath) + "/Contents/"
@@ -336,20 +462,24 @@ public enum LiveControl {
         processes(inBundle: installedPath).map { !$0.isEmpty }
     }
 
-    /// Ask the app to quit by bundle id — passed as an argument, never spliced into the script —
-    /// and wait up to `wait` seconds for every process of it to leave.
-    public static func quit(_ installedPath: String, shell: Shell, wait: TimeInterval = 60) -> Bool {
-        guard isRunning(installedPath) != false else { return true }
+    /// Ask the app to quit by bundle id — passed as an argument, never spliced into the script — and
+    /// wait up to `wait` seconds until `gone()` says it has. By default that means no process of it
+    /// is left; the Gateway passes a rule that ignores its own service process, which is stopped
+    /// separately by the PID that owns the port.
+    public static func quit(_ installedPath: String, shell: Shell, wait: TimeInterval = 60,
+                            gone rule: (() -> Bool)? = nil) -> Bool {
+        let gone = rule ?? { isRunning(installedPath) == false }
+        if gone() { return true }
         guard let id = try? BundleInfo.read(installedPath).identifier else { return false }
         _ = try? shell.run("/usr/bin/osascript", arguments: [
             "-e", "on run argv", "-e", "tell application id (item 1 of argv) to quit", "-e", "end run", id,
         ], timeout: 30)
         let deadline = Mono.now() + wait
         while Mono.now() < deadline {
-            if isRunning(installedPath) == false { return true }
+            if gone() { return true }
             Thread.sleep(forTimeInterval: 1)
         }
-        return isRunning(installedPath) == false
+        return gone()
     }
 
     public static func appDmg(_ installedPath: String, shell: Shell) -> AppControl {
@@ -363,11 +493,28 @@ public enum LiveControl {
             healthTimeout: 60)
     }
 
-    /// The Gateway: its server outlives the menu-bar app. It is stopped by the PID its /health
-    /// reports — only after checking that PID really runs from this bundle — with SIGTERM only, and
-    /// counts as stopped once the port stays quiet. Healthy means /health answers 200 from a
-    /// process of this bundle, the bundle on disk is the expected version, and the app runs.
-    public static func gateway(_ installedPath: String, shell: Shell, port: Int = 8787) -> AppControl {
+    /// The pids owning the *listening* socket on `port`, asked of `lsof` by port (absolute path,
+    /// bounded timeout, never by name). This is the only evidence that lets a stop signal a PID; an
+    /// empty answer is a refusal, never a licence to signal whatever /health named.
+    static func listeners(onPort port: Int, shell: Shell) -> [pid_t] {
+        guard let result = try? shell.run("/usr/sbin/lsof",
+                                          arguments: ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fp"],
+                                          timeout: 15),
+              result.exitCode == 0 else { return [] }
+        return result.stdout.split(separator: "\n").compactMap { line in
+            line.hasPrefix("p") ? pid_t(line.dropFirst()) : nil
+        }
+    }
+
+    /// The Gateway: its server outlives the menu-bar app, and both run from inside the same bundle.
+    /// The server is stopped by the PID its /health reports — only after checking that this PID
+    /// really runs from this bundle AND really owns the listening socket on the port — with SIGTERM
+    /// only, and counts as stopped once the port stays quiet. Quitting therefore means *the app*
+    /// has quit, not that the bundle has no processes left: the service is stopped separately, and
+    /// otherwise a menu-bar app could never be quit while its own server is up. Healthy means
+    /// /health answers 200 from a process of this bundle, the bundle on disk is the expected
+    /// version, and the app runs.
+    public static func gateway(_ installedPath: String, shell: Shell, port: Int = 8787, quitWait: TimeInterval = 60) -> AppControl {
         let health = URL(string: "http://127.0.0.1:\(port)/health")!
         let prefix = realPath(installedPath) + "/Contents/"
         func probe() -> (code: Int, pid: pid_t?) {
@@ -390,12 +537,26 @@ public enum LiveControl {
             }
             return true
         }
+        /// This app's own service process: the PID /health names, and only when it is one of ours.
+        func servicePid() -> pid_t? { let named = probe().pid; return ours(named) ? named : nil }
+        /// The app is gone once the only process of this bundle left is its service (or none is).
+        func appGone() -> Bool {
+            guard let all = processes(inBundle: installedPath) else { return false }  // cannot tell: keep waiting
+            guard let service = servicePid() else { return all.isEmpty }
+            return all.allSatisfy { $0 == service }
+        }
         var control = appDmg(installedPath, shell: shell)
+        control.quit = { quit(installedPath, shell: shell, wait: quitWait, gone: { appGone() }) }
         control.stopService = {
             let answer = probe()
             if answer.code == 0 { return quiet() }
             // Something answers that is not this Gateway: never signal it, and do not install over it.
             guard ours(answer.pid), let pid = answer.pid else { return false }
+            // The PID /health names is the service only when it is also the PID that owns the
+            // listening socket: a local server naming any other process inside this bundle must not
+            // turn a stop into a signal to an unrelated process.
+            let owners = listeners(onPort: port, shell: shell)
+            guard !owners.isEmpty, owners.allSatisfy({ $0 == pid }) else { return false }
             guard kill(pid, SIGTERM) == 0 || errno == ESRCH else { return false }
             let deadline = Mono.now() + 60
             while Mono.now() < deadline, kill(pid, 0) == 0 { Thread.sleep(forTimeInterval: 1) }
@@ -404,7 +565,9 @@ public enum LiveControl {
         let appHealthy = control.healthy
         control.healthy = { expected in
             let answer = probe()
-            return answer.code == 200 && ours(answer.pid) && appHealthy(expected)
+            let owners = listeners(onPort: port, shell: shell)
+            return answer.code == 200 && ours(answer.pid) && !owners.isEmpty
+                && owners.allSatisfy { $0 == answer.pid } && appHealthy(expected)
         }
         control.healthTimeout = 120
         return control

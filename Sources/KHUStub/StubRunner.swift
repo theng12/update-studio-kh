@@ -60,6 +60,15 @@ public final class StubRunner: @unchecked Sendable {
         var switchMono: TimeInterval?      // set when the switch happened in this process
         var warnedNoFallback = false
 
+        // A probation a previous process left open gets its whole window again here: time that
+        // passed while no child of ours was running is not this version misbehaving, and must not
+        // roll it back before it has been given the grace the window promises.
+        if supervisor.onProbation {
+            supervisor.recordSwitch(at: now(), target: supervisor.state.target)
+            switchMono = Mono.now()
+            save(supervisor)
+        }
+
         func elapsed() -> TimeInterval? { switchMono.map { Mono.now() - $0 } }
 
         /// Put `previous` back. Checked before anything is stopped: with no usable fallback the
@@ -70,6 +79,7 @@ public final class StubRunner: @unchecked Sendable {
                 return false
             }
             log("rolling back: \(reason)")
+            let rejected = layout.currentBinary()?.path      // what is being rolled back FROM
             do {
                 let restored = try FileLock.withExclusive(layout.switchLock) { try switcher.switchBack(at: now()) }
                 guard restored != nil else { return false }
@@ -77,7 +87,8 @@ public final class StubRunner: @unchecked Sendable {
                 log("rollback failed: \(error)")
                 return false
             }
-            supervisor.recordRollback(at: now(), target: layout.currentBinary()?.path)
+            supervisor.recordRollback(at: now(), target: layout.currentBinary()?.path,
+                                      rejected: rejected.map { StubLayout.version(of: URL(fileURLWithPath: $0)) })
             switchMono = Mono.now()
             warnedNoFallback = false
             save(supervisor)
@@ -100,6 +111,9 @@ public final class StubRunner: @unchecked Sendable {
             }
 
             let nonce = UUID().uuidString
+            // Only a beat carrying THIS child's nonce counts, and one the child before it wrote
+            // must not be left standing to vouch for this one.
+            if supervisor.state.heartbeat_at != nil { supervisor.clearHeartbeat(); save(supervisor) }
             log("starting \(binary.path) \(childArguments.joined(separator: " "))")
             guard let child = spawn(binary, nonce: nonce) else {
                 // Cannot even launch: counted as a crash, so three of them roll back like any other.

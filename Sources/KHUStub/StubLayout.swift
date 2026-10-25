@@ -89,10 +89,13 @@ public struct StubSwitcher: @unchecked Sendable {
         return StubLayout.version(of: previous)
     }
 
-    /// The fallback a rollback would use — checked before anything is stopped for it.
+    /// The fallback a rollback would use — checked before anything is stopped for it. It is judged
+    /// on the binaries themselves, not on the link paths: an alias pointing at whatever `current`
+    /// already runs is not a fallback, and rolling back to it would replace nothing.
     public func usablePrevious() -> URL? {
         guard let previous = layout.previousBinary(fileManager: fileManager) else { return nil }
-        if let current = layout.currentBinary(fileManager: fileManager), current.path == previous.path { return nil }
+        if let current = layout.currentBinary(fileManager: fileManager),
+           RealPath.of(current.path) == RealPath.of(previous.path) { return nil }
         return previous
     }
 

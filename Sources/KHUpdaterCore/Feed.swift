@@ -54,3 +54,19 @@ public struct Release: Codable, Sendable, Equatable {
     public var feedData: Data? { Data(base64Encoded: feed) }
     public var signatureData: Data? { Data(base64Encoded: signature) }
 }
+
+/// The publisher's answer to `GET /commands` and its signature in ONE body, the same way the feed
+/// travels: orders and status cross the tailnet as plain text, so the reply is signed with the key
+/// every agent is pinned to and carries this Mac's id and the moment it was made. The agent refuses
+/// one it cannot verify, one for another Mac, and one that is not fresh.
+public struct SignedReply: Codable, Sendable, Equatable {
+    public var reply: String      // base64 of the exact signed bytes
+    public var signature: String  // base64 Ed25519 signature over those bytes
+
+    public init(reply: Data, signature: Data) {
+        self.reply = reply.base64EncodedString(); self.signature = signature.base64EncodedString()
+    }
+
+    public var replyData: Data? { Data(base64Encoded: reply) }
+    public var signatureData: Data? { Data(base64Encoded: signature) }
+}

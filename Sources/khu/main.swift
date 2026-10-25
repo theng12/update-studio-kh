@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 @main
 struct KHUMain {
@@ -10,10 +11,24 @@ struct KHUMain {
               keygen <dir>
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--allow-same]
               enrol --state <dir> --machine <id>
-              serve --feed <dir> --state <dir> --bind <ip> --port <p>
+              serve --feed <dir> --state <dir> --key <keyfile> --bind <ip> --port <p>
               agent --config <file> [--once]
             """.utf8))
             exit(64)
+        }
+        /// The value of the flag at `index`, or `usage()`. A flag with nothing after it is a usage
+        /// error: reading past the end of the line is a crash, not a diagnosis.
+        func value(_ flag: String, _ index: inout Int) -> String {
+            index += 1
+            guard index < args.count else {
+                FileHandle.standardError.write(Data("error: \(flag) needs a value\n".utf8))
+                usage()
+            }
+            return args[index]
+        }
+        func fail(_ message: String) -> Never {
+            FileHandle.standardError.write(Data("error: \(message)\n".utf8))
+            exit(1)
         }
         if args.isEmpty { usage() }
         switch args[0] {
@@ -22,73 +37,87 @@ struct KHUMain {
             let dir = URL(fileURLWithPath: args[1])
             let keyFile = dir.appendingPathComponent("private.key")
             do {
-                guard !FileManager.default.fileExists(atPath: keyFile.path) else {
-                    throw khuFail("\(keyFile.path) already exists; a new key would orphan every agent pinned to the old one")
-                }
                 try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                         attributes: [.posixPermissions: 0o700])
+                // The file is created exclusively (`O_CREAT|O_EXCL`, then published by `link`), and
+                // the key is printed only when it was created: the public key on screen is always
+                // the public half of the private key that is stored, even if two keygens run at once.
                 let key = Signing.generateKeyPair()
                 try Signing.savePrivateKey(key.privateKey, to: keyFile)
                 print("public key: \(key.publicKeyBase64)")
                 print("private key: \(keyFile.path)")
-            } catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) }
+            } catch { fail("\(error)") }
         case "publish":
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, allowSame = false
             var i = 1
             while i < args.count {
                 switch args[i] {
-                case "--feed": i+=1; feed=args[i]
-                case "--key": i+=1; key=args[i]
-                case "--app": i+=1; app=args[i]
-                case "--version": i+=1; version=args[i]
-                case "--artifact": i+=1; artifact=args[i]
-                case "--kind": i+=1; kind=args[i]
-                case "--allow-same": allowSame=true
+                case "--feed": feed = value("--feed", &i)
+                case "--key": key = value("--key", &i)
+                case "--app": app = value("--app", &i)
+                case "--version": version = value("--version", &i)
+                case "--artifact": artifact = value("--artifact", &i)
+                case "--kind": kind = value("--kind", &i)
+                case "--allow-same": allowSame = true
                 default: usage()
                 }
-                i+=1
+                i += 1
             }
-            guard let f=feed, let k=key, let a=app, let v=version, let art=artifact else { usage() }
+            guard let f = feed, let k = key, let a = app, let v = version, let art = artifact else { usage() }
             do {
-                try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a, version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame)
+                try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a,
+                                          version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame)
                 print("published \(a) \(v)")
-            } catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) }
+            } catch { fail("\(error)") }
         case "enrol":
             var state: String?, machine: String?
-            var i=1
+            var i = 1
             while i < args.count {
                 switch args[i] {
-                case "--state": i+=1; state=args[i]
-                case "--machine": i+=1; machine=args[i]
+                case "--state": state = value("--state", &i)
+                case "--machine": machine = value("--machine", &i)
                 default: usage()
                 }
-                i+=1
+                i += 1
             }
-            guard let s=state, let m=machine else { usage() }
-            do {
-                let tok = try Enrolment.enrol(stateDir: URL(fileURLWithPath: s), machine: m)
-                print(tok)
-            } catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) }
+            guard let s = state, let m = machine else { usage() }
+            do { print(try Enrolment.enrol(stateDir: URL(fileURLWithPath: s), machine: m)) }
+            catch { fail("\(error)") }
         case "serve":
-            var feed: String?, state: String?, binds: [String] = [], port: Int = 8790
-            var i=1
+            var feed: String?, state: String?, key: String?, binds: [String] = [], port: Int = 8790
+            var i = 1
             while i < args.count {
                 switch args[i] {
-                case "--feed": i+=1; feed=args[i]
-                case "--state": i+=1; state=args[i]
-                case "--bind": i+=1; binds.append(args[i])  // repeatable: loopback for the owner, the Tailscale IP for the Macs
-                case "--port": i+=1; port=Int(args[i]) ?? 8080
+                case "--feed": feed = value("--feed", &i)
+                case "--state": state = value("--state", &i)
+                case "--key": key = value("--key", &i)
+                case "--bind": binds.append(value("--bind", &i))  // repeatable: loopback for the owner, the Tailscale IP for the Macs
+                case "--port":
+                    let text = value("--port", &i)
+                    guard let number = Int(text), (1...65535).contains(number) else {
+                        FileHandle.standardError.write(Data("error: --port must be a number from 1 to 65535, not \(text)\n".utf8))
+                        exit(2)
+                    }
+                    port = number
                 default: usage()
                 }
-                i+=1
+                i += 1
             }
-            guard let f=feed, let s=state else { usage() }
+            guard let f = feed, let s = state else { usage() }
+            // Orders are signed with this key, and the Macs refuse an unsigned or unverifiable one,
+            // so a publisher without it can publish but never command.
+            let commandKey: Curve25519.Signing.PrivateKey?
+            do { commandKey = try key.map { try Signing.loadPrivateKey(from: URL(fileURLWithPath: $0)) } }
+            catch { fail("\(error)") }
+            if commandKey == nil {
+                FileHandle.standardError.write(Data("warning: no --key given, so this publisher cannot sign orders and the Macs will refuse them\n".utf8))
+            }
             // Every address is bound before any is served, so a bad --bind fails the start.
             var servers: [(FeedServer, Int32)] = []
             for address in (binds.isEmpty ? ["127.0.0.1"] : binds) {
-                let srv = FeedServer(feedDir: URL(fileURLWithPath: f), stateDir: URL(fileURLWithPath: s), bind: address, port: port)
-                do { servers.append((srv, try srv.listen())) }
-                catch { FileHandle.standardError.write(Data("error: \(error)\n".utf8)); exit(1) }
+                let srv = FeedServer(feedDir: URL(fileURLWithPath: f), stateDir: URL(fileURLWithPath: s),
+                                     bind: address, port: port, commandKey: commandKey)
+                do { servers.append((srv, try srv.listen())) } catch { fail("\(error)") }
                 print("serving on \(address):\(port)")
             }
             for (srv, fd) in servers {
@@ -97,22 +126,22 @@ struct KHUMain {
             while true { Thread.sleep(forTimeInterval: 3600) }
         case "agent":
             var config: String?, once = false
-            var i=1
+            var i = 1
             while i < args.count {
                 switch args[i] {
-                case "--config": i+=1; config=args[i]
-                case "--once": once=true
+                case "--config": config = value("--config", &i)
+                case "--once": once = true
                 default: usage()
                 }
-                i+=1
+                i += 1
             }
-            guard let c=config else { usage() }
+            guard let c = config else { usage() }
             let cfg: AgentConfig
             do {
                 var loaded = try JSONDecoder().decode(AgentConfig.self, from: Data(contentsOf: URL(fileURLWithPath: c)))
                 loaded.once = once || loaded.once
                 cfg = loaded
-            } catch { FileHandle.standardError.write(Data("cannot read the agent config \(c): \(error)\n".utf8)); exit(1) }
+            } catch { fail("cannot read the agent config \(c): \(error)") }
             // The stub rolls a fresh version back unless it hears from this very child within 2 minutes.
             // The beat runs on its own thread, so a long download or install never silences it.
             let mine = Agent.selfVersion(config: cfg)

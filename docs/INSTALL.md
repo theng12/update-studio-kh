@@ -13,6 +13,9 @@ Placeholders in `packaging/*.plist` and `examples/agent-config.json`: `__HOME__`
 K="$HOME/Library/KHUpdater"; mkdir -p "$K/bin" "$K/feed" "$K/state" ~/Library/Logs ~/Library/LaunchAgents
 cp build/khu build/khu-stub "$K/bin/"     # from this repository's ./build.sh
 "$K/bin/khu" keygen "$K/keys"      # prints the PUBLIC key; private.key stays here, mode 0600
+# The publisher plist must pass `--key "$K/keys/private.key"` to `khu serve`: orders are
+# signed with it, and the Macs refuse an unsigned or unverifiable order. Without it the
+# publisher can still publish and serve the feed, but it cannot command anything.
 sed -e "s#__HOME__#$HOME#g" -e "s#__TAILSCALE_IP__#$(tailscale ip -4)#g" \
     packaging/com.khupdater.publisher.plist > ~/Library/LaunchAgents/com.khupdater.publisher.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.khupdater.publisher.plist
@@ -55,6 +58,12 @@ reports, SIGTERM only), `app-dmg` (any ordinary app), `updater` (self-update thr
 
 `_trash` folders (in `state/`, `feed/` and `base/`) collect superseded downloads, bundles and links;
 nothing is ever deleted, so empty them yourself from time to time.
+
+First installs with no previous bundle are launched and health-checked. If unhealthy, their
+install journal stays and later runs retry health rather than report `current`. Recovery and
+rollback failures also keep the journal; do not discard it to silence an unresolved result.
+Gateway stop and health require the PID in `/health` to own the listening socket as well as
+run from the configured bundle; an unrelated listener blocks installation.
 
 ## Removing it
 

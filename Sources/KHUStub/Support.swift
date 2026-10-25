@@ -15,10 +15,17 @@ public func khuFail(_ message: String) -> KHUError { KHUError(message) }
 /// Names that come off the wire (artifact file names, machine ids, app ids) are never used as
 /// path components before passing through here. No separators, no leading dot, no "..".
 public enum SafeName {
+    /// The cap is in BYTES, not characters — a file system entry holds 255 (`ENAMETOOLONG`) and a
+    /// name's *characters* say nothing about its bytes. It is derived from the longest name anything
+    /// builds out of one of these: the publisher's `artifacts/<sha12-><name>` (13) written through
+    /// the atomic writer's `.<sha12-><name>.khu-tmp-<36-char uuid>` (46 more), and the agent's
+    /// `…<name>.part` (5). 196 + 59 = 255, so every derived name fits.
+    public static let maxBytes = 196
+
     public static func component(_ name: String, what: String = "name") throws -> String {
         let allowed = CharacterSet(charactersIn:
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_+@ ")
-        guard !name.isEmpty, name.count <= 128,
+        guard !name.isEmpty, name.utf8.count <= maxBytes,
               name != ".", name != "..",
               !name.hasPrefix("."),
               !name.hasPrefix(" "), !name.hasSuffix(" "),
@@ -27,6 +34,18 @@ public enum SafeName {
             throw khuFail("refused unsafe \(what): \(name)")
         }
         return name
+    }
+}
+
+/// The kernel's own spelling of a path (`realpath(3)`), which is what `proc_pidpath` reports about
+/// a process. Foundation's `resolvingSymlinksInPath` drops `/private`, so it would never match —
+/// and anything that has to decide "is this the same file" by what a process says about itself
+/// needs this one.
+public enum RealPath {
+    public static func of(_ path: String) -> String {
+        guard let resolved = realpath(path, nil) else { return path }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 }
 

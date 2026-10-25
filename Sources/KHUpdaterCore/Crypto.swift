@@ -11,9 +11,24 @@ public enum Signing {
         KeyPair(privateKey: Curve25519.Signing.PrivateKey())
     }
 
+    /// Creates the key file ONLY when it does not already exist, and never overwrites one: a second
+    /// key stored at the same path would orphan every agent pinned to the first — and would be the
+    /// key whose public half `keygen` never printed. The bytes go to a temporary file first (so no
+    /// reader ever sees half a key) and are published with `link(2)`, which is atomic and fails with
+    /// `EEXIST`: two `keygen`s running at once can leave only one key stored, and it is the one
+    /// whose public key was printed. The mode is 0600 from creation.
     public static func savePrivateKey(_ key: Curve25519.Signing.PrivateKey, to url: URL) throws {
-        let data = key.rawRepresentation
-        try AtomicFile.write(data, to: url, permissions: 0o600)
+        let directory = url.deletingLastPathComponent()
+        let temporary = try AtomicFile.write(key.rawRepresentation,
+                                             to: directory.appendingPathComponent(".\(url.lastPathComponent).khu-tmp-\(UUID().uuidString)"),
+                                             permissions: 0o600)
+        defer { _ = try? Trash.move(temporary, into: Trash.root(in: directory)) }
+        guard link(temporary.path, url.path) == 0 else {
+            throw khuFail(errno == EEXIST
+                ? "\(url.path) already exists; a new key would orphan every agent pinned to the old one"
+                : "cannot create \(url.path) (errno \(errno))")
+        }
+        AtomicFile.syncDirectory(directory)
     }
 
     public static func loadPrivateKey(from url: URL) throws -> Curve25519.Signing.PrivateKey {
