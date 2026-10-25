@@ -347,6 +347,32 @@ public final class FeedServer: @unchecked Sendable {
             && nonce.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) || ($0 >= 65 && $0 <= 70) }
     }
 
+    /// What a `GET /commands` request says it can carry out. `absent` and `named([])` are different:
+    /// a request that never names the parameter (the Hub's token probe) must not edit the record,
+    /// while an agent that names an empty list is telling the publisher it can do nothing special.
+    enum Capabilities: Equatable {
+        case absent
+        case refused(String)
+        case named([String])
+    }
+
+    /// Bounded like everything else a Mac may write: the list is stored on its record, so a query
+    /// string is not a place to put a paragraph or ten thousand names.
+    static func parsedCapabilities(_ raw: String?) -> Capabilities {
+        guard let raw else { return .absent }
+        guard raw.utf8.count <= ReportPolicy.maxCapabilitiesQueryBytes else {
+            return .refused("that capabilities list is longer than this publisher accepts (\(ReportPolicy.maxCapabilitiesQueryBytes) bytes)")
+        }
+        let names = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard names.count <= ReportPolicy.maxCapabilities else {
+            return .refused("that Mac named more capabilities than this publisher accepts (at most \(ReportPolicy.maxCapabilities))")
+        }
+        guard names.allSatisfy({ $0.utf8.count <= ReportPolicy.maxCapabilityCharacters }) else {
+            return .refused("a capability name is longer than this publisher accepts (\(ReportPolicy.maxCapabilityCharacters) characters)")
+        }
+        return .named(Array(Set(names)).sorted())
+    }
+
     /// A `/status` report is bounded before it is stored, so one Mac — possibly one that claimed a
     /// token through a window and has never been inspected — cannot make `state.json` grow without
     /// limit. Returns the refusal sentence, or nil when the report fits.
@@ -373,16 +399,17 @@ public final class FeedServer: @unchecked Sendable {
     /// `POST /enrol` — a Mac claiming a token for itself while the owner has a window open. Every
     /// refusal is a plain sentence and leaves the state exactly as it was.
     func enrol(_ req: HTTPRequest, remote: String, now: Date = Date()) -> HTTPResponse {
-        guard enrolLimiter.allow(remote, now: now) else {
-            return Self.text(429, "too many enrolment requests from this address; wait a minute and try again")
-        }
         // This is the one route with no token, so it is the one a web page could reach: a
         // `text/plain` POST is a "simple request" that a browser sends cross-site without a
         // preflight, and spending the owner's enrolment window would be the whole effect. Browsers
         // send Origin (and usually Referer); a Mac's own agent sends neither, so a request that
-        // carries one is refused before its body is touched.
+        // carries one is refused before its body is touched — and before it counts against the
+        // address's allowance, so a page the owner visits cannot use up a Mac's attempts.
         guard req.headers["origin"] == nil, req.headers["referer"] == nil else {
             return Self.text(403, "a web page cannot enrol a Mac: this route is for a Mac's own agent, which sends no Origin or Referer")
+        }
+        guard enrolLimiter.allow(remote, now: now) else {
+            return Self.text(429, "too many enrolment requests from this address; wait a minute and try again")
         }
         guard req.body.count <= EnrolPolicy.maxBodyBytes else {
             return Self.text(413, "that enrolment request is too large")
@@ -511,20 +538,32 @@ public final class FeedServer: @unchecked Sendable {
             guard let commandKey else {
                 return Self.text(503, "this publisher has no signing key, so it will not send orders: start `khu serve` with --key")
             }
+            let advertised = Self.parsedCapabilities(req.query["capabilities"])
+            if case .refused(let message) = advertised { return Self.text(400, message) }
             // Read-only: an order stays pending until its result is reported.
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
+                // Counted for the Mac the token proves, like every other report route: this request
+                // rewrites the Mac's record (its capabilities) and so holds the one state lock.
+                guard reportLimiter.allow(machine) else { return Self.text(429, "this Mac is asking too often; try again in a minute") }
                 var ms = state.machines[machine]!
                 // Record the capabilities this agent advertised, so the status page can warn when
-                // a pending rollback order cannot be delivered to an older agent.
-                let capabilities = Set((req.query["capabilities"] ?? "").split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces) })
-                ms.capabilities = Array(capabilities)
-                state.machines[machine] = ms
+                // a pending rollback order cannot be delivered to an older agent. A request that
+                // does not name them changes NOTHING: the Hub asks this route with a stored token
+                // to learn whether the publisher still honours it, and a probe must never edit the
+                // record it is asking about.
+                let names: Set<String>
+                if case .named(let list) = advertised {
+                    names = Set(list)
+                    ms.capabilities = list
+                    state.machines[machine] = ms
+                } else {
+                    names = []
+                }
                 // A rollback order is withheld from an agent that does not say it understands one:
                 // an older agent would carry the same order out as an update.
                 let deliverable = ms.pending.filter {
-                    $0.action == ServerCommand.update || capabilities.contains(AgentCapability.ownerRollback)
+                    $0.action == ServerCommand.update || names.contains(AgentCapability.ownerRollback)
                 }
                 // Signed with the key every agent is pinned to, and naming this Mac and the moment
                 // it was made: a forged or replayed reply is refused at the Mac.
@@ -628,17 +667,16 @@ public final class FeedServer: @unchecked Sendable {
                             return Self.text(400, "send minutes: 0 closes the window, 1 to \(EnrolPolicy.maxMinutes) opens one")
                         }
                         if minutes == 0 {
-                            // The same close the CLI performs: a window-enrolled record that never
-                            // reported goes with it, so the cap is not left full of claims nobody
-                            // made good on.
-                            state.pruneUnreportedWindowEnrolments()
+                            // Closing drops the window and nothing else: a Mac that enrolled
+                            // through it may not have run its agent yet, and its token has to keep
+                            // working. Only a new window (after the abandonment age) prunes.
                             state.enrolWindow = nil
                             return Self.ok
                         }
                         guard (1...EnrolPolicy.maxMinutes).contains(minutes) else {
                             return Self.text(400, "minutes must be 0 (close) or 1 to \(EnrolPolicy.maxMinutes)")
                         }
-                        state.pruneUnreportedWindowEnrolments()
+                        state.pruneAbandonedWindowEnrolments()
                         state.enrolWindow = EnrolWindow.starting(minutes: minutes)
                         return Self.ok
                     }
@@ -739,7 +777,11 @@ public final class FeedServer: @unchecked Sendable {
                 let installed = ms.installed[app] ?? "not installed"
                 let latest = feed?.apps[app]?.version ?? "—"
                 let hasPendingRollback = ms.pending.contains { $0.app == app && $0.action == ServerCommand.rollback }
-                let agentTooOld = hasPendingRollback && ms.capabilities != nil && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false)
+                // Warn unless there is POSITIVE evidence this agent understands a rollback: a Mac
+                // that has advertised nothing at all — every build before the action existed, and
+                // anything that has only ever been probed — cannot be assumed capable. So this is
+                // "we have no evidence", never "the Mac said it cannot".
+                let agentTooOld = hasPendingRollback && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false)
                 let pending = ms.pending.contains { $0.app == app } ? (agentTooOld ? "waiting for the Mac (agent too old for rollback)" : "waiting for the Mac") : ""
                 let last = ms.lastResults?[app].map { "\($0.status)\($0.reason.map { $0.isEmpty ? "" : ": " + $0 } ?? "") (\($0.at))" } ?? ""
                 let ownUpdater = app == "story" || app == "hub"

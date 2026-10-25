@@ -1801,22 +1801,37 @@ func ownerRollbackTests() {
                "F6 Roll back button hidden or disabled for updater app (form=\(hasRollbackForm), disabled=\(hasDisabledOrHidden))")
     }
 
-    // F7 (minor): Server page shows when an agent is too old for rollback.
+    // F7 (minor): Server page shows when an agent is too old for rollback. "Too old" means the
+    // publisher has no evidence the agent understands a rollback order — which includes an agent
+    // that advertises nothing at all, the shape every build before ServerCommand.action has, and
+    // the shape of the Hub's own token probe (which must not edit the record, N3).
     do {
         let r = R6Rig("f7-old-agent")
-        _ = r.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-rollback",
-                                                   headers: ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790",
-                                                             "content-type": "application/json"],
-                                                   body: JSON.encode(["machine": "mac1", "app": "foo"])), remote: "127.0.0.1")
-        _ = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/commands?machine=mac1",
+        func requestRollback() {
+            _ = r.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-rollback",
+                                                       headers: ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790",
+                                                                 "content-type": "application/json"],
+                                                       body: JSON.encode(["machine": "mac1", "app": "foo"])), remote: "127.0.0.1")
+        }
+        func orders(_ query: String) -> HTTPResponse {
+            r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/commands?machine=mac1\(query)",
                                                    headers: ["authorization": "Bearer \(r.config.token)"]), remote: "100.64.0.9")
-        let page = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": "127.0.0.1:8790"]), remote: "127.0.0.1")
-        let html = String(data: page.data, encoding: .utf8) ?? ""
-        let showsLimitation = html.contains("too old") || html.contains("does not support")
-            || html.contains("not capable") || html.contains("upgrade")
-            || html.contains("older agent") || html.contains("cannot roll back")
-        expect(showsLimitation,
-               "F7 Server page indicates agent cannot perform rollback")
+        }
+        func warns() -> Bool {
+            let page = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": "127.0.0.1:8790"]), remote: "127.0.0.1")
+            let html = String(data: page.data, encoding: .utf8) ?? ""
+            return html.contains("too old") || html.contains("does not support")
+                || html.contains("not capable") || html.contains("upgrade")
+                || html.contains("older agent") || html.contains("cannot roll back")
+        }
+        requestRollback()
+        _ = orders("")
+        expect((try? StateStore.load(from: r.rig.state))?.machines["mac1"]?.capabilities == nil && warns(),
+               "F7 a rollback order is flagged while the agent has advertised nothing at all")
+        _ = orders("&capabilities=some-other-capability")
+        expect(warns(), "F7 it stays flagged when the agent advertises something else")
+        _ = orders("&capabilities=\(AgentCapability.ownerRollback)")
+        expect(!warns(), "F7 it clears once the agent says it understands a rollback")
     }
 }
 
@@ -2393,6 +2408,14 @@ func enrolWindowTests() {
         expect(loose?.removed.first?.machine == "gone" && loose?.removed.first?.droppedOrders.isEmpty == true
                && loose?.enrolWindow?.enrolled == 0 && loose?.enrolWindow?.minutes == 0,
                "E18 a removed record and a window written with fewer fields decode with their empty values")
+        // `machines` is REQUIRED. `{}` is not an empty fleet, and answering an empty fleet would
+        // silently orphan every Mac that believes it is enrolled.
+        try! Data("{}".utf8).write(to: StateStore.stateFile(in: r.rig.state))
+        expect((try? StateStore.load(from: r.rig.state)) == nil,
+               "E18 a state file without `machines` is an error, never an empty fleet")
+        let noFleet = enrolPost(r.server, machine: "mac-with-no-fleet", nonce: enrolNonce())
+        expect(noFleet.status == 503,
+               "E18 the routes say 503 against such a file instead of serving an empty fleet (\(noFleet.status))")
     }
 
     // E19. A Mac — possibly one that claimed a token through a window and has never been inspected —
@@ -2492,37 +2515,61 @@ func enrolWindowTests() {
                "E20 the same machine and nonce enrol when no Origin or Referer is present: the agent's own request")
     }
 
-    // E21. A window is not left full of claims nobody made good on: closing it, or opening a new
-    // one, drops the window-enrolled records that never reported once. A Mac that HAS reported is
-    // never dropped this way, and a squatter's id stops blocking the real Mac.
+    // E21. A record that never reported is dropped only when a NEW window opens and it is older than
+    // the abandonment age — never on close. A Mac handed a token seconds ago has not run its agent
+    // yet; deleting its record leaves it answering 401 with a token it was legitimately given.
+    // A Mac that HAS reported is never dropped this way.
     do {
         let r = EnrolRig("e21-prune")
         r.openWindow(60)
-        _ = enrolPost(r.server, machine: "claimed", nonce: enrolNonce())
+        let claimed = enrolReply(enrolPost(r.server, machine: "claimed", nonce: enrolNonce()),
+                                 key: r.rig.pair.privateKey)?.token ?? ""
         let reported = enrolReply(enrolPost(r.server, machine: "reported", nonce: enrolNonce()),
                                   key: r.rig.pair.privateKey)?.token ?? ""
         _ = enrolStatusPost(r.server, machine: "reported", token: reported, body: ["machine": "reported"])
-        expect(r.machines.keys.sorted() == ["claimed", "reported"], "E21 setup: one claim that never reported, one Mac that did")
+        expect(r.machines.keys.sorted() == ["claimed", "reported"], "E21 setup: one Mac that has not reported yet, one that has")
         try! EnrolmentWindow.close(stateDir: r.rig.state)
-        expect(r.machines.keys.sorted() == ["reported"] && r.window == nil,
-               "E21 closing the window drops the claim that never reported and keeps the Mac that did")
+        expect(r.machines.keys.sorted() == ["claimed", "reported"] && r.window == nil,
+               "E21 closing the window drops NO record: the Mac it just enrolled has not reported yet")
+        expect(enrolStatusPost(r.server, machine: "claimed", token: claimed,
+                               body: ["machine": "claimed"]).status == 200,
+               "E21 the token that closed window delivered still reports")
+        // The page's own Close behaves the same way.
         r.openWindow(60)
         _ = enrolPost(r.server, machine: "claimed2", nonce: enrolNonce())
+        _ = enrolPost(r.server, machine: "abandoned", nonce: enrolNonce())
         _ = enrolOwnerPost(r, "/api/enrol-window", ["minutes": "0"])
-        expect(r.machines.keys.sorted() == ["reported"] && r.window == nil,
-               "E21 the page's own Close drops it as well")
+        expect(r.machines["claimed2"] != nil && r.machines["abandoned"] != nil && r.window == nil,
+               "E21 the page's own Close drops nothing either")
+        // Opening a NEW window drops an abandoned claim once it is older than the age — and only then.
+        func backdate(_ machine: String, _ age: String) {
+            try! StateStore.update(in: r.rig.state) { $0.machines[machine]?.enrolledAt = age }
+        }
+        backdate("abandoned", ISO.string(Date().addingTimeInterval(-20 * 60)))
         r.openWindow(60)
-        _ = enrolPost(r.server, machine: "claimed3", nonce: enrolNonce())
+        expect(r.machines["abandoned"] == nil && r.machines["claimed2"] != nil
+               && r.machines["reported"] != nil && r.machines["claimed"] != nil,
+               "E21 a new window drops a claim older than fifteen minutes and keeps everything younger")
+        expect(enrolStatusPost(r.server, machine: "reported", token: reported,
+                               body: ["machine": "reported"]).status == 200,
+               "E21 a Mac that has reported is never dropped by a new window")
+        // An age that cannot be read keeps the record: "I could not work out how old this is" must
+        // never delete a Mac's token.
+        backdate("claimed2", "not a date")
         r.openWindow(60)
-        expect(r.machines["claimed3"] == nil && r.machines["reported"] != nil && r.window?.enrolled == 0,
-               "E21 opening a new window drops the abandoned claim that belonged to the old one")
+        expect(r.machines["claimed2"] != nil,
+               "E21 a record whose age cannot be read is kept, never guessed away")
+        // An id a squatter abandoned is freed by the same age rule, so the real Mac can take it.
         let slot = EnrolRig("e21-slot", cap: 1)
         slot.openWindow(60)
         _ = enrolPost(slot.server, machine: "squatter", nonce: enrolNonce())
+        try! StateStore.update(in: slot.rig.state) {
+            $0.machines["squatter"]?.enrolledAt = ISO.string(Date().addingTimeInterval(-20 * 60))
+        }
         slot.openWindow(60)
-        expect(enrolPost(slot.server, machine: "real-mac", nonce: enrolNonce()).status == 200
-               && slot.machines["squatter"] == nil,
-               "E21 a new window frees the cap slot an abandoned claim was holding")
+        expect(slot.machines["squatter"] == nil
+               && enrolPost(slot.server, machine: "squatter", nonce: enrolNonce()).status == 200,
+               "E21 the id an abandoned claim held is free again after a new window")
     }
 
     // E22. A Mac whose signed reply was lost resends the SAME machine and nonce and gets a fresh
@@ -2610,6 +2657,59 @@ func enrolWindowTests() {
                    "E24 a LAN bind of \(bind) refuses enrolment instead of naming a URL the Hub refuses")
         }
         expect(r.machines.isEmpty, "E24 no LAN bind enrolled anything")
+    }
+
+    // E25. `GET /commands`: what an agent advertises is bounded and counted against the Mac's report
+    // budget, and a request that names no capabilities changes NOTHING — the Hub asks this route with
+    // a stored token to learn whether the publisher still honours it, and a probe must not edit the
+    // record it is asking about (a /status probe would refresh lastSeen and make a dead Mac look alive).
+    do {
+        let r = EnrolRig("e25-commands")
+        let token = try! Enrolment.enrol(stateDir: r.rig.state, machine: "probe-me")
+        let s = FeedServer(feedDir: r.rig.feed, stateDir: r.rig.state, bind: "100.64.0.7", port: 8790,
+                           commandKey: r.rig.pair.privateKey, reportPostsPerMinute: 3)
+        func fetch(_ query: String) -> HTTPResponse {
+            s.handleRequest(HTTPRequest(method: "GET", path: "/commands?machine=probe-me\(query)",
+                                        headers: ["authorization": "Bearer \(token)"]), remote: "100.64.0.9")
+        }
+        _ = fetch("&capabilities=owner-rollback-v1")
+        expect(r.machines["probe-me"]?.capabilities == ["owner-rollback-v1"],
+               "E25 the capabilities an agent advertises are recorded")
+        let before = r.stateBytes
+        let probe = fetch("")
+        expect(probe.status == 200 && r.stateBytes == before
+               && r.machines["probe-me"]?.lastSeen == nil
+               && r.machines["probe-me"]?.capabilities == ["owner-rollback-v1"],
+               "E25 a probe that names no capabilities answers 200 and changes nothing at all (\(probe.status))")
+        let many = (0...ReportPolicy.maxCapabilities).map { "c\($0)" }.joined(separator: ",")
+        let long = String(repeating: "c", count: ReportPolicy.maxCapabilityCharacters + 1)
+        let huge = String(repeating: "c", count: ReportPolicy.maxCapabilitiesQueryBytes + 1)
+        let refused = [fetch("&capabilities=\(many)").status, fetch("&capabilities=\(long)").status,
+                       fetch("&capabilities=\(huge)").status]
+        expect(refused == [400, 400, 400], "E25 an unbounded capabilities list is refused (\(refused))")
+        expect(r.machines["probe-me"]?.capabilities == ["owner-rollback-v1"],
+               "E25 a refused capabilities list is not stored")
+        let limited = (0..<3).map { _ in fetch("&capabilities=").status }
+        expect(limited == [200, 429, 429],
+               "E25 the command route is under the Mac's report limit, so it cannot be looped for free (\(limited))")
+    }
+
+    // E26. A web page's refusal must not spend the Mac's allowance: the Origin/Referer check runs
+    // before the per-address rate limit.
+    do {
+        let r = EnrolRig("e26-csrf-budget", attempts: 2)
+        r.openWindow(30)
+        let s = r.server
+        let body = try! JSONSerialization.data(withJSONObject: ["machine": "budget-mac", "nonce": enrolNonce()])
+        let fromPage = (0..<5).map { _ in
+            s.handleRequest(HTTPRequest(method: "POST", path: "/enrol",
+                headers: ["content-type": "text/plain", "origin": "http://evil.test"], body: body),
+                remote: "100.64.0.9").status
+        }
+        expect(fromPage == [403, 403, 403, 403, 403], "E26 every request a page makes is refused (\(fromPage))")
+        let real = (0..<3).map { enrolPost(s, machine: "budget-\($0)", nonce: enrolNonce()).status }
+        expect(real == [200, 200, 429],
+               "E26 the refused page requests spent none of this address's two attempts (\(real))")
     }
 }
 

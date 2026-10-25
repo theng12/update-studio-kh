@@ -14,15 +14,18 @@ the `capabilities` gate is read off the wire and the journal is written as JSON 
 builds against both) — the base has no `ServerCommand.action`, no journal order/intent, no
 `/api/request-rollback` and no owner swap at all.
 
-Network enrolment windows and Mac removal were added on 2026-10-25 (owner) and are covered by E1–E24
+Network enrolment windows and Mac removal were added on 2026-10-25 (owner) and are covered by E1–E26
 in `Tests/Runner/main.swift` (`enrolWindowTests`): a closed window, a window's expiry, the minted
 reply as Studio Hub's client verifies it, an already-enrolled id, bad ids and nonces and oversize
 bodies, the window's cap, the per-address rate limit, `/enrol` without `--key` and on a bind no Mac
 can reach, the owner route's loopback/Host/Origin checks, the CLI, the page, and removal with its
-re-enrolment and its concurrency (E1–E17); then the 2026-10-26 adversarial review's findings: a state
-file written before `removed` existed still decoding, the bounded report routes, `/enrol` refused to
-a web page, abandoned window enrolments pruned and a lost reply re-minted, `/enrol`'s generic
-refusals, and the single window constructor with the Tailscale-only bind (E18–E24).
+re-enrolment and its concurrency (E1–E17); then the 2026-10-26 adversarial review's findings
+(E18–E24): a state file written before `removed` existed still decoding, the bounded report routes,
+`/enrol` refused to a web page, abandoned window enrolments pruned and a lost reply re-minted,
+`/enrol`'s generic refusals, and the single window constructor with the Tailscale-only bind; and the
+same day's re-review (E25 and E26, with E18 and E21 extended): the prune running only when a NEW
+window opens and only past the abandonment age, `machines` required of a state file, `GET /commands`
+bounded and probe-safe, and a page's refusal not spending the Mac's allowance.
 
 ## Feed
 
@@ -73,10 +76,16 @@ one slow or stalled Mac never holds up the others.
   bounded names and values; a result keeps its order id, `status` and `reason` within their own
   bounds, at most one result per app (the map is keyed by app) and at most `maxApps` apps — a Mac
   that keeps naming new ones evicts the oldest, so what one Mac can write never depends on how long
-  it runs. `/status` and both result routes share one per-machine rate limit
-  (`ReportPolicy.perMachinePerMinute`), counted only after the Mac's token is checked — a limit keyed
-  on a name the body chooses, before the token, would let anything on the tailnet silence a Mac's
-  reports by sending them with its id — and set far above any real agent's rate.
+  it runs. `/commands` is bounded too: the `capabilities` names an agent advertises are at most
+  `ReportPolicy.maxCapabilities` short names and `maxCapabilitiesQueryBytes` in all, refused above
+  that instead of stored, and a request that names **no** `capabilities` parameter at all changes
+  nothing on the record — the Hub asks this route with a stored token to learn whether the publisher
+  still honours it, and a probe must not edit the record it is asking about (nor refresh `lastSeen`,
+  which would make a removed Mac look alive). `/status`, `/commands` and both result routes share one
+  per-machine rate limit (`ReportPolicy.perMachinePerMinute`), counted only after the Mac's token is
+  checked — a limit keyed on a name the body chooses, before the token, would let anything on the
+  tailnet silence a Mac's reports by sending them with its id — and set far above any real agent's
+  rate.
   A **rollback** order is handed out only to an agent that names `owner-rollback-v1` in
   `capabilities`: an agent built before `ServerCommand.action` existed would read the same order as
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
@@ -97,11 +106,12 @@ token, and it is the only way a Mac gets a token without the owner touching the 
 - Body `{"machine": <id>, "nonce": <64 hex>}`, answer `SignedReply` of
   `{machine, nonce, feedURL, publicKey, issuedAt, token}`. The `X-Hub-Token` header the Hub sends is
   **ignored**: nothing on the publisher can verify it, so it is not part of any decision here.
-- A request that carries **Origin or Referer is refused (403)** before its body is parsed. `/enrol`
-  is the one route with no token, and a `text/plain` POST is a "simple request" a browser sends
-  cross-site without a preflight — so a page the owner happened to visit could otherwise spend the
-  window they opened. A Mac's own agent sends neither header (it is an `httpx` POST with no browser
-  in front of it), so the refusal can never reach the Mac it is meant to enrol.
+- A request that carries **Origin or Referer is refused (403)** before its body is parsed, and before
+  it counts against the address's allowance — a page the owner visits must not be able to spend the
+  attempts a Mac needs. `/enrol` is the one route with no token, and a `text/plain` POST is a "simple
+  request" a browser sends cross-site without a preflight, so a page the owner happened to visit could
+  otherwise spend the window they opened. A Mac's own agent sends neither header (it is an `httpx`
+  POST with no browser in front of it), so the refusal can never reach the Mac it is meant to enrol.
 - The **window** is opened from the page (`POST /api/enrol-window`, `minutes` 0 to close, 1–240 to
   open) or with `khu enrol-window --state <dir> --minutes N`. Its end time is stored in state.json
   under state.lock and is the **only** thing that decides: there is no second flag that can disagree
@@ -152,22 +162,33 @@ The removal stays in the list as history, and the page says whether that Mac is 
 per-app Automatic overrides (`state.machines[<id>].automatic`): the fresh record starts with none, so
 the Mac's own config decides again until the owner sets them. The history in `state.removed` keeps
 what the Mac had reported, but not those overrides — the removed record is the one that had them.
+**Removal changes this publisher's state and nothing else.** The dead config the Hub archived when it
+re-enrolled (`<home>/Library/KHUpdater/_trash/<id>/config.json`) still holds the token the publisher
+has just stopped honouring, and an older `state.json` restored from a backup brings the removed
+record — and that token with it — back to life. A restored publisher state is a state the owner is
+choosing to run with; removal is not a revocation that lives anywhere else.
 
-**A window cannot be left full of claims nobody made good on.** Closing a window — from the page, the
-CLI, or by opening a new one over it — drops every record that enrolled through a window and never
-reported once. Such a record is either a Mac whose signed reply was lost (it cannot use a token it
-never saw; its next run enrols again through the next window) or an id a device claimed and
-abandoned, and either way it holds one of the window's cap slots and would 409 the real Mac that
-wants that id. A record that has reported (`lastSeen`) is never dropped this way — only Remove Mac
+**A window is not left full of claims nobody made good on, but only time may say so.** A record that
+enrolled through a window, never reported, and is older than
+`EnrolPolicy.abandonedAfterSeconds` (15 minutes) is dropped when a NEW window opens. Such a record is
+an id a device claimed and abandoned, and it holds one of the window's cap slots and would 409 the
+real Mac that wants that id. **Closing a window drops nothing**, and neither does one that is only
+seconds old on opening a new one: the Mac has the token the moment the reply reaches it and may not
+run its agent for a few minutes, so deleting its record would leave it answering 401 with a token the
+publisher legitimately gave it — the age is the only evidence that separates a Mac that has not
+reported *yet* from one that never will. A record whose `enrolledAt` cannot be read is kept, not
+guessed at, and a record that has reported (`lastSeen`) is never dropped this way — only Remove Mac
 does that.
 
 State is `state.json`; every change is one read-modify-write under `state.lock` (flock, shared
 by all processes, `khu enrol` included). An unreadable state file is a 503 that says so and is
-left untouched; a change that could not be saved is a 500, never a 200. **Every field of the state
-file is optional when it is read**, with the empty value it had when it was absent: a publisher
-upgraded across a release must keep reading the file its previous build wrote (`{"machines":{…}}`
-with no `removed` and no `enrolWindow`) — a decoder that throws on a missing field turns every route
-into a permanent 503 for the whole fleet.
+left untouched; a change that could not be saved is a 500, never a 200. **`machines` is required;
+the fields added later are optional when they are read.** A file with no `machines` key is an error,
+never an empty fleet — serving an empty fleet would silently orphan every Mac that believes it is
+enrolled — while `removed` and `enrolWindow` are absent in everything written up to `2eaae0c`, and a
+decoder that throws on a missing one of them turns every route into a permanent 503 for the whole
+fleet. The same rule holds inside each record: every field it has ever had reads as optional with the
+value it had when it was absent.
 
 ## Agent
 
@@ -341,18 +362,22 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
   enrolled**: an id with a record answers 409 and one without is enrolled. The fleet's names are not
   secret from the tailnet; nothing else about an enrolled Mac — its token, its apps, its orders — is
   answered to anything but that Mac's own token. The one record that can be re-minted over the
-  network is one that has never reported, and only by repeating the nonce it enrolled with: there is
-  no working token on a Mac that has never reported, so nothing is displaced that a Mac was using.
+  network is one that has never reported, and only by repeating the nonce it enrolled with. That Mac
+  may still be holding the token it was sent — its agent has not run yet — so the honest statement is
+  that a re-mint displaces **no token the publisher has evidence was used**: a Mac that has reported
+  is never re-minted, whatever nonce it sends, and neither is one whose record was minted for a
+  different nonce.
 - `/enrol` is the one route anything on the tailnet may reach, so its refusals are sentences and
   never diagnostics: no state path, no decoder text, no bind, no port. The detail of a state file
   that cannot be read or saved goes to the publisher's stderr and to the owner's page, which is
   where the owner can act on it.
 - The report bounds are policy, not measurements: 64 apps and their names and values, a
-  128-character order id, a 64-character status, a 400-character reason, and 60 report posts a minute
-  per Mac. A real agent stays far under all of them; a Mac that somehow exceeds one is refused with a
-  400 or a 429 and its own agent reports the failure, rather than the publisher silently truncating
-  what it was told. The one silent action is the oldest-result eviction at 64 apps, because a result
-  the owner can no longer see beside its app has no reader.
+  128-character order id, a 64-character status, a 400-character reason, 16 capability names of 64
+  characters (512 bytes of query in all), and 60 report posts a minute per Mac. A real agent stays far
+  under all of them; a Mac that somehow exceeds one is refused with a 400 or a 429 and its own agent
+  reports the failure, rather than the publisher silently truncating what it was told. The one silent
+  action is the oldest-result eviction at 64 apps, because a result the owner can no longer see beside
+  its app has no reader.
 
 - The reply crosses the tailnet with the token inside it, signed but not encrypted: the signature
   proves *who* answered, Tailscale's own transport encryption is the confidentiality there. A token
@@ -361,12 +386,15 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
   a clock jump can close or extend a window early, and restarting `serve` clears them (the window's
   per-window cap, the 409 for an enrolled id and the report bounds do not depend on either). The
   `/enrol` limit is per client address, so several addresses each get their own allowance, and the
-  report limit is per machine id; the cap on new enrolments per window is the bound that does not
-  depend on anyone's address.
+  report limit covers `/status`, `/commands` and both result routes per machine id; the cap on new
+  enrolments per window is the bound that does not depend on anyone's address.
 - A flood inside an open window can therefore use up that window's allowance of new ids — a Mac part
   way through enrolling may get 429 until the owner opens a new window or removes what a device
   claimed. It cannot touch a Mac that is already enrolled, cannot stop the owner opening a new
   window, and is visible on the page as it happens.
+- A record abandoned by a device on the tailnet is freed fifteen minutes after it was minted, when
+  the owner next opens a window — not at the moment the window closes. Until then that id answers 409
+  to anything else, which is the price of never deleting a record a real Mac may be holding.
 - `state.removed` grows by one record per removal and nothing trims it. Only the owner can add to it,
   and only from this Mac.
 - A body larger than 4 KiB is refused with 413 once read; the transport's own 1 MiB cap is what stops

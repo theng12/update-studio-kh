@@ -191,6 +191,11 @@ public enum EnrolPolicy {
     /// `/enrol` attempts one client address may make per minute. The window's cap bounds the
     /// enrolments that SUCCEED; this bounds the attempts that do not.
     public static let attemptsPerMinute = 30
+    /// How long a window enrolment may sit with no report before a NEW window treats it as
+    /// abandoned. It is longer than any agent's run interval by a wide margin: the Mac has the token
+    /// the moment the reply reached it, and only the passage of time can tell a Mac that has not
+    /// reported YET from one that never will.
+    public static let abandonedAfterSeconds: TimeInterval = 15 * 60
     /// A nonce is `secrets.token_hex(32)` at the Mac: 64 hexadecimal characters, echoed back
     /// verbatim inside the signed reply.
     public static let nonceCharacters = 64
@@ -216,6 +221,11 @@ public enum ReportPolicy {
     /// The order id a result names: a UUID, or `auto-` and a UUID, and nothing longer. It is stored
     /// with the result and comes out of the URL path, so it needs a bound of its own.
     public static let maxCommandIdCharacters = 128
+    /// What `GET /commands?capabilities=` may carry. The string is stored on the Mac's record, so it
+    /// needs the same kind of bound as every other report: a few short names, never a paragraph.
+    public static let maxCapabilities = 16
+    public static let maxCapabilityCharacters = 64
+    public static let maxCapabilitiesQueryBytes = 512
     /// `/status` plus result posts one Mac may make per minute. The agent posts status once per run
     /// (every five minutes) and a result per order, so this is far above any real Mac's rate and
     /// only bounds a loop.
@@ -277,11 +287,13 @@ public enum EnrolmentWindow {
     /// one is already open replaces it and resets its count: the owner asking for a fresh window is
     /// exactly what a fresh count is for.
     ///
-    /// Opening also drops every window-enrolled record that never reported (`/status` once). Such a
-    /// record is either a Mac whose signed reply was lost on the way — it cannot use the token it
-    /// never received — or an id a device on the tailnet claimed and abandoned. Either way it holds
-    /// one of the window's cap slots and 409s the real Mac that wants that id, and nothing but the
-    /// owner's removal would ever free it. A record that HAS reported is never dropped here.
+    /// Opening also drops window enrolments that never reported and are older than
+    /// `EnrolPolicy.abandonedAfterSeconds`. Such a record is either a Mac whose signed reply was
+    /// lost — it cannot use the token it never received — or an id a device on the tailnet claimed
+    /// and abandoned; either way it holds one of the window's cap slots and 409s the real Mac that
+    /// wants that id. The age is what makes this safe: a Mac that was handed a token seconds ago
+    /// has not had its first agent run yet, and deleting its record would leave it answering 401
+    /// with a token it was legitimately given. A record that HAS reported is never dropped here.
     @discardableResult
     public static func open(stateDir: URL, minutes: Int, now: Date = Date()) throws -> EnrolWindow {
         guard (1...EnrolPolicy.maxMinutes).contains(minutes) else {
@@ -289,20 +301,18 @@ public enum EnrolmentWindow {
         }
         let window = EnrolWindow.starting(minutes: minutes, now: now)
         try StateStore.update(in: stateDir) { state in
-            state.pruneUnreportedWindowEnrolments()
+            state.pruneAbandonedWindowEnrolments(now: now)
             state.enrolWindow = window
         }
         return window
     }
 
     /// Closing drops the record: a closed window is the absence of one, so nothing can read a stale
-    /// end time as an open door. It drops unreported window enrolments too — a close is the owner
-    /// saying this round is over, so the cap is not left full of claims nobody ever made good on.
+    /// end time as an open door. It drops nothing else — a Mac that enrolled through this window may
+    /// not have run its agent yet, and its token has to keep working, so only a new window (after the
+    /// abandonment age) or Remove Mac ever drops a record.
     public static func close(stateDir: URL) throws {
-        try StateStore.update(in: stateDir) { state in
-            state.pruneUnreportedWindowEnrolments()
-            state.enrolWindow = nil
-        }
+        try StateStore.update(in: stateDir) { $0.enrolWindow = nil }
     }
 }
 
@@ -370,13 +380,14 @@ public struct ServerState: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey { case machines, enrolWindow, removed }
-    /// A state file written before a field existed keeps decoding: `removed` (added with Remove Mac)
-    /// and `enrolWindow` (added with network enrolment) are absent in everything a publisher wrote up
-    /// to `2eaae0c`, and a synthesized decoder would throw on them — which `StateStore.load` turns
-    /// into a 503 on every route, for ever. The machines themselves are what must survive.
+    /// `machines` is REQUIRED: a state file without it is not an empty fleet, and answering an empty
+    /// fleet would silently orphan every Mac that thinks it is enrolled. The two fields added later
+    /// (`removed` with Remove Mac, `enrolWindow` with network enrolment) are optional, because
+    /// everything written up to `2eaae0c` lacks them and a decoded-throw there makes every route a
+    /// permanent 503.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        machines = try c.decodeIfPresent([String: MachineState].self, forKey: .machines) ?? [:]
+        machines = try c.decode([String: MachineState].self, forKey: .machines)
         enrolWindow = try c.decodeIfPresent(EnrolWindow.self, forKey: .enrolWindow)
         removed = try c.decodeIfPresent([RemovedMachine].self, forKey: .removed) ?? []
     }
@@ -384,12 +395,14 @@ public struct ServerState: Codable, Sendable, Equatable {
     /// The newest removal of this machine id, if it has ever been removed.
     public func removal(of machine: String) -> RemovedMachine? { removed.last { $0.machine == machine } }
 
-    /// Drop every record that enrolled through a window and never reported once. The one record a
-    /// window should never be able to strand: a Mac that lost its signed reply cannot use the token
-    /// it never saw, and a claimed id nobody ever used holds a cap slot and blocks the real Mac.
-    /// A record that has reported (`lastSeen`) is left alone, whatever its source.
-    public mutating func pruneUnreportedWindowEnrolments() {
-        for (machine, record) in machines where record.enrolmentSource == MachineState.windowSource && record.lastSeen == nil {
+    /// Drop window enrolments that never reported `now - olderThan`. Never on close: a Mac that was
+    /// handed a token is not abandoned until time proves it. A record whose `enrolledAt` cannot be
+    /// read is kept — "I could not work out how old this is" must never delete anything.
+    public mutating func pruneAbandonedWindowEnrolments(olderThan: TimeInterval = EnrolPolicy.abandonedAfterSeconds,
+                                                        now: Date = Date()) {
+        for (machine, record) in machines
+        where record.enrolmentSource == MachineState.windowSource && record.lastSeen == nil
+            && record.enrolledAt.flatMap(ISO.date).map({ now.timeIntervalSince($0) > olderThan }) == true {
             machines.removeValue(forKey: machine)
         }
     }
