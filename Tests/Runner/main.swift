@@ -582,6 +582,7 @@ final class InProcessClient: HTTPClient, @unchecked Sendable {
     var resultStatus: Int? = nil
     var downloads = 0
     var extraBytes = 0
+    var downloadFailure: String?
     init(server: FeedServer) { self.server = server }
     func respond(_ method: String, _ url: URL, _ headers: [String: String], _ body: Data) -> HTTPResponse {
         var target = url.path
@@ -598,6 +599,15 @@ final class InProcessClient: HTTPClient, @unchecked Sendable {
     }
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
         downloads += 1
+        if let downloadFailure {
+            try Data("partial".utf8).write(to: file)
+            switch downloadFailure {
+            case "transport": throw URLError(.networkConnectionLost)
+            case "http": return 503
+            case "size": return 200
+            default: try Data(repeating: 120, count: Int(limit)).write(to: file); return 200
+            }
+        }
         let r = respond("GET", url, headers, Data())
         guard case .file(let source, let size) = r.body else { try r.data.write(to: file); return r.status }
         guard size + Int64(extraBytes) <= limit else { throw DeliveryMismatch(description: "larger than expected") }
@@ -694,6 +704,38 @@ func agentAndServerTests() {
         expect(retry?.updates == 1 && c.downloads == 2, "R5-1 the next run downloads it again and installs")
         let healed = try? AtomicFile.readJSON(AgentMemory.self, from: URL(fileURLWithPath: cfgD.stateDir).appendingPathComponent("agent-memory.json"))
         expect(healed != nil && healed?.deliveryMismatches?["d"] == nil, "R5-1 a good install clears the mismatch count")
+    }
+
+    // Failed transfers may have written bytes before refusing: preserve them in state/_trash now,
+    // not only when a later run happens to clear the downloads directory.
+    for failure in ["transport", "http", "size", "sha"] {
+        let rig = Rig("partial-\(failure)")
+        let installed = makeApp(rig.root.appendingPathComponent("Foo.app"), version: "1.0.0")
+        try! rig.publish("foo", "2.0.0", rig.artifact("foo.dmg", "good-dmg"), kind: "app-dmg")
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        let client = InProcessClient(server: rig.server)
+        client.downloadFailure = failure
+        let config = agentConfig(rig, token: token, apps: ["foo": AppConfig(bundlePath: installed.path, recipe: "app-dmg", automatic: true)])
+        let mount = rig.root.appendingPathComponent("mount")
+        makeApp(mount.appendingPathComponent("Foo.app"), version: "2.0.0")
+        let shell = RecordingShell(mount: mount)
+        let app = FakeApp(installed: installed, healthy: ["2.0.0"])
+        let control: (String, AppConfig) -> AppControl = { _, _ in app.control }
+        _ = try? Agent.runOnce(config: config, http: client, shell: shell, control: control)
+        let state = URL(fileURLWithPath: config.stateDir)
+        let downloads = state.appendingPathComponent("downloads/foo")
+        let parts = (try? fm.contentsOfDirectory(atPath: downloads.path))?.filter { $0.hasSuffix(".part") }
+        let trash = fm.enumerator(at: Trash.root(in: state), includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []
+        let saved = trash.first { $0.pathExtension == "part" }
+        let expected = failure == "sha" ? Data(repeating: 120, count: 8) : Data("partial".utf8)
+        let report = (try? StateStore.load(from: rig.state))?.machines["mac1"]?.lastResults?["foo"]
+        expect(report?.status == "download_failed" && parts?.isEmpty == true && saved.flatMap { try? Data(contentsOf: $0) } == expected
+               && marker(installed) == "1.0.0" && app.events.isEmpty,
+               "R19/R5-1 \(failure) failure moves the partial file to state trash before returning")
+        client.downloadFailure = nil
+        let retry = try? Agent.runOnce(config: config, http: client, shell: shell, control: control)
+        expect(retry?.updates == 1 && marker(installed) == "2.0.0" && app.running && client.downloads == 2,
+               "R5-1 a good run after \(failure) installs and launches the app")
     }
 
     // R25: the agent's high-water mark.

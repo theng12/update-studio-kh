@@ -22,6 +22,25 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.khupdater.publisher.
 open http://127.0.0.1:8790/        # the status page (loopback only)
 ```
 
+## Per-user agent kit (no destination activation)
+
+`packaging/build-agent-kit.sh <updater-version> <new-output-directory>` packages the two
+`./build.sh build` binaries, the existing agent plist, a config example and `install-agent.sh`.
+The kit has no credentials. It contains the build Mac's architecture only; check the destination
+architecture before copying it. No sudo, package receipt or system-wide daemon is needed.
+
+On the destination, run `bash /path/to/kit/install-agent.sh /path/to/filled-config.json "$HOME"`
+as the signed-in user. The script validates required config fields, stages the per-user layout,
+sets `stateDir` and `stubBase` to this home, forces `once: false`, and writes a mode-0600 config.
+It preserves the configured app choices and Automatic settings; use the `story`/`hub` recipes
+for those apps, always status-only in v1. Existing installations are refused rather than overwritten.
+A failed staging attempt moves into `~/Library/_trash/`; no file is deleted.
+
+It **does not start the agent**. Review the config and then, on that Mac only, activate with
+`launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.khupdater.agent.plist"`.
+The local smoke check is `python3 -I Tests/test_packaging.py` after `./build.sh build`; it uses
+only temporary homes and never calls launchctl or opens an app.
+
 ## 2. Publish a release (any time)
 
 ```bash

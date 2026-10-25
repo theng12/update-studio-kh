@@ -477,15 +477,21 @@ public enum Agent {
         if fm.fileExists(atPath: dir.path) { try Trash.move(dir, into: Trash.root(in: stateDir)) }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let part = dir.appendingPathComponent(name + ".part")
-        let code = try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
-                                     headers: [:], to: part, limit: entry.bytes)
-        guard code == 200 else { throw khuFail("artifact download answered \(code); nothing was changed") }
-        let (sha, bytes) = try Signing.sha256Hex(fileAt: part)
-        guard bytes == entry.bytes else { throw DeliveryMismatch(description: "artifact size mismatch; nothing was changed") }
-        guard sha == entry.sha256 else { throw DeliveryMismatch(description: "artifact sha256 mismatch; nothing was changed") }
-        let artifact = dir.appendingPathComponent(name)
-        try fm.moveItem(at: part, to: artifact)
-        return artifact
+        do {
+            let code = try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
+                                         headers: [:], to: part, limit: entry.bytes)
+            guard code == 200 else { throw khuFail("artifact download answered \(code); nothing was changed") }
+            let (sha, bytes) = try Signing.sha256Hex(fileAt: part)
+            guard bytes == entry.bytes else { throw DeliveryMismatch(description: "artifact size mismatch; nothing was changed") }
+            guard sha == entry.sha256 else { throw DeliveryMismatch(description: "artifact sha256 mismatch; nothing was changed") }
+            let artifact = dir.appendingPathComponent(name)
+            try fm.moveItem(at: part, to: artifact)
+            return artifact
+        } catch {
+            do { try Trash.move(part, into: Trash.root(in: stateDir)) }
+            catch { throw khuFail("download failed and its partial file could not be moved to _trash: \(error)") }
+            throw error
+        }
     }
 
     /// Self-update: the verified binary becomes `versions/<v>/khu` (never overwritten once there),
