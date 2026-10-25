@@ -10,6 +10,7 @@ case "${1:-build}" in
     echo "built build/khu build/khu-stub"
     ;;
   test)
+    swiftc -parse-as-library -O -o build/khu "${CORE[@]}" Sources/khu/*.swift
     swiftc -parse-as-library -O -o build/khu-tests "${CORE[@]}" Tests/Runner/*.swift
     ./build/khu-tests
     ;;
