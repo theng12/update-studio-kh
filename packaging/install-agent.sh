@@ -1,5 +1,6 @@
 #!/bin/bash
-# A fresh per-user install only. Activation is a separate owner action on the destination Mac.
+# A fresh per-user install, then the LaunchAgent is loaded here (owner, 2026-10-26) — the same
+# activation Studio Hub's khu_agent performs. Nothing is started if the install is refused or fails.
 set -euo pipefail
 umask 077
 KIT="$(cd "$(dirname "$0")" && pwd)"
@@ -24,9 +25,12 @@ mkdir -p "$DEST_HOME/Library/LaunchAgents" "$DEST_HOME/Library/Logs"
 STAGE="$(mktemp -d "$DEST_HOME/Library/.KHUpdater-install.XXXXXXXX")"
 PLIST_STAGE="$STAGE/agent.plist"
 PROMOTED=false
+COMMITTED=false
 cleanup() {
     local code=$?
-    if [[ $code != 0 ]]; then
+    # Past COMMITTED the install is complete; only a failed start remains, and that must leave
+    # the files where they are (it is retried with one launchctl command, not a reinstall).
+    if [[ $code != 0 && "$COMMITTED" != true ]]; then
         local trash="$DEST_HOME/Library/_trash/$(basename "$STAGE")"
         mkdir -p "$trash"
         if [[ "$PROMOTED" == true ]]; then mv "$K" "$trash/KHUpdater"; fi
@@ -57,7 +61,28 @@ cp "$KIT/com.khupdater.agent.plist" "$PLIST_STAGE"
 mv "$STAGE/KHUpdater" "$K"
 PROMOTED=true
 mv "$PLIST_STAGE" "$PLIST"
+COMMITTED=true
 # Keep the now-empty staging folder out of the way; never delete it.
 mkdir -p "$DEST_HOME/Library/_trash"
 mv "$STAGE" "$DEST_HOME/Library/_trash/"
-echo 'Agent installed but NOT started. Activate the LaunchAgent locally after reviewing the config.'
+
+# The same rule as Studio Hub's khu_agent.Bootstrap.activate: a loaded job is left alone (never a
+# second copy), and a job that is not loaded is bootstrapped from the plist written above.
+LAUNCHCTL="$(command -v launchctl || true)"
+DOMAIN="gui/$(id -u)"
+if [[ -z "$LAUNCHCTL" ]]; then
+    REASON='launchctl was not found on this Mac'
+elif "$LAUNCHCTL" print "$DOMAIN/com.khupdater.agent" >/dev/null 2>&1; then
+    echo "Agent installed; launchd already has com.khupdater.agent loaded, so it was left alone."
+    exit 0
+elif OUTPUT="$("$LAUNCHCTL" bootstrap "$DOMAIN" "$PLIST" 2>&1)"; then
+    echo "Agent installed and started (launchd job com.khupdater.agent)."
+    exit 0
+else
+    REASON="${OUTPUT:-launchctl refused without a message}"
+fi
+# The install is finished and stays; only the start failed, and one command retries it.
+echo "Agent installed, but launchd did not start it: $REASON" >&2
+echo "The install is kept at $K; nothing was removed. Start it later with:" >&2
+echo "  launchctl bootstrap $DOMAIN $PLIST" >&2
+exit 1
