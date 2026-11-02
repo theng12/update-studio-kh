@@ -2,6 +2,14 @@
 
 The newest version is first. The status page shows the top entry.
 
+## 1.0.2 — 2026-11-02
+- A new look for the page and the app, in light and dark: a summary of how many Macs are connected, up to date, need an update or failed, then one list of Macs with each app's version and status.
+- Update and Roll back sit on each app's row; Remove Mac is under each Mac's More menu and asks first.
+- Find a Mac by typing part of its name.
+- The Feed section lists each published app with its version, size and notes.
+- A failed install shows in red with the Mac's own reason.
+- A new app icon.
+
 ## 1.0.1 — 2026-11-02
 - The status page shows KH Updater's version and what's new in it.
 

@@ -734,8 +734,8 @@ public final class FeedServer: @unchecked Sendable {
                 + "<p><b>The state file cannot be read</b>: \(h("\(error)")). It was left untouched.</p>"
         }
         let feed = FeedPublisher.loadFeed(from: feedDir)
-        func form(_ action: String, _ machine: String, _ app: String, _ extra: String, _ label: String) -> String {
-            "<form method=post action=\(action)><input type=hidden name=machine value=\"\(h(machine))\"><input type=hidden name=app value=\"\(h(app))\">\(extra)<button>\(label)</button></form>"
+        func form(_ action: String, _ machine: String, _ app: String, _ extra: String, _ label: String, _ style: String) -> String {
+            "<form method=post action=\(action)><input type=hidden name=machine value=\"\(h(machine))\"><input type=hidden name=app value=\"\(h(app))\">\(extra)<button class=\"\(style)\">\(label)</button></form>"
         }
         let clock = DateFormatter()
         clock.dateFormat = "yyyy-MM-dd HH:mm"
@@ -746,91 +746,226 @@ public final class FeedServer: @unchecked Sendable {
             return "<form method=post action=\(action)>\(inputs)<button>\(label)</button></form>"
         }
 
-        // The enrolment window, its countdown, and how many of the window's allowance are used.
+        // The enrolment window: one small control with its countdown and how much of its allowance is used.
         let window = state.enrolWindow
         let isOpen = window?.isOpen() ?? false
-        let openForm = "<form method=post action=/api/enrol-window><input type=number name=minutes value=\(EnrolPolicy.defaultMinutes) min=1 max=\(EnrolPolicy.maxMinutes) size=4><button>Open an enrolment window for that many minutes</button></form>"
-        var enrol = "<h2>Network enrolment</h2>"
+        let openForm = "<form method=post action=/api/enrol-window class=row><label for=minutes class=sr>Minutes</label><input id=minutes type=number name=minutes value=\(EnrolPolicy.defaultMinutes) min=1 max=\(EnrolPolicy.maxMinutes)><span class=unit>min</span><button class=primary>Open window</button></form>"
+        var enrol: String
         var countdown = ""
         if let window, isOpen {
             let seconds = Int(window.remaining())
             let endUnix = window.untilDate.map { Int($0.timeIntervalSince1970) } ?? 0
-            enrol += "<p><b>Open</b> until \(h(stamp(window.until))), <span id=left data-until=\"\(endUnix)\">\(seconds / 60) min \(seconds % 60) s</span> left"
+            enrol = "<p><span class=\"dot ok\"></span><b>Open</b> until \(h(stamp(window.until))), <span id=left data-until=\"\(endUnix)\">\(seconds / 60) min \(seconds % 60) s</span> left"
                 + " — \(window.enrolled) of \(maxEnrolmentsPerWindow) new Macs enrolled in this window. A Mac that is not enrolled yet may claim a token for itself.</p>"
-                + form("/api/enrol-window", ["minutes": "0"], "Close the window now")
-            countdown = "<script nonce=\"\(h(nonce))\">var e=document.getElementById('left'),u=Number(e.getAttribute('data-until'));"
+                + form("/api/enrol-window", ["minutes": "0"], "Close now")
+            countdown = "var e=document.getElementById('left');if(e){var u=Number(e.getAttribute('data-until'));"
                 + "function t(){var s=Math.round(u-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'}"
-                + "t();setInterval(t,1000)</script>"
+                + "t();setInterval(t,1000)}"
         } else if let window {
-            enrol += "<p><b>Closed</b>: the window that ended \(h(stamp(window.until))) is over, so the publisher is not taking new Macs. It enrolled \(window.enrolled) of \(maxEnrolmentsPerWindow).</p>\(openForm)"
+            enrol = "<p><span class=\"dot\"></span><b>Closed</b>: the last window ended \(h(stamp(window.until))) and enrolled \(window.enrolled) of \(maxEnrolmentsPerWindow). No Mac can join until you open one.</p>\(openForm)"
         } else {
-            enrol += "<p><b>Closed</b>: no Mac can enrol itself. Open a window to let a Mac that is not enrolled yet claim a token for itself.</p>\(openForm)"
+            enrol = "<p><span class=\"dot\"></span><b>Closed</b>: no Mac can enrol itself. Open a window to let a Mac that is not enrolled yet claim a token for itself.</p>\(openForm)"
         }
-        // Only rendered when a nonce allows it; the minutes above are the no-script answer.
-        let script = isOpen && !nonce.isEmpty ? countdown : ""
 
-        var rows = ""
+        // One Macs table: a header row per Mac, then one row per app with its status and actions.
+        // A status is only "Up to date" when the Mac's own report matches the feed; anything the
+        // publisher cannot vouch for says what it does not know.
+        let failures: Set<String> = ["failed", "install_failed", "download_failed", "download_mismatch", "rolled_back",
+                                     "rollback_failed", "rollback_unhealthy", "rollback_blocked", "unresolved"]
+        func words(_ status: String) -> String { let s = status.replacingOccurrences(of: "_", with: " "); return s.prefix(1).uppercased() + s.dropFirst() }
+        let now = Date()
+        var total = 0, connected = 0, upToDate = 0, needUpdate = 0, failedMacs = 0
+        var bodies = ""
+        var windowRows = 0
         for machine in state.machines.keys.sorted() {
             guard let ms = state.machines[machine], ms.tokenHash != nil else { continue }
-            let apps = Set(ms.installed.keys).union(feed?.apps.keys.map { $0 } ?? []).sorted()
+            total += 1
+            if ms.enrolmentSource == MachineState.windowSource { windowRows += 1 }
+            // shortcut: "connected" means a report in the last 15 minutes (three 5-minute agent runs).
+            let live = ms.lastSeen.flatMap(ISO.date).map { now.timeIntervalSince($0) < 15 * 60 } ?? false
+            if live { connected += 1 }
+            // What this Mac runs, plus feed apps its own config lists but has not installed yet.
+            // A record from before configs were reported shows every feed app, as before.
+            let feedApps = Set(feed?.apps.keys.map { $0 } ?? [])
+            // An app with an order waiting is always listed, so its order is never out of sight.
+            // A Mac that has never reported has no versions to show, only its waiting orders.
+            let reported = ms.lastSeen == nil ? Set<String>()
+                : Set(ms.installed.keys).union(ms.automaticDefault.map { Set($0.keys).intersection(feedApps) } ?? feedApps)
+            let apps = reported.union(ms.pending.map(\.app)).sorted()
+            var needs = false, failed = false
+            var appRows = ""
             for app in apps {
-                let installed = ms.installed[app] ?? "not installed"
-                let latest = feed?.apps[app]?.version ?? "—"
+                let installed = ms.installed[app]
+                let feedApp = feed?.apps[app]
+                let ownUpdater = app == "story" || app == "hub"
                 let hasPendingRollback = ms.pending.contains { $0.app == app && $0.action == ServerCommand.rollback }
                 // Warn unless there is POSITIVE evidence this agent understands a rollback: a Mac
                 // that has advertised nothing at all — every build before the action existed, and
                 // anything that has only ever been probed — cannot be assumed capable. So this is
                 // "we have no evidence", never "the Mac said it cannot".
                 let agentTooOld = hasPendingRollback && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false)
-                let pending = ms.pending.contains { $0.app == app } ? (agentTooOld ? "waiting for the Mac (agent too old for rollback)" : "waiting for the Mac") : ""
-                let last = ms.lastResults?[app].map { "\($0.status)\($0.reason.map { $0.isEmpty ? "" : ": " + $0 } ?? "") (\($0.at))" } ?? ""
-                let ownUpdater = app == "story" || app == "hub"
-                let auto = ms.effectiveAutomatic(app)
-                let update = ownUpdater || feed?.apps[app] == nil ? "" : form("/api/request-update", machine, app, "", "Update")
+                let result = ms.lastResults?[app]
+                let appFailed = result.map { failures.contains($0.status) } ?? false
+                let behind = installed.flatMap { i in feedApp.map { VersionCompare.isNewer($0.version, than: i) } } ?? false
+                let same = installed.flatMap { i in feedApp.map { VersionCompare.compare(i, $0.version) == 0 } } ?? false
+                let chip: (String, String)
+                if ms.pending.contains(where: { $0.app == app }) {
+                    chip = (agentTooOld ? "Waiting for the Mac (agent too old for rollback)" : "Waiting for the Mac", "info")
+                } else if appFailed { chip = ("Failed", "bad") }
+                else if ownUpdater { chip = ("Own updater", "muted") }
+                else if installed == nil { chip = ("Not installed", "warn") }
+                else if feedApp == nil { chip = ("Not in feed", "muted") }
+                else if behind { chip = ("Update available", "warn") }
+                else if same { chip = ("Up to date", "ok") }
+                else { chip = ("Newer than feed", "muted") }
+                if appFailed { failed = true }
+                if !ownUpdater && feedApp != nil && (behind || installed == nil) { needs = true }
+                let healthText = ms.health[app].map { "<span class=\"sub\(($0 == "running") ? "" : " warn")\">\(h($0))</span>" } ?? ""
+                let resultLine = result.map { r in
+                    "<div class=\"result\(failures.contains(r.status) ? " bad" : "")\">\(h(words(r.status)))\(r.reason.map { $0.isEmpty ? "" : ": " + h($0) } ?? "") <span class=sub>\(h(stamp(r.at)))</span></div>"
+                } ?? ""
+                var actions = ""
+                if !ownUpdater && feedApp != nil && !same { actions += form("/api/request-update", machine, app, "", "Update", "primary") }
+                var more = ""
                 // Rollback needs no feed entry: it puts back the version this Mac kept.
-                let rollback = ownUpdater ? "" : form("/api/request-rollback", machine, app, "", "Roll back")
-                let automatic = ownUpdater || feed?.apps[app] == nil ? "" :
-                    form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Automatic: on" : "Automatic: off")
-                let note = ownUpdater ? "updated by its own updater" : ""
-                rows += "<tr><td>\(h(machine))</td><td>\(h(app))</td><td>\(h(installed))</td><td>\(h(latest))</td><td>\(h(ms.health[app] ?? ""))</td><td>\(h(ms.lastSeen ?? "never"))</td><td>\(h(pending))</td><td>\(h(last))</td><td>\(update)\(rollback)\(h(note))</td><td>\(automatic)</td></tr>"
+                if !ownUpdater { more += form("/api/request-rollback", machine, app, "", "Roll back", "") }
+                let auto = ms.effectiveAutomatic(app)
+                if !ownUpdater && feedApp != nil {
+                    actions += "<span class=\"tag\(auto ? " on" : "")\">Automatic: \(auto ? "on" : "off")</span>"
+                    more += form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Turn Automatic off" : "Turn Automatic on", "")
+                }
+                if !more.isEmpty { actions += "<details class=more><summary aria-label=\"More for \(h(app))\">More</summary><div class=menu>\(more)</div></details>" }
+                appRows += "<tr class=app><td class=name>\(h(app))</td><td class=num>\(h(installed ?? "—")) \(healthText)</td><td class=num>\(h(feedApp?.version ?? "—"))</td>"
+                    + "<td><span class=\"chip \(chip.1)\">\(h(chip.0))</span>\(resultLine)</td><td class=actions>\(actions)</td></tr>"
             }
-        }
-
-        // Which Macs enrolled themselves, when — the owner's review list — and how to remove one.
-        var macRows = ""
-        var windowRows = 0
-        for machine in state.machines.keys.sorted() {
-            guard let ms = state.machines[machine], ms.tokenHash != nil else { continue }
+            if failed { failedMacs += 1 } else if needs { needUpdate += 1 } else if live { upToDate += 1 }
+            if ms.lastSeen == nil { appRows += "<tr class=app><td colspan=5 class=sub>Has not reported yet. Versions appear after its first report.</td></tr>" }
             let via = ms.enrolmentSource == MachineState.windowSource ? "a window" : "the publisher"
-            if ms.enrolmentSource == MachineState.windowSource { windowRows += 1 }
-            macRows += "<tr><td>\(h(machine))</td><td>\(h(via))</td><td>\(h(stamp(ms.enrolledAt)))</td><td>\(h(ms.lastSeen.map(stamp) ?? "never"))</td><td>\(ms.pending.count)</td>"
-                + "<td>\(form("/api/remove-machine", ["machine": machine], "Remove Mac"))</td></tr>"
+            let seen = ms.lastSeen.map { live ? "Last seen \(h(stamp($0)))" : "<span class=badtext>Not reporting since \(h(stamp($0)))</span>" } ?? "<span class=warntext>Never seen</span>"
+            let orders = ms.pending.isEmpty ? "" : " · \(ms.pending.count) order\(ms.pending.count == 1 ? "" : "s") waiting"
+            bodies += "<tbody data-mac=\"\(h(machine.lowercased()))\"><tr class=mac><th colspan=5><div class=machead><span class=macname>\(h(machine))</span>"
+                + "<span class=sub>\(seen)\(orders)</span>"
+                + "<details class=more><summary aria-label=\"More for \(h(machine))\">More</summary><div class=menu>"
+                + "<p class=sub>Joined through \(h(via)), \(h(stamp(ms.enrolledAt)))</p>"
+                + "<form method=post action=/api/remove-machine data-confirm=\"Remove \(h(machine))? It stops being served until it joins again through an open window.\"><input type=hidden name=\"machine\" value=\"\(h(machine))\"><button class=danger>Remove Mac</button></form>"
+                + "</div></details></div></th></tr>\(appRows)</tbody>"
         }
-        let macs = macRows.isEmpty ? "<p>No Mac is enrolled.</p>"
-            : "<table><tr><th>Mac</th><th>Enrolled via</th><th>Enrolled</th><th>Last seen</th><th>Orders waiting</th><th></th></tr>\(macRows)</table>"
+        let macs = bodies.isEmpty ? "<p class=empty>No Mac is enrolled. Open an enrolment window above, then run the installer on the Mac.</p>"
+            : "<div class=tablewrap><table class=macs><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>Status</th><th><span class=sr>Actions</span></th></tr></thead>\(bodies)</table></div>"
+        let notReporting = total - connected
+        let summary = "<div class=stats>"
+            + "<div class=stat><span class=n>\(connected)</span><span>Macs connected<small>of \(total) enrolled, reported in the last 15 min</small></span></div>"
+            + "<div class=stat><span class=\"n ok\">\(upToDate)</span><span>Up to date</span></div>"
+            + "<div class=stat><span class=\"n\(needUpdate > 0 ? " warn" : "")\">\(needUpdate)</span><span>Need update</span></div>"
+            + "<div class=stat><span class=\"n\(failedMacs > 0 ? " bad" : "")\">\(failedMacs)</span><span>Failed</span></div>"
+            + (notReporting > 0 ? "<div class=stat><span class=\"n warn\">\(notReporting)</span><span>Not reporting<small>status not checked</small></span></div>" : "")
+            + "</div>"
+
+        // The feed: what each app is published at, as the Macs see it.
+        let sizes = ByteCountFormatter()
+        let feedRows = (feed?.apps ?? [:]).sorted { $0.key < $1.key }.map { app, entry in
+            "<tr><td class=name>\(h(app))</td><td class=num>\(h(entry.version))</td><td>\(h(entry.kind))</td><td class=num>\(h(sizes.string(fromByteCount: entry.bytes)))</td>"
+                + "<td>\(entry.notes.map { $0.isEmpty ? "<span class=sub>No notes</span>" : h($0) } ?? "<span class=sub>No notes</span>")</td></tr>"
+        }.joined()
+        let feedSection = feed == nil || feedRows.isEmpty ? "<p class=empty>Nothing is published yet. Publish a release with <code>khu publish</code>.</p>"
+            : "<p class=sub>Published \(h(stamp(feed?.published_at)))</p><div class=tablewrap><table class=feed><thead><tr><th>App</th><th>Version</th><th>Kind</th><th>Size</th><th>Notes</th></tr></thead>\(feedRows)</table></div>"
+
         var removedRows = ""
         for removal in state.removed.sorted(by: { $0.removedAt > $1.removedAt }) {
             let live = state.machines[removal.machine] != nil ? "enrolled again since" : "not enrolled"
-            removedRows += "<tr><td>\(h(removal.machine))</td><td>\(h(stamp(removal.removedAt)))</td><td>\(h(stamp(removal.lastSeen)))</td><td>\(h(live))</td></tr>"
+            removedRows += "<tr><td class=name>\(h(removal.machine))</td><td class=num>\(h(stamp(removal.removedAt)))</td><td class=num>\(h(stamp(removal.lastSeen)))</td><td>\(h(live))</td></tr>"
         }
-        let removed = state.removed.isEmpty ? "<p>No Mac has been removed.</p>"
-            : "<table><tr><th>Mac</th><th>Removed</th><th>Last seen then</th><th>Now</th></tr>\(removedRows)</table>"
+        let removed = state.removed.isEmpty ? "<p class=sub>No Mac has been removed.</p>"
+            : "<div class=tablewrap><table><thead><tr><th>Mac</th><th>Removed</th><th>Last seen then</th><th>Now</th></tr></thead>\(removedRows)</table></div>"
         // The top CHANGELOG.md entry: "## <version> — <date>" and its "- " lines.
         let latest = Changelog.text.components(separatedBy: "\n## ").dropFirst().first?
             .components(separatedBy: "\n") ?? []
         let news = latest.dropFirst().filter { $0.hasPrefix("- ") }.map { "<li>\(h(String($0.dropFirst(2))))</li>" }.joined()
-        let version = "<p><b>Version \(h(latest.first ?? "unknown"))</b></p><h2>What's new</h2><ul>\(news)</ul>"
+        let version = "<details class=news><summary><p><b>Version \(h(latest.first ?? "unknown"))</b></p><span class=link>What's new</span></summary><div class=newsbody><h2>What's new</h2><ul>\(news)</ul></div></details>"
+        // Restores the search across the 30 s refresh, asks before Remove Mac, runs the countdown.
+        let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">\(countdown)"
+            + "var f=document.getElementById('filter');function run(){var q=f.value.trim().toLowerCase(),n=0;"
+            + "document.querySelectorAll('tbody[data-mac]').forEach(function(b){var hit=!q||b.getAttribute('data-mac').indexOf(q)>=0;b.hidden=!hit;if(hit)n++});"
+            + "document.getElementById('count').textContent=q?n+' shown':'';try{sessionStorage.setItem('khu-filter',f.value)}catch(e){}}"
+            + "if(f){f.hidden=false;try{f.value=sessionStorage.getItem('khu-filter')||''}catch(e){}f.addEventListener('input',run);run()}"
+            + "document.querySelectorAll('form[data-confirm]').forEach(function(x){x.addEventListener('submit',function(e){if(!confirm(x.getAttribute('data-confirm')))e.preventDefault()})})"
+            + "</script>"
         return """
-        <!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=30><title>KH Updater</title>
-        <style>body{font:14px -apple-system,sans-serif;margin:24px}table{border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:6px 10px;text-align:left}form{display:inline}input[type=number]{width:5em}</style></head>
-        <body><h1>KH Updater</h1><p>Every Mac and app, refreshed every 30 s. Update installs the feed's version on that Mac; Roll back puts the version that Mac kept back in place; Automatic does it whenever the feed is newer; Remove Mac drops a Mac's token and its waiting orders, and that Mac enrols again through an open window.</p>
-        \(version)\(enrol)\(script)
-        <h2>Macs enrolled\(windowRows > 0 ? " (\(windowRows) through a window)" : "")</h2>\(macs)
-        <h2>Macs removed</h2>\(removed)
-        <h2>Apps</h2>
-        <table><tr><th>Mac</th><th>App</th><th>Installed</th><th>Feed</th><th>Health</th><th>Last seen</th><th>Pending</th><th>Last result</th><th></th><th></th></tr>\(rows)</table></body></html>
+        <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><meta http-equiv=refresh content=30><title>KH Updater</title>
+        <style>\(Self.pageStyle)</style></head>
+        <body><header class=top><div class=brand>\(Self.mark)<div><h1>KH Updater</h1><p class=sub>Every Mac and its apps, refreshed every 30 s.</p></div></div>\(version)</header>
+        <main>
+        <section class=overview>\(summary)<div class=enrol><h2>Network enrolment</h2>\(enrol)</div></section>
+        <section><div class=sechead><h2>Macs enrolled\(windowRows > 0 ? " (\(windowRows) through a window)" : "")</h2><div class=row><span id=count class=sub></span><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac" hidden></div></div>\(macs)
+        <p class="sub foot">Update installs the feed's version on that Mac. Roll back puts back the version that Mac kept. Automatic installs whenever the feed is newer. Remove Mac drops its token and waiting orders; it can join again through an open window.</p></section>
+        <section><h2>Feed</h2>\(feedSection)</section>
+        <section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>
+        </main>\(script)</body></html>
         """
     }
+
+    /// The page's mark: a down arrow into a tray, drawn the same way as the app icon.
+    static let mark = "<svg class=mark viewBox=\"0 0 32 32\" aria-hidden=true><rect width=32 height=32 rx=8 fill=\"var(--accent)\"/><path d=\"M16 7v12m-5-5 5 5 5-5M9 21v3h14v-3\" fill=none stroke=\"#fff\" stroke-width=2.4 stroke-linecap=round stroke-linejoin=round/></svg>"
+
+    static let pageStyle = """
+    :root{--bg:#f6f7f6;--panel:#fff;--line:#e3e6e4;--text:#16201c;--sub:#5d6964;--accent:#1d6b51;--accent-ink:#fff;--ok:#1d7a4c;--ok-bg:#e3f3ea;--warn:#8a5a00;--warn-bg:#fdf0d5;--bad:#b42318;--bad-bg:#fde8e6;--info:#1d5fa8;--info-bg:#e5eefb;--muted-bg:#eef0ef;--focus:#2e8b6a}
+    @media (prefers-color-scheme:dark){:root{--bg:#111614;--panel:#181f1c;--line:#2a3430;--text:#e6ece9;--sub:#97a49e;--accent:#3fa37f;--accent-ink:#06120d;--ok:#5fcf97;--ok-bg:#16301f;--warn:#f0b450;--warn-bg:#33270f;--bad:#ff8a7e;--bad-bg:#3a1714;--info:#86b6f2;--info-bg:#15263c;--muted-bg:#222b27;--focus:#5fcf97}}
+    *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+    body{margin:0}::selection{background:var(--accent);color:var(--accent-ink)}
+    h1{font-size:20px;letter-spacing:-.02em;margin:0}h2{font-size:15px;margin:0 0 10px;letter-spacing:-.01em}p{margin:0 0 8px}
+    .sub{color:var(--sub);font-size:12.5px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+    .top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:2}
+    .brand{display:flex;gap:12px;align-items:center}.mark{width:34px;height:34px;flex:none}
+    main{padding:20px 24px 40px;max-width:1240px;margin:0 auto}section{margin-bottom:28px}
+    .overview{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,380px);gap:16px;align-items:stretch}
+    .stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+    .stat{flex:1 1 120px;display:flex;align-items:center;gap:10px;padding:14px 16px;background:var(--panel)}
+    .stat .n{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em}.stat small{display:block;color:var(--sub);font-size:11.5px}
+    .n.ok{color:var(--ok)}.n.warn{color:var(--warn)}.n.bad{color:var(--bad)}
+    .enrol{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}.enrol h2{font-size:13px;color:var(--sub);font-weight:600;margin-bottom:6px}
+    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sub);margin-right:6px;vertical-align:1px}.dot.ok{background:var(--ok)}
+    .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.unit{color:var(--sub)}
+    form{display:inline;margin:0}
+    button,input{font:inherit;color:inherit}
+    button{border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:4px 11px;cursor:pointer;white-space:nowrap}
+    button:hover{background:var(--muted-bg)}button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:550}button.primary:hover{filter:brightness(1.08)}
+    button.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}button.danger:hover{background:var(--bad-bg)}
+    input[type=number]{width:4.5em;padding:4px 6px;border:1px solid var(--line);border-radius:7px;background:var(--bg);font-variant-numeric:tabular-nums}
+    input[type=search]{width:220px;max-width:100%;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+    :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+    .sechead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}.sechead h2{margin:0}
+    .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:12px}.tablewrap thead th:first-child{border-top-left-radius:12px}.tablewrap thead th:last-child{border-top-right-radius:12px}
+    table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:7px 14px;vertical-align:middle}
+    thead th{font-size:11.5px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line);background:var(--panel)}
+    .num{font-variant-numeric:tabular-nums}.name{font-weight:550}
+    tbody+tbody .mac th,.feed tbody tr+tr td,.removed tr+tr td{border-top:1px solid var(--line)}
+    .mac th{background:var(--muted-bg);font-weight:400;padding:8px 14px}.machead{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.macname{font-weight:650}.machead details{margin-left:auto}
+    .app td{padding-top:6px;padding-bottom:6px}.app .name{padding-left:24px}
+    .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:550;white-space:nowrap}
+    .chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--info-bg);color:var(--info)}.chip.muted{background:var(--muted-bg);color:var(--sub)}
+    .result{font-size:12.5px;color:var(--sub);margin-top:3px}.result.bad{color:var(--bad);font-weight:550}
+    .sub.warn,.warntext{color:var(--warn)}.badtext{color:var(--bad);font-weight:550}
+    .actions{text-align:right;white-space:nowrap}.actions>*{margin-left:6px}
+    .tag{font-size:12px;color:var(--sub)}.tag.on{color:var(--accent);font-weight:600}
+    details.more{display:inline-block;position:relative}details.more summary{list-style:none;cursor:pointer;color:var(--sub);font-size:12.5px;padding:3px 8px;border-radius:6px}
+    details.more summary::-webkit-details-marker{display:none}details.more summary:hover,details.more[open] summary{background:var(--muted-bg);color:var(--text)}
+    .menu{position:absolute;right:0;top:calc(100% + 4px);z-index:3;display:flex;flex-direction:column;gap:6px;padding:8px;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.14)}
+    .menu button{width:100%;text-align:left}.menu p{margin:0 0 2px;white-space:nowrap}
+    details.news{text-align:right}details.news summary{list-style:none;cursor:pointer}details.news summary::-webkit-details-marker{display:none}details.news summary p{margin:0}
+    .link{color:var(--accent);font-size:12.5px}.newsbody{position:absolute;right:24px;margin-top:8px;width:min(420px,calc(100vw - 48px));text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.16)}
+    .newsbody h2{font-size:13px}.newsbody ul{margin:0;padding-left:18px}
+    details.removed summary{cursor:pointer;color:var(--sub)}details.removed summary h2{display:inline;font-size:13px}details.removed[open] summary{margin-bottom:10px}
+    .empty{background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:18px;color:var(--sub)}.foot{margin-top:10px;max-width:80ch}
+    code{font:12.5px ui-monospace,Menlo,monospace;background:var(--muted-bg);padding:1px 5px;border-radius:5px}
+    @media (max-width:820px){.top{padding:14px 16px}main{padding:16px}.overview{grid-template-columns:1fr}
+    .macs thead{display:none}.macs .app{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 14px}.macs .app td{padding:0}.macs .app .name{padding-left:0}
+    .macs .app td:nth-child(3)::before{content:"Feed ";color:var(--sub)}.macs .app td.actions{text-align:left}.actions>*{margin:0 6px 0 0}
+    .feed td:nth-child(3),.feed th:nth-child(3){display:none}
+    .top .brand .sub{display:none}.mark{width:28px;height:28px}h1{font-size:18px}details.news summary p{font-size:12.5px}
+    .stat{flex-basis:45%;padding:12px}.stat small{display:none}.stat .n{font-size:20px}
+    .macs .app td:nth-child(1){grid-area:1/1}.macs .app td:nth-child(4){grid-area:1/2;text-align:right}.macs .app td:nth-child(2){grid-area:2/1}.macs .app td:nth-child(3){grid-area:2/2;text-align:right;color:var(--sub)}
+    .macs .app td.actions{grid-area:3/1/4/3}.macs .app td.actions:empty{display:none}}
+    """
 
     /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).
     public func listen() throws -> Int32 {
