@@ -92,6 +92,8 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// signed reply was lost resends the SAME machine and nonce; matching this lets the publisher
     /// answer that resend with a fresh token instead of a 409 that would strand the Mac for ever.
     public var enrolNonceHash: String?
+    /// The Mac's last results, newest first, for the owner's page (absent in older state).
+    public var history: [HistoryEntry]?
     /// The one enrolment source the status page lists.
     public static let windowSource = "window"
     public init(machine: String) {
@@ -105,7 +107,7 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// which is a worse fault than any single missing field.
     private enum CodingKeys: String, CodingKey {
         case machine, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
-             automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash
+             automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -123,6 +125,7 @@ public struct MachineState: Codable, Sendable, Equatable {
         enrolledAt = try c.decodeIfPresent(String.self, forKey: .enrolledAt)
         enrolmentSource = try c.decodeIfPresent(String.self, forKey: .enrolmentSource)
         enrolNonceHash = try c.decodeIfPresent(String.self, forKey: .enrolNonceHash)
+        history = try c.decodeIfPresent([HistoryEntry].self, forKey: .history)
     }
 
     /// The setting the agent will actually follow.
@@ -163,6 +166,21 @@ public struct ServerCommand: Codable, Sendable, Equatable {
 /// instead — the opposite of what the owner asked for.
 public enum AgentCapability {
     public static let ownerRollback = "owner-rollback-v1"
+}
+
+/// One install result as the page shows it: which app, the version it was on, the version the feed
+/// offered (nil for a rollback), and what the Mac said.
+public struct HistoryEntry: Codable, Sendable, Equatable {
+    public static let kept = 10
+    public var app: String
+    public var from: String?
+    public var to: String?
+    public var status: String
+    public var reason: String?
+    public var at: String
+    public init(app: String, from: String?, to: String?, status: String, reason: String?, at: String) {
+        self.app = app; self.from = from; self.to = to; self.status = status; self.reason = reason; self.at = at
+    }
 }
 
 public struct CommandResult: Codable, Sendable, Equatable {

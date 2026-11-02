@@ -33,7 +33,7 @@ public enum FeedPublisher {
     /// (`<sha12>-<name>`), so two apps' files can never overwrite each other and bytes an older
     /// feed still names are never replaced.
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
-                               kind: String?, allowSame: Bool, now: Date = Date()) throws {
+                               kind: String?, allowSame: Bool, notes: String? = nil, now: Date = Date()) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
         let key = try Signing.loadPrivateKey(from: keyFile)
@@ -66,7 +66,7 @@ public enum FeedPublisher {
                 try FileManager.default.moveItem(at: staging, to: dest)
             }
             feed.apps[app] = FeedApp(version: version, file: name, sha256: sha, bytes: bytes,
-                                     kind: kind ?? (feed.apps[app]?.kind ?? "app-dmg"), notes: feed.apps[app]?.notes)
+                                     kind: kind ?? (feed.apps[app]?.kind ?? "app-dmg"), notes: notes)
             // Strictly later than the last release, so an agent's high-water mark always moves forward.
             let previous = feed.publishedAt ?? .distantPast
             feed.published_at = ISO.string(max(now, previous.addingTimeInterval(0.001)))

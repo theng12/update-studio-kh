@@ -9,7 +9,7 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--allow-same]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--notes "<line>\\n<line>"] [--allow-same]
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
               remove --state <dir> --machine <id>
@@ -50,7 +50,7 @@ struct KHUMain {
                 print("private key: \(keyFile.path)")
             } catch { fail("\(error)") }
         case "publish":
-            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, allowSame = false
+            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, notes: String?, allowSame = false
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -60,6 +60,7 @@ struct KHUMain {
                 case "--version": version = value("--version", &i)
                 case "--artifact": artifact = value("--artifact", &i)
                 case "--kind": kind = value("--kind", &i)
+                case "--notes": notes = value("--notes", &i)
                 case "--allow-same": allowSame = true
                 default: usage()
                 }
@@ -68,7 +69,8 @@ struct KHUMain {
             guard let f = feed, let k = key, let a = app, let v = version, let art = artifact else { usage() }
             do {
                 try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a,
-                                          version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame)
+                                          version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
+                                          notes: notes.map { $0.replacingOccurrences(of: "\\n", with: "\n") })
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "enrol":
