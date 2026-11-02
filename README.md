@@ -21,6 +21,11 @@ turned on.
 (Requires the Swift 6.4 command-line tools; XCTest is not used — tests use the
 `Testing` framework.)
 
+## The app
+
+`packaging/build-app.sh <version>` builds `build/KH Updater.app` and its DMG: a window onto the
+publisher's page (http://127.0.0.1:8790/). Nothing else; the publisher runs without it.
+
 ## Subcommands
 
 See `docs/DESIGN.md`.
