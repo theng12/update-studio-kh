@@ -755,8 +755,8 @@ public final class FeedServer: @unchecked Sendable {
                 + "<p><b>The state file cannot be read</b>: \(h("\(error)")). It was left untouched.</p>"
         }
         let feed = FeedPublisher.loadFeed(from: feedDir)
-        func form(_ action: String, _ machine: String, _ app: String, _ extra: String, _ label: String, _ style: String) -> String {
-            "<form method=post action=\(action)><input type=hidden name=machine value=\"\(h(machine))\"><input type=hidden name=app value=\"\(h(app))\">\(extra)<button class=\"\(style)\">\(label)</button></form>"
+        func form(_ action: String, _ machine: String, _ app: String, _ extra: String, _ label: String, _ style: String, confirm: String = "") -> String {
+            "<form method=post action=\(action)\(confirm.isEmpty ? "" : " data-confirm=\"\(h(confirm))\"")><input type=hidden name=machine value=\"\(h(machine))\"><input type=hidden name=app value=\"\(h(app))\">\(extra)<button class=\"\(style)\">\(label)</button></form>"
         }
         let clock = DateFormatter()
         clock.dateFormat = "yyyy-MM-dd HH:mm"
@@ -862,9 +862,14 @@ public final class FeedServer: @unchecked Sendable {
                     if online && !failed && rowUpdate.isEmpty { rowUpdate = form("/api/request-update", machine, app, "", "Update \(h(name(app)))", "primary small") }
                 }
                 // Rollback needs no feed entry: it puts back the version this Mac kept.
-                if !ownUpdater { actions += form("/api/request-rollback", machine, app, "", "Roll back", "") }
+                if !ownUpdater {
+                    // The version it goes back to is the one the last update replaced, when this page saw it.
+                    let kept = ms.history?.first { $0.app == app && ($0.status == "updated" || $0.status == "switched") }?.from
+                    actions += form("/api/request-rollback", machine, app, "", "Roll back", "",
+                                    confirm: "Roll back \(name(app)) on \(machine) to \(kept ?? "the version it kept")?")
+                }
                 if !ownUpdater && feedApp != nil {
-                    actions += form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Turn Automatic off" : "Turn Automatic on", "quiet")
+                    actions += form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Turn Automatic off" : "Turn Automatic on", "small")
                 }
                 let health = ms.health[app].flatMap { $0 == "running" ? nil : " <span class=warntext>\(h($0))</span>" } ?? ""
                 rows += "<tr><td class=name>\(h(name(app)))</td><td class=num>\(h(installed ?? "—"))\(health)</td><td class=num>\(h(feedApp?.version ?? "—"))</td>"
@@ -878,7 +883,7 @@ public final class FeedServer: @unchecked Sendable {
                                   "Reason: \(result.reason ?? "none given")", "Time: \(stamp(result.at))",
                                   "Versions: \(entry?.from ?? "?") -> \(entry?.to ?? "?")", "Installed now: \(installed ?? "not installed")"].joined(separator: "\n")
                     failures += "<div class=failure><div class=failhead><b>\(h(name(app))) failed: \(h(words(result.status)))</b><span class=sub>\(h(stamp(result.at)))</span></div>"
-                        + "<p>\(h(result.reason.flatMap { $0.isEmpty ? nil : $0 } ?? "The Mac gave no reason."))</p>"
+                        + "<p>\(h(result.reason.flatMap { $0.isEmpty ? nil : $0.prefix(1).uppercased() + $0.dropFirst() } ?? "The Mac gave no reason."))</p>"
                         + "<p class=sub>\(h([back, tried].compactMap { $0 }.joined(separator: ", ")))</p>"
                         + "<button type=button class=copy data-copy=\"\(h(report))\">Copy error report</button></div>"
                 }
@@ -919,7 +924,7 @@ public final class FeedServer: @unchecked Sendable {
                        ("failed", "Failed", count(["failed"])), ("offline", "Offline", count(["offline"]))]
             .map { "<button type=button class=filter data-f=\($0.0) aria-pressed=\($0.0 == "all" ? "true" : "false")>\($0.1) <span class=num>\($0.2)</span></button>" }.joined()
         let macs = macRows.isEmpty ? "<p class=empty>No Mac is connected yet. Connect one with the steps below.</p>"
-            : "<div class=maclist>\(macRows.map(\.html).joined())</div>"
+            : "<div class=maclist>\(macRows.map(\.html).joined())</div><p id=nomatch class=empty hidden>No Macs match this filter.</p>"
         let summary = "<div class=stats>"
             + "<div class=stat><span class=n>\(connected)<small> of \(total)</small></span><span>Connected<small>reported in the last 10 min</small></span></div>"
             + "<div class=stat><span class=\"n\(total > 0 && upToDate == total ? " ok" : "")\">\(upToDate)</span><span>Up to date<small>every app on the feed version</small></span></div>"
@@ -970,25 +975,31 @@ public final class FeedServer: @unchecked Sendable {
         // Filters and search (kept across the refresh), open rows kept open, confirm, copy, countdown.
         let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">\(countdown)" + #"""
         var views=document.querySelectorAll('[data-view]'),nav=document.querySelector('.tabs');nav.hidden=false;
-        function show(){var v=location.hash.slice(1)||sessionStorage.getItem('khu-view')||'macs';if(['macs','apps','connect'].indexOf(v)<0)v='macs';sessionStorage.setItem('khu-view',v);
-        views.forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});window.scrollTo(0,0)}
+        function show(){var v=location.hash.slice(1)||sessionStorage.getItem('khu-view')||'macs';if(['macs','apps','connect'].indexOf(v)<0)v='macs';var was=sessionStorage.getItem('khu-view');sessionStorage.setItem('khu-view',v);
+        views.forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});if(was&&was!=v)window.scrollTo(0,0)}
         window.addEventListener('hashchange',show);show();
         document.querySelectorAll('details.mac>summary').forEach(function(m){m.addEventListener('click',function(e){var f=e.target.closest('form');if(f){e.preventDefault();f.requestSubmit()}})});
         var S=sessionStorage,f=document.getElementById('filter'),mode=S.getItem('khu-mode')||'all';
         function run(){var q=f.value.trim().toLowerCase(),n=0;document.querySelectorAll('details.mac').forEach(function(d){var st=d.getAttribute('data-state');
         var ok=(!q||d.getAttribute('data-mac').indexOf(q)>=0)&&(mode=='all'||st==mode);d.hidden=!ok;if(ok)n++});
         document.querySelectorAll('.filter').forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-f')==mode)});
-        document.getElementById('count').textContent=(q||mode!='all')?n+' shown':'';S.setItem('khu-filter',f.value);S.setItem('khu-mode',mode)}
+        document.getElementById('count').textContent=(q||mode!='all')?n+' shown':'';var nm=document.getElementById('nomatch');if(nm){nm.hidden=n>0;document.querySelector('.maclist').hidden=n==0}S.setItem('khu-filter',f.value);S.setItem('khu-mode',mode)}
         if(f){document.querySelector('.tools').hidden=false;f.value=S.getItem('khu-filter')||'';f.addEventListener('input',run);
         document.querySelectorAll('.filter').forEach(function(b){b.addEventListener('click',function(){mode=b.getAttribute('data-f');run()})});run()}
         var open=JSON.parse(S.getItem('khu-open')||'[]');document.querySelectorAll('details.mac').forEach(function(d){var k=d.getAttribute('data-mac');
         if(open.indexOf(k)>=0)d.open=true;d.addEventListener('toggle',function(){var o=JSON.parse(S.getItem('khu-open')||'[]').filter(function(x){return x!=k});if(d.open)o.push(k);S.setItem('khu-open',JSON.stringify(o))})});
         document.querySelectorAll('form[data-confirm]').forEach(function(x){x.addEventListener('submit',function(e){if(!confirm(x.getAttribute('data-confirm')))e.preventDefault()})});
-        document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=b.getAttribute('data-copy'),done=function(){b.textContent='Copied'};
+        document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=b.getAttribute('data-copy'),done=function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy error report'},2000)};
         if(navigator.clipboard){navigator.clipboard.writeText(t).then(done,fallback)}else fallback();function fallback(){var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done()}})});
-        """# + "</script>"
+        var news=document.querySelector('details.news');function closeNews(){news.open=false}
+        document.addEventListener('keydown',function(e){if(e.key=='Escape')closeNews()});document.addEventListener('click',function(e){if(news.open&&!news.contains(e.target))closeNews()});
+        var y=S.getItem('khu-y');if(y!==null){S.removeItem('khu-y');window.scrollTo(0,Number(y))}
+        // Refresh in place: wait while someone is typing or reading the notes; a confirm box pauses scripts.
+        function tick(){var a=document.activeElement;if(news.open||(a&&a.tagName=='INPUT')){setTimeout(tick,5000);return}S.setItem('khu-y',String(window.scrollY));location.reload()}
+        setTimeout(tick,REFRESH*1000);
+        """#.replacingOccurrences(of: "REFRESH", with: isOpen ? "10" : "30") + "</script>"
         return """
-        <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><meta http-equiv=refresh content=\(isOpen ? 10 : 30)><title>KH Updater</title>
+        <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><noscript><meta http-equiv=refresh content=\(isOpen ? 10 : 30)></noscript><title>KH Updater</title>
         <style>\(Self.pageStyle)</style></head>
         <body><header class=top><div class=brand>\(Self.mark)<h1>KH Updater</h1></div>
         <nav class=tabs aria-label="Views" hidden><a href=#macs data-tab=macs>Macs</a><a href=#apps data-tab=apps>Apps &amp; updates</a></nav>
@@ -997,7 +1008,7 @@ public final class FeedServer: @unchecked Sendable {
         <div data-view=macs><section>\(summary)\(banner)</section>
         <section><div class=sechead><h2>Macs</h2><div class=tools hidden><div class=filters role=group aria-label="Show">\(filters)</div><span id=count class=sub></span><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac"></div></div>\(macs)
         </section>
-        <section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section></div>
+        \(state.removed.isEmpty ? "" : "<section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>")</div>
         \(connect)
         <section data-view=apps><h2>Apps &amp; updates</h2><p class=sub>What each app is published at. Update N Macs updates every connected Mac that is behind.</p>\(feedSection)</section>
         </main>\(script)</body></html>

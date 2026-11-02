@@ -868,6 +868,8 @@ func agentAndServerTests() {
                                             body: Data(#"{"machine":"mac2","app":"demo","status":"current"}"#.utf8)), remote: "100.64.0.9")
         }
         expect((try! StateStore.load(from: rigO.state)).machines["mac2"]?.history?.count == HistoryEntry.kept, "P4 a Mac keeps its last 10 results")
+        expect(s.statusHTML().contains("data-confirm=\"Roll back demo on mac2 to ") && s.statusHTML().contains("No Macs match this filter.")
+               && !s.statusHTML().contains("Macs removed (0)"), "P8 Roll back asks first, an empty filter says so, and an empty removed list is hidden")
         try? FeedPublisher.publish(feedDir: rigO.feed, keyFile: rigO.key, app: "noted", version: "1.0.0", artifact: rigO.artifact("n.zip", "n"),
                                    kind: "fake-for-tests", allowSame: false, notes: "- Copy error report button\n- Not tested on printer hardware")
         expect(FeedPublisher.loadFeed(from: rigO.feed)?.apps["noted"]?.notes?.contains("printer hardware") == true
@@ -2227,7 +2229,7 @@ func enrolWindowTests() {
             return (response, String(data: response.data, encoding: .utf8) ?? "")
         }
         let closed = page().1
-        expect(closed.contains("Connect a Mac") && closed.contains("<b>Closed</b>") && closed.contains("No Mac has been removed"),
+        expect(closed.contains("Connect a Mac") && closed.contains("<b>Closed</b>") && !closed.contains("Macs removed"),
                "E13 the page says network enrolment is closed by default")
         r.openWindow(30)
         _ = enrolPost(r.server, machine: "fresh-mac", nonce: enrolNonce())

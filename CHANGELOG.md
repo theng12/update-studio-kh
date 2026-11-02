@@ -12,6 +12,7 @@ The newest version is first. The status page shows the top entry.
 - "Connect a new Mac" shows the three steps, what is needed first and where the kit is; while the window is open, new Macs appear as they join.
 - A release's notes can be added to the feed when it is published.
 - KH Updater's own agent and app show their What's New from this changelog.
+- The page refreshes without jumping to the top or closing open Macs, and Roll back asks first.
 
 ## 1.0.1 — 2026-11-02
 - The status page shows KH Updater's version and what's new in it.
