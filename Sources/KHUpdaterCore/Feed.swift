@@ -22,6 +22,8 @@ public struct FeedApp: Codable, Sendable, Equatable {
     public var accent: String?
     /// When this version was published.
     public var released: String?
+    /// Shown in the Launcher only on a Mac that already has it.
+    public var mainMacOnly: Bool?
 
     public init(version: String, file: String, sha256: String, bytes: Int64, kind: String, notes: String? = nil) {
         self.version = version; self.file = file; self.sha256 = sha256

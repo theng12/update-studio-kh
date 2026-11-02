@@ -12,7 +12,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     var requested: Set<String> = []
     let wake = DispatchSemaphore(value: 0)
     let stateDir: URL
-    private let machine: String
+    let machine: String
     let version: String?
     private var item: NSStatusItem!
     var itemIfReady: NSStatusItem? { item }

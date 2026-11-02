@@ -9,7 +9,7 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--notes "<line>\\n<line>"] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--allow-same]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--notes "<line>\\n<line>"] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same]
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
               remove --state <dir> --machine <id>
@@ -56,7 +56,7 @@ struct KHUMain {
             } catch { fail("\(error)") }
         case "publish":
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, notes: String?, shown: String?, allowSame = false
-            var words = AppWords(), wordsGiven = false
+            var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -69,6 +69,7 @@ struct KHUMain {
                 case "--notes": notes = value("--notes", &i)
                 case "--allow-same": allowSame = true
                 case "--name": shown = value("--name", &i)
+                case "--main-mac-only": mainOnly = true
                 case "--tagline": words.tagline = value("--tagline", &i); wordsGiven = true
                 case "--description": words.description = value("--description", &i); wordsGiven = true
                 case "--accent": words.accent = value("--accent", &i); wordsGiven = true
@@ -83,7 +84,7 @@ struct KHUMain {
             do {
                 try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
-                                          notes: notes.map { $0.replacingOccurrences(of: "\\n", with: "\n") }, displayName: shown, words: wordsGiven ? words : nil)
+                                          notes: notes.map { $0.replacingOccurrences(of: "\\n", with: "\n") }, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "enrol":

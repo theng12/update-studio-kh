@@ -136,6 +136,12 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             s.hidden = h.sorted(); try? s.save(to: helper.stateDir)
         case "automatic": helper.setAutomatic(id, body["on"] as? Bool ?? false)
         case "check": helper.rescanSSDs()
+        case "copyReport":
+            guard let app else { break }
+            let report = ["Studio Launcher KH error report", "Mac: \(helper.machine)", "App: \(app.name) (\(app.app))",
+                          "Installed: \(app.installed ?? "not installed")", "Offered: \(app.available ?? "-") from \(app.source ?? "-")",
+                          "Reason: \(app.reason ?? "-")", "Helper: \(helper.version ?? "-")", "At: \(ISO.string(Date()))"].joined(separator: "\n")
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(report, forType: .string)
         case "log": FileHandle.standardError.write(Data("launcher page: \(body["text"] ?? "")\n".utf8)); return
         case "pause": DownloadControl.pause(body["on"] as? Bool ?? !DownloadControl.paused)
         case "cancel": DownloadControl.cancel()

@@ -2110,6 +2110,31 @@ func launcherTests() {
         expect("\(cancelled.map { "\($0)" } ?? "")".contains("cancelled on this Mac"), "L8 Cancel stops the download and says so")
         DownloadControl.pause(false)
     }
+    // L9. What's New follows the version on offer; the control window shows only where it is installed.
+    do {
+        var feedApp = FeedApp(version: "1.0.2", file: "p.dmg", sha256: String(repeating: "a", count: 64), bytes: 1, kind: "app-dmg", notes: "- feed notes for 1.0.2")
+        feedApp.bundleID = "com.t.p"
+        var newer = SSDApp(id: "printer", name: "P", version: "1.0.3", bundleID: "com.t.p", file: "p3.dmg", sha256: "b"); newer.notes = "- ssd notes for 1.0.3"
+        var same = SSDApp(id: "printer", name: "P", version: "1.0.2", bundleID: "com.t.p", file: "p2.dmg", sha256: "c"); same.notes = nil
+        let feed = Feed(published_at: ISO.string(Date()), apps: ["printer": feedApp])
+        expect(Catalog.build(feed: feed, ssd: [ssd([newer])]).first?.notes == "- ssd notes for 1.0.3", "L9 a newer SSD copy shows its own What's New")
+        expect(Catalog.build(feed: feed, ssd: [ssd([same])]).first?.notes == "- feed notes for 1.0.2", "L9 the same version from an SSD keeps the feed's What's New")
+        let readme = root.appendingPathComponent("README.md")
+        try! "# P 1.0.3\n\n## What's new in 1.0.3\n- Adds A4\n- Shows mm and inches\n\n## Install\n- not this\n".write(to: readme, atomically: true, encoding: .utf8)
+        expect(SSDIndexer.whatsNew(in: readme, version: "1.0.3") == "- Adds A4\n- Shows mm and inches" && SSDIndexer.whatsNew(in: readme, version: "1.0.2") == nil,
+               "L9 the SSD index reads a folder README's What's new for that version only")
+        let rig = Rig("main-only")
+        try? rig.publish("other", "1.0.0", rig.artifact("o.zip", "o"))
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        var control = SSDApp(id: "kh-updater-app", name: "Update Studio KH", version: "1.0.4", bundleID: "com.t.ctl", bundleName: "U.app", file: "u.dmg", sha256: "d")
+        control.mainMacOnly = true
+        let apps = rig.root.appendingPathComponent("Applications")
+        let r1 = try? Agent.runOnce(config: agentConfig(rig, token: token, apps: [:]), http: InProcessClient(server: rig.server), ssd: [ssd([control])], appFolders: [apps])
+        expect(r1 != nil && r1?.apps.contains { $0.app == "kh-updater-app" } == false, "L9 the control window is not offered on a Mac that does not have it")
+        _ = makeApp(apps.appendingPathComponent("U.app"), version: "1.0.4", id: "com.t.ctl")
+        let r2 = try? Agent.runOnce(config: agentConfig(rig, token: token, apps: [:]), http: InProcessClient(server: rig.server), ssd: [ssd([control])], appFolders: [apps])
+        expect(r2?.apps.contains { $0.app == "kh-updater-app" && $0.installed == "1.0.4" } == true, "L9 it is listed on a Mac that already has it")
+    }
     // L5. Publishing records the app's own name, bundle ID and icon; a DMG of another version is refused.
     do {
         let rig = Rig("publish-meta")

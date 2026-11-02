@@ -103,6 +103,15 @@ function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k i
 const day=iso=>{if(!iso)return null;const d=new Date(iso);return isNaN(d)?null:d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})};
 const mb=b=>b==null?null:(b>=1e9?(b/1e9).toFixed(1)+' GB':b>=1e6?Math.round(b/1e6)+' MB':Math.max(1,Math.round(b/1e3))+' KB');
 function ago(iso){if(!iso)return 'Not checked yet';const s=(Date.now()-new Date(iso))/1000;if(s<60)return 'Checked just now';if(s<3600)return 'Checked '+Math.round(s/60)+' min ago';return 'Checked '+Math.round(s/3600)+' h ago'}
+// A failure in plain words; the Mac's own text stays in Copy error report.
+function plain(r){if(!r)return '';const t=r.toLowerCase();
+ if(t.includes('hdiutil')||t.includes('image not recognized')||t.includes('no mountable'))return 'The installer file couldn’t be opened. It may be damaged; try Update again.';
+ if(t.includes('does not match its checksum'))return 'The copy on the SSD doesn’t match its checksum, so it wasn’t used. Try the SSD again or update from the feed.';
+ if(t.includes('dmg holds')||t.includes('this mac\'s app is'))return 'The installer holds a different app than the one on this Mac. Nothing was changed.';
+ if(t.includes('cancelled on this mac'))return 'Cancelled. Nothing was changed.';
+ if(t.includes('did not finish')||t.includes('download')||t.includes('could not connect')||t.includes('timed out'))return 'The download didn’t finish. Check the network and try Update again.';
+ if(t.includes('not healthy')||t.includes('rolled back'))return 'The new version didn’t start properly, so the previous version is running again.';
+ return r.split(/[;.]/)[0]+'.'}
 function installed(a){return a.installed!=null&&a.managed}
 function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Failed':['Failed','bad'],
  'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
@@ -134,7 +143,7 @@ function card(a){const tag=a.tagline||a.description||(a.statusOnly?'Updates itse
  const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter')openDetail(a.id)}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
-  a.status=='Failed'&&a.reason?el('div',{class:'reason'},a.reason):null,
+  a.status=='Failed'&&a.reason?el('div',{class:'reason'},plain(a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
@@ -168,6 +177,7 @@ function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remo
  if(a.open&&!a.helper){add('Open',()=>post({action:'open',app:a.id}));add('Show in Finder',()=>post({action:'finder',app:a.id}))}
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
  if(a.canRollBack)add('Roll back to the previous version',()=>post({action:'rollback',app:a.id}));
+ if(a.status=='Failed'&&a.reason)add('Copy error report',()=>post({action:'copyReport',app:a.id}));
  if(a.managed&&!a.statusOnly){items.push(el('hr'));items.push(el('button',{role:'menuitemcheckbox','aria-checked':a.automatic,onclick:()=>{m.remove();post({action:'automatic',app:a.id,on:!a.automatic})}},el('span',{class:'check'},a.automatic?svg('M3.5 8.5l3 3 6-7'):''),'Update automatically'))}
  items.push(el('hr'));
  if(a.open&&!a.helper)add('Uninstall…',()=>post({action:'uninstall',app:a.id}),'danger');
@@ -184,7 +194,7 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
  const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':true,'aria-label':a.name,style:a.accent?'--app:'+a.accent:null,onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},icon(a),el('div',{class:'t'},el('h3',{},a.name),a.tagline?el('div',{class:'sub'},a.tagline):null,
     el('div',{class:'meta',style:'margin-top:8px'},chip(a),versionLine(a),a.released?el('span',{class:'when'},'· '+day(a.released)):null),
-    a.status=='Failed'&&a.reason?el('div',{class:'reason',style:'margin-top:6px'},a.reason):null,
+    a.status=='Failed'&&a.reason?el('div',{class:'reason',style:'margin-top:6px'},plain(a.reason)):null,
     a.status=='Updating…'?el('div',{style:'margin-top:10px;max-width:420px'},progress(a)):el('div',{class:'foot',style:'margin-top:12px;max-width:340px'},...buttons(a,true))),
    el('div',{class:'nav'},el('button',{class:'btn icon',title:'Previous app','aria-label':'Previous app',onclick:()=>step(-1)},svg('M10 3 5 8l5 5')),
     el('button',{class:'btn icon',title:'Next app','aria-label':'Next app',onclick:()=>step(1)},svg('M6 3l5 5-5 5')),

@@ -75,6 +75,8 @@ public struct SSDApp: Codable, Sendable, Equatable {
     public var accent: String?
     public var released: String?
     public var bytes: Int64?
+    /// Shown only on a Mac that already has it (Update Studio KH, the control window).
+    public var mainMacOnly: Bool?
     public var words: AppWords { AppWords(tagline: tagline, description: description, features: features, accent: accent) }
     public init(id: String, name: String, version: String, bundleID: String, bundleName: String? = nil, file: String? = nil,
                 sha256: String? = nil, updatesItself: Bool = false, setup: String? = nil, icon: String? = nil, notes: String? = nil) {
@@ -121,6 +123,7 @@ public struct CatalogEntry: Sendable, Equatable {
     public var words = AppWords()
     public var released: String?
     public var bytes: Int64?
+    public var mainMacOnly = false
 
     public struct Local: Sendable, Equatable {
         public var volume: String
@@ -147,6 +150,7 @@ public enum Catalog {
                 entry.icon = icons.appendingPathComponent("\(app.bundleID).png").path
             }
             entry.words = app.words
+            entry.mainMacOnly = app.mainMacOnly ?? false
             entries[app.id] = entry
         }
         for (id, app) in feed?.apps ?? [:] where app.kind != "updater" {
@@ -158,6 +162,7 @@ public enum Catalog {
             let w = AppWords(tagline: app.tagline, description: app.description, features: app.features, accent: app.accent)
             entries[id]?.words = w.isEmpty ? (before?.words ?? w) : w
             entries[id]?.released = app.released; entries[id]?.bytes = app.bytes
+            entries[id]?.mainMacOnly = (app.mainMacOnly ?? false) || (before?.mainMacOnly ?? false)
         }
         for source in ssd {
             // The helper itself is not an app on offer: it is already here.
@@ -170,6 +175,7 @@ public enum Catalog {
                 entry.updatesItself = entry.updatesItself || app.updatesItself
                 if entry.notes == nil { entry.notes = app.notes }
                 if entry.words.isEmpty { entry.words = app.words }
+                if app.mainMacOnly == true { entry.mainMacOnly = true }
                 if let setup = app.setup { entry.setupFolder = source.root.appendingPathComponent(setup).path }
                 if let icon = app.icon, entry.icon == nil { entry.icon = source.root.appendingPathComponent(icon).path }
                 if let file = app.file, let sha = app.sha256, !app.updatesItself {
@@ -177,6 +183,8 @@ public enum Catalog {
                     if best.allSatisfy({ !VersionCompare.isNewer($0, than: app.version) }) {
                         entry.ssd = .init(volume: source.volume, file: source.root.appendingPathComponent(file).path, sha256: sha, version: app.version)
                         entry.released = app.released ?? entry.released; entry.bytes = app.bytes ?? entry.bytes
+                        // What's New belongs to the version on offer: the SSD's own notes when it is not the feed's version.
+                        if app.version != entry.feedVersion { entry.notes = app.notes }
                     }
                 }
                 if app.updatesItself, entry.selfVersion.map({ VersionCompare.isNewer(app.version, than: $0) }) ?? true {
@@ -300,6 +308,9 @@ public enum SSDIndexer {
                                              setup: old?.setup ?? (selfUpdating ? "\(appsFolder)/\(folder)" : nil), icon: icon, notes: old?.notes)
                 // Hand-written words survive; the date and size are the installer's own.
                 app.tagline = old?.tagline; app.description = old?.description; app.features = old?.features; app.accent = old?.accent
+                app.mainMacOnly = old?.mainMacOnly
+                // The folder README's "What's new in <version>" list, when it names this version.
+                app.notes = whatsNew(in: dir.appendingPathComponent("README.md"), version: meta.version) ?? old.flatMap { $0.version == meta.version ? $0.notes : nil }
                 let path = file.map { root.appendingPathComponent($0).path } ?? dir.path
                 let attrs = try? fm.attributesOfItem(atPath: path)
                 app.released = (attrs?[.modificationDate] as? Date).map(ISO.string)
@@ -310,5 +321,14 @@ public enum SSDIndexer {
         let index = SSDIndex(apps: best.values.sorted { $0.name < $1.name })
         try AtomicFile.writeJSON(index, to: root.appendingPathComponent(SSDIndex.fileName))
         return index
+    }
+
+    /// The "- " lines under a "## What's new in <version>" heading, or nil.
+    static func whatsNew(in readme: URL, version: String) -> String? {
+        guard let text = try? String(contentsOf: readme, encoding: .utf8) else { return nil }
+        let parts = text.components(separatedBy: "\n## ")
+        guard let section = parts.first(where: { $0.lowercased().hasPrefix("what's new in \(version)") || $0.lowercased().hasPrefix("what’s new in \(version)") }) else { return nil }
+        let lines = section.split(separator: "\n").dropFirst().filter { $0.hasPrefix("- ") }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 }

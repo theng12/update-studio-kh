@@ -33,7 +33,7 @@ public enum FeedPublisher {
     /// (`<sha12>-<name>`), so two apps' files can never overwrite each other and bytes an older
     /// feed still names are never replaced.
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
-                               kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil,
+                               kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
                                meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, now: Date = Date()) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
@@ -77,6 +77,7 @@ public enum FeedPublisher {
             let w = words ?? AppWords(tagline: old?.tagline, description: old?.description, features: old?.features, accent: old?.accent)
             entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
             entry.released = ISO.string(now)
+            entry.mainMacOnly = mainMacOnly ?? old?.mainMacOnly
             if ["app-dmg", "gateway"].contains(kindNow), let read = meta, let info = try? read(dest.path) {
                 guard info.version == version else {
                     throw khuFail("\(artifact.lastPathComponent) holds version \(info.version), not \(version); nothing was published")

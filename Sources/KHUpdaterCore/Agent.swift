@@ -569,7 +569,10 @@ public enum Agent {
             // The icon read from the app's own bundle (cached from an SSD or the feed), else the installed copy's.
             row.icon = entry?.icon ?? feedIcon(feed.apps[app], http: http, serverBase: serverBase, stateDir: stateDir) ?? row.bundlePath
             return row
-        }.filter { $0.managed || $0.available != nil }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }.filter { row in
+            // Offered only where it can be installed; the control window only where it already is.
+            (row.managed || row.available != nil) && !(row.installed == nil && catalog.first { $0.id == row.app }?.mainMacOnly == true)
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// The feed's icon for an app this Mac does not have, kept under `state/icons/` once its
