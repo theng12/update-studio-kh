@@ -858,14 +858,14 @@ public final class FeedServer: @unchecked Sendable {
                 chips += "<span class=\"app t-\(st.1)\">\(h(name(app))) <span class=num>\(h(installed ?? "—"))</span></span>"
                 var actions = ""
                 if !ownUpdater && feedApp != nil && !same && order == nil {
-                    actions += form("/api/request-update", machine, app, "", installed == nil ? "Install" : "Update", "primary")
+                    actions += form("/api/request-update", machine, app, "", installed == nil ? "Install" : "Update", "primary small")
                     if online && !failed && rowUpdate.isEmpty { rowUpdate = form("/api/request-update", machine, app, "", "Update \(h(name(app)))", "primary small") }
                 }
                 // Rollback needs no feed entry: it puts back the version this Mac kept.
                 if !ownUpdater {
                     // The version it goes back to is the one the last update replaced, when this page saw it.
                     let kept = ms.history?.first { $0.app == app && ($0.status == "updated" || $0.status == "switched") }?.from
-                    actions += form("/api/request-rollback", machine, app, "", "Roll back", "",
+                    actions += form("/api/request-rollback", machine, app, "", "Roll back", "small",
                                     confirm: "Roll back \(name(app)) on \(machine) to \(kept ?? "the version it kept")?")
                 }
                 if !ownUpdater && feedApp != nil {
@@ -891,8 +891,8 @@ public final class FeedServer: @unchecked Sendable {
             if online { if anyFailed { failedMacs += 1 } else if anyUpdate { needUpdate += 1 } else if !anyUpdating && ms.lastSeen != nil { upToDate += 1 } }
             if !online { offline += 1 }
             let overall: (String, String, String, Int)
-            if ms.lastSeen == nil { overall = ("", "warn", "offline", 1) }
-            else if !online { overall = ("", "bad", "offline", 1) }
+            if ms.lastSeen == nil { overall = ("Not seen yet", "muted", "offline", 1) }
+            else if !online { overall = ("Offline", "muted", "offline", 1) }
             else if anyFailed { overall = ("Failed · \(failSummary)", "bad", "failed", 0) }
             else if anyUpdating { overall = ("Updating", "info", "updating", 2) }
             else if anyUpdate { overall = ("Update available", "warn", "update", 3) }
@@ -927,9 +927,9 @@ public final class FeedServer: @unchecked Sendable {
             : "<div class=maclist>\(macRows.map(\.html).joined())</div><p id=nomatch class=empty hidden>No Macs match this filter.</p>"
         let summary = "<div class=stats>"
             + "<div class=stat><span class=n>\(connected)<small> of \(total)</small></span><span>Connected<small>reported in the last 10 min</small></span></div>"
-            + "<div class=stat><span class=\"n\(total > 0 && upToDate == total ? " ok" : "")\">\(upToDate)</span><span>Up to date<small>every app on the feed version</small></span></div>"
+            + "<div class=stat><span class=\"n\(connected > 0 && upToDate == connected ? " ok" : "")\">\(upToDate)</span><span>Up to date<small>every app on the feed version</small></span></div>"
             + "<div class=stat><span class=\"n\(needUpdate > 0 ? " warn" : "")\">\(needUpdate)</span><span>Needs update<small>\(updates) update\(updates == 1 ? "" : "s") available</small></span></div>"
-            + "<div class=stat><span class=\"n\(failedMacs + offline > 0 ? " bad" : "")\">\(failedMacs + offline)</span><span>Failed or offline<small>\(failedMacs) failed · \(offline) offline</small></span></div>"
+            + "<div class=stat><span class=\"n\(failedMacs > 0 ? " bad" : offline > 0 ? " warn" : "")\">\(failedMacs + offline)</span><span>Failed or offline<small>\(failedMacs) failed · \(offline) offline</small></span></div>"
             + "</div>"
         let banner = isOpen ? "<p class=banner><span class=\"dot ok\"></span>New Macs can connect for \(leftText.replacingOccurrences(of: "id=left ", with: "")) left — \(joined.count) new Mac\(joined.count == 1 ? "" : "s") joined. <a href=#connect>See who joined</a></p>" : ""
 
@@ -995,7 +995,7 @@ public final class FeedServer: @unchecked Sendable {
         document.addEventListener('keydown',function(e){if(e.key=='Escape')closeNews()});document.addEventListener('click',function(e){if(news.open&&!news.contains(e.target))closeNews()});
         var y=S.getItem('khu-y');if(y!==null){S.removeItem('khu-y');window.scrollTo(0,Number(y))}
         // Refresh in place: wait while someone is typing or reading the notes; a confirm box pauses scripts.
-        function tick(){var a=document.activeElement;if(news.open||(a&&a.tagName=='INPUT')){setTimeout(tick,5000);return}S.setItem('khu-y',String(window.scrollY));location.reload()}
+        function tick(){var a=document.activeElement;if(news.open||document.querySelector('details.notes[open]')||(a&&a.tagName=='INPUT')){setTimeout(tick,5000);return}S.setItem('khu-y',String(window.scrollY));location.reload()}
         setTimeout(tick,REFRESH*1000);
         """#.replacingOccurrences(of: "REFRESH", with: isOpen ? "10" : "30") + "</script>"
         return """
@@ -1111,7 +1111,7 @@ public final class FeedServer: @unchecked Sendable {
     details.mac>summary{grid-template-columns:1fr;gap:6px;padding:10px 14px}.state{order:1}.apps{order:2}.seen{order:3;text-align:left}
     .apptable thead,.hist thead,.feed thead{display:none}.apptable tr,.feed tr{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 0}.apptable td,.feed td{padding:0;border:0!important}.apptable tbody tr+tr,.feed tbody tr+tr{border-top:1px solid var(--line2)}
     .apptable td:nth-child(3)::before{content:"Feed ";color:var(--sub)}.apptable td.actions,.feed td.actions,.feed td:nth-child(4){grid-column:1/-1;text-align:left}.actions>*{margin:4px 6px 0 0}
-    .hist tr{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:6px 0}.hist td{padding:0;font-size:12.5px;border:0!important}.hist tbody tr+tr{border-top:1px solid var(--line2)}details.mac>summary{position:relative;padding-right:34px}.chev{position:absolute;right:16px;top:18px}input[type=search]{width:100%}.tools{width:100%}}
+    .hist tr{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:6px 0}.hist td{padding:0;font-size:12.5px;border:0!important}.hist tbody tr+tr{border-top:1px solid var(--line2)}details.mac>summary{position:relative;padding-right:34px}.chev{position:absolute;right:16px;top:18px}input[type=search]{width:100%}.tools{width:100%}#filter{order:2}#count{order:3;min-width:0;text-align:left}}
     """
 
     /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).
