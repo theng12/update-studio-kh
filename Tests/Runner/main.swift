@@ -840,6 +840,7 @@ func agentAndServerTests() {
         try? rigO.publish("demo", "1.0.0", rigO.artifact("demo.zip", "z"))
         _ = s.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(tok)"],
                                         body: Data(#"{"machine":"mac2","installed":{"demo":"0.9.0"},"automatic_default":{"demo":true}}"#.utf8)), remote: "100.64.0.9")
+        expect(s.statusHTML().contains("<p><b>Version ") && s.statusHTML().contains("<h2>What's new</h2><ul><li>"), "the page shows the top CHANGELOG entry")
         expect(s.statusHTML().contains("Automatic: on"), "R32 a Mac whose own config is Automatic shows Automatic: on")
         // R33: an artifact whose name has a space is served.
         try? rigO.publish("spaced", "1.0.0", rigO.artifact("My App.dmg", "s"))

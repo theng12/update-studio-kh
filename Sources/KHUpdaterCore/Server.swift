@@ -815,11 +815,16 @@ public final class FeedServer: @unchecked Sendable {
         }
         let removed = state.removed.isEmpty ? "<p>No Mac has been removed.</p>"
             : "<table><tr><th>Mac</th><th>Removed</th><th>Last seen then</th><th>Now</th></tr>\(removedRows)</table>"
+        // The top CHANGELOG.md entry: "## <version> — <date>" and its "- " lines.
+        let latest = Changelog.text.components(separatedBy: "\n## ").dropFirst().first?
+            .components(separatedBy: "\n") ?? []
+        let news = latest.dropFirst().filter { $0.hasPrefix("- ") }.map { "<li>\(h(String($0.dropFirst(2))))</li>" }.joined()
+        let version = "<p><b>Version \(h(latest.first ?? "unknown"))</b></p><h2>What's new</h2><ul>\(news)</ul>"
         return """
         <!doctype html><html><head><meta charset=utf-8><meta http-equiv=refresh content=30><title>KH Updater</title>
         <style>body{font:14px -apple-system,sans-serif;margin:24px}table{border-collapse:collapse}td,th{border-bottom:1px solid #ddd;padding:6px 10px;text-align:left}form{display:inline}input[type=number]{width:5em}</style></head>
         <body><h1>KH Updater</h1><p>Every Mac and app, refreshed every 30 s. Update installs the feed's version on that Mac; Roll back puts the version that Mac kept back in place; Automatic does it whenever the feed is newer; Remove Mac drops a Mac's token and its waiting orders, and that Mac enrols again through an open window.</p>
-        \(enrol)\(script)
+        \(version)\(enrol)\(script)
         <h2>Macs enrolled\(windowRows > 0 ? " (\(windowRows) through a window)" : "")</h2>\(macs)
         <h2>Macs removed</h2>\(removed)
         <h2>Apps</h2>
