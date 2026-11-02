@@ -78,6 +78,10 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var automatic: [String: Bool]
     /// What the Mac's own config says when there is no override (reported by the agent).
     public var automaticDefault: [String: Bool]?
+    /// When each `automatic` value was set and whether the Mac's own menu set it.
+    public var automaticSet: [String: AutomaticChange]?
+    /// Automatic is paused from the Mac's menu until then (reported by the agent).
+    public var pausedUntil: String?
     /// The capabilities the agent advertised on its most recent /commands fetch. Used by the
     /// status page to warn when a pending rollback order cannot be delivered to an older agent.
     public var capabilities: [String]?
@@ -109,7 +113,8 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// which is a worse fault than any single missing field.
     private enum CodingKeys: String, CodingKey {
         case machine, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
-             automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history
+             automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
+             automaticSet, pausedUntil
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -128,6 +133,8 @@ public struct MachineState: Codable, Sendable, Equatable {
         enrolmentSource = try c.decodeIfPresent(String.self, forKey: .enrolmentSource)
         enrolNonceHash = try c.decodeIfPresent(String.self, forKey: .enrolNonceHash)
         history = try c.decodeIfPresent([HistoryEntry].self, forKey: .history)
+        automaticSet = try c.decodeIfPresent([String: AutomaticChange].self, forKey: .automaticSet)
+        pausedUntil = try c.decodeIfPresent(String.self, forKey: .pausedUntil)
     }
 
     /// The setting the agent will actually follow.

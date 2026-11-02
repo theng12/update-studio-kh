@@ -543,6 +543,15 @@ public final class FeedServer: @unchecked Sendable {
             if let refusal = Self.reportRefusal(installed: installed, health: health, defaults: defaults) {
                 return Self.text(400, refusal)
             }
+            // The Mac's menu switches, each with its time; bounded like everything else it reports.
+            let local = (body["automatic_local"] as? [String: [String: Any]] ?? [:]).compactMapValues { v -> (Bool, Date)? in
+                guard let on = v["on"] as? Bool, let at = (v["at"] as? String).flatMap(ISO.date) else { return nil }
+                return (on, at)
+            }
+            guard local.count <= ReportPolicy.maxApps, local.keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= ReportPolicy.maxNameCharacters }) else {
+                return Self.text(400, "that Mac reported more Automatic switches, or longer app names, than this publisher accepts (at most \(ReportPolicy.maxApps) apps, \(ReportPolicy.maxNameCharacters) characters for a name)")
+            }
+            let pausedUntil = (body["paused_until"] as? String).flatMap(ISO.date).map(ISO.string)
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
                 // Counted only for the Mac the token proves: a limit keyed on a machine id the
@@ -553,6 +562,12 @@ public final class FeedServer: @unchecked Sendable {
                 if let installed { ms.installed = installed }
                 if let health { ms.health = health }
                 if let defaults { ms.automaticDefault = defaults }
+                // Whichever change is later wins: a switch on the Mac, or the page's.
+                for (app, (on, at)) in local where ms.automaticSet?[app].flatMap({ ISO.date($0.at) }).map({ at > $0 }) ?? true {
+                    ms.automatic[app] = on
+                    ms.automaticSet = (ms.automaticSet ?? [:]).merging([app: AutomaticChange(at: ISO.string(at), byMac: true)]) { _, new in new }
+                }
+                ms.pausedUntil = pausedUntil
                 ms.lastSeen = ISO.string(Date())
                 state.machines[machine] = ms
                 return Self.ok
@@ -593,7 +608,8 @@ public final class FeedServer: @unchecked Sendable {
                 }
                 // Signed with the key every agent is pinned to, and naming this Mac and the moment
                 // it was made: a forged or replayed reply is refused at the Mac.
-                let body = JSON.encode(CommandsReply(machine: machine, commands: deliverable, automatic: ms.automatic), pretty: false)
+                let body = JSON.encode(CommandsReply(machine: machine, commands: deliverable, automatic: ms.automatic,
+                                                       automaticAt: ms.automaticSet?.mapValues(\.at)), pretty: false)
                 guard let signature = try? Signing.sign(body, with: commandKey) else {
                     return Self.text(500, "could not sign the orders")
                 }
@@ -752,6 +768,7 @@ public final class FeedServer: @unchecked Sendable {
                     }
                     if req.path == "/api/automatic" {
                         ms.automatic[app] = f["on"] == "true"
+                        ms.automaticSet = (ms.automaticSet ?? [:]).merging([app: AutomaticChange(at: ISO.string(Date()), byMac: false)]) { _, new in new }
                     } else {
                         let action = req.path == "/api/request-rollback" ? ServerCommand.rollback : ServerCommand.update
                         if !ms.pending.contains(where: { $0.app == app && $0.action == action }) {
@@ -809,10 +826,7 @@ public final class FeedServer: @unchecked Sendable {
             if s < 86_400 { return "\(s / 3600) h ago" }
             return stamp(iso)
         }
-        // shortcut: display names for the apps this fleet runs; any other id shows as itself.
-        let names = ["hub": "Studio Hub", "story": "Story Studio", "gateway": "Gateway", "updater": "Updater",
-                     "printer-studio": "Printer Studio", "media-studio": "Media Studio", "kh-updater-app": "KH Updater app"]
-        func name(_ app: String) -> String { names[app] ?? app }
+        func name(_ app: String) -> String { AppNames.display(app) }
         func words(_ status: String) -> String { let s = status.replacingOccurrences(of: "_", with: " "); return s.prefix(1).uppercased() + s.dropFirst() }
 
         // The enrolment window: its state, its countdown, and how much of its allowance is used.
@@ -900,7 +914,7 @@ public final class FeedServer: @unchecked Sendable {
                 }
                 let health = ms.health[app].flatMap { $0 == "running" ? nil : " <span class=warntext>\(h($0))</span>" } ?? ""
                 rows += "<tr><td class=name>\(h(name(app)))</td><td class=num>\(h(installed ?? "—"))\(health)</td><td class=num>\(h(feedApp?.version ?? "—"))</td>"
-                    + "<td><span class=\"chip \(st.1)\">\(h(st.0))</span>\(auto && !ownUpdater && feedApp != nil ? " <span class=\"tag on\">Automatic: on</span>" : "")</td><td class=actions>\(actions)</td></tr>"
+                    + "<td><span class=\"chip \(st.1)\">\(h(st.0))</span>\(auto && !ownUpdater && feedApp != nil ? " <span class=\"tag on\">Automatic: on</span>" : "")\(ms.automaticSet?[app]?.byMac == true && !ownUpdater ? " <span class=sub>changed on this Mac</span>" : "")</td><td class=actions>\(actions)</td></tr>"
                 if failed, let result {
                     if failSummary.isEmpty { failSummary = "\(name(app)): \(words(result.status).lowercased())" }
                     let entry = ms.history?.first { $0.app == app && $0.at == result.at }
@@ -940,7 +954,7 @@ public final class FeedServer: @unchecked Sendable {
                    : "<table class=apptable><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>State</th><th><span class=sr>Actions</span></th></tr></thead>\(rows)</table>")
                 + "<h3>Recent results</h3>" + (history.isEmpty ? "<p class=sub>No install results yet.</p>"
                    : "<table class=hist><thead><tr><th>App</th><th>From → to</th><th>Time</th><th>Result</th></tr></thead>\(history)</table>")
-                + "<div class=macfoot><span class=sub>Connected on \(h(ms.enrolledAt.flatMap(ISO.date).map { joinedFormat.string(from: $0) } ?? "an unknown date"))\(ms.pending.isEmpty ? "" : " · \(ms.pending.count) order\(ms.pending.count == 1 ? "" : "s") waiting")</span>"
+                + "<div class=macfoot><span class=sub>Connected on \(h(ms.enrolledAt.flatMap(ISO.date).map { joinedFormat.string(from: $0) } ?? "an unknown date"))\(ms.pausedUntil.flatMap(ISO.date).map { $0 > now ? " · Automatic paused on this Mac until \(h(stamp(ms.pausedUntil)))" : "" } ?? "")\(ms.pending.isEmpty ? "" : " · \(ms.pending.count) order\(ms.pending.count == 1 ? "" : "s") waiting")</span>"
                 + "<form method=post action=/api/remove-machine data-confirm=\"Remove \(h(machine))? It stops being served until it connects again with the pairing code.\"><input type=hidden name=\"machine\" value=\"\(h(machine))\"><button class=danger>Remove Mac</button></form></div>"
                 + "</div></details>"
             macRows.append(MacRow(rank: overall.3, name: machine, html: html, state: overall.2))

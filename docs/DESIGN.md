@@ -243,6 +243,14 @@ counter once.
 `khu agent` writes a heartbeat every 30 s on its own thread (so a long install never silences
 it), carrying the nonce the stub gave this child.
 
+**The menu-bar icon (0.1.2).** In a logged-in session the agent shows a menu-bar icon from its own
+process (no Dock icon, no second app): each app's version and state, Update now, Check for Updates
+Now, an Automatic switch per app and a 24-hour pause, stored in `state/helper.json`. Each switch has
+its time; the agent reports them on `/status` and the publisher keeps whichever change, the Mac's or
+the page's, is later. The signed `/commands` reply carries `automaticAt` so the agent applies the
+same rule. A pause holds Automatic only: the owner's orders and Update now still run. Story and Hub
+stay status-only and get no switch. `KHU_NO_MENU` turns the icon off.
+
 ## Recipes
 
 `app-dmg` and `gateway`, in this order:

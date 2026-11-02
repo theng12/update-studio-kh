@@ -2,6 +2,17 @@
 
 The newest version is first. The status page shows the top entry.
 
+## 1.0.4 — 2026-11-02
+- When someone changes Automatic from a Mac's menu-bar icon, that Mac shows "changed on this Mac" on the page. The later change wins, whether it was made on the page or on the Mac.
+- A Mac whose Automatic updates are paused from its menu says so, and until when.
+
+## 0.1.2 — 2026-11-02
+- KH Updater has a small icon in the menu bar on each Mac. It has no Dock icon and no window.
+- The menu lists each app with its version and state: Up to date, Update available, Updating or Failed with the reason.
+- Update now, Check for Updates Now, an Automatic switch per app, and Pause Automatic Updates for 24 Hours.
+- Story Studio and Studio Hub update themselves, so they show their state and no switch.
+- A Mac set up from now on has Automatic on.
+
 ## 1.0.3 — 2026-11-02
 - A new Mac connects with a pairing code shown in KH Updater, at any time. You no longer open a window first.
 - New code replaces the code after asking; Macs already connected stay connected.

@@ -203,18 +203,27 @@ struct KHUMain {
                     }
                 }.start()
             }
-            repeat {
-                do {
-                    let r = try Agent.runOnce(config: cfg)
-                    print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
-                    for note in r.notes { print("note: \(note)") }
-                    if r.restartRequested { print("updater switched to a new version; exiting so the stub starts it"); exit(0) }
-                } catch {
-                    FileHandle.standardError.write(Data("agent error: \(error)\n".utf8))
-                }
-                if cfg.once { break }
-                Thread.sleep(forTimeInterval: Double(max(1, cfg.intervalMinutes) * 60))
-            } while true
+            let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
+            func loop() {
+                var requested: Set<String> = []
+                repeat {
+                    do {
+                        let r = try Agent.runOnce(config: cfg, requested: requested, installing: { menu?.installing($0) })
+                        print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
+                        for note in r.notes { print("note: \(note)") }
+                        menu?.finished(r, error: nil)
+                        if r.restartRequested { print("updater switched to a new version; exiting so the stub starts it"); exit(0) }
+                    } catch {
+                        FileHandle.standardError.write(Data("agent error: \(error)\n".utf8))
+                        menu?.finished(nil, error: "\(error)")
+                    }
+                    if cfg.once { break }
+                    let seconds = Double(max(1, cfg.intervalMinutes) * 60)
+                    if let menu { requested = menu.waitForNextRun(seconds: seconds) } else { Thread.sleep(forTimeInterval: seconds) }
+                } while true
+            }
+            // With a menu the main thread belongs to AppKit and the runs go on their own thread.
+            if let menu { Thread { loop() }.start(); menu.start() } else { loop() }
         default:
             usage()
         }

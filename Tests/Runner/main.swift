@@ -1951,6 +1951,110 @@ func enrolOwnerPost(_ r: EnrolRig, _ path: String, _ fields: [String: String], h
                                        body: JSON.encode(fields)), remote: remote)
 }
 
+func helperTests() {
+    let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+    func setPage(_ rig: Rig, _ app: String, _ on: Bool) {
+        _ = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/automatic", headers: owner,
+            body: Data(#"{"machine":"mac1","app":"\#(app)","on":\#(on ? "true" : "false")}"#.utf8)), remote: "127.0.0.1")
+    }
+    func record(_ rig: Rig) -> MachineState? { (try? StateStore.load(from: rig.state))?.machines["mac1"] }
+    func page(_ rig: Rig) -> String {
+        String(data: rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": "127.0.0.1:8790"]), remote: "127.0.0.1").data, encoding: .utf8) ?? ""
+    }
+    func setup(_ tag: String, page: Bool? = nil) -> (Rig, AgentConfig, InProcessClient) {
+        let rig = Rig("helper-" + tag)
+        let app = makeApp(rig.root.appendingPathComponent("H.app"), version: "1.0.0")
+        let hub = makeApp(rig.root.appendingPathComponent("Hub.app"), version: "0.6.213", id: "com.example.hub")
+        try? rig.publish("demo", "2.0.0", rig.artifact("demo.zip", "demo-bytes"))
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        let cfg = agentConfig(rig, token: token, apps: ["demo": AppConfig(bundlePath: app.path, recipe: "fake-for-tests"),
+                                                         "hub": AppConfig(bundlePath: hub.path, recipe: "hub", automatic: true)])
+        if let page { setPage(rig, "demo", page) }
+        return (rig, cfg, InProcessClient(server: rig.server))
+    }
+    func local(_ cfg: AgentConfig, _ on: Bool, at: Date, paused: Date? = nil) {
+        let dir = URL(fileURLWithPath: cfg.stateDir)
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try! HelperSettings(automatic: ["demo": .init(on: on, at: ISO.string(at))], pausedUntil: paused.map(ISO.string)).save(to: dir)
+    }
+
+    // H1. The later of the Mac's switch and the page's wins; a page value with no time is older.
+    do {
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000), t1 = t0.addingTimeInterval(60)
+        let mine = HelperSettings(automatic: ["a": .init(on: true, at: ISO.string(t1))])
+        expect(mine.automatic("a", page: false, pageAt: ISO.string(t0), config: false)
+               && !mine.automatic("a", page: false, pageAt: ISO.string(t1.addingTimeInterval(1)), config: true)
+               && mine.automatic("a", page: false, pageAt: nil, config: false)
+               && mine.automatic("a", page: nil, pageAt: nil, config: false)
+               && !HelperSettings().automatic("a", page: nil, pageAt: nil, config: false)
+               && HelperSettings().automatic("a", page: true, pageAt: nil, config: false),
+               "H1 the later switch wins, a timeless page value counts as older, and the config is the fallback")
+    }
+    // H2. A switch on the Mac turns Automatic on, reaches the page in one report, and the reply carries its time.
+    do {
+        let (rig, cfg, client) = setup("h2", page: false)
+        local(cfg, true, at: Date().addingTimeInterval(1))
+        let r = try? Agent.runOnce(config: cfg, http: client)
+        expect(r?.commandsRun == 1 && r?.updates == 1, "H2 a later switch on the Mac wins over the page's off and installs")
+        let ms = record(rig)
+        expect(ms?.automatic["demo"] == true && ms?.automaticSet?["demo"]?.byMac == true, "H2 the page has the Mac's switch after one report, marked as the Mac's")
+        expect(page(rig).contains("changed on this Mac"), "H2 the page says the setting was changed on this Mac")
+        let reply = rig.server.handleRequest(HTTPRequest(method: "GET", path: "/commands?machine=mac1", headers: ["authorization": "Bearer \(cfg.token)"]), remote: "100.64.0.9")
+        let body = (try? JSONDecoder().decode(SignedReply.self, from: reply.data))?.replyData
+        let orders = body.flatMap { try? JSONDecoder().decode(CommandsReply.self, from: $0) }
+        expect(orders?.automatic["demo"] == true && orders?.automaticAt?["demo"] != nil, "H2 the signed reply says when the setting was made")
+    }
+    // H3. A later change on the page wins over an earlier switch on the Mac, there and on the Mac.
+    do {
+        let (rig, cfg, client) = setup("h3")
+        local(cfg, true, at: Date().addingTimeInterval(-60))
+        setPage(rig, "demo", false)
+        let r = try? Agent.runOnce(config: cfg, http: client)
+        expect(r?.commandsRun == 0 && r?.apps.first { $0.app == "demo" }?.automatic == false, "H3 the page's later off wins on the Mac")
+        expect(record(rig)?.automatic["demo"] == false && record(rig)?.automaticSet?["demo"]?.byMac == false,
+               "H3 the Mac's older switch does not overwrite the page's later change")
+    }
+    // H4. A pause holds Automatic; "Update now" from the menu still runs; the page shows the pause.
+    do {
+        let (rig, cfg, client) = setup("h4")
+        local(cfg, true, at: Date(), paused: Date().addingTimeInterval(24 * 3600))
+        let held = try? Agent.runOnce(config: cfg, http: client)
+        expect(held?.commandsRun == 0, "H4 while paused nothing installs by itself")
+        expect(record(rig)?.pausedUntil != nil && page(rig).contains("Automatic paused on this Mac until"),
+               "H4 the pause reaches the publisher and the page says so")
+        var seen: [String?] = []
+        let now = try? Agent.runOnce(config: cfg, http: client, requested: ["demo"], installing: { seen.append($0) })
+        expect(now?.updates == 1 && seen == ["demo", nil], "H4 Update now installs while paused, and says it is updating while it does")
+        expect(record(rig)?.lastResults?["demo"]?.commandId.hasPrefix("auto-demo-menu-") == true, "H4 the result reaches the page as this Mac's own update")
+        local(cfg, true, at: Date(), paused: Date().addingTimeInterval(-1))
+        _ = try? Agent.runOnce(config: cfg, http: client)
+        expect(record(rig)?.pausedUntil == nil, "H4 an ended pause is cleared on the page")
+    }
+    // H5. The menu shows each app's state; Story and Hub get no switch.
+    do {
+        let (_, cfg, client) = setup("h5")
+        let r = try? Agent.runOnce(config: cfg, http: client)
+        let demo = r?.apps.first { $0.app == "demo" }, hub = r?.apps.first { $0.app == "hub" }
+        expect(demo?.installed == "1.0.0" && demo?.available == "2.0.0" && demo?.status == HelperApp.updateAvailable && demo?.automatic == false,
+               "H5 an app behind the feed is Update available")
+        expect(hub?.statusOnly == true && hub?.automatic == false && hub?.status == HelperApp.updatesItself, "H5 Hub updates itself and has no switch")
+        let failed = HelperApp.status(installed: "1.0.0", available: "2.0.0", statusOnly: false, last: ("rolled_back", "not healthy"))
+        let current = HelperApp.status(installed: "2.0.0", available: "2.0.0", statusOnly: false, last: ("failed", "old"))
+        expect(failed.0 == HelperApp.failed && failed.1 == "not healthy" && current.0 == HelperApp.upToDate && current.1 == nil
+               && HelperApp.status(installed: nil, available: nil, statusOnly: false, last: nil).0 == HelperApp.notInstalled,
+               "H5 a failure shows with its reason until the app is current")
+    }
+    // H6. A report with too many switches is refused and changes nothing.
+    do {
+        let (rig, cfg, _) = setup("h6")
+        let many = Dictionary(uniqueKeysWithValues: (0...ReportPolicy.maxApps).map { ("a\($0)", ["on": true, "at": ISO.string(Date())] as [String: Any]) })
+        let reply = enrolStatusPost(rig.server, machine: "mac1", token: cfg.token, body: ["machine": "mac1", "automatic_local": many])
+        expect(reply.status == 400 && record(rig)?.automatic.isEmpty == true, "H6 an unbounded list of switches is refused")
+    }
+    // H7. The helper's What's New comes from this changelog.
+    expect(!WhatsNew.lines(for: "0.1.2").isEmpty && WhatsNew.lines(for: "9.9.9").isEmpty, "H7 the helper's What's New is its changelog entry")
+}
+
 func pairingTests() {
     func post(_ server: FeedServer, _ machine: String, _ code: Any, nonce: String = enrolNonce(), now: Date = Date()) -> HTTPResponse {
         let body = try! JSONSerialization.data(withJSONObject: ["machine": machine, "nonce": nonce, "code": code])
@@ -2884,6 +2988,7 @@ struct RunnerMain {
         if ProcessInfo.processInfo.environment["E_ONLY"] == "1" {
             enrolWindowTests()
             pairingTests()
+            helperTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -2916,6 +3021,7 @@ r41HealthMustHold()
         ownerRollbackTests()
         enrolWindowTests()
         pairingTests()
+        helperTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

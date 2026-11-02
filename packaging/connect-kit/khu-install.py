@@ -209,7 +209,8 @@ def app_config(home: Path, registry: dict) -> dict:
 
     Same shape, same key order and same first-found-wins rule as the Hub's own reader.
     """
-    apps = {"updater": {"bundlePath": "", "recipe": "updater", "automatic": False}}
+    # Automatic is on for a new Mac (owner, 2026-11-02); Story and Hub update themselves.
+    apps = {"updater": {"bundlePath": "", "recipe": "updater", "automatic": True}}
     for root in app_folders(home):
         for bundle in sorted(root.glob("*.app")):
             try:
@@ -219,7 +220,8 @@ def app_config(home: Path, registry: dict) -> dict:
                 if entry:
                     apps.setdefault(entry["app"], {"bundlePath": str(bundle.resolve()),
                                                    "recipe": entry["recipe"],
-                                                   "automatic": False, "bundleID": identity})
+                                                   "automatic": entry["recipe"] not in ("story", "hub", "status"),
+                                                   "bundleID": identity})
             except (OSError, ValueError, KeyError):
                 continue
     return apps

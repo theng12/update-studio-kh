@@ -7,6 +7,8 @@ public struct AgentRunResult: Sendable, Equatable {
     public var updates: Int
     public var restartRequested = false
     public var notes: [String] = []
+    /// Each app as the menu-bar icon shows it, from what is on disk after the run.
+    public var apps: [HelperApp] = []
     public init(statusPosted: Bool = false, commandsRun: Int = 0, updates: Int = 0) {
         self.statusPosted = statusPosted; self.commandsRun = commandsRun; self.updates = updates
     }
@@ -213,14 +215,16 @@ public enum Agent {
 
     public static func runOnce(config: AgentConfig, http: HTTPClient = URLSessionHTTPClient(), shell: Shell = SystemShell(),
                                control: ((String, AppConfig) -> AppControl)? = nil,
-                               executable: String? = Bundle.main.executablePath, now: Date = Date()) throws -> AgentRunResult {
+                               executable: String? = Bundle.main.executablePath, now: Date = Date(),
+                               requested: Set<String> = [], installing: ((String?) -> Void)? = nil) throws -> AgentRunResult {
         try validate(config)
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         // One agent at a time per Mac: a second one (or a manual --once) refuses instead of racing.
         return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"), wait: false) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
-                          control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now)
+                          control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
+                          requested: requested, installing: installing ?? { _ in })
         }
     }
 
@@ -229,7 +233,8 @@ public enum Agent {
     }
 
     static func runLocked(config: AgentConfig, stateDir: URL, http: HTTPClient, shell: Shell,
-                          control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date) throws -> AgentRunResult {
+                          control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
+                          requested: Set<String> = [], installing: (String?) -> Void = { _ in }) throws -> AgentRunResult {
         guard let feedURL = URL(string: config.feedURL) else { throw khuFail("feedURL is not a URL") }
         let serverBase = feedURL.deletingLastPathComponent()
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
@@ -299,11 +304,16 @@ public enum Agent {
         }
         try remember()
 
-        // 3. Status, with this Mac's own Automatic defaults so the page shows what will really happen.
-        let statusBody = try JSONSerialization.data(withJSONObject: [
+        // 3. Status, with this Mac's own Automatic defaults so the page shows what will really happen,
+        // and what the person at this Mac set from the menu-bar icon.
+        let helper = HelperSettings.load(from: stateDir)
+        var report: [String: Any] = [
             "machine": config.machine, "installed": installed, "health": health,
             "automatic_default": config.apps.mapValues { $0.automatic },
-        ])
+            "automatic_local": helper.automatic.mapValues { ["on": $0.on, "at": $0.at] as [String: Any] },
+        ]
+        if let until = helper.pausedUntil, helper.paused(at: now) { report["paused_until"] = until }
+        let statusBody = try JSONSerialization.data(withJSONObject: report)
         let (_, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
         guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }
         result.statusPosted = true
@@ -381,8 +391,14 @@ public enum Agent {
                 todo.append((command.app, command.id, command.action, true))
             }
         }
+        // "Update now" from the menu-bar icon is this Mac's own order: it runs even while paused.
+        for app in requested.sorted() where config.apps[app] != nil && !todo.contains(where: { $0.app == app }) {
+            todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.update, true))
+        }
+        // A pause from the menu holds Automatic only; the owner's orders and "Update now" still run.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
-        where (orders.automatic[app] ?? cfg.automatic) && !statusOnly.contains(cfg.recipe) {
+        where !helper.paused(at: now) && !statusOnly.contains(cfg.recipe)
+            && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic) {
             guard !todo.contains(where: { $0.app == app }), let entry = feed.apps[app] else { continue }
             guard memory.rejected[app] != entry.sha256 else { continue }  // failed here before: wait for a new artifact
             let current = installed[app]
@@ -404,6 +420,8 @@ public enum Agent {
                 memory.updaterArtifacts = (memory.updaterArtifacts ?? [:]).merging([entry.version: entry.sha256]) { _, new in new }
                 try remember()
             }
+            installing(item.app)
+            defer { installing(nil) }
             do {
                 switch item.action {
                 case ServerCommand.update:
@@ -459,7 +477,24 @@ public enum Agent {
                 result.restartRequested = true; break
             }  // the rest wait for the new version
         }
+        result.apps = snapshot(config: config, feed: feed, orders: orders, helper: helper, memory: memory, executable: executable)
         return result
+    }
+
+    /// Each app as it stands on disk now, for the menu-bar icon.
+    static func snapshot(config: AgentConfig, feed: Feed, orders: CommandsReply, helper: HelperSettings,
+                         memory: AgentMemory, executable: String?) -> [HelperApp] {
+        config.apps.keys.sorted { AppNames.display($0) < AppNames.display($1) }.map { app in
+            let cfg = config.apps[app]!
+            let installed = cfg.recipe == "updater" ? selfVersion(config: config, executable: executable)
+                : (try? BundleInfo.read(cfg.bundlePath))?.version
+            let last = memory.done.values.filter { $0.app == app }.max { $0.at < $1.at }.map { ($0.status, $0.reason) }
+            let only = statusOnly.contains(cfg.recipe)
+            let (status, reason) = HelperApp.status(installed: installed, available: feed.apps[app]?.version, statusOnly: only, last: last)
+            return HelperApp(app: app, installed: installed, available: feed.apps[app]?.version, statusOnly: only,
+                             automatic: !only && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic),
+                             status: status, reason: reason)
+        }
     }
 
     static func verifiedFeed(http: HTTPClient, serverBase: URL, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> Feed {
@@ -623,9 +658,13 @@ public struct CommandsReply: Codable, Sendable, Equatable {
     public var at: String
     public var commands: [ServerCommand]
     public var automatic: [String: Bool]
+    /// When each `automatic` value was last set, so a later switch on the Mac can win. Absent from
+    /// older publishers, and for values set before it existed: those count as older than any switch.
+    public var automaticAt: [String: String]?
 
-    public init(machine: String, at: String = ISO.string(Date()), commands: [ServerCommand], automatic: [String: Bool]) {
-        self.machine = machine; self.at = at; self.commands = commands; self.automatic = automatic
+    public init(machine: String, at: String = ISO.string(Date()), commands: [ServerCommand], automatic: [String: Bool],
+                automaticAt: [String: String]? = nil) {
+        self.machine = machine; self.at = at; self.commands = commands; self.automatic = automatic; self.automaticAt = automaticAt
     }
 }
 

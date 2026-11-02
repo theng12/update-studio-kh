@@ -11,7 +11,7 @@
     "gateway": {
       "bundlePath": "/Applications/gateway-kh.app",
       "recipe": "gateway",
-      "automatic": false,
+      "automatic": true,
       "bundleID": "__GATEWAY_BUNDLE_ID__"
     },
     "hub": {
@@ -27,7 +27,7 @@
     "updater": {
       "bundlePath": "",
       "recipe": "updater",
-      "automatic": false
+      "automatic": true
     }
   }
 }
