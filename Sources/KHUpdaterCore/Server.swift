@@ -1004,11 +1004,11 @@ public final class FeedServer: @unchecked Sendable {
                 + "<td>\(notes)</td><td class=actions>\(action)</td></tr>"
         }.joined()
             // The apps that update themselves are not in the feed: the newest version any Mac reports.
-            + ["story", "hub", "gateway"].filter { feed?.apps[$0] == nil }.compactMap { app -> String? in
+            + ["story", "hub", "gateway"].filter { feed?.apps[$0] == nil }.map { app -> String in
                 let seen = state.machines.values.compactMap { $0.installed[app] }
-                guard let newest = seen.max(by: { (VersionCompare.compare($0, $1) ?? 0) < 0 }) else { return nil }
-                return "<tr><td class=name>\(h(name(app)))</td><td class=num>\(h(newest))</td><td class=num>—</td>"
-                    + "<td><span class=sub>Newest on a Mac; its notes are in the app</span></td><td class=actions><span class=sub>Updates itself</span></td></tr>"
+                let newest = seen.max(by: { (VersionCompare.compare($0, $1) ?? 0) < 0 })
+                return "<tr><td class=name>\(h(name(app)))</td><td class=num>\(h(newest ?? "—"))</td><td class=num>—</td>"
+                    + "<td><span class=sub>\(newest == nil ? "No connected Mac reports it" : "Newest on a Mac; its notes are in the app")</span></td><td class=actions><span class=sub>Updates itself</span></td></tr>"
             }.joined()
         let feedSection = feed == nil || feedRows.isEmpty ? "<p class=empty>Nothing is published yet. Publish a release with <code>khu publish</code>.</p>"
             : "<div class=tablewrap><table class=feed><thead><tr><th>App</th><th>Version</th><th>Size</th><th>What's new</th><th><span class=sr>Actions</span></th></tr></thead>\(feedRows)</table></div>"

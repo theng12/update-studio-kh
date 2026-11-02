@@ -2058,6 +2058,7 @@ func helperTests() {
         let html = page(rig)
         expect(html.contains("Studio Hub KH</td><td class=num>0.6.213") && html.contains("<span class=sub>Updates itself</span></td></tr>"),
                "H8 Studio Hub KH is listed with the version its Mac has, and updates itself")
+        expect(html.contains("Story Studio KH</td><td class=num>—") && html.contains("No connected Mac reports it"), "H8 Story Studio KH is listed even when no Mac reports it, and says so")
     }
     // H7. The helper's What's New comes from this changelog.
     expect(!WhatsNew.lines(for: "0.1.2").isEmpty && WhatsNew.lines(for: "9.9.9").isEmpty, "H7 the helper's What's New is its changelog entry")
