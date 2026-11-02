@@ -551,6 +551,10 @@ public final class FeedServer: @unchecked Sendable {
             guard local.count <= ReportPolicy.maxApps, local.keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= ReportPolicy.maxNameCharacters }) else {
                 return Self.text(400, "that Mac reported more Automatic switches, or longer app names, than this publisher accepts (at most \(ReportPolicy.maxApps) apps, \(ReportPolicy.maxNameCharacters) characters for a name)")
             }
+            let reportedName = body["display_name"] as? String
+            if let reportedName, !MacName.valid(reportedName) {
+                return Self.text(400, "send a valid Mac name (at most \(MacName.maxCharacters) characters)")
+            }
             let pausedUntil = (body["paused_until"] as? String).flatMap(ISO.date).map(ISO.string)
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
@@ -559,6 +563,7 @@ public final class FeedServer: @unchecked Sendable {
                 // silence a Mac's reports by sending them with its id.
                 guard reportLimiter.allow(machine) else { return Self.text(429, "this Mac is reporting too often; try again in a minute") }
                 var ms = state.machines[machine]!
+                if let reportedName { ms.report(name: reportedName) }
                 if let installed { ms.installed = installed }
                 if let health { ms.health = health }
                 if let defaults { ms.automaticDefault = defaults }
@@ -750,8 +755,8 @@ public final class FeedServer: @unchecked Sendable {
                     }
                     guard let machine = f["machine"], !machine.isEmpty else { return Self.text(400, "send machine") }
                     if req.path == "/api/rename-machine" {
-                        guard let name = f["name"], (try? SafeName.component(name, what: "Mac name")) != nil else {
-                            return Self.text(400, "send a valid Mac name")
+                        guard let name = f["name"], MacName.valid(name) else {
+                            return Self.text(400, "send a valid Mac name (at most \(MacName.maxCharacters) characters)")
                         }
                         guard var ms = state.machines[machine], ms.tokenHash != nil else { return Self.text(404, "no enrolled Mac") }
                         ms.rename(to: name)
@@ -963,7 +968,7 @@ public final class FeedServer: @unchecked Sendable {
                 + failures
                 + (rows.isEmpty ? "<p class=sub>No versions yet: they appear after this Mac's first report.</p>"
                    : "<table class=apptable><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>State</th><th><span class=sr>Actions</span></th></tr></thead>\(rows)</table>")
-                + "<form method=post action=/api/rename-machine data-confirm=\"Rename this Mac’s label? Its connection stays the same.\"><input type=hidden name=machine value=\"\(h(machine))\"><label>Mac name <input name=name required maxlength=100 value=\"\(h(label))\"></label> <button>Rename</button></form>"
+                + "<form method=post action=/api/rename-machine data-confirm=\"Rename this Mac’s label? Its connection stays the same.\"><input type=hidden name=machine value=\"\(h(machine))\"><label>Mac name <input name=name required maxlength=\(MacName.maxCharacters) value=\"\(h(label))\"></label> <button>Rename</button> <span class=sub>Up to \(MacName.maxCharacters) characters</span></form>"
                 + "<h3>Recent results</h3>" + (history.isEmpty ? "<p class=sub>No install results yet.</p>"
                    : "<table class=hist><thead><tr><th>App</th><th>From → to</th><th>Time</th><th>Result</th></tr></thead>\(history)</table>")
                 + "<div class=macfoot><span class=sub>Connected on \(h(ms.enrolledAt.flatMap(ISO.date).map { joinedFormat.string(from: $0) } ?? "an unknown date"))\(ms.pausedUntil.flatMap(ISO.date).map { $0 > now ? " · Automatic paused on this Mac until \(h(stamp(ms.pausedUntil)))" : "" } ?? "")\(ms.pending.isEmpty ? "" : " · \(ms.pending.count) order\(ms.pending.count == 1 ? "" : "s") waiting")</span>"

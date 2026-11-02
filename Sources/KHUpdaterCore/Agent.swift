@@ -1,4 +1,5 @@
 import Foundation
+import SystemConfiguration
 import CryptoKit
 
 public struct AgentRunResult: Sendable, Equatable {
@@ -350,6 +351,7 @@ public enum Agent {
             "automatic_default": config.apps.mapValues { $0.automatic },
             "automatic_local": helper.automatic.mapValues { ["on": $0.on, "at": $0.at] as [String: Any] },
         ]
+        if let name = MacName.current() { report["display_name"] = name }
         if let until = helper.pausedUntil, helper.paused(at: now) { report["paused_until"] = until }
         let statusBody = try JSONSerialization.data(withJSONObject: report)
         let (_, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
@@ -793,5 +795,34 @@ extension URL {
         items.append(URLQueryItem(name: name, value: value))
         comps.queryItems = items
         return comps.url ?? self
+    }
+}
+
+/// Read the same Machine ID as the Hub, without changing the enrolment identity.
+public enum MacName {
+    public static let maxCharacters = 128
+    public static func valid(_ name: String) -> Bool {
+        !name.isEmpty && name.utf16.count <= maxCharacters && !name.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+    }
+    public static func current(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                               applications: URL = URL(fileURLWithPath: "/Applications"),
+                               computerName: String? = SCDynamicStoreCopyComputerName(nil, nil) as String?) -> String? {
+        let fm = FileManager.default
+        let settings = home.appendingPathComponent("Library/Application Support/StudioHub Standalone/hub/controller_settings.json")
+        var candidates: [URL] = []
+        for folder in [applications, home.appendingPathComponent("Applications")] {
+            for app in ["Studio Hub.app", "Hub Studio KH.app"] where fm.fileExists(atPath: folder.appendingPathComponent(app).path) {
+                let voice = folder.appendingPathComponent(app).appendingPathComponent("Contents/Resources/voice")
+                candidates += [settings, voice.appendingPathComponent("components/controller_settings.json"), voice.appendingPathComponent("controller_settings.json")]
+            }
+        }
+        for path in candidates {
+            guard let data = try? Data(contentsOf: path),
+                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let name = value["controller_id"] as? String,
+                  valid(name) else { continue }
+            return name
+        }
+        return computerName.flatMap { valid($0) ? $0 : nil }
     }
 }

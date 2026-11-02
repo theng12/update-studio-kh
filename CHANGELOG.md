@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.8 — 2026-11-03
+- Mac names follow the Hub Machine ID, or the computer name when Hub is not installed, while keeping their enrolment.
+- A label set on this page stays until the Mac’s own name changes again.
+- Mac labels support names in every language, up to the limit shown beside Rename.
+
 ## 1.0.7 — 2026-11-03
 - A Mac’s label can be renamed on its expanded row without changing its connection or enrolment.
 - Macs with the same name stay separate and show a same name warning.

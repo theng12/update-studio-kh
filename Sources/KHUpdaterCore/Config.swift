@@ -65,6 +65,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
 public struct MachineState: Codable, Sendable, Equatable {
     public var machine: String
     public var displayName: String?
+    public var reportedName: String?
     public var name: String { displayName ?? machine }
     public var tokenHash: String?
     public var installed: [String: String]
@@ -114,7 +115,7 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// keep loading: a publisher that cannot decode its own state serves 503 to every Mac for ever,
     /// which is a worse fault than any single missing field.
     private enum CodingKeys: String, CodingKey {
-        case machine, displayName, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
+        case machine, displayName, reportedName, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
              automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
              automaticSet, pausedUntil
     }
@@ -122,6 +123,7 @@ public struct MachineState: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         machine = try c.decode(String.self, forKey: .machine)
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        reportedName = try c.decodeIfPresent(String.self, forKey: .reportedName)
         tokenHash = try c.decodeIfPresent(String.self, forKey: .tokenHash)
         installed = try c.decodeIfPresent([String: String].self, forKey: .installed) ?? [:]
         health = try c.decodeIfPresent([String: String].self, forKey: .health) ?? [:]
@@ -563,7 +565,7 @@ public enum Enrolment {
 
     /// Labels never change the enrolment ID, token or queued orders.
     public static func rename(stateDir: URL, machine: String, to name: String) throws {
-        _ = try SafeName.component(name, what: "Mac name")
+        guard MacName.valid(name) else { throw khuFail("Mac name must have 1 to \(MacName.maxCharacters) characters without control characters") }
         try StateStore.update(in: stateDir) { state in
             guard var record = state.machines[machine] else { throw khuFail("no enrolled Mac named \(machine)") }
             record.rename(to: name)
@@ -573,6 +575,11 @@ public enum Enrolment {
 }
 
 extension MachineState {
+    public mutating func report(name newName: String) {
+        // A page label stays until the Mac's actual name changes again.
+        if reportedName.map({ $0 != newName }) ?? (displayName == nil) { rename(to: newName) }
+        reportedName = newName
+    }
     public mutating func rename(to newName: String) {
         guard newName != name else { return }
         let old = name

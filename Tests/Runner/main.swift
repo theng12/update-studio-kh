@@ -2183,6 +2183,56 @@ func launcherTests() {
         let response = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(token)"], body: Data(#"{"machine":"old-mac","installed":{}}"#.utf8)), remote: "100.64.0.9")
         expect(response.status == 200, "W7 the unchanged enrolment still reports after rename")
     }
+    // W8. A reported rename follows the Mac; a page label survives unchanged reports.
+    do {
+        let rig = Rig("reported-name")
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "stable-id")
+        func report(_ name: String) -> Int {
+            let body = try! JSONSerialization.data(withJSONObject: ["machine": "stable-id", "display_name": name])
+            return rig.server.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(token)"], body: body), remote: "100.64.0.9").status
+        }
+        expect(report("mac-one") == 200 && report("mac-one") == 200, "W8 repeated names report successfully")
+        var ms = (try! StateStore.load(from: rig.state)).machines["stable-id"]!
+        expect(ms.name == "mac-one" && ms.history?.count == 1, "W8 a reported rename appears once")
+        try! Enrolment.rename(stateDir: rig.state, machine: "stable-id", to: "page-label")
+        _ = report("mac-one")
+        ms = (try! StateStore.load(from: rig.state)).machines["stable-id"]!
+        expect(ms.name == "page-label", "W8 an unchanged report preserves a page label")
+        _ = report("mac-two")
+        ms = (try! StateStore.load(from: rig.state)).machines["stable-id"]!
+        expect(ms.name == "mac-two" && ms.machine == "stable-id" && ms.tokenHash == Enrolment.sha256Hex(token), "W8 changing the Mac name keeps enrolment identity")
+        let before = ms
+        expect(report(String(repeating: "x", count: SafeName.maxBytes + 1)) == 400, "W8 an oversized reported name is refused")
+        expect((try! StateStore.load(from: rig.state)).machines["stable-id"] == before, "W8 a refused report leaves the record intact")
+        let home = rig.root.appendingPathComponent("home"), apps = rig.root.appendingPathComponent("Applications")
+        let hub = apps.appendingPathComponent("Studio Hub.app")
+        let settings = home.appendingPathComponent("Library/Application Support/StudioHub Standalone/hub/controller_settings.json")
+        try! FileManager.default.createDirectory(at: settings.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! FileManager.default.createDirectory(at: hub, withIntermediateDirectories: true)
+        expect(MacName.current(home: home, applications: apps, computerName: "Computer Name") == "Computer Name", "W8 no Hub settings falls back to the computer name")
+        try! Data(#"{"controller_id":"hub-machine-id"}"#.utf8).write(to: settings)
+        expect(MacName.current(home: home, applications: apps, computerName: "Computer Name") == "hub-machine-id", "W8 a Hub Machine ID wins")
+        try! Data(#"{"controller_id":"changed-hub-id"}"#.utf8).write(to: settings)
+        expect(MacName.current(home: home, applications: apps, computerName: "Computer Name") == "changed-hub-id", "W8 the name is read live after a change")
+    }
+    // W9. The owner route validates and escapes labels, and keeps the same token.
+    do {
+        let rig = Rig("owner-label")
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "stable-id")
+        let body = try! JSONSerialization.data(withJSONObject: ["machine": "stable-id", "name": "Sam's Mac <script>"])
+        let good = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        var foreign = good; foreign["origin"] = "http://attacker.example"
+        expect(rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/rename-machine", headers: foreign, body: body), remote: "127.0.0.1").status == 403, "W9 a foreign origin cannot rename a Mac")
+        expect(rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/rename-machine", headers: good, body: body), remote: "100.64.0.9").status == 403, "W9 another Mac cannot rename labels")
+        expect(rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/rename-machine", headers: good, body: body), remote: "127.0.0.1").status == 200, "W9 the local owner can rename a label")
+        let page = rig.server.statusHTML()
+        expect(page.contains("&lt;script&gt;") && !page.contains("Mac <script>"), "W9 labels are escaped in the row and input")
+        let invalid = try! JSONSerialization.data(withJSONObject: ["machine": "stable-id", "name": "bad\nname"])
+        expect(rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/rename-machine", headers: good, body: invalid), remote: "127.0.0.1").status == 400, "W9 control characters are refused")
+        expect(!MacName.valid("a" + String(repeating: "\u{0301}", count: MacName.maxCharacters)), "W9 combining marks cannot evade the input length bound")
+        expect(MacName.valid("ម៉ាក់របស់ខ្ញុំ") && MacName.valid("Sam's Mac") && !MacName.valid("") && !MacName.valid(String(repeating: "x", count: MacName.maxCharacters + 1)), "W9 Mac names support languages and punctuation within the visible bound")
+        expect((try! StateStore.load(from: rig.state)).machines["stable-id"]?.tokenHash == Enrolment.sha256Hex(token), "W9 the owner route keeps the token")
+    }
     // W. What's New has one source: each app's CHANGELOG. Publish refuses anything else.
     do {
         let rig = Rig("whats-new")

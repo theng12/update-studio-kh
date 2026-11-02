@@ -15,7 +15,7 @@ struct KHUMain {
               remove --state <dir> --machine <id>
               serve --feed <dir> --state <dir> --key <keyfile> --bind <ip> --port <p>
               agent --config <file> [--once]
-              rename-machine --state <dir> --from <id> --to <id>
+              rename-machine --state <dir> --from <device-id> --to <label>
               ssd-index --volume <path> [--feed <dir>] [--changelog <id>=<repo or CHANGELOG.md>]...   (writes <path>/apps.json)
               connect --kit <dir> --machine <id> --code <pairing code>
             """.utf8))

@@ -91,6 +91,7 @@ one slow or stalled Mac never holds up the others.
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
   defaults to `update` when absent, so an order signed before the field existed decodes unchanged
   and still means what it meant when the owner gave it.
+- `/status` may report a bounded `display_name`. The helper reads the installed Hub’s current Machine ID, else the macOS computer name. The publisher stores the last reported name separately: a manual label survives unchanged reports, and the next actual Mac name change follows automatically. Older helpers omit the field and leave the label alone.
 - A Mac has a separate optional display label. Renaming changes that label and adds one history entry; the enrolment ID, token hash, pending orders and enrolment date stay unchanged. Duplicate labels remain separate records and show “same name” on the page.
 - Owner-only: `GET /`, `POST /api/rename-machine`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic`,
   `POST /api/enrol-window`, `POST /api/remove-machine` — loopback peer, a Host of
