@@ -9,13 +9,14 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--notes "<line>\\n<line>"] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same]
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
               remove --state <dir> --machine <id>
               serve --feed <dir> --state <dir> --key <keyfile> --bind <ip> --port <p>
               agent --config <file> [--once]
-              ssd-index --volume <path>   (writes <path>/apps.json)
+              rename-machine --state <dir> --from <id> --to <id>
+              ssd-index --volume <path> [--feed <dir>] [--changelog <id>=<repo or CHANGELOG.md>]...   (writes <path>/apps.json)
               connect --kit <dir> --machine <id> --code <pairing code>
             """.utf8))
             exit(64)
@@ -55,7 +56,7 @@ struct KHUMain {
                 print("private key: \(keyFile.path)")
             } catch { fail("\(error)") }
         case "publish":
-            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, notes: String?, shown: String?, allowSame = false
+            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, allowSame = false
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil
             var i = 1
             while i < args.count {
@@ -66,7 +67,9 @@ struct KHUMain {
                 case "--version": version = value("--version", &i)
                 case "--artifact": artifact = value("--artifact", &i)
                 case "--kind": kind = value("--kind", &i)
-                case "--notes": notes = value("--notes", &i)
+                case "--changelog": changelog = value("--changelog", &i)
+                case "--note": extra = value("--note", &i)
+                case "--notes": fail("--notes is gone: the notes come from --changelog, plus one optional --note line")
                 case "--allow-same": allowSame = true
                 case "--name": shown = value("--name", &i)
                 case "--main-mac-only": mainOnly = true
@@ -81,10 +84,12 @@ struct KHUMain {
                 i += 1
             }
             guard let f = feed, let k = key, let a = app, let v = version, let art = artifact else { usage() }
+            guard let changelog else { fail("publish needs --changelog <repo or CHANGELOG.md>: the notes come from its top entry") }
             do {
+                let notes = try ReleaseNotes.forRelease(changelog: URL(fileURLWithPath: changelog), version: v, extra: extra)
                 try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
-                                          notes: notes.map { $0.replacingOccurrences(of: "\\n", with: "\n") }, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly)
+                                          notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "enrol":
@@ -127,11 +132,35 @@ struct KHUMain {
                     print("network enrolment is open for \(n) minutes, until \(window.until)")
                 }
             } catch { fail("\(error)") }
-        case "ssd-index":
-            guard args.count == 3, args[1] == "--volume" else { usage() }
+        case "rename-machine":
+            guard args.count == 7, args[1] == "--state", args[3] == "--from", args[5] == "--to" else { usage() }
             do {
-                let index = try SSDIndexer.index(volume: URL(fileURLWithPath: args[2]))
-                for app in index.apps { print("\(app.id) \(app.version) \(app.updatesItself ? "updates itself" : (app.file ?? "-"))") }
+                try Enrolment.rename(stateDir: URL(fileURLWithPath: args[2]), machine: args[4], to: args[6])
+                print("renamed \(args[4]) to \(args[6]); its token is unchanged")
+            } catch { fail("\(error)") }
+        case "ssd-index":
+            var volume: String?, feedDir: String?, changelogs: [String: URL] = [:]
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--volume": volume = value("--volume", &i)
+                case "--feed": feedDir = value("--feed", &i)
+                case "--changelog":
+                    let parts = value("--changelog", &i).split(separator: "=", maxSplits: 1).map(String.init)
+                    guard parts.count == 2 else { usage() }
+                    changelogs[parts[0]] = URL(fileURLWithPath: parts[1])
+                default: usage()
+                }
+                i += 1
+            }
+            guard let volume else { usage() }
+            do {
+                let feed = feedDir.flatMap { FeedPublisher.loadFeed(from: URL(fileURLWithPath: $0)) }
+                let index = try SSDIndexer.index(volume: URL(fileURLWithPath: volume), feed: feed, changelogs: changelogs)
+                for app in index.apps {
+                    let lines = app.notes?.split(separator: "\n").count ?? 0
+                    print("\(app.id) \(app.version) \(app.updatesItself ? "updates itself" : (app.file ?? "-")) · \(lines == 0 ? "NO NOTES" : "\(lines) note lines")")
+                }
             } catch { fail("\(error)") }
         case "launcher-bundle":
             // Packaging: Studio Launcher KH.app around this binary, with the setup kit inside.

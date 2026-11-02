@@ -991,9 +991,9 @@ public final class FeedServer: @unchecked Sendable {
         let sizes = ByteCountFormatter()
         let feedRows = (feed?.apps ?? [:]).sorted { name($0.key) < name($1.key) }.map { app, entry -> String in
             let behind = state.machines.filter { Self.updateAvailable($0.value, app: app, feed: feed, now: now) }.count
-            // KH Updater's own apps (agent and app) read their entry in CHANGELOG.md when the feed has no notes.
+            // KH Updater's own apps (agent and app) read their own changelog entry when the feed has no notes.
             let own = app == "updater" || app == "kh-updater-app"
-                ? Changelog.text.components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(entry.version + " ") }
+                ? (app == "updater" ? Changelog.launcher : Changelog.text).components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(entry.version + " ") }
                     .map { $0.split(separator: "\n").dropFirst().joined(separator: "\n") } : nil
             let lines = (entry.notes.flatMap { $0.isEmpty ? nil : $0 } ?? own ?? "").split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let notes = lines.isEmpty ? "<span class=sub>No notes yet</span>"

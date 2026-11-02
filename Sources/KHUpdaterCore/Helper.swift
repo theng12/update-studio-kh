@@ -105,10 +105,10 @@ public enum AppNames {
     public static func display(_ app: String) -> String { names[app] ?? app }
 }
 
-/// The CHANGELOG.md entry for one version, as plain lines without the "- ".
+/// The CHANGELOG-launcher.md entry for one version, as plain lines without the "- ".
 public enum WhatsNew {
     public static func lines(for version: String) -> [String] {
-        let entry = Changelog.text.components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(version + " ") }
+        let entry = Changelog.launcher.components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(version + " ") }
         return (entry ?? "").split(separator: "\n").dropFirst().filter { $0.hasPrefix("- ") }.map { String($0.dropFirst(2)) }
     }
 }

@@ -270,7 +270,7 @@ public enum SSDIndexer {
     public static let appsFolder = "1 Install Apps"
     public static let iconsFolder = ".apps-icons"
 
-    public static func index(volume root: URL, shell: Shell = SystemShell()) throws -> SSDIndex {
+    public static func index(volume root: URL, feed: Feed? = nil, changelogs: [String: URL] = [:], shell: Shell = SystemShell()) throws -> SSDIndex {
         let fm = FileManager.default
         let previous = (try? AtomicFile.readJSON(SSDIndex.self, from: root.appendingPathComponent(SSDIndex.fileName)))?.apps ?? []
         let appsDir = root.appendingPathComponent(appsFolder)
@@ -309,8 +309,13 @@ public enum SSDIndexer {
                 // Hand-written words survive; the date and size are the installer's own.
                 app.tagline = old?.tagline; app.description = old?.description; app.features = old?.features; app.accent = old?.accent
                 app.mainMacOnly = old?.mainMacOnly
-                // The folder README's "What's new in <version>" list, when it names this version.
-                app.notes = whatsNew(in: dir.appendingPathComponent("README.md"), version: meta.version) ?? old.flatMap { $0.version == meta.version ? $0.notes : nil }
+                // The feed's notes for this exact version, else this version's changelog entry, so
+                // both places read the same; an app with neither keeps its folder README's list.
+                let feedApp = feed?.apps[app.id]
+                app.notes = (feedApp?.version == meta.version ? feedApp?.notes : nil)
+                    ?? changelogs[app.id].flatMap { try? ReleaseNotes.entries(of: $0).first { $0.version == meta.version }?.notes }.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? whatsNew(in: dir.appendingPathComponent("README.md"), version: meta.version)
+                    ?? old.flatMap { $0.version == meta.version ? $0.notes : nil }
                 let path = file.map { root.appendingPathComponent($0).path } ?? dir.path
                 let attrs = try? fm.attributesOfItem(atPath: path)
                 app.released = (attrs?[.modificationDate] as? Date).map(ISO.string)

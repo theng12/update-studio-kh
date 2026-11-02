@@ -532,7 +532,7 @@ struct Rig {
         let url = dir.appendingPathComponent(name); try! text.write(to: url, atomically: true, encoding: .utf8); return url
     }
     func publish(_ app: String, _ version: String, _ artifact: URL, kind: String = "fake-for-tests") throws {
-        try FeedPublisher.publish(feedDir: feed, keyFile: key, app: app, version: version, artifact: artifact, kind: kind, allowSame: false)
+        try FeedPublisher.publish(feedDir: feed, keyFile: key, app: app, version: version, artifact: artifact, kind: kind, allowSame: false, meta: nil)
     }
     var server: FeedServer { FeedServer(feedDir: feed, stateDir: state, bind: "127.0.0.1", port: 8790, commandKey: pair.privateKey) }
 }
@@ -873,7 +873,7 @@ func agentAndServerTests() {
         try? FeedPublisher.publish(feedDir: rigO.feed, keyFile: rigO.key, app: "noted", version: "1.0.0", artifact: rigO.artifact("n.zip", "n"),
                                    kind: "fake-for-tests", allowSame: false, notes: "- Copy error report button\n- Not tested on printer hardware")
         expect(FeedPublisher.loadFeed(from: rigO.feed)?.apps["noted"]?.notes?.contains("printer hardware") == true
-               && s.statusHTML().contains("<li>Not tested on printer hardware</li>"), "P5 publish --notes is signed into the feed and shown as What's new")
+               && s.statusHTML().contains("<li>Not tested on printer hardware</li>"), "P5 notes are signed into the feed and shown as What's new")
         try! StateStore.update(in: rigO.state) { $0.machines["mac2"]?.lastSeen = ISO.string(Date().addingTimeInterval(-3600)) }
         let quiet = s.statusHTML()
         expect(quiet.contains("Offline · ") && !quiet.contains("Update 1 Mac"), "P6 a Mac silent for an hour is Offline, never its last state")
@@ -2148,20 +2148,91 @@ func launcherTests() {
         expectThrows("L5 a DMG that holds another version is refused", contains: "holds version 1.0.0") {
             try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.1", artifact: rig.artifact("m2.dmg", "m2"), kind: "app-dmg", allowSame: false, meta: meta)
         }
-        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m3.dmg", "m3"), kind: "app-dmg", allowSame: false,
-                                   meta: { _ in throw khuFail("unreadable") })
+        expectThrows("W1 a DMG that cannot be read is refused", contains: "cannot be read") {
+            try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m6.dmg", "m6"), kind: "app-dmg", allowSame: false,
+                                      meta: { _ in throw khuFail("unreadable") })
+        }
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m3.dmg", "m3"), kind: "app-dmg", allowSame: false, meta: nil)
         let kept = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
         let words = AppWords(tagline: "Photos and labels", description: "D", features: [AppFeature(title: "One library", text: "t")], accent: "#2a7")
         try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.3", artifact: rig.artifact("m4.dmg", "m4"), kind: "app-dmg", allowSame: false,
-                                   words: words, meta: { _ in throw khuFail("unreadable") })
-        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.4", artifact: rig.artifact("m5.dmg", "m5"), kind: "app-dmg", allowSame: false,
-                                   meta: { _ in throw khuFail("unreadable") })
+                                   words: words, meta: nil)
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.4", artifact: rig.artifact("m5.dmg", "m5"), kind: "app-dmg", allowSame: false, meta: nil)
         let worded = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
         expect(worded?.tagline == "Photos and labels" && worded?.features?.first?.title == "One library" && worded?.accent == "#2a7" && worded?.released != nil,
                "L5 a release's tagline, description, features and accent are stored, and carried to the next release that names none")
         let list = Catalog.build(feed: Feed(published_at: ISO.string(Date()), apps: ["media": worded!]), ssd: [])
         expect(list.first?.words.tagline == "Photos and labels", "L5 the Launcher's card reads those words from the feed")
-        expect(kept?.version == "1.0.2" && kept?.bundleID == "com.t.media" && kept?.icon == e?.icon, "L5 a DMG that cannot be read keeps the earlier name, ID and icon")
+        expect(kept?.version == "1.0.2" && kept?.bundleID == "com.t.media" && kept?.icon == e?.icon, "L5 a release with no DMG to read keeps the earlier name, ID and icon")
+    }
+    // W7. Renaming a Mac keeps its token: the new name works with it, the old name stops.
+    do {
+        let rig = Rig("rename")
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "old-mac")
+        _ = try! Enrolment.enrol(stateDir: rig.state, machine: "taken-mac")
+        expectThrows("W7 a name already enrolled is refused", contains: "already enrolled") { try Enrolment.rename(stateDir: rig.state, machine: "old-mac", to: "taken-mac") }
+        try! Enrolment.rename(stateDir: rig.state, machine: "old-mac", to: "new-mac")
+        let machines = (try! StateStore.load(from: rig.state)).machines
+        expect(machines["old-mac"] == nil && machines["new-mac"]?.machine == "new-mac" && machines["new-mac"]?.tokenHash == Enrolment.sha256Hex(token),
+               "W7 the record moves to the new name with its token")
+    }
+    // W. What's New has one source: each app's CHANGELOG. Publish refuses anything else.
+    do {
+        let rig = Rig("whats-new")
+        func changelog(_ name: String, _ text: String) -> URL {
+            let url = rig.root.appendingPathComponent(name)
+            try! Data(text.utf8).write(to: url)
+            return url
+        }
+        let good = changelog("good.md", "# Changelog\n\nIntro.\n\n## 1.2.0 — 2026-11-02\n\n- First\n\n- Second\n\n## 1.1.0 — 2026-10-01\n- Older\n")
+        expect((try? ReleaseNotes.forRelease(changelog: good, version: "1.2.0", extra: nil)) == "- First\n- Second", "W2 the notes are the top entry's lines and no other's")
+        expect((try? ReleaseNotes.forRelease(changelog: good, version: "1.2.0", extra: "Not tested on printer hardware")) == "- First\n- Second\n- Not tested on printer hardware",
+               "W2 one optional extra line is added after them")
+        expectThrows("W3 an entry for another version is refused", contains: "the top entry of") { _ = try ReleaseNotes.forRelease(changelog: good, version: "1.3.0", extra: nil) }
+        expectThrows("W3 a heading with no date is refused", contains: "is not") {
+            _ = try ReleaseNotes.forRelease(changelog: changelog("nodate.md", "## 1.2.0\n- x\n"), version: "1.2.0", extra: nil)
+        }
+        expectThrows("W3 another heading style is refused", contains: "is not") {
+            _ = try ReleaseNotes.forRelease(changelog: changelog("style.md", "## [1.2.0] - November 2026\n- x\n"), version: "1.2.0", extra: nil)
+        }
+        expectThrows("W3 an entry with no lines is refused", contains: "has no") {
+            _ = try ReleaseNotes.forRelease(changelog: changelog("empty.md", "## 1.2.0 — 2026-11-02\nProse only.\n"), version: "1.2.0", extra: nil)
+        }
+        expectThrows("W3 a missing changelog is refused", contains: "cannot read") {
+            _ = try ReleaseNotes.forRelease(changelog: rig.root.appendingPathComponent("none.md"), version: "1.2.0", extra: nil)
+        }
+        let plain = changelog("plain.md", "## 2.0.0 — 2026-11-02\n\n### Studios come back\n\nProse.\n\n### Technical notes\n\n- **Internal**\n\n## 1.9.0 — 2026-11-01\n\n- Dash\n\n### Technical\n\n- Hidden\n")
+        expect((try? ReleaseNotes.entries(of: plain).map(\.notes)) == ["- Studios come back", "- Dash"], "W2 plain headings count as lines, and technical notes stay out")
+        let repo = rig.root.appendingPathComponent("repo")
+        try! fm.createDirectory(at: repo, withIntermediateDirectories: true)
+        try! fm.copyItem(at: good, to: repo.appendingPathComponent("CHANGELOG.md"))
+        expect((try? ReleaseNotes.entries(of: repo).first?.version) == "1.2.0", "W4 a repository folder means its CHANGELOG.md")
+        expect((try? ReleaseNotes.entries(of: changelog("v.md", "## v1.4.374 — 2026-11-01\n- x\n")).first?.version) == "1.4.374", "W4 a leading v on the version is read")
+
+        let khu = URL(fileURLWithPath: "build/khu").standardizedFileURL.path
+        let art = rig.artifact("w.zip", "w").path
+        func publish(_ more: [String]) -> ShellResult? {
+            try? SystemShell().run(khu, arguments: ["publish", "--feed", rig.feed.path, "--key", rig.key.path, "--app", "w", "--version", "1.2.0", "--artifact", art, "--kind", "fake-for-tests"] + more, timeout: 10)
+        }
+        let quiet = publish([]), typed = publish(["--notes", "- typed"]), wrong = publish(["--changelog", changelog("old.md", "## 1.1.0 — 2026-10-01\n- Older\n").path])
+        expect(quiet?.exitCode != 0 && quiet?.stderr.contains("needs --changelog") == true, "W5 publish with no changelog is refused")
+        expect(typed?.exitCode != 0 && typed?.stderr.contains("--notes is gone") == true, "W5 free-typed notes are refused")
+        expect(wrong?.exitCode != 0 && wrong?.stderr.contains("is 1.1.0, not 1.2.0") == true && FeedPublisher.loadFeed(from: rig.feed)?.apps["w"] == nil,
+               "W5 a changelog on another version publishes nothing")
+        let done = publish(["--changelog", good.path, "--note", "One extra"])
+        expect(done?.exitCode == 0 && FeedPublisher.loadFeed(from: rig.feed)?.apps["w"]?.notes == "- First\n- Second\n- One extra", "W5 the right changelog is signed into the feed")
+
+        // The SSD says what the feed says, and any other version says its own entry.
+        let volume = rig.root.appendingPathComponent("ssd")
+        func onSSD(_ version: String) { _ = makeApp(volume.appendingPathComponent("1 Install Apps/W/W.app"), version: version, id: "com.t.w") }
+        let feed = FeedPublisher.loadFeed(from: rig.feed)
+        onSSD("1.2.0")
+        expect((try? SSDIndexer.index(volume: volume, feed: feed, changelogs: ["w": good]))?.apps.first?.notes == "- First\n- Second\n- One extra", "W6 the SSD's notes match the feed's for the same version")
+        onSSD("1.1.0")
+        expect((try? SSDIndexer.index(volume: volume, feed: feed, changelogs: ["w": good]))?.apps.first?.notes == "- Older", "W6 an SSD on another version shows that version's entry")
+        onSSD("1.0.0")
+        let noEntry = (try? SSDIndexer.index(volume: volume, feed: feed, changelogs: ["w": good]))?.apps.first
+        expect(noEntry?.version == "1.0.0" && noEntry?.notes == nil, "W6 a version with no entry has no notes, not another version's")
     }
     // L6. The front door: wrong code refused with the publisher's reason; right code installs through the kit's own script.
     do {

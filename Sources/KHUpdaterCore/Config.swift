@@ -557,4 +557,18 @@ public enum Enrolment {
             return removal
         }
     }
+
+    /// A Mac's new name, keeping its token, history and settings. That Mac's own config.json must
+    /// carry the new name too, or its next request is refused.
+    public static func rename(stateDir: URL, machine: String, to name: String) throws {
+        _ = try SafeName.component(name, what: "machine id")
+        try StateStore.update(in: stateDir) { state in
+            guard var record = state.machines[machine] else { throw khuFail("no enrolled Mac named \(machine)") }
+            guard state.machines[name] == nil else { throw khuFail("a Mac named \(name) is already enrolled") }
+            record.machine = name
+            record.pending = record.pending.map { var order = $0; order.machine = name; return order }
+            state.machines.removeValue(forKey: machine)
+            state.machines[name] = record
+        }
+    }
 }

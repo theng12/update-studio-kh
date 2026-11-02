@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build
 # CHANGELOG.md is compiled in, so the status page shows this build's version and what's new.
-{ printf 'public enum Changelog {\n    public static let text = #"""\n'; cat CHANGELOG.md; printf '"""#\n}\n'; } > build/Changelog.swift
+{ printf 'public enum Changelog {\n    public static let text = #"""\n'; cat CHANGELOG.md; printf '"""#\n    public static let launcher = #"""\n'; cat CHANGELOG-launcher.md; printf '"""#\n}\n'; } > build/Changelog.swift
 CORE=(Sources/KHUStub/*.swift Sources/KHUpdaterCore/*.swift build/Changelog.swift)
 case "${1:-build}" in
   build)

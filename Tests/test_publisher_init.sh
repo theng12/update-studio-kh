@@ -39,7 +39,7 @@ check "plist lints" '/usr/bin/plutil -lint "$P" >/dev/null'
 check "plist has no placeholders" '! grep -q __ "$P"'
 check "plist serves on 8790 for loopback and Tailscale" '[[ "$(/usr/bin/plutil -extract ProgramArguments json -o - "$P")" == *"\"--bind\",\"127.0.0.1\",\"--bind\",\"100.64.0.1\",\"--port\",\"8790\""* ]]'
 check "plist runs the installed binary" '[[ "$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$P")" == "$K/bin/khu" ]]'
-check "installed khu can load the key" '"$K/bin/khu" publish --feed "$WORK/feed" --key "$K/keys/private.key" --app x --version 1.0.0 --artifact "$ROOT/build/khu-stub" >/dev/null'
+check "installed khu can load the key" 'printf "## 1.0.0 — 2026-11-02\n- x\n" > "$WORK/log.md" && "$K/bin/khu" publish --feed "$WORK/feed" --key "$K/keys/private.key" --app x --version 1.0.0 --changelog "$WORK/log.md" --artifact "$ROOT/build/khu-stub" >/dev/null'
 
 KEYSUM=$(shasum "$K/keys/private.key")
 check "second run refuses" '! run --tailscale-ip 100.64.0.1 --backup-to "$WORK"'

@@ -69,7 +69,6 @@ public enum FeedPublisher {
             let kindNow = kind ?? (feed.apps[app]?.kind ?? "app-dmg")
             var entry = FeedApp(version: version, file: name, sha256: sha, bytes: bytes, kind: kindNow, notes: notes)
             // The app's own name, identity and icon, so the Launcher lists it with no code change.
-            // A DMG that cannot be read is still published; the fields are then carried over.
             let old = feed.apps[app]
             entry.name = displayName ?? old?.name; entry.bundleID = old?.bundleID; entry.bundleName = old?.bundleName
             entry.icon = old?.icon; entry.iconSha256 = old?.iconSha256
@@ -78,7 +77,10 @@ public enum FeedPublisher {
             entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
             entry.released = ISO.string(now)
             entry.mainMacOnly = mainMacOnly ?? old?.mainMacOnly
-            if ["app-dmg", "gateway"].contains(kindNow), let read = meta, let info = try? read(dest.path) {
+            if ["app-dmg", "gateway"].contains(kindNow), let read = meta {
+                guard let info = try? read(dest.path) else {
+                    throw khuFail("\(artifact.lastPathComponent) cannot be read as an app DMG, so its version is unknown; nothing was published")
+                }
                 guard info.version == version else {
                     throw khuFail("\(artifact.lastPathComponent) holds version \(info.version), not \(version); nothing was published")
                 }
@@ -99,3 +101,54 @@ public enum FeedPublisher {
         }
     }
 }
+
+/// What a release says about itself, read from its app's CHANGELOG: one `## <version> — <date>`
+/// entry and its "- " lines, or its "### " headings when it has no such lines. "### Technical
+/// notes" and what follows it are for developers and left out. One rule for every app, so the
+/// feed, the SSD and each app's own What's New say the same thing.
+public enum ReleaseNotes {
+    public struct Entry: Equatable, Sendable {
+        public var version: String, date: String?, notes: String
+    }
+
+    /// `path` is the CHANGELOG itself, or a repository folder holding CHANGELOG.md. A heading that
+    /// is not `## <version> — <date>` becomes an entry with an empty version.
+    public static func entries(of path: URL) throws -> [Entry] {
+        var isDir: ObjCBool = false
+        let isFolder = FileManager.default.fileExists(atPath: path.path, isDirectory: &isDir) && isDir.boolValue
+        let file = isFolder ? path.appendingPathComponent("CHANGELOG.md") : path
+        guard let text = try? String(contentsOf: file, encoding: .utf8) else { throw khuFail("cannot read \(file.path)") }
+        var found: [Entry] = [], headings: [[String]] = [], technical = false
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("## ") {
+                let parts = line.dropFirst(3).components(separatedBy: " — ").map { $0.trimmingCharacters(in: .whitespaces) }
+                let version = parts[0].hasPrefix("v") ? String(parts[0].dropFirst()) : parts[0]
+                found.append(Entry(version: VersionCompare.isValid(version) ? version : "", date: parts.count > 1 ? parts[1] : nil, notes: ""))
+                headings.append([]); technical = false
+            } else if line.lowercased().hasPrefix("### technical") {
+                technical = true
+            } else if line.hasPrefix("### "), !technical, !found.isEmpty {
+                headings[headings.count - 1].append("- " + line.dropFirst(4))
+            } else if line.hasPrefix("- "), !technical, let last = found.indices.last {
+                found[last].notes += (found[last].notes.isEmpty ? "" : "\n") + line
+            }
+        }
+        for i in found.indices where found[i].notes.isEmpty { found[i].notes = headings[i].joined(separator: "\n") }
+        return found
+    }
+
+    /// The notes to publish: the top entry's, once it is known to be this version, and one optional
+    /// extra line.
+    public static func forRelease(changelog: URL, version: String, extra: String?) throws -> String {
+        guard let top = try entries(of: changelog).first else { throw khuFail("\(changelog.path) has no \"## <version> — <date>\" entry; nothing was published") }
+        guard !top.version.isEmpty, top.date != nil else { throw khuFail("the top heading of \(changelog.path) is not \"## <version> — <date>\"; nothing was published") }
+        guard top.version == version else {
+            throw khuFail("the top entry of \(changelog.path) is \(top.version), not \(version); add the \(version) entry first. Nothing was published")
+        }
+        guard !top.notes.isEmpty else { throw khuFail("the \(version) entry of \(changelog.path) has no \"- \" lines; nothing was published") }
+        let line = (extra ?? "").trimmingCharacters(in: .whitespaces)
+        guard !line.contains("\n") else { throw khuFail("--note is one line; nothing was published") }
+        return line.isEmpty ? top.notes : top.notes + "\n" + (line.hasPrefix("- ") ? line : "- " + line)
+    }
+}
+

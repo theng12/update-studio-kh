@@ -1,19 +1,15 @@
-# What's new in Update Studio KH and Studio Launcher KH
+# What's new in Update Studio KH
 
-The newest version is first. The status page shows the top entry.
+The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
+
+## 1.0.6 — 2026-11-02
+- Publishing reads What's New from the app's CHANGELOG, and refuses a CHANGELOG or installer on a different version
+- The SSD's What's New now matches the feed's
+- Update Studio KH and Studio Launcher KH each have their own CHANGELOG
 
 ## 1.0.5 — 2026-11-02
 - Publishing an app records its own name, bundle ID and icon in the feed, so Studio Launcher KH lists a new app with no code change. A DMG that holds a different version than the one named is refused.
 - `khu ssd-index` writes each SSD's apps.json from the installers in "1 Install Apps".
-
-## 0.1.3 — 2026-11-02
-- Studio Launcher KH is a real app in Applications: Spotlight finds it, and opening it shows one window with every app for this Mac.
-- The list comes from the feed and any plugged-in SSD. Each app shows its own icon, what is installed, the newest version and where it comes from, with Install, Update or Open.
-- An SSD copy is checked against its checksum before it is installed, and installs the same way as a download, with rollback. When the feed and the SSD have the same version, the SSD copy is used.
-- Story Studio KH, Hub Studio KH and Gateway Studio KH show their version and Open Setup Folder, since they update themselves.
-- An app installed by hand is found and kept up to date too.
-- On a Mac with no helper yet, opening Studio Launcher KH asks for the pairing code once and sets everything up.
-- The menu has Open Studio Launcher.
 
 ## 1.0.4 — 2026-11-02
 - When someone changes Automatic from a Mac's menu-bar icon, that Mac shows "changed on this Mac" on the page. The later change wins, whether it was made on the page or on the Mac.
@@ -21,13 +17,6 @@ The newest version is first. The status page shows the top entry.
 - New names: this window is Update Studio KH, and the helper on each Mac is Studio Launcher KH. The apps read Hub Studio KH, Story Studio KH, Gateway Studio KH, Printer Studio KH and Media Studio KH.
 - The Connect a Mac steps point to the kit folder "Studio Launcher KH - Connect a Mac".
 - Apps & updates also lists Story Studio KH, Hub Studio KH and Gateway Studio KH, with the newest version on any Mac. They show "Updates itself" instead of an Update button.
-
-## 0.1.2 — 2026-11-02
-- Studio Launcher KH has a small icon in the menu bar on each Mac. It has no Dock icon and no window.
-- The menu lists each app with its version and state: Up to date, Update available, Updating or Failed with the reason.
-- Update now, Check for Updates Now, an Automatic switch per app, and Pause Automatic Updates for 24 Hours.
-- Story Studio and Studio Hub update themselves, so they show their state and no switch.
-- A Mac set up from now on has Automatic on.
 
 ## 1.0.3 — 2026-11-02
 - A new Mac connects with a pairing code shown in KH Updater, at any time. You no longer open a window first.
@@ -52,6 +41,3 @@ The newest version is first. The status page shows the top entry.
 
 ## 1.0.0 — 2026-11-02
 - KH Updater is an app you can open: KH Updater.app shows the status page in its own window.
-
-## 0.1.1 — 2026-10-27
-- Installing the agent from an SSD kit or Studio Hub also starts it, so a Mac starts reporting as soon as it enrols.
