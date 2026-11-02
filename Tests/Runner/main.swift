@@ -2051,6 +2051,14 @@ func helperTests() {
         let reply = enrolStatusPost(rig.server, machine: "mac1", token: cfg.token, body: ["machine": "mac1", "automatic_local": many])
         expect(reply.status == 400 && record(rig)?.automatic.isEmpty == true, "H6 an unbounded list of switches is refused")
     }
+    // H8. The apps that update themselves are listed under Apps & updates with the newest version a Mac has.
+    do {
+        let (rig, cfg, client) = setup("h8")
+        _ = try? Agent.runOnce(config: cfg, http: client)
+        let html = page(rig)
+        expect(html.contains("Studio Hub KH</td><td class=num>0.6.213") && html.contains("<span class=sub>Updates itself</span></td></tr>"),
+               "H8 Studio Hub KH is listed with the version its Mac has, and updates itself")
+    }
     // H7. The helper's What's New comes from this changelog.
     expect(!WhatsNew.lines(for: "0.1.2").isEmpty && WhatsNew.lines(for: "9.9.9").isEmpty, "H7 the helper's What's New is its changelog entry")
 }

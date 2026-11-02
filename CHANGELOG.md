@@ -5,6 +5,8 @@ The newest version is first. The status page shows the top entry.
 ## 1.0.4 — 2026-11-02
 - When someone changes Automatic from a Mac's menu-bar icon, that Mac shows "changed on this Mac" on the page. The later change wins, whether it was made on the page or on the Mac.
 - A Mac whose Automatic updates are paused from its menu says so, and until when.
+- Apps & updates also lists Story Studio KH, Studio Hub KH and Gateway, with the newest version on any Mac. They show "Updates itself" instead of an Update button.
+- The two KH Updater parts are now named "KH Updater (this window)" and "KH Updater helper (on each Mac)".
 
 ## 0.1.2 — 2026-11-02
 - KH Updater has a small icon in the menu bar on each Mac. It has no Dock icon and no window.
