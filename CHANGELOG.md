@@ -3,6 +3,7 @@
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
 ## 1.0.8 — 2026-11-03
+- Installers keep their declared macOS 13 minimum instead of requiring the build Mac’s newer OS.
 - Mac names follow the Hub Machine ID, or the computer name when Hub is not installed, while keeping their enrolment.
 - A label set on this page stays until the Mac’s own name changes again.
 - Mac labels support names in every language, up to the limit shown beside Rename.

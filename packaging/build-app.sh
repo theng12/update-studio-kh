@@ -9,7 +9,7 @@ TMP="$(mktemp -d)"
 mkdir -p build
 [ -e "$APP" ] && { mkdir -p _trash; mv "$APP" "_trash/Update Studio KH.app.$(date +%s)"; }
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -o "$APP/Contents/MacOS/KHUpdater" App/main.swift -framework AppKit -framework WebKit
+swiftc -O -target "$(uname -m)-apple-macos13.0" -o "$APP/Contents/MacOS/KHUpdater" App/main.swift -framework AppKit -framework WebKit
 
 swiftc -o "$TMP/icon" App/icon.swift -framework AppKit
 "$TMP/icon" "$TMP/icon.png"

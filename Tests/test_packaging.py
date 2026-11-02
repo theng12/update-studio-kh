@@ -55,6 +55,12 @@ def run(script, *args, env=fake_env):
 
 
 try:
+    # Inspect real binaries: the kit must run on the macOS version its app declares.
+    for binary in ("khu", "khu-stub"):
+        output = subprocess.check_output(["xcrun", "vtool", "-show-build", str(ROOT / "build" / binary)], text=True)
+        minimums = [line.split()[1] for line in output.splitlines() if line.strip().startswith("minos ")]
+        check(bool(minimums) and all(tuple(map(int, (v.split(".") + ["0", "0"])[:2])) <= (13, 0) for v in minimums),
+              f"{binary} supports the declared macOS 13 minimum")
     kit = work / "Agent Kit"
     builder = ROOT / "packaging/build-agent-kit.sh"
     installer = kit / "install-agent.sh"

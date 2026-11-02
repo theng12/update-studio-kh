@@ -5,15 +5,16 @@ mkdir -p build
 # CHANGELOG.md is compiled in, so the status page shows this build's version and what's new.
 { printf 'public enum Changelog {\n    public static let text = #"""\n'; cat CHANGELOG.md; printf '"""#\n    public static let launcher = #"""\n'; cat CHANGELOG-launcher.md; printf '"""#\n}\n'; } > build/Changelog.swift
 CORE=(Sources/KHUStub/*.swift Sources/KHUpdaterCore/*.swift build/Changelog.swift)
+TARGET="$(uname -m)-apple-macos13.0" # Match the app’s declared minimum, not this build Mac’s OS.
 case "${1:-build}" in
   build)
-    swiftc -parse-as-library -O -o build/khu "${CORE[@]}" Sources/khu/*.swift
-    swiftc -parse-as-library -O -o build/khu-stub Sources/KHUStub/*.swift Sources/khu-stub/*.swift
+    swiftc -parse-as-library -O -target "$TARGET" -o build/khu "${CORE[@]}" Sources/khu/*.swift
+    swiftc -parse-as-library -O -target "$TARGET" -o build/khu-stub Sources/KHUStub/*.swift Sources/khu-stub/*.swift
     echo "built build/khu build/khu-stub"
     ;;
   test)
-    swiftc -parse-as-library -O -o build/khu "${CORE[@]}" Sources/khu/*.swift
-    swiftc -parse-as-library -O -o build/khu-tests "${CORE[@]}" Tests/Runner/*.swift
+    swiftc -parse-as-library -O -target "$TARGET" -o build/khu "${CORE[@]}" Sources/khu/*.swift
+    swiftc -parse-as-library -O -target "$TARGET" -o build/khu-tests "${CORE[@]}" Tests/Runner/*.swift
     ./build/khu-tests
     ;;
   *)
