@@ -158,6 +158,8 @@ struct KHUMain {
             if commandKey == nil {
                 FileHandle.standardError.write(Data("warning: no --key given, so this publisher cannot sign orders and the Macs will refuse them\n".utf8))
             }
+            do { try Enrolment.ensurePairingCode(stateDir: URL(fileURLWithPath: s)) }
+            catch { FileHandle.standardError.write(Data("warning: no pairing code could be made, so new Macs cannot pair: \(error)\n".utf8)) }
             // Every address is bound before any is served, so a bad --bind fails the start.
             var servers: [(FeedServer, Int32)] = []
             for address in (binds.isEmpty ? ["127.0.0.1"] : binds) {

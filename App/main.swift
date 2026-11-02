@@ -26,13 +26,13 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // The page asks before Remove Mac, Update N Macs and Roll back; a web view shows no confirm box unless the app does.
+    // The page asks before Remove Mac, Update N Macs, Roll back and New code; a web view shows no confirm box unless the app does.
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
         let alert = NSAlert()
         alert.messageText = message
-        // The button says what the page is asking for: Remove, Update or Roll back.
-        alert.addButton(withTitle: ["Remove", "Update", "Roll back"].first { message.hasPrefix($0) } ?? "OK")
+        // The button says what the page is asking for.
+        alert.addButton(withTitle: ["Remove", "Update", "Roll back", "New code"].first { message.hasPrefix($0) } ?? "OK")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
     }

@@ -84,15 +84,14 @@ temporary homes and a stand-in `launchctl` first on `PATH`, and never opens an a
 On the publisher: `~/Library/KHUpdater/bin/khu enrol --state ~/Library/KHUpdater/state --machine <id>` prints the
 Mac's token (only its sha256 is stored). Then that token goes in the Mac's config.
 
-**Or let the Mac enrol itself**: open a window on the publisher's page
-(`http://127.0.0.1:8790`) — or `~/Library/KHUpdater/bin/khu enrol-window --state ~/Library/KHUpdater/state --minutes 30`
-— and the Mac's setup claims a token for itself while the window is open. Enrolment is closed the rest
-of the time. Only a Mac the publisher does not already know can do this: an id that is already enrolled
+**Or let the Mac enrol itself**: the Connect kit asks for the pairing code shown on the publisher's page
+(`http://127.0.0.1:8790`) and claims a token with it, at any time. Five wrong codes lock it for five
+minutes, and New code on the page replaces it. Hub's bootstrap sends no code, so it needs an open window:
+`~/Library/KHUpdater/bin/khu enrol-window --state ~/Library/KHUpdater/state --minutes 30`. Only a Mac the publisher does not already know can do this: an id that is already enrolled
 is refused over the network, so a device on the tailnet can never take a real Mac's place. A Mac that
 was reset is removed first — `Remove Mac` on the page, or
-`khu remove --state ~/Library/KHUpdater/state --machine <id>` — and then enrols again through the next
-window. The page lists every Mac that enrolled through a window, with the time, so the owner can see
-who claimed one.
+`khu remove --state ~/Library/KHUpdater/state --machine <id>` — and then enrols again the same way. The page lists every Mac with the time it connected, so the owner
+can see who claimed one.
 
 ### What the agent does on each Mac
 

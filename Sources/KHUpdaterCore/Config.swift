@@ -96,6 +96,8 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var history: [HistoryEntry]?
     /// The one enrolment source the status page lists.
     public static let windowSource = "window"
+    /// A Mac that claimed its own token with the pairing code.
+    public static let pairingSource = "pairing"
     public init(machine: String) {
         self.machine = machine; self.installed = [:]; self.health = [:]
         self.pending = []; self.automatic = [:]
@@ -197,6 +199,9 @@ public struct CommandResult: Codable, Sendable, Equatable {
 /// The numbers here are policy, not values published by anybody else: they bound what a device on
 /// the tailnet can write into the owner's state while a window is open.
 public enum EnrolPolicy {
+    /// Wrong pairing codes before every code try is refused, and for how long. The page shows both.
+    public static let pairingWrongTries = 5
+    public static let pairingLockMinutes = 5
     /// The most new Macs one open window may enrol. The status page shows this figure beside the
     /// count, so a limit that refuses is never a limit nobody was told about.
     public static let maxPerWindow = 200
@@ -383,8 +388,29 @@ public struct RemovedMachine: Codable, Sendable, Equatable {
     }
 }
 
+/// The code a new Mac types to claim a token. Kept as plain digits in the 0600 state file, not
+/// hashed like a token: the owner's page must keep showing it, and a hash of six digits is undone
+/// in under a second anyway. Anyone who can read that file can already run `khu enrol`.
+public struct PairingCode: Codable, Sendable, Equatable {
+    public var code: String
+    public var wrongTries: Int
+    public var lockedUntil: String?
+
+    public static func fresh(replacing old: String? = nil) -> PairingCode {
+        var code: String
+        repeat { code = String(format: "%06d", Int.random(in: 0...999_999)) } while code == old
+        return PairingCode(code: code, wrongTries: 0, lockedUntil: nil)
+    }
+    public var shown: String { "\(code.prefix(3))-\(code.suffix(3))" }
+    public func locked(at now: Date) -> Bool { lockedUntil.flatMap(ISO.date).map { now < $0 } ?? false }
+    /// A person may type it with or without the dash.
+    public func matches(_ typed: String) -> Bool { typed.filter { "0123456789".contains($0) } == code }
+}
+
 public struct ServerState: Codable, Sendable, Equatable {
     public var machines: [String: MachineState]
+    /// Nil until `khu serve` first starts with this version.
+    public var pairing: PairingCode?
     /// The enrolment window the owner opened, or nil when enrolment is closed (the default, and
     /// what state written before this existed decodes to).
     public var enrolWindow: EnrolWindow?
@@ -397,7 +423,7 @@ public struct ServerState: Codable, Sendable, Equatable {
         self.machines = machines; self.enrolWindow = enrolWindow; self.removed = removed
     }
 
-    private enum CodingKeys: String, CodingKey { case machines, enrolWindow, removed }
+    private enum CodingKeys: String, CodingKey { case machines, pairing, enrolWindow, removed }
     /// `machines` is REQUIRED: a state file without it is not an empty fleet, and answering an empty
     /// fleet would silently orphan every Mac that thinks it is enrolled. The two fields added later
     /// (`removed` with Remove Mac, `enrolWindow` with network enrolment) are optional, because
@@ -406,6 +432,7 @@ public struct ServerState: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         machines = try c.decode([String: MachineState].self, forKey: .machines)
+        pairing = try c.decodeIfPresent(PairingCode.self, forKey: .pairing)
         enrolWindow = try c.decodeIfPresent(EnrolWindow.self, forKey: .enrolWindow)
         removed = try c.decodeIfPresent([RemovedMachine].self, forKey: .removed) ?? []
     }
@@ -488,6 +515,14 @@ public enum Enrolment {
         state.machines[machine] = record
     }
 
+    /// A publisher always has a code once it is serving. An unreadable state file throws here and
+    /// is left untouched.
+    public static func ensurePairingCode(stateDir: URL) throws {
+        try StateStore.update(in: stateDir) { state in
+            if state.pairing == nil { state.pairing = PairingCode.fresh() }
+        }
+    }
+
     public static func enrol(stateDir: URL, machine: String, now: Date = Date()) throws -> String {
         _ = try SafeName.component(machine, what: "machine id")
         let tok = token()
@@ -501,7 +536,7 @@ public enum Enrolment {
     ///
     /// A machine id is NOT barred from enrolling again by this: the owner's day for resetting and
     /// re-enrolling Macs depends on it. `khu enrol` (or a new enrolment window) is how it comes
-    /// back.
+    /// back, as is the pairing code.
     @discardableResult
     public static func remove(stateDir: URL, machine: String, now: Date = Date()) throws -> RemovedMachine {
         _ = try SafeName.component(machine, what: "machine id")

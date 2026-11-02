@@ -1951,6 +1951,102 @@ func enrolOwnerPost(_ r: EnrolRig, _ path: String, _ fields: [String: String], h
                                        body: JSON.encode(fields)), remote: remote)
 }
 
+func pairingTests() {
+    func post(_ server: FeedServer, _ machine: String, _ code: Any, nonce: String = enrolNonce(), now: Date = Date()) -> HTTPResponse {
+        let body = try! JSONSerialization.data(withJSONObject: ["machine": machine, "nonce": nonce, "code": code])
+        return server.handleRequest(HTTPRequest(method: "POST", path: "/enrol", headers: ["content-type": "application/json"], body: body),
+                                    remote: "100.64.0.9", now: now)
+    }
+    func text(_ r: HTTPResponse) -> String { String(data: r.data, encoding: .utf8) ?? "" }
+    func rig(_ tag: String) -> (EnrolRig, FeedServer, PairingCode) {
+        let r = EnrolRig(tag)
+        try! Enrolment.ensurePairingCode(stateDir: r.rig.state)
+        return (r, r.server, (try! StateStore.load(from: r.rig.state)).pairing!)
+    }
+    func wrong(_ p: PairingCode) -> String { p.code == "000000" ? "000001" : "000000" }
+
+    // PC1. The right code enrols at any time, with no window, with or without the dash.
+    do {
+        let (r, server, p) = rig("pc1")
+        expect(p.code.count == 6 && p.shown.count == 7 && r.window == nil, "PC1 a publisher has a six-digit code and no window")
+        let reply = post(server, "mac-a", p.shown)
+        let signed = enrolReply(reply, key: r.rig.pair.privateKey)
+        expect(reply.status == 200 && signed?.machine == "mac-a" && !(signed?.token ?? "").isEmpty, "PC1 the right code gets a signed token with no window")
+        expect(r.machines["mac-a"]?.tokenHash == signed.map { Enrolment.sha256Hex($0.token) } && r.machines["mac-a"]?.enrolmentSource == MachineState.pairingSource,
+               "PC1 only the token's hash is stored, and the record says it came by pairing")
+        expect(post(server, "mac-b", p.code).status == 200, "PC1 the code works again, without the dash, for the next Mac")
+        expect((try? Enrolment.ensurePairingCode(stateDir: r.rig.state)) != nil && (try! StateStore.load(from: r.rig.state)).pairing?.code == p.code,
+               "PC1 restarting keeps the code")
+    }
+    // PC2. A wrong code is refused, makes no record and gets no token, with or without a window open.
+    do {
+        let (r, server, p) = rig("pc2")
+        let reply = post(server, "mac-a", wrong(p))
+        expect(reply.status == 403 && text(reply).contains("4 tries left") && r.machines.isEmpty, "PC2 a wrong code is refused and says how many tries are left")
+        expect(post(server, "mac-a", 123456).status == 403 && r.machines.isEmpty, "PC2 a code that is not text is a wrong code")
+        r.openWindow(30)
+        expect(post(server, "mac-a", wrong(p)).status == 403 && r.machines.isEmpty, "PC2 a wrong code is refused even while a window is open")
+    }
+    // PC3. Five wrong codes lock it, the right code included, until the lock ends; a right code resets the count.
+    do {
+        let (r, server, p) = rig("pc3")
+        let start = Date()
+        for _ in 1...4 { _ = post(server, "mac-a", wrong(p), now: start) }
+        expect(post(server, "mac-a", p.code, now: start).status == 200, "PC3 four wrong tries do not lock")
+        for _ in 1...4 { _ = post(server, "mac-b", wrong(p), now: start) }
+        let fifth = post(server, "mac-b", wrong(p), now: start)
+        expect(fifth.status == 429 && r.machines["mac-b"] == nil, "PC3 the count restarted after the right code, and the fifth wrong try locks")
+        let during = start.addingTimeInterval(Double(EnrolPolicy.pairingLockMinutes) * 60 - 1)
+        expect(post(server, "mac-b", p.code, now: during).status == 429 && r.machines["mac-b"] == nil, "PC3 while locked even the right code is refused")
+        let page = String(data: server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": r.host]), remote: "127.0.0.1").data, encoding: .utf8) ?? ""
+        expect(page.contains("<b>Locked</b>"), "PC3 the page says it is locked")
+        let after = start.addingTimeInterval(Double(EnrolPolicy.pairingLockMinutes) * 60 + 1)
+        expect(post(server, "mac-b", p.code, now: after).status == 200, "PC3 the right code works when the lock ends")
+    }
+    // PC4. An enrolled id is still refused with the right code; a lost reply can still be resent.
+    do {
+        let (r, server, p) = rig("pc4")
+        let nonce = enrolNonce()
+        let first = enrolReply(post(server, "mac-a", p.code, nonce: nonce), key: r.rig.pair.privateKey)
+        let hash = r.machines["mac-a"]?.tokenHash
+        expect(first != nil && post(server, "mac-a", p.code).status == 409 && r.machines["mac-a"]?.tokenHash == hash,
+               "PC4 another claim on an enrolled id is refused and its token is untouched")
+        let resend = enrolReply(post(server, "mac-a", p.code, nonce: nonce), key: r.rig.pair.privateKey)
+        expect(resend != nil && resend?.token != first?.token, "PC4 the same claim resent, before the Mac has reported, gets a fresh token")
+        _ = enrolStatusPost(server, machine: "mac-a", token: resend!.token, body: ["machine": "mac-a"])
+        expect(post(server, "mac-a", p.code, nonce: nonce).status == 409, "PC4 once it has reported, even the same claim is refused")
+        expect(post(server, "mac-c", wrong(p)).status == 403 && post(server, "mac-a", wrong(p)).status == 403, "PC4 a wrong code never says which ids are enrolled")
+    }
+    // PC5. No code and no window is refused; no code with a window works as before and spends the window.
+    do {
+        let (r, server, _) = rig("pc5")
+        expect(enrolPost(server, machine: "hub-a", nonce: enrolNonce()).status == 403 && r.machines.isEmpty, "PC5 no code and no window is refused")
+        r.openWindow(30)
+        expect(enrolPost(server, machine: "hub-a", nonce: enrolNonce()).status == 200 && r.machines["hub-a"]?.enrolmentSource == MachineState.windowSource && r.window?.enrolled == 1,
+               "PC5 Hub's bootstrap, with no code, still enrols through a window")
+    }
+    // PC6. The code shows on the owner's page only; New code replaces it and leaves Macs connected.
+    do {
+        let (r, server, p) = rig("pc6")
+        let req = HTTPRequest(method: "GET", path: "/", headers: ["host": r.host])
+        let page = String(data: server.handleRequest(req, remote: "127.0.0.1").data, encoding: .utf8) ?? ""
+        expect(page.contains(p.shown) && page.contains("data-confirm=\"New code?") && !page.contains("/api/enrol-window"), "PC6 the page shows the code and New code asks first")
+        let remote = server.handleRequest(req, remote: "100.64.0.9")
+        expect(remote.status == 403 && !text(remote).contains(p.shown), "PC6 a device on the tailnet is not shown the code")
+        expect(!text(post(server, "mac-x", wrong(p))).contains(p.code), "PC6 a refusal never repeats the code")
+        expect(post(server, "mac-a", p.code).status == 200, "PC6 a Mac connects")
+        expect(enrolOwnerPost(r, "/api/pairing-code", [:], remote: "100.64.0.9").status == 403
+               && enrolOwnerPost(r, "/api/pairing-code", [:], headers: ["host": r.host, "origin": "http://evil.example"]).status == 403
+               && (try! StateStore.load(from: r.rig.state)).pairing?.code == p.code, "PC6 New code is refused from the tailnet and from another site")
+        expect(enrolOwnerPost(r, "/api/pairing-code", [:]).status == 200, "PC6 New code works from the page")
+        let next = (try! StateStore.load(from: r.rig.state)).pairing!
+        expect(next.code != p.code && post(server, "mac-b", p.code).status == 403 && post(server, "mac-b", next.code).status == 200 && r.machines["mac-a"] != nil,
+               "PC6 the old code stops working, the new one works, and connected Macs stay")
+        let mode = (try? FileManager.default.attributesOfItem(atPath: StateStore.stateFile(in: r.rig.state).path))?[.posixPermissions] as? Int
+        expect(mode == 0o600, "PC6 the file holding the code is private")
+    }
+}
+
 func enrolWindowTests() {
     // E1. Closed is the default: a publisher nobody opened a window on enrols no one.
     do {
@@ -2229,8 +2325,8 @@ func enrolWindowTests() {
             return (response, String(data: response.data, encoding: .utf8) ?? "")
         }
         let closed = page().1
-        expect(closed.contains("Connect a Mac") && closed.contains("<b>Closed</b>") && !closed.contains("Macs removed"),
-               "E13 the page says network enrolment is closed by default")
+        expect(closed.contains("Connect a Mac") && !closed.contains("/api/enrol-window") && !closed.contains("Macs removed"),
+               "E13 the page has no window steps while no window is open")
         r.openWindow(30)
         _ = enrolPost(r.server, machine: "fresh-mac", nonce: enrolNonce())
         let (response, html) = page()
@@ -2245,7 +2341,7 @@ func enrolWindowTests() {
         expect(html.contains("action=/api/remove-machine") && html.contains("Remove Mac"),
                "E13 each Mac has a Remove Mac button on the page")
         try! EnrolmentWindow.close(stateDir: r.rig.state)
-        expect(page().1.contains("<b>Closed</b>"), "E13 the page follows the window back to closed")
+        expect(!page().1.contains("data-until="), "E13 the page follows the window back to closed")
     }
 
     // E14. The reply is exactly what Studio Hub's client is written to accept.
@@ -2787,6 +2883,7 @@ struct RunnerMain {
         }
         if ProcessInfo.processInfo.environment["E_ONLY"] == "1" {
             enrolWindowTests()
+            pairingTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -2818,6 +2915,7 @@ r41HealthMustHold()
         round2Tests()
         ownerRollbackTests()
         enrolWindowTests()
+        pairingTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

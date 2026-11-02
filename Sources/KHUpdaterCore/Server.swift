@@ -396,8 +396,9 @@ public final class FeedServer: @unchecked Sendable {
         return nil
     }
 
-    /// `POST /enrol` — a Mac claiming a token for itself while the owner has a window open. Every
-    /// refusal is a plain sentence and leaves the state exactly as it was.
+    /// `POST /enrol` — a Mac claiming a token for itself, with the pairing code or (sending none)
+    /// while the owner has a window open, which is how Hub's bootstrap does it. Every refusal is a
+    /// plain sentence and leaves the state exactly as it was, except that a wrong code is counted.
     func enrol(_ req: HTTPRequest, remote: String, now: Date = Date()) -> HTTPResponse {
         // This is the one route with no token, so it is the one a web page could reach: a
         // `text/plain` POST is a "simple request" that a browser sends cross-site without a
@@ -437,8 +438,34 @@ public final class FeedServer: @unchecked Sendable {
         let publicKey = commandKey.publicKey.rawRepresentation.base64EncodedString()
         let issuedAt = Int(now.timeIntervalSince1970)
         return transact(genericFailure: true) { state in
-            guard let window = state.enrolWindow, window.isOpen(at: now) else {
-                return Self.text(403, "this publisher is not taking new Macs right now; ask the owner to open an enrolment window")
+            var window: EnrolWindow?
+            if let sent = object["code"] {
+                guard var pairing = state.pairing else {
+                    return Self.text(403, "this publisher has no pairing code yet; ask its owner to click New code in KH Updater")
+                }
+                guard !pairing.locked(at: now) else {
+                    return Self.text(429, "too many wrong pairing codes; wait \(EnrolPolicy.pairingLockMinutes) minutes and try again")
+                }
+                guard let typed = sent as? String, pairing.matches(typed) else {
+                    pairing.wrongTries += 1
+                    let left = EnrolPolicy.pairingWrongTries - pairing.wrongTries
+                    if left <= 0 {
+                        pairing.wrongTries = 0
+                        pairing.lockedUntil = ISO.string(now.addingTimeInterval(Double(EnrolPolicy.pairingLockMinutes) * 60))
+                    }
+                    state.pairing = pairing
+                    return left <= 0
+                        ? Self.text(429, "that pairing code is wrong, and that was the last try: wait \(EnrolPolicy.pairingLockMinutes) minutes and try again")
+                        : Self.text(403, "that pairing code is wrong; check the code shown in KH Updater (\(left) \(left == 1 ? "try" : "tries") left before a \(EnrolPolicy.pairingLockMinutes)-minute lock)")
+                }
+                pairing.wrongTries = 0
+                pairing.lockedUntil = nil
+                state.pairing = pairing
+            } else {
+                guard let open = state.enrolWindow, open.isOpen(at: now) else {
+                    return Self.text(403, "this publisher needs a pairing code to take a new Mac, or an open enrolment window; ask its owner")
+                }
+                window = open
             }
             // A Mac this publisher already has a record of is refused over the network, whatever
             // else happens: another device on the tailnet must never be able to rotate a real Mac's
@@ -453,14 +480,14 @@ public final class FeedServer: @unchecked Sendable {
             // and the resend mints a fresh token, so a reply that WAS seen and kept is replaced by
             // one this Mac asked for with the same question.
             let retry = state.machines[machine].map { record in
-                record.enrolmentSource == MachineState.windowSource && record.lastSeen == nil
-                    && record.enrolNonceHash == Enrolment.sha256Hex(nonce)
+                (record.enrolmentSource == MachineState.windowSource || record.enrolmentSource == MachineState.pairingSource)
+                    && record.lastSeen == nil && record.enrolNonceHash == Enrolment.sha256Hex(nonce)
             } ?? false
             guard state.machines[machine] == nil || retry else {
-                return Self.text(409, "that Mac is already enrolled with this publisher, so another device on the tailnet cannot take its place; if it was reset, the owner removes it on the publisher first (Remove Mac on the status page, or `khu remove`) and then it enrols again through a window")
+                return Self.text(409, "that Mac is already enrolled with this publisher, so another device on the tailnet cannot take its place; if it was reset, the owner removes it on the publisher first (Remove Mac on the status page, or `khu remove`) and then it connects again with the pairing code")
             }
             // A resend is the same enrolment, not a second one: it must not spend another slot.
-            guard retry || window.enrolled < maxEnrolmentsPerWindow else {
+            guard retry || window.map({ $0.enrolled < maxEnrolmentsPerWindow }) ?? true else {
                 return Self.text(429, "this enrolment window has already enrolled as many Macs as it allows (\(maxEnrolmentsPerWindow)); ask the owner to open a new one")
             }
             let token = Enrolment.token()
@@ -472,9 +499,9 @@ public final class FeedServer: @unchecked Sendable {
                 FileHandle.standardError.write(Data("publisher: could not sign an enrolment reply\n".utf8))
                 return Self.text(500, "the publisher could not answer that just now; try again")
             }
-            Enrolment.store(token, for: machine, at: now, source: MachineState.windowSource,
+            Enrolment.store(token, for: machine, at: now, source: window == nil ? MachineState.pairingSource : MachineState.windowSource,
                             nonce: nonce, in: &state)
-            if !retry { state.enrolWindow?.enrolled = window.enrolled + 1 }
+            if !retry, let window { state.enrolWindow?.enrolled = window.enrolled + 1 }
             return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
         }
     }
@@ -503,8 +530,7 @@ public final class FeedServer: @unchecked Sendable {
             }
         }
 
-        // A Mac enrolling itself: the one route with no token, open only while the owner's window
-        // is, and refused by the checks inside `enrol`.
+        // A Mac enrolling itself: the one route with no token, refused by the checks inside `enrol`.
         if req.method == "POST" && req.path == "/enrol" { return enrol(req, remote: remote, now: now) }
 
         if req.method == "POST" && req.path == "/status" {
@@ -666,7 +692,8 @@ public final class FeedServer: @unchecked Sendable {
             }
             if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
                                         || req.path == "/api/automatic" || req.path == "/api/enrol-window"
-                                        || req.path == "/api/remove-machine" || req.path == "/api/update-all") {
+                                        || req.path == "/api/remove-machine" || req.path == "/api/update-all"
+                                        || req.path == "/api/pairing-code") {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
                 let response = transact { state -> HTTPResponse in
@@ -688,6 +715,10 @@ public final class FeedServer: @unchecked Sendable {
                         }
                         state.pruneAbandonedWindowEnrolments()
                         state.enrolWindow = EnrolWindow.starting(minutes: minutes)
+                        return Self.ok
+                    }
+                    if req.path == "/api/pairing-code" {
+                        state.pairing = PairingCode.fresh(replacing: state.pairing?.code)
                         return Self.ok
                     }
                     if req.path == "/api/update-all" {
@@ -787,24 +818,20 @@ public final class FeedServer: @unchecked Sendable {
         // The enrolment window: its state, its countdown, and how much of its allowance is used.
         let window = state.enrolWindow
         let isOpen = window?.isOpen() ?? false
-        let openForm = "<form method=post action=/api/enrol-window class=row><label for=minutes>Keep open for</label><input id=minutes type=number name=minutes value=\(EnrolPolicy.defaultMinutes) min=1 max=\(EnrolPolicy.maxMinutes)><span class=unit>min</span><button class=primary>Allow new Macs to connect</button></form>"
-        var enrol: String
+        var enrol = ""
         var countdown = ""
         var leftText = ""
         if let window, isOpen {
             let seconds = Int(window.remaining())
             let endUnix = window.untilDate.map { Int($0.timeIntervalSince1970) } ?? 0
             leftText = "<span id=left data-until=\"\(endUnix)\">\(seconds / 60) min \(seconds % 60) s</span>"
-            enrol = "<p><span class=\"dot ok\"></span><b>Open</b>: new Macs can connect until \(h(stamp(window.until))), \(leftText) left"
+            // Only a window opened with `khu enrol-window` gets here; the page shows it and can stop it.
+            enrol = "<p><span class=\"dot ok\"></span><b>Open</b>: new Macs can connect without a code until \(h(stamp(window.until))), \(leftText) left"
                 + " — \(window.enrolled) of \(maxEnrolmentsPerWindow) new Macs enrolled in this window. A Mac that is not enrolled yet may claim a token for itself.</p>"
                 + form("/api/enrol-window", ["minutes": "0"], "Stop allowing new Macs")
             countdown = "document.querySelectorAll('[data-until]').forEach(function(e){var u=Number(e.getAttribute('data-until'));"
                 + "function t(){var s=Math.round(u-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'}"
                 + "t();setInterval(t,1000)});"
-        } else if let window {
-            enrol = "<p><span class=dot></span><b>Closed</b>: new Macs cannot connect. The last window ended \(h(stamp(window.until))) and enrolled \(window.enrolled) of \(maxEnrolmentsPerWindow).</p>\(openForm)"
-        } else {
-            enrol = "<p><span class=dot></span><b>Closed</b>: new Macs cannot connect until you allow them.</p>\(openForm)"
         }
 
         // Every Mac, one compact row each, problems first. Each app has exactly one state, and
@@ -914,7 +941,7 @@ public final class FeedServer: @unchecked Sendable {
                 + "<h3>Recent results</h3>" + (history.isEmpty ? "<p class=sub>No install results yet.</p>"
                    : "<table class=hist><thead><tr><th>App</th><th>From → to</th><th>Time</th><th>Result</th></tr></thead>\(history)</table>")
                 + "<div class=macfoot><span class=sub>Connected on \(h(ms.enrolledAt.flatMap(ISO.date).map { joinedFormat.string(from: $0) } ?? "an unknown date"))\(ms.pending.isEmpty ? "" : " · \(ms.pending.count) order\(ms.pending.count == 1 ? "" : "s") waiting")</span>"
-                + "<form method=post action=/api/remove-machine data-confirm=\"Remove \(h(machine))? It stops being served until it joins again through an open window.\"><input type=hidden name=\"machine\" value=\"\(h(machine))\"><button class=danger>Remove Mac</button></form></div>"
+                + "<form method=post action=/api/remove-machine data-confirm=\"Remove \(h(machine))? It stops being served until it connects again with the pairing code.\"><input type=hidden name=\"machine\" value=\"\(h(machine))\"><button class=danger>Remove Mac</button></form></div>"
                 + "</div></details>"
             macRows.append(MacRow(rank: overall.3, name: machine, html: html, state: overall.2))
         }
@@ -933,12 +960,17 @@ public final class FeedServer: @unchecked Sendable {
             + "</div>"
         let banner = isOpen ? "<p class=banner><span class=\"dot ok\"></span>New Macs can connect for \(leftText.replacingOccurrences(of: "id=left ", with: "")) left — \(joined.count) new Mac\(joined.count == 1 ? "" : "s") joined. <a href=#connect>See who joined</a></p>" : ""
 
-        // Connect a new Mac: the existing window and the existing kit, in three steps.
+        // Connect a new Mac: the pairing code and the existing kit, in three steps.
+        let codeLocked = state.pairing?.locked(at: Date()) ?? false
+        let pairing = "<div class=pair><span class=paircode>\(state.pairing.map { h($0.shown) } ?? "No code yet")</span>"
+            + "<form method=post action=/api/pairing-code\(state.pairing == nil ? "" : " data-confirm=\"New code? The old code stops working. Macs already connected stay connected.\"")><button>New code</button></form></div>"
+            + (codeLocked ? "<p><span class=\"dot bad\"></span><b>Locked</b> after \(EnrolPolicy.pairingWrongTries) wrong tries, until \(h(stamp(state.pairing?.lockedUntil ?? ""))). No code is accepted until then.</p>"
+                          : "<p class=sub>Works at any time. \(EnrolPolicy.pairingWrongTries) wrong tries lock it for \(EnrolPolicy.pairingLockMinutes) minutes.</p>")
         let joinedList = isOpen ? "<div class=joined><h3>Joined in this window</h3>" + (joined.isEmpty ? "<p class=sub>None yet. This list updates every 10 s.</p>" : "<ul>\(joined.joined())</ul>") + "</div>" : ""
         let connect = "<section id=connect class=panel data-view=connect><h2>Connect a Mac</h2>"
             + "<p class=sub>Needed first: Tailscale on the new Mac, signed in to the same network as this Mac.</p>"
-            + "<ol class=steps><li><b>Allow new Macs to connect here.</b>\(enrol)</li>"
-            + "<li><b>On the new Mac, double-click “Connect to KH Updater”</b> from the kit in <code>~/Desktop/All YouTube Stuff/KH Updater - Connect a Mac/</code> and press Return to accept its name.</li>"
+            + "<ol class=steps><li><b>The pairing code for new Macs.</b>\(pairing)\(enrol)</li>"
+            + "<li><b>On the new Mac, double-click “Connect to KH Updater”</b> from the kit in <code>~/Desktop/All YouTube Stuff/KH Updater - Connect a Mac/</code>, press Return to accept its name, and type this code.</li>"
             + "<li><b>It appears in the Macs list</b> within a few minutes. Nothing installs by itself.</li></ol>\(joinedList)</section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
@@ -1096,6 +1128,7 @@ public final class FeedServer: @unchecked Sendable {
     .failhead{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:4px}.failhead b{color:var(--bad)}.failure p{margin:0 0 6px}
     .macfoot{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid var(--line2)}
     .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+    .pair{display:flex;align-items:center;gap:14px;margin:4px 0 6px}.paircode{font:600 28px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.04em;user-select:all;font-variant-numeric:tabular-nums}
     .steps{margin:12px 0 0;padding-left:20px}.steps li{margin-bottom:10px}.steps li>b{display:block;margin-bottom:4px}.steps p{margin:0 0 6px}
     .joined{margin-top:6px;padding-top:10px;border-top:1px solid var(--line2)}.joined ul{margin:0;padding-left:18px}
     .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:2px 6px}

@@ -2,6 +2,12 @@
 
 The newest version is first. The status page shows the top entry.
 
+## 1.0.3 — 2026-11-02
+- A new Mac connects with a pairing code shown in KH Updater, at any time. You no longer open a window first.
+- New code replaces the code after asking; Macs already connected stay connected.
+- Five wrong codes lock pairing for five minutes, and the page says so.
+- The Connect kit asks for the code once and shows the publisher's own reason if it is refused.
+
 ## 1.0.2 — 2026-11-02
 - A new look for the page and the app, in light and dark, with a new app icon.
 - One compact row per Mac: its apps and versions, one overall state and when it was last seen. Problems come first, and All, Needs update, Failed and Offline filter the list. Type part of a name to find a Mac.

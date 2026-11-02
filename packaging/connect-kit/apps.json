@@ -1,0 +1,6 @@
+{
+  "_note": "The apps KH Updater manages on a printer Mac, by bundle identifier. 'Connect to KH Updater.command' records Printer Studio KH if it finds it in ~/Applications or /Applications.",
+  "apps": {
+    "com.theng12.printerstudio": {"app": "printer-studio", "recipe": "app-dmg"}
+  }
+}
