@@ -2165,16 +2165,23 @@ func launcherTests() {
         expect(list.first?.words.tagline == "Photos and labels", "L5 the Launcher's card reads those words from the feed")
         expect(kept?.version == "1.0.2" && kept?.bundleID == "com.t.media" && kept?.icon == e?.icon, "L5 a release with no DMG to read keeps the earlier name, ID and icon")
     }
-    // W7. Renaming a Mac keeps its token: the new name works with it, the old name stops.
+    // W7. Labels never move identity; two Macs may have the same label.
     do {
         let rig = Rig("rename")
         let token = try! Enrolment.enrol(stateDir: rig.state, machine: "old-mac")
         _ = try! Enrolment.enrol(stateDir: rig.state, machine: "taken-mac")
-        expectThrows("W7 a name already enrolled is refused", contains: "already enrolled") { try Enrolment.rename(stateDir: rig.state, machine: "old-mac", to: "taken-mac") }
-        try! Enrolment.rename(stateDir: rig.state, machine: "old-mac", to: "new-mac")
+        let before = (try! StateStore.load(from: rig.state)).machines["old-mac"]!
+        try! Enrolment.rename(stateDir: rig.state, machine: "old-mac", to: "taken-mac")
+        try! Enrolment.rename(stateDir: rig.state, machine: "old-mac", to: "taken-mac")
         let machines = (try! StateStore.load(from: rig.state)).machines
-        expect(machines["old-mac"] == nil && machines["new-mac"]?.machine == "new-mac" && machines["new-mac"]?.tokenHash == Enrolment.sha256Hex(token),
-               "W7 the record moves to the new name with its token")
+        let renamed = machines["old-mac"]!
+        expect(machines.count == 2 && renamed.machine == "old-mac" && renamed.name == "taken-mac"
+               && renamed.tokenHash == Enrolment.sha256Hex(token) && renamed.pending == before.pending
+               && renamed.enrolledAt == before.enrolledAt, "W7 rename keeps identity, token, enrolment and orders")
+        expect(renamed.history?.count == 1 && renamed.history?.first?.reason == "Renamed from old-mac", "W7 rename history occurs once")
+        expect(rig.server.statusHTML().contains("same name"), "W7 duplicate labels remain visible with a warning")
+        let response = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(token)"], body: Data(#"{"machine":"old-mac","installed":{}}"#.utf8)), remote: "100.64.0.9")
+        expect(response.status == 200, "W7 the unchanged enrolment still reports after rename")
     }
     // W. What's New has one source: each app's CHANGELOG. Publish refuses anything else.
     do {

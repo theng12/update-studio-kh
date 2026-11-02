@@ -64,6 +64,8 @@ public struct AgentConfig: Codable, Sendable, Equatable {
 
 public struct MachineState: Codable, Sendable, Equatable {
     public var machine: String
+    public var displayName: String?
+    public var name: String { displayName ?? machine }
     public var tokenHash: String?
     public var installed: [String: String]
     public var health: [String: String]
@@ -112,13 +114,14 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// keep loading: a publisher that cannot decode its own state serves 503 to every Mac for ever,
     /// which is a worse fault than any single missing field.
     private enum CodingKeys: String, CodingKey {
-        case machine, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
+        case machine, displayName, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
              automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
              automaticSet, pausedUntil
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         machine = try c.decode(String.self, forKey: .machine)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
         tokenHash = try c.decodeIfPresent(String.self, forKey: .tokenHash)
         installed = try c.decodeIfPresent([String: String].self, forKey: .installed) ?? [:]
         health = try c.decodeIfPresent([String: String].self, forKey: .health) ?? [:]
@@ -558,17 +561,23 @@ public enum Enrolment {
         }
     }
 
-    /// A Mac's new name, keeping its token, history and settings. That Mac's own config.json must
-    /// carry the new name too, or its next request is refused.
+    /// Labels never change the enrolment ID, token or queued orders.
     public static func rename(stateDir: URL, machine: String, to name: String) throws {
-        _ = try SafeName.component(name, what: "machine id")
+        _ = try SafeName.component(name, what: "Mac name")
         try StateStore.update(in: stateDir) { state in
             guard var record = state.machines[machine] else { throw khuFail("no enrolled Mac named \(machine)") }
-            guard state.machines[name] == nil else { throw khuFail("a Mac named \(name) is already enrolled") }
-            record.machine = name
-            record.pending = record.pending.map { var order = $0; order.machine = name; return order }
-            state.machines.removeValue(forKey: machine)
-            state.machines[name] = record
+            record.rename(to: name)
+            state.machines[machine] = record
         }
+    }
+}
+
+extension MachineState {
+    public mutating func rename(to newName: String) {
+        guard newName != name else { return }
+        let old = name
+        displayName = newName
+        history = Array(([HistoryEntry(app: "updater", from: nil, to: nil, status: "renamed",
+                                      reason: "Renamed from \(old)", at: ISO.string(Date()))] + (history ?? [])).prefix(HistoryEntry.kept))
     }
 }

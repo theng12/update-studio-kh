@@ -709,7 +709,7 @@ public final class FeedServer: @unchecked Sendable {
             if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
                                         || req.path == "/api/automatic" || req.path == "/api/enrol-window"
                                         || req.path == "/api/remove-machine" || req.path == "/api/update-all"
-                                        || req.path == "/api/pairing-code") {
+                                        || req.path == "/api/pairing-code" || req.path == "/api/rename-machine") {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
                 let response = transact { state -> HTTPResponse in
@@ -749,6 +749,15 @@ public final class FeedServer: @unchecked Sendable {
                         return Self.ok
                     }
                     guard let machine = f["machine"], !machine.isEmpty else { return Self.text(400, "send machine") }
+                    if req.path == "/api/rename-machine" {
+                        guard let name = f["name"], (try? SafeName.component(name, what: "Mac name")) != nil else {
+                            return Self.text(400, "send a valid Mac name")
+                        }
+                        guard var ms = state.machines[machine], ms.tokenHash != nil else { return Self.text(404, "no enrolled Mac") }
+                        ms.rename(to: name)
+                        state.machines[machine] = ms
+                        return Self.ok
+                    }
                     if req.path == "/api/remove-machine" {
                         guard (try? SafeName.component(machine, what: "machine id")) != nil else {
                             return Self.text(400, "that machine id is not one this publisher accepts")
@@ -857,6 +866,8 @@ public final class FeedServer: @unchecked Sendable {
         for machine in state.machines.keys.sorted() {
             guard let ms = state.machines[machine], ms.tokenHash != nil else { continue }
             total += 1
+            let label = ms.name
+            let duplicate = state.machines.values.filter { $0.tokenHash != nil && $0.name == label }.count > 1
             if isOpen, let window, ms.enrolmentSource == MachineState.windowSource, let at = ms.enrolledAt, at >= window.openedAt {
                 joined.append("<li><b>\(h(machine))</b> <span class=sub>\(h(ago(at)))\(ms.lastSeen == nil ? ", has not reported yet" : "")</span></li>")
             }
@@ -940,24 +951,25 @@ public final class FeedServer: @unchecked Sendable {
             else { overall = ("Up to date", "ok", "ok", 5) }
             let history = (ms.history ?? []).map { e in
                 "<tr><td>\(h(name(e.app)))</td><td class=num>\(h(e.from ?? "—")) → \(h(e.to ?? "previous"))</td><td class=num>\(h(stamp(e.at)))</td>"
-                    + "<td class=\"\(Self.failureStatuses.contains(e.status) ? "badtext" : "")\">\(h(words(e.status)))</td></tr>"
+                    + "<td class=\"\(Self.failureStatuses.contains(e.status) ? "badtext" : "")\">\(h(e.status == "renamed" ? (e.reason ?? "Renamed") : words(e.status)))</td></tr>"
             }.joined()
-            let model = Self.model(of: machine).map { "<small>\(h($0))</small>" } ?? ""
+            let model = Self.model(of: label).map { "<small>\(h($0))</small>" } ?? ""
             let seen = ms.lastSeen == nil ? "<span class=\"dot warn\"></span>Never seen"
                 : online ? "<span class=\"dot ok\"></span>Online · \(h(ago(ms.lastSeen)))"
                 : "<span class=\"dot bad\"></span><span class=badtext>Offline · \(h(ago(ms.lastSeen)))</span>"
-            let html = "<details class=\"mac s-\(overall.2)\" data-mac=\"\(h(machine.lowercased()))\" data-state=\(overall.2)><summary>"
-                + "<span class=who><b>\(h(machine))</b>\(model)</span><span class=apps>\(chips)</span>"
+            let html = "<details class=\"mac s-\(overall.2)\" data-mac=\"\(h(label.lowercased()))\" data-state=\(overall.2)><summary>"
+                + "<span class=who><b>\(h(label))</b>\(duplicate ? "<small>same name</small>" : "")\(model)</span><span class=apps>\(chips)</span>"
                 + "<span class=state>\(overall.0.isEmpty ? "" : "<span class=\"chip \(overall.1)\">\(h(overall.0))</span>")\(rowUpdate)</span><span class=\"seen num\">\(seen)</span><span class=chev aria-hidden=true></span></summary><div class=detail>"
                 + failures
                 + (rows.isEmpty ? "<p class=sub>No versions yet: they appear after this Mac's first report.</p>"
                    : "<table class=apptable><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>State</th><th><span class=sr>Actions</span></th></tr></thead>\(rows)</table>")
+                + "<form method=post action=/api/rename-machine data-confirm=\"Rename this Mac’s label? Its connection stays the same.\"><input type=hidden name=machine value=\"\(h(machine))\"><label>Mac name <input name=name required maxlength=100 value=\"\(h(label))\"></label> <button>Rename</button></form>"
                 + "<h3>Recent results</h3>" + (history.isEmpty ? "<p class=sub>No install results yet.</p>"
                    : "<table class=hist><thead><tr><th>App</th><th>From → to</th><th>Time</th><th>Result</th></tr></thead>\(history)</table>")
                 + "<div class=macfoot><span class=sub>Connected on \(h(ms.enrolledAt.flatMap(ISO.date).map { joinedFormat.string(from: $0) } ?? "an unknown date"))\(ms.pausedUntil.flatMap(ISO.date).map { $0 > now ? " · Automatic paused on this Mac until \(h(stamp(ms.pausedUntil)))" : "" } ?? "")\(ms.pending.isEmpty ? "" : " · \(ms.pending.count) order\(ms.pending.count == 1 ? "" : "s") waiting")</span>"
                 + "<form method=post action=/api/remove-machine data-confirm=\"Remove \(h(machine))? It stops being served until it connects again with the pairing code.\"><input type=hidden name=\"machine\" value=\"\(h(machine))\"><button class=danger>Remove Mac</button></form></div>"
                 + "</div></details>"
-            macRows.append(MacRow(rank: overall.3, name: machine, html: html, state: overall.2))
+            macRows.append(MacRow(rank: overall.3, name: label, html: html, state: overall.2))
         }
         macRows.sort { ($0.rank, $0.name) < ($1.rank, $1.name) }
         func count(_ states: Set<String>) -> Int { macRows.filter { states.contains($0.state) }.count }

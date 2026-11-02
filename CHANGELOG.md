@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.7 — 2026-11-03
+- A Mac’s label can be renamed on its expanded row without changing its connection or enrolment.
+- Macs with the same name stay separate and show a same name warning.
+- A name change appears once in the Mac’s recent results.
+
 ## 1.0.6 — 2026-11-02
 - Publishing reads What's New from the app's CHANGELOG, and refuses a CHANGELOG or installer on a different version
 - The SSD's What's New now matches the feed's

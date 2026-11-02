@@ -91,7 +91,8 @@ one slow or stalled Mac never holds up the others.
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
   defaults to `update` when absent, so an order signed before the field existed decodes unchanged
   and still means what it meant when the owner gave it.
-- Owner-only: `GET /`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic`,
+- A Mac has a separate optional display label. Renaming changes that label and adds one history entry; the enrolment ID, token hash, pending orders and enrolment date stay unchanged. Duplicate labels remain separate records and show “same name” on the page.
+- Owner-only: `GET /`, `POST /api/rename-machine`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic`,
   `POST /api/enrol-window`, `POST /api/remove-machine` — loopback peer, a Host of
   127.0.0.1/localhost/[::1] with this port (no DNS rebinding), and for changes an Origin or
   Referer from this page (neither is refused). The page sends CSP, `X-Frame-Options: DENY`,
