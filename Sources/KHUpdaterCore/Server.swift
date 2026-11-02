@@ -441,7 +441,7 @@ public final class FeedServer: @unchecked Sendable {
             var window: EnrolWindow?
             if let sent = object["code"] {
                 guard var pairing = state.pairing else {
-                    return Self.text(403, "this publisher has no pairing code yet; ask its owner to click New code in KH Updater")
+                    return Self.text(403, "this publisher has no pairing code yet; ask its owner to click New code in Update Studio KH")
                 }
                 guard !pairing.locked(at: now) else {
                     return Self.text(429, "too many wrong pairing codes; wait \(EnrolPolicy.pairingLockMinutes) minutes and try again")
@@ -456,7 +456,7 @@ public final class FeedServer: @unchecked Sendable {
                     state.pairing = pairing
                     return left <= 0
                         ? Self.text(429, "that pairing code is wrong, and that was the last try: wait \(EnrolPolicy.pairingLockMinutes) minutes and try again")
-                        : Self.text(403, "that pairing code is wrong; check the code shown in KH Updater (\(left) \(left == 1 ? "try" : "tries") left before a \(EnrolPolicy.pairingLockMinutes)-minute lock)")
+                        : Self.text(403, "that pairing code is wrong; check the code shown in Update Studio KH (\(left) \(left == 1 ? "try" : "tries") left before a \(EnrolPolicy.pairingLockMinutes)-minute lock)")
                 }
                 pairing.wrongTries = 0
                 pairing.lockedUntil = nil
@@ -799,7 +799,7 @@ public final class FeedServer: @unchecked Sendable {
         }
         let state: ServerState
         do { state = try StateStore.read(in: stateDir) } catch {
-            return "<!doctype html><meta charset=utf-8><title>KH Updater</title><h1>KH Updater</h1>"
+            return "<!doctype html><meta charset=utf-8><title>Update Studio KH</title><h1>Update Studio KH</h1>"
                 + "<p><b>The state file cannot be read</b>: \(h("\(error)")). It was left untouched.</p>"
         }
         let feed = FeedPublisher.loadFeed(from: feedDir)
@@ -920,7 +920,7 @@ public final class FeedServer: @unchecked Sendable {
                     let entry = ms.history?.first { $0.app == app && $0.at == result.at }
                     let back = entry?.from.map { result.status.hasPrefix("rolled_back") || result.status.hasPrefix("rollback") ? "Back on \($0)" : "Was on \($0)" }
                     let tried = entry?.to.map { "tried \($0)" }
-                    let report = ["KH Updater error report", "Mac: \(machine)", "App: \(name(app)) (\(app))", "Result: \(result.status)",
+                    let report = ["Update Studio KH error report", "Mac: \(machine)", "App: \(name(app)) (\(app))", "Result: \(result.status)",
                                   "Reason: \(result.reason ?? "none given")", "Time: \(stamp(result.at))",
                                   "Versions: \(entry?.from ?? "?") -> \(entry?.to ?? "?")", "Installed now: \(installed ?? "not installed")"].joined(separator: "\n")
                     failures += "<div class=failure><div class=failhead><b>\(h(name(app))) failed: \(h(words(result.status)))</b><span class=sub>\(h(stamp(result.at)))</span></div>"
@@ -984,7 +984,7 @@ public final class FeedServer: @unchecked Sendable {
         let connect = "<section id=connect class=panel data-view=connect><h2>Connect a Mac</h2>"
             + "<p class=sub>Needed first: Tailscale on the new Mac, signed in to the same network as this Mac.</p>"
             + "<ol class=steps><li><b>The pairing code for new Macs.</b>\(pairing)\(enrol)</li>"
-            + "<li><b>On the new Mac, double-click “Connect to KH Updater”</b> from the kit in <code>~/Desktop/All YouTube Stuff/KH Updater - Connect a Mac/</code>, press Return to accept its name, and type this code.</li>"
+            + "<li><b>On the new Mac, double-click “Connect to Studio Launcher KH”</b> from the kit in <code>~/Desktop/All YouTube Stuff/KH Updater - Connect a Mac/</code>, press Return to accept its name, and type this code.</li>"
             + "<li><b>It appears in the Macs list</b> within a few minutes. Nothing installs by itself.</li></ol>\(joinedList)</section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
@@ -1052,9 +1052,9 @@ public final class FeedServer: @unchecked Sendable {
         setTimeout(tick,REFRESH*1000);
         """#.replacingOccurrences(of: "REFRESH", with: isOpen ? "10" : "30") + "</script>"
         return """
-        <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><noscript><meta http-equiv=refresh content=\(isOpen ? 10 : 30)></noscript><title>KH Updater</title>
+        <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><noscript><meta http-equiv=refresh content=\(isOpen ? 10 : 30)></noscript><title>Update Studio KH</title>
         <style>\(Self.pageStyle)</style></head>
-        <body><header class=top><div class=brand>\(Self.mark)<h1>KH Updater</h1></div>
+        <body><header class=top><div class=brand>\(Self.mark)<h1>Update Studio KH</h1></div>
         <nav class=tabs aria-label="Views" hidden><a href=#macs data-tab=macs>Macs</a><a href=#apps data-tab=apps>Apps &amp; updates</a></nav>
         <div class=headright>\(version)<a class=connectbtn href=#connect data-tab=connect>+ Connect a Mac</a></div></header>
         <main>

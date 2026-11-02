@@ -1,4 +1,4 @@
-// KH Updater.app: a window onto the publisher's own status page. Nothing else.
+// Update Studio KH.app: a window onto the publisher's own status page. Nothing else.
 import AppKit
 import WebKit
 
@@ -7,7 +7,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let menu = NSMenu(), item = NSMenuItem(), appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit KH Updater", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit Update Studio KH", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.submenu = appMenu
         menu.addItem(item)
         NSApp.mainMenu = menu
@@ -17,7 +17,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate {
         web.load(URLRequest(url: URL(string: "http://127.0.0.1:8790/")!))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "KH Updater"
+        window.title = "Update Studio KH"
         window.contentView = web
         window.minSize = NSSize(width: 420, height: 400)
         window.center()

@@ -1,15 +1,15 @@
-# What's new in KH Updater
+# What's new in Update Studio KH and Studio Launcher KH
 
 The newest version is first. The status page shows the top entry.
 
 ## 1.0.4 — 2026-11-02
 - When someone changes Automatic from a Mac's menu-bar icon, that Mac shows "changed on this Mac" on the page. The later change wins, whether it was made on the page or on the Mac.
 - A Mac whose Automatic updates are paused from its menu says so, and until when.
-- Apps & updates also lists Story Studio KH, Studio Hub KH and Gateway, with the newest version on any Mac. They show "Updates itself" instead of an Update button.
-- The two KH Updater parts are now named "KH Updater (this window)" and "KH Updater helper (on each Mac)".
+- New names: this window is Update Studio KH, and the helper on each Mac is Studio Launcher KH. The apps read Hub Studio KH, Story Studio KH, Gateway Studio KH, Printer Studio KH and Media Studio KH.
+- Apps & updates also lists Story Studio KH, Hub Studio KH and Gateway Studio KH, with the newest version on any Mac. They show "Updates itself" instead of an Update button.
 
 ## 0.1.2 — 2026-11-02
-- KH Updater has a small icon in the menu bar on each Mac. It has no Dock icon and no window.
+- Studio Launcher KH has a small icon in the menu bar on each Mac. It has no Dock icon and no window.
 - The menu lists each app with its version and state: Up to date, Update available, Updating or Failed with the reason.
 - Update now, Check for Updates Now, an Automatic switch per app, and Pause Automatic Updates for 24 Hours.
 - Story Studio and Studio Hub update themselves, so they show their state and no switch.

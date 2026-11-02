@@ -636,10 +636,10 @@ def main(argv: list[str]) -> int:
     apps_file = Path(options.get("apps") or here / "apps.json").expanduser()
     allow_test = bool(options.get("allow_test"))
 
-    print("  KH Updater")
+    print("  Studio Launcher KH")
     if kit.is_symlink() or not kit.is_dir() or not (kit / "publisher.json").is_file():
         print("  The agent kit is not beside this file, or it has no publisher.json.")
-        print("  Nothing was installed. Use the kit's own 'Install KH Updater.command'.")
+        print("  Nothing was installed. Use the kit's own 'Connect to Studio Launcher KH.command'.")
         return 1
     try:
         registry = load_app_registry(apps_file)
@@ -652,7 +652,7 @@ def main(argv: list[str]) -> int:
 
     try:
         if bootstrap.enrolled():
-            print(f"  KH Updater is already installed on this Mac ({bootstrap.report()}).")
+            print(f"  Studio Launcher KH is already installed on this Mac ({bootstrap.report()}).")
             print("  Nothing was changed.")
             return 0
 
@@ -670,7 +670,7 @@ def main(argv: list[str]) -> int:
             return 2
         code = os.environ.get("KH_UPDATER_PAIRING_CODE", "")
         if options["ask"]:
-            code = input("  Type the pairing code shown in KH Updater: ").strip()
+            code = input("  Type the pairing code shown in Update Studio KH: ").strip()
     except (EOFError, KeyboardInterrupt):
         print("  Nothing was installed.")
         return 2
@@ -684,24 +684,24 @@ def main(argv: list[str]) -> int:
     except StartFailed as failure:
         # The install is finished and stays: only the start failed, and one command retries it.
         # Trashing it here would make this Mac enrol a second time for a launchd hiccup.
-        print(f"  KH Updater is installed but launchd did not start it: {failure}")
+        print(f"  Studio Launcher KH is installed but launchd did not start it: {failure}")
         print("  The install is kept; nothing was removed. Start it later with:")
         print(f"  launchctl bootstrap gui/{os.getuid()} {failure.plist}")
         return 1
     except (ValueError, KeyError, OSError) as error:
         where = trash_partial_install(home, plist)
-        print(f"  KH Updater was NOT installed: {error}")
+        print(f"  Studio Launcher KH was NOT installed: {error}")
         if where is None:
             print("  Nothing was written.")
         else:
             print(f"  Anything this run wrote was moved to {where}.")
         print("  Fix that, then run this file again. "
-              "The pairing code is in KH Updater on the Mac Studio.")
+              "The pairing code is in Update Studio KH on the Mac Studio.")
         return 1
     print("  Agent installed; launchd already has com.khupdater.agent loaded, so it was left alone."
           if loaded else "  Started at login: the launchd job is loaded.")
     print()
-    print("  KH Updater will keep the three apps on this Mac up to date.")
+    print("  Studio Launcher KH will keep the apps on this Mac up to date. Its icon is in the menu bar.")
     return 0
 
 

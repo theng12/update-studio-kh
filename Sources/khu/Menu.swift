@@ -85,7 +85,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         let symbol = list.contains { $0.status == HelperApp.failed } || error != nil ? "exclamationmark.arrow.circlepath"
             : busy ? "arrow.triangle.2.circlepath"
             : list.contains { $0.status == HelperApp.updateAvailable } ? "arrow.down.circle.fill" : "arrow.down.circle"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "KH Updater")
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Studio Launcher KH")
         image?.isTemplate = true
         item.button?.image = image
     }
@@ -102,7 +102,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
             return i
         }
 
-        note("KH Updater · \(machine)")
+        note("Studio Launcher KH · \(machine)")
         if let until = settings.pausedUntil, settings.paused(at: Date()) {
             note("Automatic updates paused until \(Self.clock(until))")
         }
@@ -130,7 +130,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         _ = action("Check for Updates Now", #selector(checkNow))
         _ = action(settings.paused(at: Date()) ? "Resume Automatic Updates" : "Pause Automatic Updates for 24 Hours", #selector(togglePause))
         menu.addItem(.separator())
-        note("KH Updater helper \(version ?? "")")
+        note("Studio Launcher KH \(version ?? "")")
         _ = action("What's New…", #selector(whatsNew))
     }
 
@@ -166,7 +166,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     @objc private func whatsNew() {
         let lines = version.map(WhatsNew.lines(for:)) ?? []
-        alert("What's new in KH Updater helper \(version ?? "")",
+        alert("What's new in Studio Launcher KH \(version ?? "")",
               lines.isEmpty ? "No notes for this version." : lines.map { "• " + $0 }.joined(separator: "\n"))
     }
 

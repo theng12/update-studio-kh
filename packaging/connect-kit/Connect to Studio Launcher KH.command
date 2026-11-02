@@ -1,8 +1,8 @@
 #!/bin/sh
-# INSTALL KH UPDATER
+# INSTALL STUDIO LAUNCHER KH
 #
 # Double-click this file on any Mac that runs one of the three apps — Story Studio, GatewayKH or
-# Studio Hub. It installs **KH Updater**, the small agent that keeps those apps up to date, and
+# Studio Hub. It installs **Studio Launcher KH**, the small agent that keeps those apps up to date, and
 # starts it. Nothing else on the Mac is changed and nothing needs the administrator password:
 # everything lives in your own ~/Library/KHUpdater.
 #
@@ -15,7 +15,7 @@
 #     and checks that its `publisher.json` is a real publisher record. A kit that was altered on
 #     the drive is refused.
 #   - Installs the agent under ~/Library/KHUpdater and enrols this Mac with the publisher, using
-#     the pairing code it asks you for: the one shown in KH Updater on the Mac Studio, under
+#     the pairing code it asks you for: the one shown in Update Studio KH on the Mac Studio, under
 #     Connect a Mac. A wrong code is refused, and a refused run leaves nothing behind.
 #   - Starts the agent at login with a launchd job (`com.khupdater.agent`).
 #
@@ -46,7 +46,7 @@ if [ -n "${KH_UPDATER_HELPER:-}" ]; then HELPER="$KH_UPDATER_HELPER"; fi
 if [ -n "${KH_UPDATER_APPS:-}" ]; then APPS="$KH_UPDATER_APPS"; fi
 
 [ "$UNATTENDED" = "1" ] || clear
-echo "  KH Updater"
+echo "  Studio Launcher KH"
 
 finish() {
   if [ "$UNATTENDED" != "1" ]; then
@@ -58,7 +58,7 @@ finish() {
 }
 fail() {
   echo
-  echo "  KH Updater was NOT installed: $1"
+  echo "  Studio Launcher KH was NOT installed: $1"
   echo "  Nothing else on this Mac was touched."
   finish "${2:-1}"
 }

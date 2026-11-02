@@ -72,9 +72,9 @@ public struct HelperApp: Sendable, Equatable {
 }
 
 public enum AppNames {
-    // shortcut: display names for the apps this fleet runs; any other id shows as itself. A rebrand is coming.
-    static let names = ["hub": "Studio Hub KH", "story": "Story Studio KH", "gateway": "Gateway", "updater": "KH Updater helper (on each Mac)",
-                        "printer-studio": "Printer Studio", "media-studio": "Media Studio", "kh-updater-app": "KH Updater (this window)"]
+    // shortcut: display names for the apps this fleet runs; any other id shows as itself. App ids and bundle IDs stay.
+    static let names = ["hub": "Hub Studio KH", "story": "Story Studio KH", "gateway": "Gateway Studio KH", "updater": "Studio Launcher KH",
+                        "printer-studio": "Printer Studio KH", "media-studio": "Media Studio KH", "kh-updater-app": "Update Studio KH"]
     public static func display(_ app: String) -> String { names[app] ?? app }
 }
 

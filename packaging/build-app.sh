@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Builds build/KH Updater.app (ad-hoc signed, like gateway-kh) and build/KH-Updater-<version>.dmg.
+# Builds build/Update Studio KH.app (ad-hoc signed, like gateway-kh) and build/Update-Studio-KH-<version>.dmg.
 # Usage: packaging/build-app.sh <version>
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${1:?usage: packaging/build-app.sh <version>}"
-APP="build/KH Updater.app"; DMG="build/KH-Updater-$VERSION.dmg"
+APP="build/Update Studio KH.app"; DMG="build/Update-Studio-KH-$VERSION.dmg"
 TMP="$(mktemp -d)"
 mkdir -p build
-[ -e "$APP" ] && { mkdir -p _trash; mv "$APP" "_trash/KH Updater.app.$(date +%s)"; }
+[ -e "$APP" ] && { mkdir -p _trash; mv "$APP" "_trash/Update Studio KH.app.$(date +%s)"; }
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -o "$APP/Contents/MacOS/KHUpdater" App/main.swift -framework AppKit -framework WebKit
 
@@ -27,7 +27,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
 <key>CFBundleExecutable</key><string>KHUpdater</string>
 <key>CFBundleIdentifier</key><string>com.khupdater.app</string>
-<key>CFBundleName</key><string>KH Updater</string>
+<key>CFBundleName</key><string>Update Studio KH</string><key>CFBundleDisplayName</key><string>Update Studio KH</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
@@ -43,7 +43,7 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
-mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/KH Updater.app"; ln -s /Applications "$TMP/dmg/Applications"
+mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Update Studio KH.app"; ln -s /Applications "$TMP/dmg/Applications"
 [ -e "$DMG" ] && { mkdir -p _trash; mv "$DMG" "_trash/$(basename "$DMG").$(date +%s)"; }
-hdiutil create -volname "KH Updater" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "Update Studio KH" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" >/dev/null
 echo "built $APP and $DMG"
