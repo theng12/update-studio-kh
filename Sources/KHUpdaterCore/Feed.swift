@@ -7,11 +7,45 @@ public struct FeedApp: Codable, Sendable, Equatable {
     public var bytes: Int64
     public var kind: String
     public var notes: String?
+    /// Read from the app's own bundle when it is published, so the Launcher can list a new app
+    /// with no code change. All optional: a feed written before they existed decodes as it did.
+    public var name: String?
+    public var bundleID: String?
+    public var bundleName: String?
+    /// A 128-point PNG of the app's icon, stored beside the artifacts, and its SHA-256.
+    public var icon: String?
+    public var iconSha256: String?
+    /// What the Launcher's card and details show. Each is optional: a missing one shows less.
+    public var tagline: String?
+    public var description: String?
+    public var features: [AppFeature]?
+    public var accent: String?
+    /// When this version was published.
+    public var released: String?
 
     public init(version: String, file: String, sha256: String, bytes: Int64, kind: String, notes: String? = nil) {
         self.version = version; self.file = file; self.sha256 = sha256
         self.bytes = bytes; self.kind = kind; self.notes = notes
     }
+}
+
+/// One numbered feature in the Launcher's details panel.
+public struct AppFeature: Codable, Sendable, Equatable {
+    public var title: String
+    public var text: String?
+    public init(title: String, text: String? = nil) { self.title = title; self.text = text }
+}
+
+/// The words an app's card and details show, carried by the feed and an SSD's apps.json alike.
+public struct AppWords: Codable, Sendable, Equatable {
+    public var tagline: String?
+    public var description: String?
+    public var features: [AppFeature]?
+    public var accent: String?
+    public init(tagline: String? = nil, description: String? = nil, features: [AppFeature]? = nil, accent: String? = nil) {
+        self.tagline = tagline; self.description = description; self.features = features; self.accent = accent
+    }
+    public var isEmpty: Bool { tagline == nil && description == nil && features == nil && accent == nil }
 }
 
 public struct Feed: Codable, Sendable, Equatable {

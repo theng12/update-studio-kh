@@ -5,16 +5,21 @@ import CoreGraphics
 /// process, so it arrives with the updater's self-update. The agent loop runs on its own thread;
 /// this owns the main thread.
 final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
-    private let lock = NSLock()
-    private var apps: [HelperApp] = []
-    private var lastError: String?
-    private var installingApp: String?
-    private var requested: Set<String> = []
-    private let wake = DispatchSemaphore(value: 0)
-    private let stateDir: URL
+    let lock = NSLock()
+    var apps: [HelperApp] = []
+    var lastError: String?
+    var installingApp: String?
+    var requested: Set<String> = []
+    let wake = DispatchSemaphore(value: 0)
+    let stateDir: URL
     private let machine: String
-    private let version: String?
+    let version: String?
     private var item: NSStatusItem!
+    var itemIfReady: NSStatusItem? { item }
+    var lastRun: Date?
+    var window: LauncherWindow?
+    var ssdSources: [SSDSource] { lock.lock(); defer { lock.unlock() }; return ssd }
+    var ssd: [SSDSource] = []
 
     init(config: AgentConfig, version: String?) {
         stateDir = URL(fileURLWithPath: config.stateDir); machine = config.machine; self.version = version
@@ -35,6 +40,13 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         menu.autoenablesItems = false
         item.menu = menu
         refreshIcon()
+        applyAppearance(HelperSettings.load(from: stateDir).appearance)
+        LauncherBundle.ensure(version: version)
+        // Opening Studio Launcher KH.app asks this process to show its window; an SSD that mounts refreshes the list.
+        DistributedNotificationCenter.default().addObserver(forName: LauncherBundle.openNotification, object: nil, queue: .main) { _ in self.showWindow() }
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { _ in self.rescanSSDs() }
+        }
         NSApp.run()
     }
 
@@ -55,10 +67,23 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         lock.lock()
         if let result { apps = result.apps }
         lastError = error
+        lastRun = Date()
+        let ready = apps.filter { $0.managed && !$0.statusOnly && $0.status == HelperApp.updateAvailable }
         installingApp = nil
         lock.unlock()
+        Notifier.announce(ready, stateDir: stateDir)
         DispatchQueue.main.async {
             self.refreshIcon()
+            self.window?.reload()
+            // KHU_WINDOW_SHOW=light|dark opens the window after the first run, for screenshots; nobody sets it in real use.
+            if let look = ProcessInfo.processInfo.environment["KHU_WINDOW_SHOW"], !look.isEmpty {
+                setenv("KHU_WINDOW_SHOW", "", 1)
+                NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
+                self.showWindow()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    FileHandle.standardError.write(Data("launcher window \(self.window?.window.windowNumber ?? 0)\n".utf8))
+                }
+            }
             if let look = ProcessInfo.processInfo.environment["KHU_MENU_SHOW"], !look.isEmpty {
                 setenv("KHU_MENU_SHOW", "", 1)
                 // At a fixed spot, so the shot does not depend on room left in the menu bar.
@@ -109,9 +134,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         if let error { note("Last check failed: \(Self.short(error))") }
         if list.isEmpty && error == nil { note("Checking…") }
         menu.addItem(.separator())
-        for app in list {
+        for app in list where app.managed {
             let status = busy == app.app ? HelperApp.updating : app.status
-            let row = NSMenuItem(title: "\(AppNames.display(app.app))   \(app.installed ?? "—") · \(status)", action: nil, keyEquivalent: "")
+            let row = NSMenuItem(title: "\(app.name.isEmpty ? AppNames.display(app.app) : app.name)   \(app.installed ?? "—") · \(status)", action: nil, keyEquivalent: "")
             menu.addItem(row)
             // Story and Hub update themselves: a status line, no switch.
             guard !app.statusOnly else { row.isEnabled = false; continue }
@@ -127,6 +152,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
             row.submenu = sub
         }
         menu.addItem(.separator())
+        _ = action("Open Studio Launcher…", #selector(openWindow))
         _ = action("Check for Updates Now", #selector(checkNow))
         _ = action(settings.paused(at: Date()) ? "Resume Automatic Updates" : "Pause Automatic Updates for 24 Hours", #selector(togglePause))
         menu.addItem(.separator())
@@ -135,9 +161,13 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     @objc private func checkNow() { wake.signal() }
+    @objc private func openWindow() { showWindow() }
 
     @objc private func updateNow(_ sender: NSMenuItem) {
         guard let app = sender.representedObject as? String else { return }
+        request(app)
+    }
+    func request(_ app: String) {
         lock.lock(); requested.insert(app); lock.unlock()
         installing(app)
         wake.signal()
@@ -145,8 +175,10 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     @objc private func toggleAutomatic(_ sender: NSMenuItem) {
         guard let app = sender.representedObject as? String else { return }
+        setAutomatic(app, sender.state != .on)
+    }
+    func setAutomatic(_ app: String, _ on: Bool) {
         var settings = HelperSettings.load(from: stateDir)
-        let on = sender.state != .on
         settings.automatic[app] = .init(on: on, at: ISO.string(Date()))
         lock.lock(); if let i = apps.firstIndex(where: { $0.app == app }) { apps[i].automatic = on }; lock.unlock()
         save(settings)
@@ -170,7 +202,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
               lines.isEmpty ? "No notes for this version." : lines.map { "• " + $0 }.joined(separator: "\n"))
     }
 
-    private func alert(_ title: String, _ text: String) {
+    func alert(_ title: String, _ text: String) {
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert(); a.messageText = title; a.informativeText = text; a.runModal()
     }
@@ -180,4 +212,17 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         let f = DateFormatter(); f.dateFormat = "EEE HH:mm"; return f.string(from: d)
     }
     static func short(_ text: String) -> String { text.count > 90 ? String(text.prefix(89)) + "…" : text }
+}
+
+extension HelperMenu {
+    /// "system" (or nil), "dark" or "light", for the window and its sheets.
+    func applyAppearance(_ choice: String?) {
+        NSApp.appearance = choice == "dark" ? NSAppearance(named: .darkAqua) : choice == "light" ? NSAppearance(named: .aqua) : nil
+    }
+
+    /// With "keep the icon in the menu bar" off, the icon shows only while the window is open.
+    /// The helper itself keeps running either way: it is what updates this Mac.
+    func windowClosed() { setMenuIcon(visible: HelperSettings.load(from: stateDir).menuBarWhenClosed ?? true) }
+    func setMenuIcon(visible: Bool) { statusItem?.isVisible = visible }
+    var statusItem: NSStatusItem? { itemIfReady }
 }

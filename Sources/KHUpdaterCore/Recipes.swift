@@ -580,7 +580,9 @@ public enum Recipe {
     static func attach(_ shell: Shell, _ artifactPath: String) throws -> String {
         let attach = try shell.run("/usr/bin/hdiutil",
                                    arguments: ["attach", "-readonly", "-nobrowse", "-noautoopen", "-plist", artifactPath], timeout: 180)
-        guard attach.exitCode == 0 else { throw khuFail("hdiutil attach failed: \(attach.stderr.prefix(200))") }
+        // hdiutil prints a deprecation WARNING first on newer macOS; the reason is in the other lines.
+        let reason = attach.stderr.split(separator: "\n").filter { !$0.contains("WARNING") }.joined(separator: " ")
+        guard attach.exitCode == 0 else { throw khuFail("hdiutil attach failed: \(reason.prefix(200))") }
         guard let mount = mountPoint(fromPlist: attach.stdout) else {
             // Attached but no mount point: detach the device it became (detaching the .dmg path does nothing).
             for device in devEntries(fromPlist: attach.stdout) {

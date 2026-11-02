@@ -1951,6 +1951,230 @@ func enrolOwnerPost(_ r: EnrolRig, _ path: String, _ fields: [String: String], h
                                        body: JSON.encode(fields)), remote: remote)
 }
 
+
+final class CaptureShell: Shell, @unchecked Sendable {
+    var calls: [[String]] = []
+    var exitCode: Int32 = 0
+    func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+        calls.append([executable] + arguments)
+        return ShellResult(exitCode: exitCode, stdout: "Agent installed and started.", stderr: exitCode == 0 ? "" : "launchctl said no")
+    }
+}
+
+func launcherTests() {
+    func feedWith(_ apps: [String: FeedApp]) -> Feed { Feed(published_at: ISO.string(Date()), apps: apps) }
+    func entry(_ v: String, bundle: String? = nil) -> FeedApp {
+        var e = FeedApp(version: v, file: "x.dmg", sha256: String(repeating: "a", count: 64), bytes: 1, kind: "app-dmg")
+        e.bundleID = bundle; e.name = bundle.map { "Name of " + $0 }; return e
+    }
+    let root = tmpDir("ssd-root")
+    func ssd(_ apps: [SSDApp]) -> SSDSource { SSDSource(volume: "KH-TEST", root: root, index: SSDIndex(apps: apps)) }
+
+    // L1. Feed plus SSD, matched by bundle ID; the same version comes from the SSD, an older one does not.
+    do {
+        let feed = feedWith(["media": entry("0.1.102", bundle: "com.t.media"), "printer": entry("1.0.3", bundle: "com.t.printer")])
+        let list = Catalog.build(feed: feed, ssd: [ssd([
+            SSDApp(id: "media-ssd", name: "Media", version: "0.1.102", bundleID: "com.t.media", file: "m.dmg", sha256: "b"),
+            SSDApp(id: "printer", name: "Printer", version: "1.0.2", bundleID: "com.t.printer", file: "p.dmg", sha256: "c"),
+            SSDApp(id: "hub", name: "Hub Studio KH", version: "0.6.213", bundleID: "com.t.hub", updatesItself: true, setup: "1 Install Apps/Studio Hub"),
+            SSDApp(id: "newapp", name: "New App", version: "2.0", bundleID: "com.t.new", file: "n.dmg", sha256: "d", icon: ".apps-icons/com.t.new.png"),
+        ])])
+        let media = list.first { $0.id == "media" }, printer = list.first { $0.id == "printer" }
+        let hub = list.first { $0.id == "hub" }, new = list.first { $0.id == "newapp" }
+        expect(media?.ssd?.volume == "KH-TEST" && media?.source == "KH-TEST" && media?.name == "Name of com.t.media", "L1 the same version on feed and SSD installs from the SSD")
+        expect(printer?.ssd == nil && printer?.source == "Feed" && printer?.available == "1.0.3", "L1 an older SSD copy loses to the feed")
+        expect(hub?.updatesItself == true && hub?.ssd == nil && hub?.available == "0.6.213" && hub?.setupFolder?.hasSuffix("1 Install Apps/Studio Hub") == true,
+               "L1 an app that updates itself has a version and a setup folder, and nothing to install")
+        expect(new?.ssd != nil && new?.name == "New App" && new?.icon?.hasSuffix("com.t.new.png") == true, "L1 an app only on an SSD is listed with its name and icon, with no code change")
+        expect(Catalog.build(feed: feedWith(["updater": FeedApp(version: "0.1.3", file: "khu", sha256: String(repeating: "a", count: 64), bytes: 1, kind: "updater")]), ssd: []).isEmpty,
+               "L1 the helper itself is not an app on offer")
+    }
+    // L2. An app installed by hand is found by bundle ID and managed; one that updates itself is reported only.
+    do {
+        let rig = Rig("discover")
+        let apps = rig.root.appendingPathComponent("Applications")
+        _ = makeApp(apps.appendingPathComponent("Printer.app"), version: "1.0.2", id: "com.t.printer")
+        _ = makeApp(apps.appendingPathComponent("Hub.app"), version: "0.6.213", id: "com.t.hub")
+        _ = makeApp(apps.appendingPathComponent("Other.app"), version: "9.0", id: "com.t.unknown")
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        try? rig.publish("printer", "1.0.3", rig.artifact("p.zip", "p"))
+        let cfg = agentConfig(rig, token: token, apps: [:])
+        let source = ssd([SSDApp(id: "printer", name: "Printer", version: "1.0.2", bundleID: "com.t.printer"),
+                          SSDApp(id: "hub", name: "Hub", version: "0.6.213", bundleID: "com.t.hub", updatesItself: true)])
+        let found = Catalog.discover(config: cfg, known: Catalog.known(in: URL(fileURLWithPath: cfg.stateDir), ssd: [source]), folders: [apps])
+        expect(found["printer"]?.recipe == "app-dmg" && found["printer"]?.automatic == true && found["hub"]?.recipe == "status" && found.count == 2,
+               "L2 a hand-installed app is managed with Automatic on; one that updates itself is status only; an unknown app is left alone")
+        _ = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server), ssd: [source], appFolders: [apps])
+        let ms = (try? StateStore.load(from: rig.state))?.machines["mac1"]
+        expect(ms?.installed["printer"] == "1.0.2" && ms?.installed["hub"] == "0.6.213", "L2 the found apps are reported to the page")
+        let later = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server), appFolders: [apps])
+        expect(later?.apps.contains { $0.app == "printer" && $0.managed } == true, "L2 they stay recognised after the SSD is unplugged")
+        let both = Catalog.discover(config: agentConfig(rig, token: token, apps: ["printer": AppConfig(bundlePath: apps.appendingPathComponent("Printer.app").path)]),
+                                    known: Catalog.known(in: URL(fileURLWithPath: cfg.stateDir), ssd: []), folders: [apps])
+        expect(both["printer"] == nil, "L2 an app already in the config is not added twice")
+    }
+    // L3. An SSD install checks the copy's SHA-256 first: a mismatch is refused and changes nothing.
+    do {
+        let rig = Rig("ssd-install")
+        let app = makeApp(rig.root.appendingPathComponent("D.app"), version: "1.0.0", id: "com.t.demo")
+        let dmg = rig.artifact("demo.dmg", "ssd-bytes")
+        let good = try! Signing.sha256Hex(fileAt: dmg).hex
+        try? rig.publish("demo", "2.0.0", rig.artifact("demo.zip", "feed-bytes"))
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        let cfg = agentConfig(rig, token: token, apps: ["demo": AppConfig(bundlePath: app.path, recipe: "fake-for-tests", bundleID: "com.t.demo")])
+        func source(_ sha: String) -> SSDSource {
+            SSDSource(volume: "KH-TEST", root: dmg.deletingLastPathComponent(),
+                      index: SSDIndex(apps: [SSDApp(id: "demo", name: "Demo", version: "2.0.0", bundleID: "com.t.demo", file: "demo.dmg", sha256: sha)]))
+        }
+        let client = InProcessClient(server: rig.server)
+        _ = try? Agent.runOnce(config: cfg, http: client, requested: ["demo"], ssd: [source(String(repeating: "0", count: 64))], appFolders: [])
+        let bad = (try? StateStore.load(from: rig.state))?.machines["mac1"]?.lastResults?["demo"]
+        expect(bad?.status == "refused" && (bad?.reason ?? "").contains("does not match its checksum") && client.downloads == 0,
+               "L3 an SSD copy that does not match its checksum is refused, and nothing is downloaded or installed")
+        _ = try? Agent.runOnce(config: cfg, http: client, requested: ["demo"], ssd: [source(good)], appFolders: [])
+        let ok = (try? StateStore.load(from: rig.state))?.machines["mac1"]?.lastResults?["demo"]
+        expect(ok?.status == "updated" && (ok?.reason ?? "").contains("KH-TEST") && client.downloads == 0, "L3 a matching SSD copy installs with no download")
+    }
+    // L4. The list shows apps this Mac does not have, from their own records.
+    do {
+        let rig = Rig("offer")
+        try? rig.publish("other", "1.0.0", rig.artifact("o.zip", "o"))
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        let cfg = agentConfig(rig, token: token, apps: [:])
+        let r = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server),
+                                   ssd: [ssd([SSDApp(id: "media", name: "Media Studio KH", version: "0.1.102", bundleID: "com.t.media", bundleName: "Media Studio KH.app", file: "m.dmg", sha256: "e")])],
+                                   appFolders: [])
+        let media = r?.apps.first { $0.app == "media" }
+        expect(media?.managed == false && media?.installed == nil && media?.available == "0.1.102" && media?.source == "KH-TEST" && media?.name == "Media Studio KH",
+               "L4 an app on offer shows its name, newest version and source, and is not managed yet")
+    }
+    // L7. After the SSD is unplugged, what it said stays: "updates itself" and the icon; nothing becomes installable.
+    do {
+        let rig = Rig("seen")
+        let apps = rig.root.appendingPathComponent("Applications")
+        _ = makeApp(apps.appendingPathComponent("Gw.app"), version: "0.2.221", id: "com.t.gw")
+        try! fm.createDirectory(at: root.appendingPathComponent(".apps-icons"), withIntermediateDirectories: true)
+        try! Data("icon".utf8).write(to: root.appendingPathComponent(".apps-icons/com.t.gw.png"))
+        try? rig.publish("other", "1.0.0", rig.artifact("o.zip", "o"))
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        let cfg = agentConfig(rig, token: token, apps: ["gateway": AppConfig(bundlePath: apps.appendingPathComponent("Gw.app").path, recipe: "gateway", automatic: true)])
+        let source = ssd([SSDApp(id: "gateway", name: "Gateway Studio KH", version: "0.2.223", bundleID: "com.t.gw", updatesItself: true, icon: ".apps-icons/com.t.gw.png"),
+                          SSDApp(id: "story", name: "Story Studio KH", version: "1.4.374", bundleID: "com.t.story", updatesItself: true)])
+        _ = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server), ssd: [source], appFolders: [apps])
+        let later = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server), appFolders: [apps])
+        let gw = later?.apps.first { $0.app == "gateway" }
+        expect(gw?.statusOnly == true && gw?.name == "Gateway Studio KH" && gw?.icon?.hasSuffix("icons/com.t.gw.png") == true
+               && gw.flatMap { $0.icon.flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) } } == Data("icon".utf8),
+               "L7 with the SSD gone, an app it marked keeps updating itself, its name and its cached icon")
+        expect(later?.apps.contains { $0.app == "story" } == false, "L7 an app only an unplugged SSD had is not listed: there is nothing to install")
+    }
+    // L8. Pause holds a real download where it is; resume finishes it; cancel stops it and rejects nothing.
+    do {
+        let rig = Rig("pause")
+        let big = rig.root.appendingPathComponent("big.bin")
+        FileManager.default.createFile(atPath: big.path, contents: nil)
+        let h = try! FileHandle(forWritingTo: big); try! h.truncate(atOffset: 400 << 20); try! h.close()
+        let server = FeedServer(feedDir: rig.feed, stateDir: rig.state, bind: "127.0.0.1", port: 18797, commandKey: rig.pair.privateKey)
+        let fd = try! server.listen()
+        Thread { try? server.serve(on: fd) }.start()
+        try? rig.publish("big", "1.0.0", big)
+        let name = (FeedPublisher.loadFeed(from: rig.feed)?.apps["big"]?.file)!
+        let url = URL(string: "http://127.0.0.1:18797/artifacts/\(name)")!
+        let out = rig.root.appendingPathComponent("out.part")
+        DownloadControl.pause(false)
+        var status = 0, failure: Error?
+        let done = DispatchSemaphore(value: 0)
+        Thread {
+            do { status = try URLSessionHTTPClient().download(url, headers: [:], to: out, limit: 400 << 20) } catch { failure = error }
+            done.signal()
+        }.start()
+        Thread.sleep(forTimeInterval: 0.05)
+        DownloadControl.pause(true)
+        Thread.sleep(forTimeInterval: 0.6)
+        let size = { ((try? FileManager.default.attributesOfItem(atPath: out.path))?[.size] as? NSNumber)?.int64Value ?? 0 }
+        let a = size(); Thread.sleep(forTimeInterval: 1.0); let b = size()
+        expect(b < 400 << 20 && b - a < 8 << 20, "L8 while paused the file stops growing (\(a) then \(b) bytes)")
+        DownloadControl.pause(false)
+        _ = done.wait(timeout: .now() + 60)
+        expect(status == 200 && failure == nil && size() == 400 << 20, "L8 resume finishes the download")
+        let second = rig.root.appendingPathComponent("out2.part")
+        var cancelled: Error?
+        let done2 = DispatchSemaphore(value: 0)
+        Thread {
+            do { _ = try URLSessionHTTPClient().download(url, headers: [:], to: second, limit: 400 << 20) } catch { cancelled = error }
+            done2.signal()
+        }.start()
+        Thread.sleep(forTimeInterval: 0.05)
+        DownloadControl.pause(true); Thread.sleep(forTimeInterval: 0.3); DownloadControl.cancel()
+        _ = done2.wait(timeout: .now() + 30)
+        expect("\(cancelled.map { "\($0)" } ?? "")".contains("cancelled on this Mac"), "L8 Cancel stops the download and says so")
+        DownloadControl.pause(false)
+    }
+    // L5. Publishing records the app's own name, bundle ID and icon; a DMG of another version is refused.
+    do {
+        let rig = Rig("publish-meta")
+        let meta: (String) throws -> AppMeta = { _ in AppMeta(name: "Media Studio KH", bundleID: "com.t.media", bundleName: "Media Studio KH.app", version: "1.0.0", iconPNG: Data("png".utf8)) }
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.0", artifact: rig.artifact("m.dmg", "m"), kind: "app-dmg", allowSame: false, meta: meta)
+        let e = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
+        let iconFile = e?.icon.map { rig.feed.appendingPathComponent("artifacts").appendingPathComponent($0) }
+        expect(e?.name == "Media Studio KH" && e?.bundleID == "com.t.media" && e?.bundleName == "Media Studio KH.app"
+               && iconFile.flatMap { try? Signing.sha256Hex(fileAt: $0).hex } == e?.iconSha256 && e?.iconSha256 != nil,
+               "L5 the feed carries the app's name, bundle ID, bundle name and a checked icon")
+        expectThrows("L5 a DMG that holds another version is refused", contains: "holds version 1.0.0") {
+            try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.1", artifact: rig.artifact("m2.dmg", "m2"), kind: "app-dmg", allowSame: false, meta: meta)
+        }
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m3.dmg", "m3"), kind: "app-dmg", allowSame: false,
+                                   meta: { _ in throw khuFail("unreadable") })
+        let kept = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
+        let words = AppWords(tagline: "Photos and labels", description: "D", features: [AppFeature(title: "One library", text: "t")], accent: "#2a7")
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.3", artifact: rig.artifact("m4.dmg", "m4"), kind: "app-dmg", allowSame: false,
+                                   words: words, meta: { _ in throw khuFail("unreadable") })
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.4", artifact: rig.artifact("m5.dmg", "m5"), kind: "app-dmg", allowSame: false,
+                                   meta: { _ in throw khuFail("unreadable") })
+        let worded = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
+        expect(worded?.tagline == "Photos and labels" && worded?.features?.first?.title == "One library" && worded?.accent == "#2a7" && worded?.released != nil,
+               "L5 a release's tagline, description, features and accent are stored, and carried to the next release that names none")
+        let list = Catalog.build(feed: Feed(published_at: ISO.string(Date()), apps: ["media": worded!]), ssd: [])
+        expect(list.first?.words.tagline == "Photos and labels", "L5 the Launcher's card reads those words from the feed")
+        expect(kept?.version == "1.0.2" && kept?.bundleID == "com.t.media" && kept?.icon == e?.icon, "L5 a DMG that cannot be read keeps the earlier name, ID and icon")
+    }
+    // L6. The front door: wrong code refused with the publisher's reason; right code installs through the kit's own script.
+    do {
+        let r = EnrolRig("front-door")
+        try! Enrolment.ensurePairingCode(stateDir: r.rig.state)
+        let code = (try! StateStore.load(from: r.rig.state)).pairing!.code
+        let kit = r.rig.root.appendingPathComponent("kit")
+        try! fm.createDirectory(at: kit, withIntermediateDirectories: true)
+        let pub = try! JSONSerialization.data(withJSONObject: ["feedURL": "http://\(r.bind):\(r.port)/release.json", "enrolURL": "http://\(r.bind):\(r.port)/enrol",
+                                                              "publicKey": r.rig.pair.publicKeyBase64, "testAuthority": false])
+        try! pub.write(to: kit.appendingPathComponent("publisher.json"))
+        try! Data("#!/bin/bash\n".utf8).write(to: kit.appendingPathComponent("install-agent.sh"))
+        func manifest() {
+            var files: [String: Any] = [:]
+            for n in ["publisher.json", "install-agent.sh"] { let d = try! Data(contentsOf: kit.appendingPathComponent(n)); files[n] = ["bytes": d.count, "sha256": Signing.sha256Hex(d)] }
+            try! JSONSerialization.data(withJSONObject: ["files": files]).write(to: kit.appendingPathComponent("MANIFEST.json"))
+        }
+        manifest()
+        let home = r.rig.root.appendingPathComponent("home")
+        let client = InProcessClient(server: r.server), shell = CaptureShell()
+        expectThrows("L6 a wrong code is refused with the publisher's own reason", contains: "pairing code is wrong") {
+            _ = try Connect.run(kit: kit, home: home, machine: "new-mac", code: code == "000000" ? "000001" : "000000", http: client, shell: shell)
+        }
+        expect(shell.calls.isEmpty, "L6 nothing is installed after a refusal")
+        _ = try? Connect.run(kit: kit, home: home, machine: "new-mac", code: code, http: client, shell: shell)
+        let call = shell.calls.first ?? []
+        expect(call.count == 4 && call[1].hasSuffix("install-agent.sh") && call[3] == home.path, "L6 the right code runs the kit's install-agent.sh for this home")
+        expect(r.machines["new-mac"]?.enrolmentSource == MachineState.pairingSource, "L6 the Mac is enrolled by pairing")
+        let leftover = (try? fm.contentsOfDirectory(atPath: home.appendingPathComponent("Library").path))?.filter { $0.hasPrefix(".khu-connect") } ?? ["?"]
+        expect(leftover.isEmpty, "L6 the temporary config holding the token is moved to _trash, not left in Library")
+        try! Data("#!/bin/bash\necho changed\n".utf8).write(to: kit.appendingPathComponent("install-agent.sh"))
+        expectThrows("L6 a kit changed on the drive is refused before anything is sent", contains: "was changed") {
+            _ = try Connect.run(kit: kit, home: r.rig.root.appendingPathComponent("home2"), machine: "other-mac", code: code, http: client, shell: shell)
+        }
+        expect(r.machines["other-mac"] == nil, "L6 a refused kit enrols nothing")
+    }
+}
+
 func helperTests() {
     let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
     func setPage(_ rig: Rig, _ app: String, _ on: Bool) {
@@ -2998,6 +3222,7 @@ struct RunnerMain {
             enrolWindowTests()
             pairingTests()
             helperTests()
+            launcherTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -3031,6 +3256,7 @@ r41HealthMustHold()
         enrolWindowTests()
         pairingTests()
         helperTests()
+        launcherTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

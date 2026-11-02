@@ -11,6 +11,17 @@ public struct HelperSettings: Codable, Sendable, Equatable {
     }
     public var automatic: [String: Switch]
     public var pausedUntil: String?
+    /// The Launcher's settings. Each is optional; nil is its default.
+    public var checkManually: Bool?
+    public var autoInstall: Bool?
+    public var notify: Bool?
+    public var appearance: String?
+    public var menuBarWhenClosed: Bool?
+    public var hidden: [String]?
+    /// The version each app was last announced at, so one update is announced once.
+    public var notified: [String: String]?
+    /// Automatic installs happen unless the person chose "Manually" or switched them off.
+    public var installsAutomatically: Bool { checkManually != true && autoInstall != false }
     public init(automatic: [String: Switch] = [:], pausedUntil: String? = nil) {
         self.automatic = automatic; self.pausedUntil = pausedUntil
     }
@@ -52,6 +63,22 @@ public struct HelperApp: Sendable, Equatable {
     public var automatic: Bool
     public var status: String
     public var reason: String?
+    /// What the Launcher window shows besides the menu's line.
+    public var name = ""
+    public var source: String?
+    public var notes: String?
+    public var icon: String?
+    public var bundlePath: String?
+    public var setupFolder: String?
+    /// False for an app on offer that this Mac does not have.
+    public var managed = true
+    public var words = AppWords()
+    public var released: String?
+    public var installedAt: String?
+    public var bytes: Int64?
+    /// The SSD the install would copy from, when it is not the feed.
+    public var fromSSD: String?
+    public var canRollBack = false
 
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
                       failed = "Failed", updatesItself = "Updates itself", notInstalled = "Not installed",

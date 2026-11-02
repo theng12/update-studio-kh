@@ -9,12 +9,14 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--notes "<line>\\n<line>"] [--allow-same]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> [--kind <k>] [--notes "<line>\\n<line>"] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--allow-same]
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
               remove --state <dir> --machine <id>
               serve --feed <dir> --state <dir> --key <keyfile> --bind <ip> --port <p>
               agent --config <file> [--once]
+              ssd-index --volume <path>   (writes <path>/apps.json)
+              connect --kit <dir> --machine <id> --code <pairing code>
             """.utf8))
             exit(64)
         }
@@ -32,6 +34,9 @@ struct KHUMain {
             FileHandle.standardError.write(Data("error: \(message)\n".utf8))
             exit(1)
         }
+        // Opened as Studio Launcher KH.app: show the helper's window, or set the helper up first.
+        if args.isEmpty, Bundle.main.bundlePath.hasSuffix(".app") { FrontDoor.run() }
+        if args.first == "notify", args.count == 3, Bundle.main.bundlePath.hasSuffix(".app") { Notifier.post(title: args[1], body: args[2]) }
         if args.isEmpty { usage() }
         switch args[0] {
         case "keygen":
@@ -50,7 +55,8 @@ struct KHUMain {
                 print("private key: \(keyFile.path)")
             } catch { fail("\(error)") }
         case "publish":
-            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, notes: String?, allowSame = false
+            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, notes: String?, shown: String?, allowSame = false
+            var words = AppWords(), wordsGiven = false
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -62,6 +68,13 @@ struct KHUMain {
                 case "--kind": kind = value("--kind", &i)
                 case "--notes": notes = value("--notes", &i)
                 case "--allow-same": allowSame = true
+                case "--name": shown = value("--name", &i)
+                case "--tagline": words.tagline = value("--tagline", &i); wordsGiven = true
+                case "--description": words.description = value("--description", &i); wordsGiven = true
+                case "--accent": words.accent = value("--accent", &i); wordsGiven = true
+                case "--feature":
+                    let parts = value("--feature", &i).split(separator: "|", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                    words.features = (words.features ?? []) + [AppFeature(title: parts[0], text: parts.count > 1 ? parts[1] : nil)]; wordsGiven = true
                 default: usage()
                 }
                 i += 1
@@ -70,7 +83,7 @@ struct KHUMain {
             do {
                 try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
-                                          notes: notes.map { $0.replacingOccurrences(of: "\\n", with: "\n") })
+                                          notes: notes.map { $0.replacingOccurrences(of: "\\n", with: "\n") }, displayName: shown, words: wordsGiven ? words : nil)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "enrol":
@@ -113,6 +126,36 @@ struct KHUMain {
                     print("network enrolment is open for \(n) minutes, until \(window.until)")
                 }
             } catch { fail("\(error)") }
+        case "ssd-index":
+            guard args.count == 3, args[1] == "--volume" else { usage() }
+            do {
+                let index = try SSDIndexer.index(volume: URL(fileURLWithPath: args[2]))
+                for app in index.apps { print("\(app.id) \(app.version) \(app.updatesItself ? "updates itself" : (app.file ?? "-"))") }
+            } catch { fail("\(error)") }
+        case "launcher-bundle":
+            // Packaging: Studio Launcher KH.app around this binary, with the setup kit inside.
+            guard args.count == 7, args[1] == "--out", args[3] == "--version", args[5] == "--kit" else { usage() }
+            do {
+                let out = URL(fileURLWithPath: args[2])
+                try LauncherBundle.write(bundle: out, executable: URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath(), version: args[4])
+                try FileManager.default.copyItem(at: URL(fileURLWithPath: args[6]), to: out.appendingPathComponent("Contents/Resources/khu-agent"))
+                print("wrote \(out.path)")
+            } catch { fail("\(error)") }
+        case "connect":
+            var kit: String?, machine: String?, code: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--kit": kit = value("--kit", &i)
+                case "--machine": machine = value("--machine", &i)
+                case "--code": code = value("--code", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let kit, let machine, let code else { usage() }
+            do { print(try Connect.run(kit: URL(fileURLWithPath: kit), home: FileManager.default.homeDirectoryForCurrentUser, machine: machine, code: code)) }
+            catch { fail("\(error)") }
         case "remove":
             var state: String?, machine: String?
             var i = 1
@@ -208,7 +251,7 @@ struct KHUMain {
                 var requested: Set<String> = []
                 repeat {
                     do {
-                        let r = try Agent.runOnce(config: cfg, requested: requested, installing: { menu?.installing($0) })
+                        let r = try Agent.runOnce(config: cfg, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [])
                         print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
                         for note in r.notes { print("note: \(note)") }
                         menu?.finished(r, error: nil)

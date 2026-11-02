@@ -70,17 +70,41 @@ public struct URLSessionHTTPClient: HTTPClient {
         let session = URLSession(configuration: .ephemeral, delegate: sink, delegateQueue: nil)
         let task = session.dataTask(with: request)
         task.resume()
-        // The deadline is ours to keep, not the peer's to reset.
-        let finished = sink.done.wait(timeout: .now() + totalTimeout) == .success
+        // The deadline is ours to keep, not the peer's to reset. A download the person paused from
+        // the Launcher is held where it is and its paused time does not count; Cancel stops it.
+        var finished = false, spent: TimeInterval = 0, suspended = false, cancelled = false
+        if handle != nil { DownloadControl.reset() }
+        while spent < totalTimeout {
+            if sink.done.wait(timeout: .now() + 0.5) == .success { finished = true; break }
+            if handle != nil {
+                if DownloadControl.cancelled { cancelled = true; break }
+                // The sink holds the data while paused; here paused time just does not count.
+                suspended = DownloadControl.paused
+                if suspended { continue }
+            }
+            spent += 0.5
+        }
         if !finished {
             task.cancel()
             _ = sink.done.wait(timeout: .now() + 5)
         }
         session.finishTasksAndInvalidate()
+        if cancelled { throw khuFail("cancelled on this Mac; nothing was changed") }
         guard finished else { throw khuFail("\(url.path) did not finish within \(Int(totalTimeout)) s; it was stopped") }
         if let error = sink.error { throw error }
         return sink
     }
+}
+
+/// The Launcher's Pause and Cancel for the download in progress. One download runs at a time.
+public enum DownloadControl {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var state = (paused: false, cancelled: false)
+    public static var paused: Bool { lock.lock(); defer { lock.unlock() }; return state.paused }
+    public static var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return state.cancelled }
+    public static func pause(_ on: Bool) { lock.lock(); state.paused = on; lock.unlock() }
+    public static func cancel() { lock.lock(); state.cancelled = true; state.paused = false; lock.unlock() }
+    static func reset() { lock.lock(); state = (false, false); lock.unlock() }
 }
 
 /// Takes a response as it arrives — into a file, or memory for small replies — and cancels it the
@@ -115,6 +139,9 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
             return
         }
         guard let handle else { buffer.append(data); return }
+        // Paused from the Launcher: hold this delivery, so the connection backs up and the sender
+        // waits. Suspending the task alone lets data already in flight keep arriving.
+        while DownloadControl.paused && !DownloadControl.cancelled { usleep(100_000) }
         do { try handle.write(contentsOf: data) } catch { self.error = error; dataTask.cancel() }
     }
 
@@ -216,7 +243,12 @@ public enum Agent {
     public static func runOnce(config: AgentConfig, http: HTTPClient = URLSessionHTTPClient(), shell: Shell = SystemShell(),
                                control: ((String, AppConfig) -> AppControl)? = nil,
                                executable: String? = Bundle.main.executablePath, now: Date = Date(),
-                               requested: Set<String> = [], installing: ((String?) -> Void)? = nil) throws -> AgentRunResult {
+                               requested: Set<String> = [], installing: ((String?) -> Void)? = nil,
+                               ssd: [SSDSource] = [], appFolders: [URL] = Catalog.applicationFolders) throws -> AgentRunResult {
+        // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
+        let stateURL = URL(fileURLWithPath: config.stateDir)
+        var config = config
+        config.apps.merge(Catalog.discover(config: config, known: Catalog.known(in: stateURL, ssd: ssd), folders: appFolders)) { a, _ in a }
         try validate(config)
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
@@ -224,7 +256,7 @@ public enum Agent {
         return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"), wait: false) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
-                          requested: requested, installing: installing ?? { _ in })
+                          requested: requested, installing: installing ?? { _ in }, ssd: ssd)
         }
     }
 
@@ -234,7 +266,13 @@ public enum Agent {
 
     static func runLocked(config: AgentConfig, stateDir: URL, http: HTTPClient, shell: Shell,
                           control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
-                          requested: Set<String> = [], installing: (String?) -> Void = { _ in }) throws -> AgentRunResult {
+                          requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = []) throws -> AgentRunResult {
+        var config = config
+        // From the Launcher: "<app>" installs or updates, "reinstall:<app>" installs the same
+        // version again, "rollback:<app>" puts back the version this Mac kept.
+        let reinstall = Set(asked.filter { $0.hasPrefix("reinstall:") }.map { String($0.dropFirst("reinstall:".count)) })
+        let rollbacks = Set(asked.filter { $0.hasPrefix("rollback:") }.map { String($0.dropFirst("rollback:".count)) })
+        let requested = Set(asked.filter { !$0.contains(":") }).union(reinstall)
         guard let feedURL = URL(string: config.feedURL) else { throw khuFail("feedURL is not a URL") }
         let serverBase = feedURL.deletingLastPathComponent()
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
@@ -321,6 +359,13 @@ public enum Agent {
         // 4. The feed: signed, understood, and not older than one already seen.
         let feed = try verifiedFeed(http: http, serverBase: serverBase, config: config, memory: &memory, now: now)
         try remember()
+        Catalog.remember(ssd, feed: feed, in: stateDir)
+        let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))
+        // Install from the Launcher's list: an app this Mac does not have yet goes to /Applications.
+        for app in requested where config.apps[app] == nil {
+            guard let entry = catalog.first(where: { $0.id == app }), !entry.updatesItself, let bundle = entry.bundleName else { continue }
+            config.apps[app] = AppConfig(bundlePath: "/Applications/" + bundle, recipe: "app-dmg", automatic: true, bundleID: entry.bundleID)
+        }
         // A self-update the stub rolled back is a failure this Mac has already seen: those bytes
         // must not be installed again on every run. A new artifact (a different SHA-256) or an
         // explicit order clears it, exactly as for any other version that failed here.
@@ -395,9 +440,12 @@ public enum Agent {
         for app in requested.sorted() where config.apps[app] != nil && !todo.contains(where: { $0.app == app }) {
             todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.update, true))
         }
+        for app in rollbacks.sorted() where config.apps[app] != nil && !todo.contains(where: { $0.app == app }) {
+            todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.rollback, true))
+        }
         // A pause from the menu holds Automatic only; the owner's orders and "Update now" still run.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
-        where !helper.paused(at: now) && !statusOnly.contains(cfg.recipe)
+        where !helper.paused(at: now) && helper.installsAutomatically && !statusOnly.contains(cfg.recipe)
             && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic) {
             guard !todo.contains(where: { $0.app == app }), let entry = feed.apps[app] else { continue }
             guard memory.rejected[app] != entry.sha256 else { continue }  // failed here before: wait for a new artifact
@@ -425,8 +473,11 @@ public enum Agent {
             do {
                 switch item.action {
                 case ServerCommand.update:
+                    // A click in the Launcher installs the SSD copy when it is at least as new as the feed's.
+                    let local = requested.contains(item.app) ? catalog.first { $0.id == item.app }?.ssd : nil
                     res = try install(app: item.app, feed: feed, installed: installed[item.app], config: config,
-                                      serverBase: serverBase, stateDir: stateDir, http: http, shell: shell, control: control)
+                                      serverBase: serverBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
+                                      force: reinstall.contains(item.app))
                 case ServerCommand.rollback:
                     res = try orderedRollback(app: item.app, order: item.id, installed: installed[item.app], config: config,
                                               stateDir: stateDir, shell: shell, control: control)
@@ -477,24 +528,61 @@ public enum Agent {
                 result.restartRequested = true; break
             }  // the rest wait for the new version
         }
-        result.apps = snapshot(config: config, feed: feed, orders: orders, helper: helper, memory: memory, executable: executable)
+        result.apps = snapshot(config: config, feed: feed, catalog: catalog, orders: orders, helper: helper, memory: memory,
+                               executable: executable, http: http, serverBase: serverBase, stateDir: stateDir)
         return result
     }
 
     /// Each app as it stands on disk now, for the menu-bar icon.
-    static func snapshot(config: AgentConfig, feed: Feed, orders: CommandsReply, helper: HelperSettings,
-                         memory: AgentMemory, executable: String?) -> [HelperApp] {
-        config.apps.keys.sorted { AppNames.display($0) < AppNames.display($1) }.map { app in
-            let cfg = config.apps[app]!
-            let installed = cfg.recipe == "updater" ? selfVersion(config: config, executable: executable)
-                : (try? BundleInfo.read(cfg.bundlePath))?.version
+    static func snapshot(config: AgentConfig, feed: Feed, catalog: [CatalogEntry], orders: CommandsReply, helper: HelperSettings,
+                         memory: AgentMemory, executable: String?, http: HTTPClient, serverBase: URL, stateDir: URL) -> [HelperApp] {
+        let ids = Set(config.apps.keys).union(catalog.map(\.id))
+        return ids.map { app -> HelperApp in
+            let cfg = config.apps[app]
+            let entry = catalog.first { $0.id == app }
+            let installed = cfg?.recipe == "updater" ? selfVersion(config: config, executable: executable)
+                : cfg.flatMap { try? BundleInfo.read($0.bundlePath) }?.version
             let last = memory.done.values.filter { $0.app == app }.max { $0.at < $1.at }.map { ($0.status, $0.reason) }
-            let only = statusOnly.contains(cfg.recipe)
-            let (status, reason) = HelperApp.status(installed: installed, available: feed.apps[app]?.version, statusOnly: only, last: last)
-            return HelperApp(app: app, installed: installed, available: feed.apps[app]?.version, statusOnly: only,
-                             automatic: !only && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic),
-                             status: status, reason: reason)
-        }
+            // An app its SSD marks as updating itself is shown that way, whatever this Mac's recipe.
+            let only = (cfg.map { statusOnly.contains($0.recipe) } ?? false) || (entry?.updatesItself ?? false)
+            let available = cfg?.recipe == "updater" ? feed.apps[app]?.version : (entry?.available ?? feed.apps[app]?.version)
+            let (status, reason) = HelperApp.status(installed: installed, available: only ? nil : available, statusOnly: only, last: last)
+            var row = HelperApp(app: app, installed: installed, available: available, statusOnly: only,
+                                automatic: !only && cfg != nil && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg!.automatic),
+                                status: status, reason: reason)
+            row.name = cfg?.recipe == "updater" ? "Studio Launcher KH" : (entry?.name ?? feed.apps[app]?.name ?? AppNames.display(app))
+            row.source = entry?.source
+            row.notes = entry?.notes ?? feed.apps[app]?.notes
+            row.setupFolder = entry?.setupFolder
+            row.managed = cfg != nil
+            row.words = entry?.words ?? AppWords()
+            // The helper is not an app on offer, but its own words come from its SSD entry.
+            if cfg?.recipe == "updater", let mine = Catalog.seen(in: stateDir).first(where: { $0.id == "updater" }) { row.words = mine.words }
+            row.released = entry?.released ?? feed.apps[app]?.released
+            row.bytes = entry?.ssd == nil ? feed.apps[app]?.bytes : entry?.bytes
+            row.fromSSD = entry?.ssd?.volume
+            if let cfg, installed != nil, cfg.recipe != "updater" {
+                row.installedAt = ((try? FileManager.default.attributesOfItem(atPath: cfg.bundlePath))?[.modificationDate] as? Date).map(ISO.string)
+                row.canRollBack = FileManager.default.fileExists(atPath: Recipe.Paths(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app).rollback.path)
+            }
+            if let cfg, installed != nil, cfg.recipe != "updater" { row.bundlePath = cfg.bundlePath }
+            // The icon read from the app's own bundle (cached from an SSD or the feed), else the installed copy's.
+            row.icon = entry?.icon ?? feedIcon(feed.apps[app], http: http, serverBase: serverBase, stateDir: stateDir) ?? row.bundlePath
+            return row
+        }.filter { $0.managed || $0.available != nil }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// The feed's icon for an app this Mac does not have, kept under `state/icons/` once its
+    /// signed SHA-256 matches. Nil (a plain placeholder) when there is none or it does not match.
+    static func feedIcon(_ entry: FeedApp?, http: HTTPClient, serverBase: URL, stateDir: URL) -> String? {
+        guard let name = entry?.icon, let sha = entry?.iconSha256, let safe = try? SafeName.component(name, what: "icon") else { return nil }
+        let file = stateDir.appendingPathComponent("icons").appendingPathComponent(safe)
+        if (try? Signing.sha256Hex(fileAt: file).hex) == sha { return file.path }
+        guard let (data, code) = try? http.get(serverBase.appendingPathComponent("artifacts").appendingPathComponent(safe), headers: [:]),
+              code == 200, data.count < 1 << 20, Signing.sha256Hex(data) == sha else { return nil }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
+        return file.path
     }
 
     static func verifiedFeed(http: HTTPClient, serverBase: URL, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> Feed {
@@ -557,9 +645,11 @@ public enum Agent {
     }
 
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
-                        http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl) throws -> RecipeResult {
+                        http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
+                        local: CatalogEntry.Local? = nil, force: Bool = false) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         if statusOnly.contains(cfg.recipe) { return RecipeResult(status: "status_only", reason: "updated by its own updater") }
+        if let local { return try installLocal(local, app: app, installed: force ? nil : installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control) }
         // An install this Mac could not finish or undo is not a settled app: an order for it must
         // not be answered "current" while a rollback is still owed. The next run picks it up.
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
@@ -571,7 +661,7 @@ public enum Agent {
             guard let order = VersionCompare.compare(entry.version, installed) else {
                 return RecipeResult(status: "refused", reason: "\(installed) here and \(entry.version) in the feed cannot be compared")
             }
-            if order == 0 { return RecipeResult(status: "current", reason: "\(installed) is already installed") }
+            if order == 0 && !force { return RecipeResult(status: "current", reason: "\(installed) is already installed") }
             if order < 0 { return RecipeResult(status: "refused", reason: "the feed has \(entry.version), older than \(installed) here; no downgrade") }
         }
 
@@ -597,6 +687,31 @@ public enum Agent {
             return RecipeResult(status: "updated")
         default:
             throw khuFail("unknown recipe \(cfg.recipe)")
+        }
+    }
+
+    /// An install from an SSD: the copy must match the SHA-256 its `apps.json` names before
+    /// anything is touched, then it takes the same journaled app-dmg path, with rollback, as a
+    /// download does.
+    static func installLocal(_ local: CatalogEntry.Local, app: String, installed: String?, cfg: AppConfig, stateDir: URL,
+                             shell: Shell, control: (String, AppConfig) -> AppControl) throws -> RecipeResult {
+        if let installed, !VersionCompare.isNewer(local.version, than: installed) {
+            return RecipeResult(status: "current", reason: "\(installed) is already installed; \(local.volume) has \(local.version)")
+        }
+        guard let sha = try? Signing.sha256Hex(fileAt: URL(fileURLWithPath: local.file)).hex else {
+            return RecipeResult(status: "refused", reason: "the copy on \(local.volume) could not be read; nothing was changed")
+        }
+        guard sha == local.sha256 else {
+            return RecipeResult(status: "refused", reason: "the copy on \(local.volume) does not match its checksum; nothing was changed")
+        }
+        switch cfg.recipe {
+        case "app-dmg", "gateway":
+            return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: local.file, feedVersion: local.version,
+                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg))
+        case "fake-for-tests":
+            return RecipeResult(status: "updated", reason: "from \(local.volume)")
+        default:
+            return RecipeResult(status: "refused", reason: "the \(cfg.recipe) recipe does not install from an SSD")
         }
     }
 

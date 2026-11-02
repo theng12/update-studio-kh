@@ -33,7 +33,8 @@ public enum FeedPublisher {
     /// (`<sha12>-<name>`), so two apps' files can never overwrite each other and bytes an older
     /// feed still names are never replaced.
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
-                               kind: String?, allowSame: Bool, notes: String? = nil, now: Date = Date()) throws {
+                               kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil,
+                               meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, now: Date = Date()) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
         let key = try Signing.loadPrivateKey(from: keyFile)
@@ -65,8 +66,31 @@ public enum FeedPublisher {
                 }
                 try FileManager.default.moveItem(at: staging, to: dest)
             }
-            feed.apps[app] = FeedApp(version: version, file: name, sha256: sha, bytes: bytes,
-                                     kind: kind ?? (feed.apps[app]?.kind ?? "app-dmg"), notes: notes)
+            let kindNow = kind ?? (feed.apps[app]?.kind ?? "app-dmg")
+            var entry = FeedApp(version: version, file: name, sha256: sha, bytes: bytes, kind: kindNow, notes: notes)
+            // The app's own name, identity and icon, so the Launcher lists it with no code change.
+            // A DMG that cannot be read is still published; the fields are then carried over.
+            let old = feed.apps[app]
+            entry.name = displayName ?? old?.name; entry.bundleID = old?.bundleID; entry.bundleName = old?.bundleName
+            entry.icon = old?.icon; entry.iconSha256 = old?.iconSha256
+            // The card's words are carried over unless this publish names new ones.
+            let w = words ?? AppWords(tagline: old?.tagline, description: old?.description, features: old?.features, accent: old?.accent)
+            entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
+            entry.released = ISO.string(now)
+            if ["app-dmg", "gateway"].contains(kindNow), let read = meta, let info = try? read(dest.path) {
+                guard info.version == version else {
+                    throw khuFail("\(artifact.lastPathComponent) holds version \(info.version), not \(version); nothing was published")
+                }
+                entry.name = displayName ?? info.name; entry.bundleID = info.bundleID; entry.bundleName = info.bundleName
+                if let png = info.iconPNG {
+                    let iconSha = Signing.sha256Hex(png)
+                    let iconName = "\(iconSha.prefix(12))-icon.png"
+                    let iconURL = artifactsDir.appendingPathComponent(iconName)
+                    if !FileManager.default.fileExists(atPath: iconURL.path) { try png.write(to: iconURL, options: .atomic) }
+                    entry.icon = iconName; entry.iconSha256 = iconSha
+                }
+            }
+            feed.apps[app] = entry
             // Strictly later than the last release, so an agent's high-water mark always moves forward.
             let previous = feed.publishedAt ?? .distantPast
             feed.published_at = ISO.string(max(now, previous.addingTimeInterval(0.001)))
