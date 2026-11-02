@@ -840,7 +840,7 @@ func agentAndServerTests() {
         try? rigO.publish("demo", "1.0.0", rigO.artifact("demo.zip", "z"))
         _ = s.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(tok)"],
                                         body: Data(#"{"machine":"mac2","installed":{"demo":"0.9.0"},"automatic_default":{"demo":true}}"#.utf8)), remote: "100.64.0.9")
-        expect(s.statusHTML().contains("<p><b>Version ") && s.statusHTML().contains("<h2>What's new</h2><ul><li>"), "the page shows the top CHANGELOG entry")
+        expect(s.statusHTML().contains(" · What's new</span>") && s.statusHTML().contains("<h2>What's new</h2><ul><li>"), "the page shows the top CHANGELOG entry")
         expect(s.statusHTML().contains("Automatic: on"), "R32 a Mac whose own config is Automatic shows Automatic: on")
         // 1.0.2 page: one state per app, Update N Macs, history, failure details, notes, offline.
         expect(s.statusHTML().contains("Update available") && s.statusHTML().contains("Update 1 Mac"),
@@ -874,7 +874,7 @@ func agentAndServerTests() {
                && s.statusHTML().contains("<li>Not tested on printer hardware</li>"), "P5 publish --notes is signed into the feed and shown as What's new")
         try! StateStore.update(in: rigO.state) { $0.machines["mac2"]?.lastSeen = ISO.string(Date().addingTimeInterval(-3600)) }
         let quiet = s.statusHTML()
-        expect(quiet.contains("Offline since") && !quiet.contains("Update 1 Mac"), "P6 a Mac silent for an hour is Offline, never its last state")
+        expect(quiet.contains("Offline · ") && !quiet.contains("Update 1 Mac"), "P6 a Mac silent for an hour is Offline, never its last state")
         expect(FeedServer.model(of: "terranash-1607-m2-pro-32-512-hub") == "M2 Pro · 32 GB · 512 GB"
                && FeedServer.model(of: "terranash-1301-m1-16-1000-hub") == "M1 · 16 GB · 1 TB"
                && FeedServer.model(of: "terranes-1606-m1-16-512-hub") == nil && FeedServer.model(of: "vengthengs-mac-studio-hub") == nil,
@@ -2238,7 +2238,7 @@ func enrolWindowTests() {
                "E13 the countdown script is allowed by its own nonce, with no 'unsafe-inline' for scripts")
         expect(html.contains("data-until=") && html.contains("of \(EnrolPolicy.maxPerWindow) new Macs enrolled in this window"),
                "E13 the open window is shown with a countdown and how much of its allowance is used")
-        expect(html.contains("fresh-mac") && html.contains("a window") && html.contains("Joined through a window"),
+        expect(html.contains("fresh-mac") && html.contains("Connected on "),
                "E13 the Mac enrolled through the window is listed as such")
         expect(html.contains("action=/api/remove-machine") && html.contains("Remove Mac"),
                "E13 each Mac has a Remove Mac button on the page")

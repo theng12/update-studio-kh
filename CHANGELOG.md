@@ -10,7 +10,8 @@ The newest version is first. The status page shows the top entry.
 - A failed install shows the Mac's own reason, when it happened and the version it is back on, with a Copy error report button.
 - The Feed lists what's new in each published app, and "Update N Macs" updates every connected Mac that is behind, after asking.
 - "Connect a new Mac" shows the three steps, what is needed first and where the kit is; while the window is open, new Macs appear as they join.
-- `khu publish --notes` adds a release's notes to the feed.
+- A release's notes can be added to the feed when it is published.
+- KH Updater's own agent and app show their What's New from this changelog.
 
 ## 1.0.1 — 2026-11-02
 - The status page shows KH Updater's version and what's new in it.
