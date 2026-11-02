@@ -6,6 +6,7 @@ The newest version is first. The status page shows the top entry.
 - When someone changes Automatic from a Mac's menu-bar icon, that Mac shows "changed on this Mac" on the page. The later change wins, whether it was made on the page or on the Mac.
 - A Mac whose Automatic updates are paused from its menu says so, and until when.
 - New names: this window is Update Studio KH, and the helper on each Mac is Studio Launcher KH. The apps read Hub Studio KH, Story Studio KH, Gateway Studio KH, Printer Studio KH and Media Studio KH.
+- The Connect a Mac steps point to the kit folder "Studio Launcher KH - Connect a Mac".
 - Apps & updates also lists Story Studio KH, Hub Studio KH and Gateway Studio KH, with the newest version on any Mac. They show "Updates itself" instead of an Update button.
 
 ## 0.1.2 — 2026-11-02

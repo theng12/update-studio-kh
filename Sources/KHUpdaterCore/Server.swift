@@ -984,7 +984,7 @@ public final class FeedServer: @unchecked Sendable {
         let connect = "<section id=connect class=panel data-view=connect><h2>Connect a Mac</h2>"
             + "<p class=sub>Needed first: Tailscale on the new Mac, signed in to the same network as this Mac.</p>"
             + "<ol class=steps><li><b>The pairing code for new Macs.</b>\(pairing)\(enrol)</li>"
-            + "<li><b>On the new Mac, double-click “Connect to Studio Launcher KH”</b> from the kit in <code>~/Desktop/All YouTube Stuff/KH Updater - Connect a Mac/</code>, press Return to accept its name, and type this code.</li>"
+            + "<li><b>On the new Mac, double-click “Connect to Studio Launcher KH”</b> from the kit in <code>~/Desktop/All YouTube Stuff/Studio Launcher KH - Connect a Mac/</code>, press Return to accept its name, and type this code.</li>"
             + "<li><b>It appears in the Macs list</b> within a few minutes. Nothing installs by itself.</li></ol>\(joinedList)</section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
