@@ -2227,7 +2227,7 @@ func enrolWindowTests() {
             return (response, String(data: response.data, encoding: .utf8) ?? "")
         }
         let closed = page().1
-        expect(closed.contains("Network enrolment") && closed.contains("<b>Closed</b>") && closed.contains("No Mac has been removed"),
+        expect(closed.contains("Connect a Mac") && closed.contains("<b>Closed</b>") && closed.contains("No Mac has been removed"),
                "E13 the page says network enrolment is closed by default")
         r.openWindow(30)
         _ = enrolPost(r.server, machine: "fresh-mac", nonce: enrolNonce())

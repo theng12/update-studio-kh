@@ -785,7 +785,7 @@ public final class FeedServer: @unchecked Sendable {
         // The enrolment window: its state, its countdown, and how much of its allowance is used.
         let window = state.enrolWindow
         let isOpen = window?.isOpen() ?? false
-        let openForm = "<form method=post action=/api/enrol-window class=row><label for=minutes class=sr>Minutes</label><input id=minutes type=number name=minutes value=\(EnrolPolicy.defaultMinutes) min=1 max=\(EnrolPolicy.maxMinutes)><span class=unit>min</span><button class=primary>Open window</button></form>"
+        let openForm = "<form method=post action=/api/enrol-window class=row><button class=primary>Allow new Macs to connect for</button><label for=minutes class=sr>Minutes</label><input id=minutes type=number name=minutes value=\(EnrolPolicy.defaultMinutes) min=1 max=\(EnrolPolicy.maxMinutes)><span class=unit>min</span></form>"
         var enrol: String
         var countdown = ""
         var leftText = ""
@@ -793,16 +793,16 @@ public final class FeedServer: @unchecked Sendable {
             let seconds = Int(window.remaining())
             let endUnix = window.untilDate.map { Int($0.timeIntervalSince1970) } ?? 0
             leftText = "<span id=left data-until=\"\(endUnix)\">\(seconds / 60) min \(seconds % 60) s</span>"
-            enrol = "<p>Network enrolment: <span class=\"dot ok\"></span><b>Open</b> until \(h(stamp(window.until))), \(leftText) left"
+            enrol = "<p><span class=\"dot ok\"></span><b>Open</b>: new Macs can connect until \(h(stamp(window.until))), \(leftText) left"
                 + " — \(window.enrolled) of \(maxEnrolmentsPerWindow) new Macs enrolled in this window. A Mac that is not enrolled yet may claim a token for itself.</p>"
-                + form("/api/enrol-window", ["minutes": "0"], "Close now")
+                + form("/api/enrol-window", ["minutes": "0"], "Stop allowing new Macs")
             countdown = "document.querySelectorAll('[data-until]').forEach(function(e){var u=Number(e.getAttribute('data-until'));"
                 + "function t(){var s=Math.round(u-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'}"
                 + "t();setInterval(t,1000)});"
         } else if let window {
-            enrol = "<p>Network enrolment: <span class=dot></span><b>Closed</b>. The last window ended \(h(stamp(window.until))) and enrolled \(window.enrolled) of \(maxEnrolmentsPerWindow).</p>\(openForm)"
+            enrol = "<p><span class=dot></span><b>Closed</b>: new Macs cannot connect. The last window ended \(h(stamp(window.until))) and enrolled \(window.enrolled) of \(maxEnrolmentsPerWindow).</p>\(openForm)"
         } else {
-            enrol = "<p>Network enrolment: <span class=dot></span><b>Closed</b>. No Mac can enrol itself until you open a window.</p>\(openForm)"
+            enrol = "<p><span class=dot></span><b>Closed</b>: new Macs cannot connect until you allow them.</p>\(openForm)"
         }
 
         // Every Mac, one compact row each, problems first. Each app has exactly one state, and
@@ -826,7 +826,7 @@ public final class FeedServer: @unchecked Sendable {
                 : Set(ms.installed.keys).union(ms.automaticDefault.map { Set($0.keys).intersection(feedApps) } ?? feedApps)
             let apps = reported.union(ms.pending.map(\.app)).sorted { name($0) < name($1) }
             var anyFailed = false, anyUpdating = false, anyUpdate = false
-            var chips = "", rows = "", failures = ""
+            var chips = "", rows = "", failures = "", failSummary = "", rowUpdate = ""
             for app in apps {
                 let installed = ms.installed[app]
                 let feedApp = feed?.apps[app]
@@ -846,16 +846,19 @@ public final class FeedServer: @unchecked Sendable {
                     st = order.action == ServerCommand.rollback ? (agentTooOld ? "Rolling back (agent too old for rollback)" : "Rolling back", "info") : ("Updating", "info")
                     anyUpdating = true
                 } else if failed { st = ("Failed", "bad"); anyFailed = true }
-                else if !online { st = ("Not checked", "muted") }
+                else if !online { st = ("Not checked · no report for 10 min", "unknown") }
                 else if ownUpdater { st = ("Updates itself", "muted") }
-                else if feedApp == nil { st = ("Not checked", "muted") }
+                else if feedApp == nil { st = ("Not checked · not in feed", "unknown") }
                 else if installed == nil || behind { st = (installed == nil ? "Not installed" : "Update available", "warn"); anyUpdate = true; updates += 1 }
                 else if same { st = ("Up to date", "ok") }
                 else { st = ("Newer than feed", "muted") }
                 let auto = ms.effectiveAutomatic(app)
                 chips += "<span class=\"app t-\(st.1)\">\(h(name(app))) <span class=num>\(h(installed ?? "—"))</span></span>"
                 var actions = ""
-                if !ownUpdater && feedApp != nil && !same && order == nil { actions += form("/api/request-update", machine, app, "", installed == nil ? "Install" : "Update", "primary") }
+                if !ownUpdater && feedApp != nil && !same && order == nil {
+                    actions += form("/api/request-update", machine, app, "", installed == nil ? "Install" : "Update", "primary")
+                    if online && !failed && rowUpdate.isEmpty { rowUpdate = form("/api/request-update", machine, app, "", "Update \(h(name(app)))", "primary small") }
+                }
                 // Rollback needs no feed entry: it puts back the version this Mac kept.
                 if !ownUpdater { actions += form("/api/request-rollback", machine, app, "", "Roll back", "") }
                 if !ownUpdater && feedApp != nil {
@@ -865,6 +868,7 @@ public final class FeedServer: @unchecked Sendable {
                 rows += "<tr><td class=name>\(h(name(app)))<span class=sub> \(h(app))</span></td><td class=num>\(h(installed ?? "—"))\(health)</td><td class=num>\(h(feedApp?.version ?? "—"))</td>"
                     + "<td><span class=\"chip \(st.1)\">\(h(st.0))</span>\(auto && !ownUpdater && feedApp != nil ? " <span class=\"tag on\">Automatic: on</span>" : "")</td><td class=actions>\(actions)</td></tr>"
                 if failed, let result {
+                    if failSummary.isEmpty { failSummary = "\(name(app)): \(words(result.status).lowercased())" }
                     let entry = ms.history?.first { $0.app == app && $0.at == result.at }
                     let back = entry?.from.map { result.status.hasPrefix("rolled_back") || result.status.hasPrefix("rollback") ? "Back on \($0)" : "Was on \($0)" }
                     let tried = entry?.to.map { "tried \($0)" }
@@ -882,7 +886,7 @@ public final class FeedServer: @unchecked Sendable {
             let overall: (String, String, String, Int)
             if ms.lastSeen == nil { overall = ("Has not reported yet", "warn", "offline", 1) }
             else if !online { overall = ("Offline since \(stamp(ms.lastSeen))", "bad", "offline", 1) }
-            else if anyFailed { overall = ("Failed", "bad", "failed", 0) }
+            else if anyFailed { overall = ("Failed · \(failSummary)", "bad", "failed", 0) }
             else if anyUpdating { overall = ("Updating", "info", "updating", 2) }
             else if anyUpdate { overall = ("Update available", "warn", "update", 3) }
             else { overall = ("Up to date", "ok", "ok", 5) }
@@ -892,10 +896,12 @@ public final class FeedServer: @unchecked Sendable {
             }.joined()
             let via = ms.enrolmentSource == MachineState.windowSource ? "a window" : "the publisher"
             let model = Self.model(of: machine).map { "<small>\(h($0))</small>" } ?? ""
-            let seen = ago(ms.lastSeen)
-            let html = "<details class=mac data-mac=\"\(h(machine.lowercased()))\" data-state=\(overall.2)><summary>"
+            let seen = ms.lastSeen == nil ? "<span class=\"dot warn\"></span>Never seen"
+                : online ? "<span class=\"dot ok\"></span>Online · \(h(ago(ms.lastSeen)))"
+                : "<span class=\"dot bad\"></span><span class=badtext>Offline · \(h(ago(ms.lastSeen)))</span>"
+            let html = "<details class=\"mac s-\(overall.2)\" data-mac=\"\(h(machine.lowercased()))\" data-state=\(overall.2)><summary>"
                 + "<span class=who><b>\(h(machine))</b>\(model)</span><span class=apps>\(chips)</span>"
-                + "<span class=\"chip \(overall.1)\">\(h(overall.0))</span><span class=\"seen num\">\(h(seen))</span></summary><div class=detail>"
+                + "<span class=state><span class=\"chip \(overall.1)\">\(h(overall.0))</span>\(rowUpdate)</span><span class=\"seen num\">\(seen)</span></summary><div class=detail>"
                 + failures
                 + (rows.isEmpty ? "<p class=sub>No versions yet: they appear after this Mac's first report.</p>"
                    : "<table class=apptable><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>State</th><th><span class=sr>Actions</span></th></tr></thead>\(rows)</table>")
@@ -915,19 +921,19 @@ public final class FeedServer: @unchecked Sendable {
             : "<div class=maclist>\(macRows.map(\.html).joined())</div>"
         let summary = "<div class=stats>"
             + "<div class=stat><span class=n>\(connected)<small> of \(total)</small></span><span>Connected<small>reported in the last 10 min</small></span></div>"
-            + "<div class=stat><span class=\"n ok\">\(upToDate)</span><span>Up to date</span></div>"
+            + "<div class=stat><span class=\"n\(total > 0 && upToDate == total ? " ok" : "")\">\(upToDate)</span><span>Up to date</span></div>"
             + "<div class=stat><span class=\"n\(needUpdate > 0 ? " warn" : "")\">\(needUpdate)</span><span>Need update<small>\(updates) update\(updates == 1 ? "" : "s") available</small></span></div>"
             + "<div class=stat><span class=\"n\(failedMacs + offline > 0 ? " bad" : "")\">\(failedMacs + offline)</span><span>Failed or offline<small>\(failedMacs) failed · \(offline) offline</small></span></div>"
             + "</div>"
-        let banner = isOpen ? "<p class=banner><span class=\"dot ok\"></span>Enrolment window open, \(leftText.replacingOccurrences(of: "id=left ", with: "")) left — \(joined.count) new Mac\(joined.count == 1 ? "" : "s") joined. <a href=#connect>Connect a new Mac</a></p>" : ""
+        let banner = isOpen ? "<p class=banner><span class=\"dot ok\"></span>New Macs can connect for \(leftText.replacingOccurrences(of: "id=left ", with: "")) left — \(joined.count) new Mac\(joined.count == 1 ? "" : "s") joined. <a href=#connect>See who joined</a></p>" : ""
 
         // Connect a new Mac: the existing window and the existing kit, in three steps.
         let joinedList = isOpen ? "<div class=joined><h3>Joined in this window</h3>" + (joined.isEmpty ? "<p class=sub>None yet. This list updates every 10 s.</p>" : "<ul>\(joined.joined())</ul>") + "</div>" : ""
-        let connect = "<section id=connect class=panel><h2>Connect a new Mac</h2>"
+        let connect = "<section id=connect class=panel data-view=connect><h2>Connect a Mac</h2>"
             + "<p class=sub>Needed first: Tailscale on the new Mac, signed in to the same network as this Mac.</p>"
-            + "<ol class=steps><li><b>Open the window here.</b>\(enrol)</li>"
+            + "<ol class=steps><li><b>Allow new Macs to connect here.</b>\(enrol)</li>"
             + "<li><b>On the new Mac, double-click “Connect to KH Updater”</b> from the kit in <code>~/Desktop/All YouTube Stuff/KH Updater - Connect a Mac/</code> and press Return to accept its name.</li>"
-            + "<li><b>It appears in the list above</b> within a few minutes. Nothing installs by itself.</li></ol>\(joinedList)</section>"
+            + "<li><b>It appears under Macs</b> within a few minutes. Nothing installs by itself.</li></ol>\(joinedList)</section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
         let sizes = ByteCountFormatter()
@@ -935,7 +941,7 @@ public final class FeedServer: @unchecked Sendable {
             let behind = state.machines.filter { Self.updateAvailable($0.value, app: app, feed: feed, now: now) }.count
             let lines = (entry.notes ?? "").split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let notes = lines.isEmpty ? "<span class=sub>No notes yet</span>"
-                : "<ul class=notes>\(lines.map { "<li>\(h($0.hasPrefix("- ") ? String($0.dropFirst(2)) : $0))</li>" }.joined())</ul>"
+                : "<details class=notes><summary>What's new</summary><ul>\(lines.map { "<li>\(h($0.hasPrefix("- ") ? String($0.dropFirst(2)) : $0))</li>" }.joined())</ul></details>"
             let action = behind == 0 ? "<span class=sub>No Mac needs it</span>"
                 : "<form method=post action=/api/update-all data-confirm=\"Update \(h(name(app))) to \(h(entry.version)) on \(behind) Mac\(behind == 1 ? "" : "s")?\"><input type=hidden name=app value=\"\(h(app))\"><button class=primary>Update \(behind) Mac\(behind == 1 ? "" : "s")</button></form>"
             return "<tr><td class=name>\(h(name(app)))<span class=sub> \(h(app))</span></td><td class=num>\(h(entry.version))</td><td class=num>\(h(sizes.string(fromByteCount: entry.bytes)))</td>"
@@ -958,6 +964,10 @@ public final class FeedServer: @unchecked Sendable {
         let version = "<details class=news><summary><p><b>Version \(h(latest.first ?? "unknown"))</b></p><span class=link>What's new</span></summary><div class=newsbody><h2>What's new</h2><ul>\(news)</ul></div></details>"
         // Filters and search (kept across the refresh), open rows kept open, confirm, copy, countdown.
         let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">\(countdown)" + #"""
+        var views=document.querySelectorAll('[data-view]'),nav=document.querySelector('.tabs');nav.hidden=false;
+        function show(){var v=location.hash.slice(1)||sessionStorage.getItem('khu-view')||'macs';if(['macs','apps','connect'].indexOf(v)<0)v='macs';sessionStorage.setItem('khu-view',v);
+        views.forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});window.scrollTo(0,0)}
+        window.addEventListener('hashchange',show);show();
         var S=sessionStorage,f=document.getElementById('filter'),mode=S.getItem('khu-mode')||'all';
         function run(){var q=f.value.trim().toLowerCase(),n=0;document.querySelectorAll('details.mac').forEach(function(d){var st=d.getAttribute('data-state');
         var ok=(!q||d.getAttribute('data-mac').indexOf(q)>=0)&&(mode=='all'||st==mode);d.hidden=!ok;if(ok)n++});
@@ -974,14 +984,16 @@ public final class FeedServer: @unchecked Sendable {
         return """
         <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><meta http-equiv=refresh content=\(isOpen ? 10 : 30)><title>KH Updater</title>
         <style>\(Self.pageStyle)</style></head>
-        <body><header class=top><div class=brand>\(Self.mark)<div><h1>KH Updater</h1><p class=sub>Every Mac and its apps, refreshed every \(isOpen ? 10 : 30) s.</p></div></div>\(version)</header>
+        <body><header class=top><div class=brand>\(Self.mark)<h1>KH Updater</h1></div>
+        <nav class=tabs aria-label="Views" hidden><a href=#macs data-tab=macs>Macs</a><a href=#apps data-tab=apps>Apps &amp; updates</a></nav>
+        <div class=headright>\(version)<a class=connectbtn href=#connect>+ Connect a Mac</a></div></header>
         <main>
-        <section>\(summary)\(banner)</section>
+        <div data-view=macs><section>\(summary)\(banner)</section>
         <section><div class=sechead><h2>Macs</h2><div class=tools hidden><div class=filters role=group aria-label="Show">\(filters)</div><span id=count class=sub></span><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac"></div></div>\(macs)
-        <p class="sub foot">Click a Mac for each app's detail, its recent results and Remove Mac. Update installs the feed's version; Roll back puts back the version that Mac kept; Automatic installs whenever the feed is newer.</p></section>
+        <p class="sub foot">Click a Mac for its apps, recent results, Roll back, Automatic and Remove Mac.</p></section>
+        <section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section></div>
         \(connect)
-        <section><h2>Feed</h2>\(feedSection)</section>
-        <section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>
+        <section data-view=apps><h2>Apps &amp; updates</h2><p class=sub>What each app is published at. Update N Macs updates every connected Mac that is behind.</p>\(feedSection)</section>
         </main>\(script)</body></html>
         """
     }
@@ -1018,45 +1030,45 @@ public final class FeedServer: @unchecked Sendable {
     static let mark = "<svg class=mark viewBox=\"0 0 32 32\" aria-hidden=true><rect width=32 height=32 rx=8 fill=\"var(--accent)\"/><path d=\"M16 7v12m-5-5 5 5 5-5M9 21v3h14v-3\" fill=none stroke=\"#fff\" stroke-width=2.4 stroke-linecap=round stroke-linejoin=round/></svg>"
 
     static let pageStyle = """
-    :root{--bg:#f5f6f5;--panel:#fff;--line:#e2e5e3;--line2:#eef0ef;--text:#16201c;--sub:#5b6762;--accent:#1d6b51;--accent-ink:#fff;--ok:#1a7448;--ok-bg:#e2f3e9;--warn:#875800;--warn-bg:#fcefd2;--bad:#b42318;--bad-bg:#fde8e6;--info:#1d5fa8;--info-bg:#e5eefb;--muted-bg:#eef0ef;--focus:#2e8b6a;--shadow:0 10px 30px rgba(15,30,25,.14)}
-    @media (prefers-color-scheme:dark){:root{--bg:#101513;--panel:#171e1b;--line:#29332f;--line2:#202926;--text:#e6ece9;--sub:#98a59f;--accent:#3fa37f;--accent-ink:#06120d;--ok:#62d19a;--ok-bg:#15301f;--warn:#f0b450;--warn-bg:#33270f;--bad:#ff8a7e;--bad-bg:#3a1714;--info:#8ab8f2;--info-bg:#15263c;--muted-bg:#212a26;--focus:#62d19a;--shadow:0 12px 32px rgba(0,0,0,.5)}}
+    :root{--bg:#f5f6f5;--panel:#fff;--line:#e2e5e3;--line2:#eef0ef;--text:#16201c;--sub:#5b6762;--accent:#1d6b51;--accent-ink:#fff;--ok:#1a7448;--ok-bg:#e2f3e9;--warn:#875800;--warn-bg:#fcefd2;--bad:#b42318;--bad-bg:#fde8e6;--info:#1d5fa8;--info-bg:#e5eefb;--muted-bg:#eef0ef;--focus:#2e8b6a;--field:#9aa6a0;--shadow:0 10px 30px rgba(15,30,25,.14)}
+    @media (prefers-color-scheme:dark){:root{--bg:#101513;--panel:#171e1b;--line:#29332f;--line2:#202926;--text:#e6ece9;--sub:#a9b5af;--accent:#3fa37f;--accent-ink:#06120d;--ok:#62d19a;--ok-bg:#15301f;--warn:#f0b450;--warn-bg:#33270f;--bad:#ff8a7e;--bad-bg:#3a1714;--info:#8ab8f2;--info-bg:#15263c;--muted-bg:#212a26;--focus:#62d19a;--field:#5f6e67;--shadow:0 12px 32px rgba(0,0,0,.5)}}
     *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
     body{margin:0}::selection{background:var(--accent);color:var(--accent-ink)}a{color:var(--accent)}
     h1{font-size:20px;letter-spacing:-.02em;margin:0}h2{font-size:15px;margin:0 0 10px;letter-spacing:-.01em}h3{font-size:12px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 6px}p{margin:0 0 8px}
     .sub{color:var(--sub);font-size:12.5px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.num{font-variant-numeric:tabular-nums}
     .top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:4}
-    .brand{display:flex;gap:12px;align-items:center}.mark{width:34px;height:34px;flex:none}.brand .sub{margin:0}
+    .top{align-items:center}.brand{display:flex;gap:10px;align-items:center}.headright{display:flex;align-items:center;gap:14px}.connectbtn{background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:600;padding:6px 12px;border-radius:8px;white-space:nowrap}.connectbtn:hover{filter:brightness(1.08)}.tabs{display:flex;gap:2px;padding:2px;background:var(--muted-bg);border-radius:9px}.tabs[hidden]{display:none}.tabs a{padding:5px 14px;border-radius:7px;color:var(--sub);text-decoration:none;font-weight:550}.tabs a[aria-current=page]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}[data-view][hidden]{display:none}.mark{width:34px;height:34px;flex:none}.brand .sub{margin:0}
     main{padding:20px 24px 48px;max-width:1240px;margin:0 auto}section{margin-bottom:28px}
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
     .stat{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--panel)}
     .stat .n{font-size:26px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap}.stat .n small{font-size:13px;color:var(--sub);font-weight:500}
     .stat small{display:block;color:var(--sub);font-size:11.5px}.n.ok{color:var(--ok)}.n.warn{color:var(--warn)}.n.bad{color:var(--bad)}
     .banner{margin:10px 0 0;padding:10px 14px;border-radius:10px;background:var(--ok-bg);color:var(--text)}
-    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sub);margin:0 6px 0 2px;vertical-align:1px}.dot.ok{background:var(--ok)}
+    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sub);margin:0 6px 0 2px;vertical-align:1px}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}.dot.warn{background:var(--warn)}
     .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.unit{color:var(--sub)}form{display:inline;margin:0}
     button,input{font:inherit;color:inherit}
     button{border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:4px 11px;cursor:pointer;white-space:nowrap;transition:background .15s}
     button:hover{background:var(--muted-bg)}button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:550}button.primary:hover{filter:brightness(1.08)}
-    button.quiet{border-color:transparent;color:var(--sub)}button.danger{color:var(--bad)}button.danger:hover{background:var(--bad-bg)}
-    input[type=number]{width:4.5em;padding:4px 6px;border:1px solid var(--line);border-radius:7px;background:var(--bg)}
-    input[type=search]{width:200px;max-width:100%;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+    button.small{padding:2px 9px;font-size:12.5px}button.quiet{border-color:transparent;color:var(--sub)}button.danger{color:var(--bad)}button.danger:hover{background:var(--bad-bg)}
+    input[type=number]{width:4.5em;padding:4px 6px;border:1px solid var(--field);border-radius:7px;background:var(--panel)}::placeholder{color:var(--sub);opacity:1}
+    input[type=search]{width:200px;max-width:100%;padding:5px 10px;border:1px solid var(--field);border-radius:8px;background:var(--panel)}
     :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
     .sechead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}.sechead h2{margin:0}
     .tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.tools[hidden]{display:none}
     .filters{display:flex;gap:2px;padding:2px;background:var(--muted-bg);border-radius:9px}
-    .filter{border:0;background:transparent;padding:4px 10px;border-radius:7px;color:var(--sub)}.filter .num{opacity:.7;margin-left:2px}
+    .filter{border:0;background:transparent;padding:4px 10px;border-radius:7px;color:var(--sub)}.filter .num{margin-left:2px}
     .filter[aria-pressed=true]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
     .maclist{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
     details.mac+details.mac{border-top:1px solid var(--line2)}details.mac[hidden]{display:none}
-    details.mac>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(190px,1.1fr) minmax(0,2fr) auto 92px;gap:14px;align-items:center;padding:9px 16px}
+    details.mac>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(190px,1.1fr) minmax(0,1.6fr) auto 170px;gap:14px;align-items:center;padding:9px 16px}
     details.mac>summary::-webkit-details-marker{display:none}details.mac>summary:hover{background:var(--line2)}details.mac[open]>summary{background:var(--muted-bg)}
     .who{display:flex;flex-direction:column;min-width:0}.who b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.who small{color:var(--sub);font-size:11.5px}
     .apps{display:flex;flex-wrap:wrap;gap:4px}
     .app{font-size:12px;padding:1px 7px;border-radius:6px;background:var(--line2);color:var(--sub);white-space:nowrap}.app .num{color:var(--text)}
     .app.t-warn{background:var(--warn-bg);color:var(--warn)}.app.t-bad{background:var(--bad-bg);color:var(--bad)}.app.t-info{background:var(--info-bg);color:var(--info)}
-    .seen{color:var(--sub);font-size:12.5px;text-align:right}
+    .seen{color:var(--sub);font-size:12.5px;text-align:right;white-space:nowrap}.state{display:flex;align-items:center;gap:8px;justify-content:flex-end}details.mac.s-failed>summary{background:var(--bad-bg)}details.mac.s-failed>summary .who b{color:var(--bad)}details.mac.s-failed>summary .chip.bad{background:var(--bad);color:var(--panel)}
     .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:550;white-space:nowrap}
-    .chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--info-bg);color:var(--info)}.chip.muted{background:var(--muted-bg);color:var(--sub)}
+    .chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--info-bg);color:var(--info)}.chip.muted{background:var(--muted-bg);color:var(--sub)}.chip.unknown{background:transparent;color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn)}
     .detail{padding:6px 16px 16px;border-top:1px solid var(--line2)}
     table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:7px 10px;vertical-align:top}
     thead th{font-size:11.5px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
@@ -1070,16 +1082,16 @@ public final class FeedServer: @unchecked Sendable {
     .steps{margin:12px 0 0;padding-left:20px}.steps li{margin-bottom:10px}.steps li>b{display:block;margin-bottom:4px}.steps p{margin:0 0 6px}
     .joined{margin-top:6px;padding-top:10px;border-top:1px solid var(--line2)}.joined ul{margin:0;padding-left:18px}
     .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:2px 6px}
-    .notes{margin:0;padding-left:16px}.notes li{margin-bottom:2px}
-    details.news{text-align:right}details.news summary{list-style:none;cursor:pointer}details.news summary::-webkit-details-marker{display:none}details.news summary p{margin:0}
+    details.notes summary{cursor:pointer;color:var(--accent)}details.notes ul{margin:6px 0 0;padding-left:16px}details.notes li{margin-bottom:2px}
+    details.news{text-align:right;font-size:12.5px}details.news summary{list-style:none;cursor:pointer}details.news summary::-webkit-details-marker{display:none}details.news summary p{margin:0}
     .link{color:var(--accent);font-size:12.5px}.newsbody{position:absolute;right:24px;margin-top:8px;width:min(440px,calc(100vw - 48px));text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
     .newsbody h2{font-size:13px}.newsbody ul{margin:0;padding-left:18px}
     details.removed summary{cursor:pointer;color:var(--sub)}details.removed summary h2{display:inline;font-size:13px}details.removed[open] summary{margin-bottom:10px}
     .empty{background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:18px;color:var(--sub)}.foot{margin-top:10px;max-width:90ch}
     code{font:12px ui-monospace,Menlo,monospace;background:var(--muted-bg);padding:1px 5px;border-radius:5px;word-break:break-all}
-    @media (max-width:820px){.top{padding:12px 16px}main{padding:14px}.brand .sub{display:none}.mark{width:28px;height:28px}h1{font-size:18px}details.news summary p{font-size:12px}
+    @media (max-width:820px){.top{padding:10px 14px;flex-wrap:wrap;gap:8px}.tabs{order:3;width:100%}.tabs a{flex:1;text-align:center}.headright{gap:8px}details.news .link{display:none}.connectbtn{padding:5px 10px}.state{justify-content:flex-start;flex-wrap:wrap}.top{padding:12px 16px}main{padding:14px}.brand .sub{display:none}.mark{width:28px;height:28px}h1{font-size:18px}details.news summary p{font-size:12px}
     .stats{grid-template-columns:1fr 1fr}.stat{padding:12px}.stat .n{font-size:21px}
-    details.mac>summary{grid-template-columns:1fr auto;gap:6px 10px;padding:10px 14px}.apps{grid-column:1/-1;grid-row:2}.seen{grid-row:3;grid-column:1/-1;text-align:left}
+    details.mac>summary{grid-template-columns:1fr;gap:6px;padding:10px 14px}.state{order:1}.apps{order:2}.seen{order:3;text-align:left}
     .apptable thead,.hist thead,.feed thead{display:none}.apptable tr,.feed tr{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 0}.apptable td,.feed td{padding:0;border:0!important}.apptable tbody tr+tr,.feed tbody tr+tr{border-top:1px solid var(--line2)}
     .apptable td:nth-child(3)::before{content:"Feed ";color:var(--sub)}.apptable td.actions,.feed td.actions,.feed td:nth-child(4){grid-column:1/-1;text-align:left}.actions>*{margin:4px 6px 0 0}
     .hist td{padding:5px 6px;font-size:12.5px}input[type=search]{width:100%}.tools{width:100%}}
