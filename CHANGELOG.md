@@ -9,6 +9,7 @@ The newest version is first. The status page shows the top entry.
 - The Feed section lists each published app with its version, size and notes.
 - A failed install shows in red with the Mac's own reason.
 - A new app icon.
+- Connected Macs are the centre of the page: each app on each Mac shows one state, Up to date, Update available, Updating, Failed or Not checked. The top of the page counts every update available across the fleet.
 
 ## 1.0.1 — 2026-11-02
 - The status page shows KH Updater's version and what's new in it.

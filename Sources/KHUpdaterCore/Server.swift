@@ -774,7 +774,7 @@ public final class FeedServer: @unchecked Sendable {
                                      "rollback_failed", "rollback_unhealthy", "rollback_blocked", "unresolved"]
         func words(_ status: String) -> String { let s = status.replacingOccurrences(of: "_", with: " "); return s.prefix(1).uppercased() + s.dropFirst() }
         let now = Date()
-        var total = 0, connected = 0, upToDate = 0, needUpdate = 0, failedMacs = 0
+        var total = 0, connected = 0, upToDate = 0, needUpdate = 0, failedMacs = 0, updatesAvailable = 0
         var bodies = ""
         var windowRows = 0
         for machine in state.machines.keys.sorted() {
@@ -808,16 +808,20 @@ public final class FeedServer: @unchecked Sendable {
                 let appFailed = result.map { failures.contains($0.status) } ?? false
                 let behind = installed.flatMap { i in feedApp.map { VersionCompare.isNewer($0.version, than: i) } } ?? false
                 let same = installed.flatMap { i in feedApp.map { VersionCompare.compare(i, $0.version) == 0 } } ?? false
+                let pendingHere = ms.pending.first { $0.app == app }
                 let chip: (String, String)
-                if ms.pending.contains(where: { $0.app == app }) {
-                    chip = (agentTooOld ? "Waiting for the Mac (agent too old for rollback)" : "Waiting for the Mac", "info")
+                if let order = pendingHere {
+                    chip = order.action == ServerCommand.rollback
+                        ? (agentTooOld ? "Rolling back (agent too old for rollback)" : "Rolling back", "info") : ("Updating", "info")
                 } else if appFailed { chip = ("Failed", "bad") }
-                else if ownUpdater { chip = ("Own updater", "muted") }
+                else if !live { chip = ("Not checked", "muted") }
+                else if ownUpdater { chip = ("Updates itself", "muted") }
                 else if installed == nil { chip = ("Not installed", "warn") }
-                else if feedApp == nil { chip = ("Not in feed", "muted") }
+                else if feedApp == nil { chip = ("Not checked", "muted") }
                 else if behind { chip = ("Update available", "warn") }
                 else if same { chip = ("Up to date", "ok") }
                 else { chip = ("Newer than feed", "muted") }
+                if chip.0 == "Update available" || chip.0 == "Not installed" { updatesAvailable += 1 }
                 if appFailed { failed = true }
                 if !ownUpdater && feedApp != nil && (behind || installed == nil) { needs = true }
                 let healthText = ms.health[app].map { "<span class=\"sub\(($0 == "running") ? "" : " warn")\">\(h($0))</span>" } ?? ""
@@ -825,7 +829,7 @@ public final class FeedServer: @unchecked Sendable {
                     "<div class=\"result\(failures.contains(r.status) ? " bad" : "")\">\(h(words(r.status)))\(r.reason.map { $0.isEmpty ? "" : ": " + h($0) } ?? "") <span class=sub>\(h(stamp(r.at)))</span></div>"
                 } ?? ""
                 var actions = ""
-                if !ownUpdater && feedApp != nil && !same { actions += form("/api/request-update", machine, app, "", "Update", "primary") }
+                if !ownUpdater && feedApp != nil && !same && pendingHere == nil { actions += form("/api/request-update", machine, app, "", "Update", "primary") }
                 var more = ""
                 // Rollback needs no feed entry: it puts back the version this Mac kept.
                 if !ownUpdater { more += form("/api/request-rollback", machine, app, "", "Roll back", "") }
@@ -854,9 +858,10 @@ public final class FeedServer: @unchecked Sendable {
             : "<div class=tablewrap><table class=macs><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>Status</th><th><span class=sr>Actions</span></th></tr></thead>\(bodies)</table></div>"
         let notReporting = total - connected
         let summary = "<div class=stats>"
+            + "<div class=\"stat lead\"><span class=\"n\(updatesAvailable > 0 ? " warn" : " ok")\">\(updatesAvailable)</span><span>Updates available<small>across every connected Mac</small></span></div>"
             + "<div class=stat><span class=n>\(connected)</span><span>Macs connected<small>of \(total) enrolled, reported in the last 15 min</small></span></div>"
             + "<div class=stat><span class=\"n ok\">\(upToDate)</span><span>Up to date</span></div>"
-            + "<div class=stat><span class=\"n\(needUpdate > 0 ? " warn" : "")\">\(needUpdate)</span><span>Need update</span></div>"
+            + "<div class=stat><span class=\"n\(needUpdate > 0 ? " warn" : "")\">\(needUpdate)</span><span>Macs to update</span></div>"
             + "<div class=stat><span class=\"n\(failedMacs > 0 ? " bad" : "")\">\(failedMacs)</span><span>Failed</span></div>"
             + (notReporting > 0 ? "<div class=stat><span class=\"n warn\">\(notReporting)</span><span>Not reporting<small>status not checked</small></span></div>" : "")
             + "</div>"
@@ -895,9 +900,10 @@ public final class FeedServer: @unchecked Sendable {
         <style>\(Self.pageStyle)</style></head>
         <body><header class=top><div class=brand>\(Self.mark)<div><h1>KH Updater</h1><p class=sub>Every Mac and its apps, refreshed every 30 s.</p></div></div>\(version)</header>
         <main>
-        <section class=overview>\(summary)<div class=enrol><h2>Network enrolment</h2>\(enrol)</div></section>
-        <section><div class=sechead><h2>Macs enrolled\(windowRows > 0 ? " (\(windowRows) through a window)" : "")</h2><div class=row><span id=count class=sub></span><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac" hidden></div></div>\(macs)
+        <section>\(summary)</section>
+        <section><div class=sechead><div><h2>Connected Macs</h2><p class=sub>Macs enrolled\(windowRows > 0 ? " (\(windowRows) through a window)" : "") · each app's state from that Mac's last report</p></div><div class=row><span id=count class=sub></span><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac" hidden></div></div>\(macs)
         <p class="sub foot">Update installs the feed's version on that Mac. Roll back puts back the version that Mac kept. Automatic installs whenever the feed is newer. Remove Mac drops its token and waiting orders; it can join again through an open window.</p></section>
+        <section class=enrol><h2>Network enrolment</h2>\(enrol)</section>
         <section><h2>Feed</h2>\(feedSection)</section>
         <section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>
         </main>\(script)</body></html>
@@ -920,9 +926,9 @@ public final class FeedServer: @unchecked Sendable {
     .overview{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,380px);gap:16px;align-items:stretch}
     .stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
     .stat{flex:1 1 120px;display:flex;align-items:center;gap:10px;padding:14px 16px;background:var(--panel)}
-    .stat .n{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em}.stat small{display:block;color:var(--sub);font-size:11.5px}
+    .stat.lead{flex-grow:1.6}.stat.lead .n{font-size:30px}.stat .n{font-size:24px;font-weight:650;font-variant-numeric:tabular-nums;letter-spacing:-.02em}.stat small{display:block;color:var(--sub);font-size:11.5px}
     .n.ok{color:var(--ok)}.n.warn{color:var(--warn)}.n.bad{color:var(--bad)}
-    .enrol{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}.enrol h2{font-size:13px;color:var(--sub);font-weight:600;margin-bottom:6px}
+    .enrol{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;max-width:560px}.enrol h2{font-size:13px;color:var(--sub);font-weight:600;margin-bottom:6px}
     .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sub);margin-right:6px;vertical-align:1px}.dot.ok{background:var(--ok)}
     .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.unit{color:var(--sub)}
     form{display:inline;margin:0}
