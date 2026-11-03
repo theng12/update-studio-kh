@@ -33,11 +33,16 @@ public enum Connect {
         return try JSON.decode(Publisher.self, from: Data(contentsOf: kit.appendingPathComponent("publisher.json")))
     }
 
-    public static func run(kit: URL, home: URL, machine: String, code: String, http: HTTPClient = URLSessionHTTPClient(),
+    public static func run(kit: URL, home: URL, machine: String, code: String, destination typed: String? = nil,
+                           http: HTTPClient = URLSessionHTTPClient(),
                            shell: Shell = SystemShell(), now: Date = Date()) throws -> String {
         guard !isSetUp(home: home) else { throw khuFail("Studio Launcher KH is already set up on this Mac") }
         _ = try SafeName.component(machine, what: "name for this Mac")
-        let pub = try publisher(kit: kit)
+        var pub = try publisher(kit: kit)
+        if let typed {
+            pub.feedURL = try destination(typed)
+            pub.enrolURL = URL(string: pub.feedURL)!.deletingLastPathComponent().appendingPathComponent("enrol").absoluteString
+        }
         guard let enrolURL = URL(string: pub.enrolURL) else { throw khuFail("the kit's publisher address is not a URL") }
         let nonce = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
         let body = try JSONSerialization.data(withJSONObject: ["machine": machine, "nonce": nonce, "code": code])

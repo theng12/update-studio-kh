@@ -1,7 +1,8 @@
 import AppKit
 
 /// The connection window in its two forms: **Connect to Update Studio** for first run (the kit
-/// vouches for the address, the person types this Mac's name and the pairing code), and **Pair
+/// supplies the address and pins the key; the person can edit the address and types this Mac's
+/// name and pairing code), and **Pair
 /// again** for explicit local recovery (the saved settings vouch for the address, the name and
 /// key are fixed, only the code is typed). Either way the attempt runs on a background queue so
 /// the window keeps painting — connecting, the publisher's own refusal, and success — with the
@@ -23,6 +24,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
 
     private let mode: Mode
     private let window: NSWindow
+    private let destinationField = NSTextField()
     private let nameField = NSTextField()
     private let codeField = NSTextField()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -59,19 +61,23 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         title.font = .systemFont(ofSize: 20, weight: .semibold)
 
         let intro: NSTextField
-        let destination: NSTextField
+        let destination = destinationField
         switch mode {
         case .firstRun(let kit, _):
             intro = Self.wrap("Studio Launcher KH sets up this Mac from the kit inside this app. "
                 + "Type the pairing code shown in Update Studio KH on the Mac Studio, under Connect a Mac.")
-            // The address the kit itself names — shown exactly, never guessed or discovered.
-            destination = NSTextField(labelWithString: (try? Connect.publisher(kit: kit))?.feedURL ?? "unknown")
+            // An edited address changes the route, never the kit's pinned publisher key.
+            destination.stringValue = (try? Connect.publisher(kit: kit))?.feedURL ?? "unknown"
+            destination.setAccessibilityLabel("Update Studio address")
             nameField.stringValue = Connect.proposedName()
         case .repair(_, let plan):
             intro = Self.wrap("Your current sign-in file will be preserved in ~/Library/KHUpdater/_trash, and this Mac "
                 + "keeps its name, its apps and its pinned key. Type the pairing code shown in Update Studio KH "
                 + "on the Mac Studio, under Connect a Mac. Nothing is sent until you press Pair again.")
-            destination = NSTextField(labelWithString: plan.feedURL)
+            destination.stringValue = plan.feedURL
+            destination.isEditable = false
+            destination.isBezeled = false
+            destination.drawsBackground = false
             nameField.stringValue = plan.machine
             nameField.isEnabled = false
         }
@@ -211,8 +217,14 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         case .repair(_, let plan):
             machine = plan.machine
         }
+        let destination = destinationField.stringValue
+        if case .firstRun = mode {
+            do { _ = try Connect.destination(destination) }
+            catch { show("\(error)", color: .systemRed, spinning: false); return }
+        }
         state = .working
         stopping = false
+        destinationField.isEnabled = false
         nameField.isEnabled = false
         codeField.isEnabled = false
         connectButton.isEnabled = false
@@ -225,7 +237,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             do {
                 switch mode {
                 case .firstRun(let kit, let home):
-                    _ = try Connect.run(kit: kit, home: home, machine: machine, code: code)
+                    _ = try Connect.run(kit: kit, home: home, machine: machine, code: code, destination: destination)
                 case .repair(let file, _):
                     // Confirmed only here because Pair again's confirmation was already accepted
                     // before this window could open (runRepair); Cancel sends nothing at all.
@@ -240,6 +252,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     private func finished(success: Bool, failure: String?) {
         guard state == .working else { return }
         if stopping { finish(.cancelled); return }
+        destinationField.isEnabled = true
         if case .firstRun = mode { nameField.isEnabled = true }
         codeField.isEnabled = true
         connectButton.isEnabled = true

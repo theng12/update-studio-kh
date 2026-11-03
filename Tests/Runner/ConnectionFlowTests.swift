@@ -241,6 +241,58 @@ func connectionFlowTests() {
         expectThrows("CF7 https is refused", contains: "plain http") { _ = try Connect.destination("https://100.64.0.7:8790") }
     }
 
+    // CF14. Editing the first-run route never replaces the kit's pinned key.
+    for scenario in ["success", "public-address", "wrong-pin"] {
+        let r = EnrolRig("edited-" + scenario)
+        let code = pairingCode(r)
+        let k = kit(for: r)
+        let home = r.rig.root.appendingPathComponent("edited-home")
+        var pub = try! JSONSerialization.jsonObject(with: Data(contentsOf: k.appendingPathComponent("publisher.json"))) as! [String: Any]
+        pub["feedURL"] = "http://100.64.0.8:8790/release.json"
+        pub["enrolURL"] = "http://100.64.0.8:8790/enrol"
+        if scenario == "wrong-pin" { pub["publicKey"] = Signing.generateKeyPair().publicKeyBase64 }
+        let bytes = try! JSONSerialization.data(withJSONObject: pub)
+        try! bytes.write(to: k.appendingPathComponent("publisher.json"))
+        var manifest = try! JSONSerialization.jsonObject(with: Data(contentsOf: k.appendingPathComponent("MANIFEST.json"))) as! [String: Any]
+        var files = manifest["files"] as! [String: Any]
+        files["publisher.json"] = ["bytes": bytes.count, "sha256": Signing.sha256Hex(bytes)]
+        manifest["files"] = files
+        try! JSONSerialization.data(withJSONObject: manifest).write(to: k.appendingPathComponent("MANIFEST.json"))
+        let client = CountingHTTP(InProcessClient(server: r.server))
+        if scenario == "success" {
+            let out = try? Connect.run(kit: k, home: home, machine: "edited-mac", code: code,
+                destination: "100.64.0.7:8790", http: client, shell: SystemShell())
+            let file = home.appendingPathComponent("Library/KHUpdater/base/config.json")
+            let saved = try? JSON.decode(AgentConfig.self, from: Data(contentsOf: file))
+            expect(out != nil && saved?.feedURL == "http://100.64.0.7:8790/release.json"
+                   && saved?.publicKey == r.rig.pair.publicKeyBase64,
+                   "CF14 edited first-run address is used and saved with the original pin")
+        } else {
+            expectThrows("CF14 invalid destination or different publisher cannot install", contains: scenario == "wrong-pin" ? "not signed" : "Tailscale range") {
+                _ = try Connect.run(kit: k, home: home, machine: "edited-mac", code: code,
+                    destination: scenario == "wrong-pin" ? "100.64.0.7:8790" : "8.8.8.8:8790",
+                    http: client, shell: SystemShell())
+            }
+            expect(!Connect.isSetUp(home: home) && (scenario != "public-address" || client.posts == 0),
+                   "CF14 public addresses send nothing and a wrong key installs nothing")
+        }
+    }
+
+    // CF15. Exercise the actual bundle writer: generated and packaged Launchers share this policy.
+    do {
+        let r = EnrolRig("ats-plist")
+        let app = r.rig.root.appendingPathComponent("Launcher.app")
+        let result = try? SystemShell().run(fm.currentDirectoryPath + "/build/khu",
+            arguments: ["launcher-bundle", "--out", app.path, "--version", "0.1.7", "--kit", kit(for: r).path], timeout: 30)
+        let data = try? Data(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
+        let plist = data.flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+        let ats = plist?["NSAppTransportSecurity"] as? [String: Any]
+        let domains = ats?["NSExceptionDomains"] as? [String: [String: Any]]
+        expect(result?.exitCode == 0 && ats?.count == 1 && domains?.count == 1
+               && domains?["100.64.0.0/10"]?["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true,
+               "CF15 bundled ATS permits only tailnet HTTP without arbitrary-load or local-network bypass")
+    }
+
     // CF9–CF13. Re-pair from saved trust only, without an embedded kit or installer.
     for scenario in ["unconfirmed", "wrong-code", "wrong-pin", "concurrent", "success"] {
         let r = EnrolRig("repair-" + scenario)

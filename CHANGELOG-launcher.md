@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.7 — 2026-11-03
+- Connect to Update Studio works over Tailscale HTTP on current macOS, with the exception limited to Tailscale addresses.
+- The first-run Update Studio address is editable and starts with the kit’s saved address; the publisher’s pinned key is still required.
+
 ## 0.1.6 — 2026-11-03
 - Update Studio receives this Mac’s reported hardware, connection details and installed-app inventory without asking for new macOS permissions.
 - Missing details remain unreported; app inventory is read-only and does not install or remove other makers’ apps.

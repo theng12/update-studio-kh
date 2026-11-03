@@ -4,7 +4,7 @@
 
 On the publisher Mac, open Update Studio KH → Connect a Mac. Use **Save Launcher copy…** to save a ZIP of the signed Launcher app with its verified connection kit, or use the Launcher installer on an install SSD. Transfer it to the new Mac; a path on the publisher’s Desktop is not an address the new Mac can use.
 
-On the new Mac, install Tailscale and sign in to a network that permits reaching the publisher. Put Studio Launcher KH in Applications, open it, and use **Connect to Update Studio**. Check the publisher shown by the trusted package, confirm the Mac name, enter the code from Update Studio, and click **Connect**. The app shows connecting, success or the reason it could not connect. It never discovers or trusts an arbitrary publisher from a code alone.
+On the new Mac, install Tailscale and sign in to a network that permits reaching the publisher. Put Studio Launcher KH in Applications, open it, and use **Connect to Update Studio**. The Update Studio address starts with the trusted package’s saved address and can be edited to another Tailscale IPv4 address; the package’s publisher key stays pinned. Confirm the Mac name, enter the code from Update Studio, and click **Connect**. The app shows connecting, success or the reason it could not connect. It never discovers or trusts an arbitrary publisher from a code alone.
 
 Launcher’s own automatic updates start enabled, matching the existing setup default. Connecting does not silently install other apps. Settings show the current connection and let you check it without enrolling the Mac again. Changing publisher trust requires its trusted connection package; a failed connection check does not replace credentials.
 

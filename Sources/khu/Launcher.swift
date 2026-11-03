@@ -69,6 +69,10 @@ enum LauncherBundle {
             "CFBundleExecutable": "Studio Launcher KH", "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version,
             "CFBundleVersion": version, "CFBundleIconFile": "AppIcon", "LSUIElement": true, "LSMinimumSystemVersion": "13.0",
             "NSHighResolutionCapable": true,
+            // macOS 14+ applies ATS to numeric IPs; only the private tailnet may use HTTP.
+            "NSAppTransportSecurity": ["NSExceptionDomains": [
+                "100.64.0.0/10": ["NSExceptionAllowsInsecureHTTPLoads": true],
+            ]],
         ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: bundle.appendingPathComponent("Contents/Info.plist"))
