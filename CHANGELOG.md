@@ -2,6 +2,14 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.10 — 2026-11-03
+- A Launcher-matched header, spacing and controls bring Macs, Apps & updates and connection setup into one consistent window.
+- Connect a Mac uses a short checklist and a large pairing code, with separate Copy code and Copy address actions.
+- Macs has page-size choices, search, status/site/tag filters and grouping, with editable location and tags.
+- Mac details open in a focused pop-up with the existing app actions, reported hardware and connection details, installed-app inventory and recent results. Older Launchers show unreported fields honestly.
+- Settings shows this publisher’s Tailscale address, pairing lock state and how each Mac’s automatic update choices work.
+- Copy actions announce success or explain when manual copying is needed. Existing connections, update choices and confirmation steps stay intact.
+
 ## 1.0.9 — 2026-11-03
 - The Update Studio app package supports both Apple silicon and Intel Macs, with macOS 13 as its minimum.
 - Mac filters sit at the front of the list, with a wider search field and a Refresh button that fetches the latest saved fleet and app reports.

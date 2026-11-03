@@ -553,6 +553,8 @@ public final class FeedServer: @unchecked Sendable {
             guard local.count <= ReportPolicy.maxApps, local.keys.allSatisfy({ !$0.isEmpty && $0.utf8.count <= ReportPolicy.maxNameCharacters }) else {
                 return Self.text(400, "that Mac reported more Automatic switches, or longer app names, than this publisher accepts (at most \(ReportPolicy.maxApps) apps, \(ReportPolicy.maxNameCharacters) characters for a name)")
             }
+            let inventory = MacInventory.read(body["inventory"])
+            if case .refused(let reason) = inventory { return Self.text(400, reason) }
             let reportedName = body["display_name"] as? String
             if let reportedName, !MacName.valid(reportedName) {
                 return Self.text(400, "send a valid Mac name (at most \(MacName.maxCharacters) characters)")
@@ -566,6 +568,7 @@ public final class FeedServer: @unchecked Sendable {
                 guard reportLimiter.allow(machine) else { return Self.text(429, "this Mac is reporting too often; try again in a minute") }
                 var ms = state.machines[machine]!
                 if let reportedName { ms.report(name: reportedName) }
+                if case .accepted(let reportedInventory) = inventory { ms.inventory = reportedInventory }
                 if let installed { ms.installed = installed }
                 if let health { ms.health = health }
                 if let defaults { ms.automaticDefault = defaults }
@@ -716,7 +719,8 @@ public final class FeedServer: @unchecked Sendable {
             if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
                                         || req.path == "/api/automatic" || req.path == "/api/enrol-window"
                                         || req.path == "/api/remove-machine" || req.path == "/api/update-all"
-                                        || req.path == "/api/pairing-code" || req.path == "/api/rename-machine") {
+                                        || req.path == "/api/pairing-code" || req.path == "/api/rename-machine"
+                                        || req.path == "/api/mac-metadata") {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
                 var createdOrders = 0
@@ -758,6 +762,19 @@ public final class FeedServer: @unchecked Sendable {
                         return Self.ok
                     }
                     guard let machine = f["machine"], !machine.isEmpty else { return Self.text(400, "send machine") }
+                    if req.path == "/api/mac-metadata" {
+                        let site = (f["site"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        let tags = (f["tags"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                        guard site.count <= 128, tags.count <= 20, tags.allSatisfy({ $0.count <= 64 }),
+                              ([site] + tags).allSatisfy({ !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }) else {
+                            return Self.text(400, "Use a site up to 128 characters and at most 20 tags, each up to 64 characters; no control characters.")
+                        }
+                        guard var ms = state.machines[machine], ms.tokenHash != nil else { return Self.text(404, "no enrolled Mac") }
+                        ms.site = site
+                        ms.tags = Array(Set(tags)).sorted()
+                        state.machines[machine] = ms
+                        return Self.ok
+                    }
                     if req.path == "/api/rename-machine" {
                         guard let name = f["name"], MacName.valid(name) else {
                             return Self.text(400, "send a valid Mac name (at most \(MacName.maxCharacters) characters)")
@@ -971,22 +988,33 @@ public final class FeedServer: @unchecked Sendable {
                 "<tr><td>\(h(name(e.app)))</td><td class=num>\(h(e.from ?? "—")) → \(h(e.to ?? "previous"))</td><td class=num>\(h(stamp(e.at)))</td>"
                     + "<td class=\"\(Self.failureStatuses.contains(e.status) ? "badtext" : "")\">\(h(e.status == "renamed" ? (e.reason ?? "Renamed") : words(e.status)))</td></tr>"
             }.joined()
-            let model = Self.model(of: label).map { "<small>From name: \(h($0))</small>" } ?? ""
+            let model = ms.inventory?.model_name.map { "<small>\(h($0))</small>" } ?? ""
+            let deviceIcon = PublisherFleet.icon(ms.inventory?.model_name ?? ms.inventory?.model_id)
             let seen = ms.lastSeen == nil ? "<span class=\"dot warn\"></span>Never seen"
                 : online ? "<span class=\"dot ok\"></span>Online · \(h(ago(ms.lastSeen)))"
                 : "<span class=\"dot bad\"></span><span class=badtext>Offline · \(h(ago(ms.lastSeen)))</span>"
-            let html = "<details class=\"mac s-\(overall.2)\" data-machine=\"\(h(machine))\" data-mac=\"\(h(label.lowercased()))\" data-state=\(overall.2)><summary>"
-                + "<span class=who><b>\(h(label))</b>\(duplicate ? "<small>same name</small>" : "")\(model)</span><span class=apps>\(chips)</span>"
+            let tags = ms.tags ?? []
+            let site = ms.site ?? ""
+            let tagsJSON = String(decoding: JSON.encode(tags, pretty: false), as: UTF8.self)
+            let metadata = ([site].filter { !$0.isEmpty } + tags).joined(separator: " · ")
+            let ownIDs = Set((feed?.apps ?? [:]).filter { AppNames.names[$0.key] != nil }.values.compactMap(\.bundleID))
+            let appInventory = PublisherInventory.apps(ms.inventory, ownBundleIDs: ownIDs, h: h)
+            let hardware = PublisherInventory.facts(ms.inventory, lastSeen: ms.lastSeen.map { stamp($0) }, h: h)
+            let html = "<details class=\"mac s-\(overall.2)\" data-machine=\"\(h(machine))\" data-label=\"\(h(label))\" data-mac=\"\(h((label + " " + machine + " " + metadata).lowercased()))\" data-site=\"\(h(site))\" data-tags=\"\(h(tagsJSON))\" data-rank=\(overall.3) data-state=\(overall.2)><summary>"
+                + "<span class=who>\(deviceIcon)<span class=whotext><b>\(h(label))</b>\(duplicate ? "<small>same name</small>" : "")\(model)\(metadata.isEmpty ? "" : "<small>\(h(metadata))</small>")</span></span><span class=apps>\(chips)</span>"
                 + "<span class=state>\(overall.0.isEmpty ? "" : "<span class=\"chip \(overall.1)\">\(h(overall.0))</span>")\(rowUpdate)</span><span class=\"seen num\">\(seen)</span><span class=chev aria-hidden=true></span></summary><div class=detail>"
+                + "<div class=macsummary>\(deviceIcon)<div><span class=\"chip \(overall.1)\">\(h(overall.0))</span><p class=sub>\(seen)</p></div></div>"
                 + failures
-                + "<dl class=identity><dt>Connection ID</dt><dd><code>\(h(machine))</code> · stays fixed when this Mac is renamed</dd>"
-                + "<dt>Name last reported by this Mac</dt><dd>\(h(ms.reportedName ?? "Not reported separately by this helper"))</dd>"
-                + "<dt>Last report</dt><dd>\(h(ms.lastSeen.map { stamp($0) } ?? "Not seen yet"))</dd>"
-                + "<dt>Hardware details</dt><dd>\(h(Self.model(of: label).map { $0 + " — read from the name, not a hardware probe" } ?? "Not reported independently"))</dd></dl>"
-                + "<p class=sub>The reported name may come from Hub or macOS; this helper does not report its source separately. Changing this page’s label does not change the Mac, its location or its connection ID.</p>"
+                + "<h3>Apps managed by Update Studio</h3>"
                 + (rows.isEmpty ? "<p class=sub>No versions yet: they appear after this Mac's first report.</p>"
                    : "<table class=apptable><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>State</th><th><span class=sr>Actions</span></th></tr></thead>\(rows)</table>")
+                + appInventory
+                + "<h3>Connection and hardware</h3><dl class=identity><dt>Connection ID</dt><dd><code>\(h(machine))</code><button type=button class=small data-copy=\"\(h(machine))\">Copy ID</button><span class=sub>Stays fixed when this Mac is renamed</span></dd>"
+                + "<dt>Name last reported by this Mac</dt><dd>\(h(ms.reportedName ?? "Not reported separately by this helper"))</dd>"
+                + "</dl>" + hardware
+                + "<p class=sub>The reported name may come from Hub or macOS; this helper does not report its source separately. Changing this page’s label does not change the Mac, its location or its connection ID.</p>"
                 + "<form method=post action=/api/rename-machine data-confirm=\"Rename this Mac’s label? Its connection stays the same.\"><input type=hidden name=machine value=\"\(h(machine))\"><label>Mac name <input name=name required maxlength=\(MacName.maxCharacters) value=\"\(h(label))\"></label> <button>Rename</button> <span class=sub>Up to \(MacName.maxCharacters) characters</span></form>"
+                + "<form class=metadata method=post action=/api/mac-metadata><input type=hidden name=machine value=\"\(h(machine))\"><label>Location / site<input name=site maxlength=128 value=\"\(h(site))\"></label><label>Tags, separated by commas<input name=tags value=\"\(h(tags.joined(separator: ", ")))\"></label><button>Save site and tags</button><p class=sub>Site: up to 128 characters. Up to 20 tags, each up to 64 characters.</p></form>"
                 + "<h3>Recent results</h3>" + (history.isEmpty ? "<p class=sub>No install results yet.</p>"
                    : "<table class=hist><thead><tr><th>App</th><th>From → to</th><th>Time</th><th>Result</th></tr></thead>\(history)</table>")
                 + "<div class=macfoot><span class=sub>Connected on \(h(ms.enrolledAt.flatMap(ISO.date).map { joinedFormat.string(from: $0) } ?? "an unknown date"))\(ms.pausedUntil.flatMap(ISO.date).map { $0 > now ? " · Automatic paused on this Mac until \(h(stamp(ms.pausedUntil)))" : "" } ?? "")\(ms.pending.isEmpty ? "" : " · \(ms.pending.count) order\(ms.pending.count == 1 ? "" : "s") waiting")</span>"
@@ -1000,7 +1028,7 @@ public final class FeedServer: @unchecked Sendable {
                        ("failed", "Failed", count(["failed"])), ("offline", "Offline", count(["offline"]))]
             .map { "<button type=button class=filter data-f=\($0.0) aria-pressed=\($0.0 == "all" ? "true" : "false")>\($0.1) <span class=num>\($0.2)</span></button>" }.joined()
         let macs = macRows.isEmpty ? "<p class=empty>No Mac is connected yet. Connect one with the steps below.</p>"
-            : "<div class=maclist>\(macRows.map(\.html).joined())</div><p id=nomatch class=empty hidden>No Macs match this filter.</p>"
+            : "<div class=fleetoptions hidden><label>Site <select id=site-filter><option value=''>All sites</option></select></label><label>Tag <select id=tag-filter><option value=''>All tags</option></select></label><label>Group by <select id=group-by><option value=''>No grouping</option><option value=site>Site</option><option value=tags>Tag set</option></select></label></div><div class=maclist>\(macRows.map(\.html).joined())</div><p id=nomatch class=empty hidden>No Macs match this filter.</p><div class=pager hidden><label>Macs per page <select id=page-size><option>10</option><option selected>25</option><option>50</option><option>100</option><option value=all>All</option></select></label><span id=page-label class=sub role=status aria-live=polite></span><button type=button id=page-prev>Previous</button><button type=button id=page-next>Next</button></div>"
         let summary = "<div class=stats>"
             + "<div class=stat><span class=n>\(connected)<small> of \(total)</small></span><span>Connected<small>reported in the last 10 min</small></span></div>"
             + "<div class=stat><span class=\"n\(connected > 0 && upToDate == connected ? " ok" : "")\">\(upToDate)</span><span>Up to date<small>every app on the feed version</small></span></div>"
@@ -1011,20 +1039,28 @@ public final class FeedServer: @unchecked Sendable {
 
         // Connect a new Mac: the pairing code and the existing kit, in three steps.
         let codeLocked = state.pairing?.locked(at: Date()) ?? false
-        let pairing = "<div class=pair><span class=paircode>\(state.pairing.map { h($0.shown) } ?? "No code yet")</span>"
+        let pairing = "<div class=pair><span class=paircode id=pairing-code>\(state.pairing.map { h($0.shown) } ?? "No code yet")</span></div>"
+            + "<div class=pairactions>\(state.pairing.map { "<button type=button class=primary data-copy=\"\(h($0.shown))\">Copy code</button>" } ?? "")"
             + "<form method=post action=/api/pairing-code\(state.pairing == nil ? "" : " data-confirm=\"New code? The old code stops working. Macs already connected stay connected.\"")><button>New code</button></form></div>"
-            + (codeLocked ? "<p><span class=\"dot bad\"></span><b>Locked</b> after \(EnrolPolicy.pairingWrongTries) wrong tries, until \(h(stamp(state.pairing?.lockedUntil ?? ""))). No code is accepted until then.</p>"
-                          : "<p class=sub>Works at any time. \(EnrolPolicy.pairingWrongTries) wrong tries lock it for \(EnrolPolicy.pairingLockMinutes) minutes.</p>")
+        let lockStatus = codeLocked
+            ? "<p class=lockstatus><span class=\"chip bad\">Pairing locked</span> After \(EnrolPolicy.pairingWrongTries) wrong tries. Try again after \(h(stamp(state.pairing?.lockedUntil ?? ""))). No code is accepted until then.</p>"
+            : "<p class=lockstatus><span class=\"chip ok\">Ready to connect</span> \(EnrolPolicy.pairingWrongTries) wrong tries lock pairing for \(EnrolPolicy.pairingLockMinutes) minutes.</p>"
         let joinedList = isOpen ? "<div class=joined><h3>Joined in this window</h3>" + (joined.isEmpty ? "<p class=sub>None yet. This list updates every 10 s.</p>" : "<ul>\(joined.joined())</ul>") + "</div>" : ""
-        let destination = publisherBind.map { "<p>Update Studio address: <code>http://\(h($0)):\(port)</code></p>" }
-            ?? "<p class=warntext>This publisher has no configured Tailscale listener. Set its Tailscale address before connecting another Mac.</p>"
-        let connect = "<section id=connect class=panel data-view=connect><h2>Connect a Mac</h2>"
-            + "<p>On the new Mac, open <b>Studio Launcher KH → Connect to Update Studio</b>.</p>"
-            + "<ol class=steps><li><b>Get Studio Launcher KH onto the new Mac</b><p>Use its installer from an install SSD, or save a Launcher copy here and transfer it to the new Mac. Copy the app into Applications and open it.</p><button type=button id=save-launcher hidden>Save Launcher copy…</button></li>"
-            + "<li><b>Connect both Macs through Tailscale</b><p>Sign in to a Tailscale network that lets the new Mac reach this publisher. Launcher already carries this publisher’s address and trusted key; it does not discover another server automatically.</p>\(destination)</li>"
-            + "<li><b>Enter this code in Launcher</b><p>Confirm the name for the new Mac, enter the pairing code in Launcher’s <b>Connect to Update Studio</b> screen, then click <b>Connect</b>.</p>\(pairing)\(enrol)</li>"
-            + "<li><b>Check the connection</b><p>Launcher shows the result. The new Mac appears here after its first report. Launcher’s own automatic updates start on by default; no other app is silently installed by connecting.</p></li></ol>\(joinedList)"
-            + "<p class=sub>Already connected Macs keep their connection and Automatic choices. This code stays valid until you choose New code; changing it does not disconnect existing Macs.</p></section>"
+        let destination = publisherBind.map {
+            "<div class=address><span class=sub>Update Studio address</span><div class=addressvalue><code>http://\(h($0)):\(port)</code><button type=button data-copy=\"http://\(h($0)):\(port)\">Copy address</button></div></div>"
+        } ?? "<p class=warntext>This publisher has no configured Tailscale listener. Set its Tailscale address before connecting another Mac.</p>"
+        let connect = "<section id=connect data-view=connect><div class=pagehead><div><h2>Connect a Mac</h2><p class=sub>One Launcher, one code. Your apps stay yours to choose.</p></div><a class=textlink href=#macs>View connected Macs</a></div>"
+            + "<div class=connectlayout><div class=setup><h3>On the new Mac</h3><ol class=steps>"
+            + "<li><div><b>Open Studio Launcher KH</b><p>Install from your SSD, or transfer a copy from this Mac. Drag it into Applications and open it.</p><button type=button id=save-launcher hidden>Save Launcher copy…</button></div></li>"
+            + "<li><div><b>Connect through Tailscale</b><p>Use a Tailscale network that can reach this publisher. Launcher already carries its address and trusted key.</p></div></li>"
+            + "<li><div><b>Enter the pairing code</b><p>Choose <strong>Studio Launcher KH → Connect to Update Studio</strong>, confirm the Mac name, enter this code and click <strong>Connect</strong>.</p></div></li>"
+            + "<li><div><b>Look for the first report</b><p>Launcher shows the result. The new Mac appears in Macs after its first report.</p></div></li></ol></div>"
+            + "<aside class=pairpanel aria-labelledby=code-title><h3 id=code-title>Pairing code</h3>\(pairing)\(lockStatus)\(destination)<p class=sub>The code stays valid until you choose New code. Changing it does not disconnect existing Macs.</p></aside></div>"
+            + "<div class=connectfoot><p>Launcher’s own automatic updates start on by default. No other app is silently installed by connecting.</p><a href=#settings>Connection settings</a></div>\(enrol)\(joinedList)</section>"
+        let settings = "<section data-view=settings><div class=pagehead><div><h2>Settings</h2><p class=sub>Connection details and update choices.</p></div></div><div class=settingslist>"
+            + "<div class=setting><div><h3>Publisher address</h3><p class=sub>Other Macs reach this Update Studio through Tailscale. Launcher carries this address and the trusted key.</p></div><div>\(destination)<p class=sub>Listener addresses are set in this Mac’s publisher configuration. Changing this display would not change the listener.</p></div></div>"
+            + "<div class=setting><div><h3>Pairing protection</h3><p class=sub>The code is protected against repeated wrong attempts.</p></div><div>\(lockStatus)<a href=#connect>View code and connect a Mac</a><p class=sub>Already connected Macs keep their connection and Automatic choices.</p></div></div>"
+            + "<div class=setting><div><h3>Automatic updates</h3><p class=sub>Every Mac keeps its own choices.</p></div><div><p>New Launcher connections start with Launcher automatic updates on. Other apps follow that Mac’s saved settings.</p><p class=sub>Use the Automatic control beside an app in a Mac’s details to change its effective setting. Existing choices are never reset by connecting.</p><a href=#macs>Manage choices in Macs</a></div></div></div></section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
         let sizes = ByteCountFormatter()
@@ -1065,56 +1101,49 @@ public final class FeedServer: @unchecked Sendable {
         let news = latest.dropFirst().filter { $0.hasPrefix("- ") }.map { "<li>\(h(String($0.dropFirst(2))))</li>" }.joined()
         let version = "<details class=news><summary><span class=link>v\(h(String((latest.first ?? "unknown").split(separator: " ").first ?? "unknown"))) · What's new</span></summary><div class=newsbody><h2>What's new</h2><ul>\(news)</ul></div></details>"
         // Filters and search (kept across the refresh), open rows kept open, confirm, copy, countdown.
-        let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">" + #"""
+        let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">" + PublisherFleet.script + #"""
         setInterval(function(){document.querySelectorAll('[data-until]').forEach(function(e){var s=Math.round(Number(e.getAttribute('data-until'))-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'})},1000);
         var S=sessionStorage,mode=S.getItem('khu-mode')||'all',refreshing=false;
-        function show(){var v=location.hash.slice(1)||S.getItem('khu-view')||'macs';if(['macs','apps','connect'].indexOf(v)<0)v='macs';var was=S.getItem('khu-view');S.setItem('khu-view',v);
+        function show(){var v=location.hash.slice(1)||S.getItem('khu-view')||'macs';if(['macs','apps','connect','settings'].indexOf(v)<0)v='macs';var was=S.getItem('khu-view');S.setItem('khu-view',v);
         document.querySelectorAll('[data-view]').forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});if(was&&was!=v)window.scrollTo(0,0)}
         function bind(){document.querySelector('.tabs').hidden=false;show();
-        document.querySelectorAll('details.mac>summary').forEach(function(m){m.addEventListener('click',function(e){var f=e.target.closest('form');if(f){e.preventDefault();f.requestSubmit()}})});
-        var f=document.getElementById('filter');
-        function run(){var q=f.value.trim().toLowerCase(),n=0;document.querySelectorAll('details.mac').forEach(function(d){var st=d.getAttribute('data-state');
-        var ok=(!q||d.getAttribute('data-mac').indexOf(q)>=0)&&(mode=='all'||st==mode||(mode=='update'&&st=='updating'));d.hidden=!ok;if(ok)n++});
-        document.querySelectorAll('.filter').forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-f')==mode)});
-        document.getElementById('count').textContent=(q||mode!='all')?n+' shown':'';var nm=document.getElementById('nomatch');if(nm){nm.hidden=n>0;document.querySelector('.maclist').hidden=n==0}S.setItem('khu-filter',f.value);S.setItem('khu-mode',mode)}
-        if(f){document.querySelector('.tools').hidden=false;f.value=S.getItem('khu-filter')||'';f.addEventListener('input',run);
-        document.querySelectorAll('.filter').forEach(function(b){b.addEventListener('click',function(){mode=b.getAttribute('data-f');run()})});run()}
-        var open=JSON.parse(S.getItem('khu-open')||'[]');document.querySelectorAll('details.mac').forEach(function(d){var k=d.getAttribute('data-machine');
-        if(open.indexOf(k)>=0)d.open=true;d.addEventListener('toggle',function(){var o=JSON.parse(S.getItem('khu-open')||'[]').filter(function(x){return x!=k});if(d.open&&o.indexOf(k)<0)o.push(k);S.setItem('khu-open',JSON.stringify(o))})});
+        bindFleet();
         document.querySelectorAll('form[data-confirm]').forEach(function(x){x.addEventListener('submit',function(e){if(!confirm(x.getAttribute('data-confirm')))e.preventDefault()})});
-        document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=b.getAttribute('data-copy'),done=function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy error report'},2000)};
-        if(navigator.clipboard){navigator.clipboard.writeText(t).then(done,fallback)}else fallback();function fallback(){var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done()}})});
+        document.querySelectorAll('button[data-copy]').forEach(function(b){var label=b.textContent;b.addEventListener('click',function(){var t=b.getAttribute('data-copy'),done=function(){b.textContent='Copied';(document.querySelector('dialog[open] .copystatus')||document.getElementById('copy-status')).textContent=label+' copied.';setTimeout(function(){b.textContent=label},2000)};
+        if(navigator.clipboard){navigator.clipboard.writeText(t).then(done,fallback)}else fallback();function fallback(){var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();var copied=false;try{copied=document.execCommand('copy')}catch(e){}a.remove();b.focus();if(copied)done();else (document.querySelector('dialog[open] .copystatus')||document.getElementById('copy-status')).textContent='Copy was unavailable. Select the text and copy it manually.'}})});
         document.getElementById('refresh').addEventListener('click',refresh);
         var save=document.getElementById('save-launcher');if(save){save.hidden=!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.saveLauncher);save.addEventListener('click',function(){window.webkit.messageHandlers.saveLauncher.postMessage('save')})}}
         window.addEventListener('hashchange',show);bind();
         function closeNews(){document.querySelector('details.news').open=false}
         document.addEventListener('keydown',function(e){if(e.key=='Escape')closeNews()});document.addEventListener('click',function(e){var news=document.querySelector('details.news');if(news.open&&!news.contains(e.target))closeNews()});
-        async function refresh(){if(refreshing)return;refreshing=true;var button=document.getElementById('refresh'),controller=new AbortController(),timeout=setTimeout(function(){controller.abort()},15000);
+        async function refresh(){if(refreshing||document.querySelector('dialog[open]'))return;refreshing=true;var button=document.getElementById('refresh'),controller=new AbortController(),timeout=setTimeout(function(){controller.abort()},15000);
         button.disabled=true;button.textContent='Refreshing…';document.getElementById('refresh-status').textContent='Fetching the latest fleet and app reports…';
         var focused=document.activeElement,id=focused&&focused.id,start=focused&&focused.selectionStart,end=focused&&focused.selectionEnd,y=window.scrollY;
         try{var response=await fetch(location.pathname,{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('Publisher returned '+response.status);
         var doc=new DOMParser().parseFromString(await response.text(),'text/html'),main=doc.querySelector('main');if(!main||!main.querySelector('#refresh'))throw Error('Publisher state could not be read');
+        if(document.querySelector('dialog[open]')){document.getElementById('refresh-status').textContent='Refresh resumes after closing Mac details.';return}
         document.querySelector('main').replaceWith(main);bind();window.scrollTo(0,y);var active=id&&document.getElementById(id);if(active){active.focus({preventScroll:true});if(start!=null&&active.setSelectionRange)active.setSelectionRange(start,end)}
         document.getElementById('refresh-status').textContent='Latest reports fetched at '+new Date().toLocaleTimeString()+'. Last seen shows when each Mac reported.';
         }catch(error){document.getElementById('refresh-status').textContent='Refresh failed: '+(error.name=='AbortError'?'publisher did not respond within 15 seconds':error.message)+'. Showing the previous reports. Try Refresh again.';
         }finally{clearTimeout(timeout);refreshing=false;button=document.getElementById('refresh');button.disabled=false;button.textContent='Refresh'}}
-        function tick(){var a=document.activeElement;if(!document.querySelector('details.news').open&&!document.querySelector('details.notes[open]')&&!(a&&(a.tagName=='INPUT'||a.tagName=='TEXTAREA')))refresh();setTimeout(tick,REFRESH*1000)}
+        function tick(){var a=document.activeElement;if(!document.querySelector('dialog[open]')&&!document.querySelector('details.news').open&&!document.querySelector('details.notes[open]')&&!(a&&(a.tagName=='INPUT'||a.tagName=='TEXTAREA')))refresh();setTimeout(tick,REFRESH*1000)}
         setTimeout(tick,REFRESH*1000);
         """#.replacingOccurrences(of: "REFRESH", with: isOpen ? "10" : "30") + "</script>"
         return """
         <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><noscript><meta http-equiv=refresh content=\(isOpen ? 10 : 30)></noscript><title>Update Studio KH</title>
-        <style>\(Self.pageStyle)</style></head>
-        <body><header class=top><div class=brand>\(Self.mark)<h1>Update Studio KH</h1></div>
-        <nav class=tabs aria-label="Views" hidden><a href=#macs data-tab=macs>Macs</a><a href=#apps data-tab=apps>Apps &amp; updates</a></nav>
+        <style>\(Self.pageStyle)\(PublisherFleet.style)</style></head>
+        <body><header class=top><div class=brand>\(Self.mark)<div><h1>Update Studio KH</h1><p class=sub>Apps across your Macs</p></div></div>
+        <nav class=tabs aria-label="Views" hidden><a href=#macs data-tab=macs>Macs</a><a href=#apps data-tab=apps>Apps &amp; updates</a><a href=#settings data-tab=settings>Settings</a></nav>
         <div class=headright>\(version)<a class=connectbtn href=#connect data-tab=connect>+ Connect a Mac</a></div></header>
         <main>
-        <div data-view=macs><section>\(summary)\(banner)</section>
+        <div data-view=macs><div class=pagehead><div><h2>Your Macs</h2><p class=sub>See what needs attention. Open a Mac for its apps and update choices.</p></div></div><section>\(summary)\(banner)</section>
         <section><h2>Macs</h2><div class=tools hidden><div class=filters role=group aria-label="Show Macs">\(filters)</div><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac"><button type=button id=refresh>Refresh</button><span id=count class=sub></span></div><p id=refresh-status class=sub role=status aria-live=polite>Latest saved reports. Last seen shows when each Mac reported.</p>\(macs)
         </section>
         \(state.removed.isEmpty ? "" : "<section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>")</div>
         \(connect)
-        <section data-view=apps><h2>Apps &amp; updates</h2><p class=sub>What each app is published at. Update N Macs updates every connected Mac that is behind.</p>\(feedSection)</section>
-        </main>\(script)</body></html>
+        \(settings)
+        <section data-view=apps><div class=pagehead><div><h2>Apps &amp; updates</h2><p class=sub>Published versions, release notes and updates for your connected Macs.</p></div></div><p class=sub>Update N Macs updates every connected Mac that is behind. Each Mac reports its result here.</p>\(feedSection)</section>
+        <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main>\(script)</body></html>
         """
     }
 
@@ -1152,13 +1181,13 @@ public final class FeedServer: @unchecked Sendable {
     static let pageStyle = """
     :root{--bg:#f5f6f5;--panel:#fff;--line:#e2e5e3;--line2:#eef0ef;--text:#16201c;--sub:#5b6762;--accent:#1d6b51;--accent-ink:#fff;--ok:#1a7448;--ok-bg:#e2f3e9;--warn:#875800;--warn-bg:#fcefd2;--bad:#b42318;--bad-bg:#fde8e6;--info:#1d5fa8;--info-bg:#e5eefb;--muted-bg:#eef0ef;--focus:#2e8b6a;--field:#9aa6a0;--shadow:0 10px 30px rgba(15,30,25,.14)}
     @media (prefers-color-scheme:dark){:root{--bg:#101513;--panel:#171e1b;--line:#29332f;--line2:#202926;--text:#e6ece9;--sub:#a9b5af;--accent:#3fa37f;--accent-ink:#06120d;--ok:#62d19a;--ok-bg:#15301f;--warn:#f0b450;--warn-bg:#33270f;--bad:#ff8a7e;--bad-bg:#3a1714;--info:#8ab8f2;--info-bg:#15263c;--muted-bg:#212a26;--focus:#62d19a;--field:#5f6e67;--shadow:0 12px 32px rgba(0,0,0,.5)}}
-    *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+    *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:13.5px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
     body{margin:0}::selection{background:var(--accent);color:var(--accent-ink)}a{color:var(--accent)}
-    h1{font-size:20px;letter-spacing:-.02em;margin:0}h2{font-size:15px;margin:0 0 10px;letter-spacing:-.01em}h3{font-size:12px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;margin:16px 0 6px}p{margin:0 0 8px}
+    h1{font-size:16px;letter-spacing:-.02em;margin:0}h2{font-size:15px;margin:0 0 10px;letter-spacing:-.01em}h3{font-size:12px;font-weight:600;color:var(--sub);letter-spacing:0;margin:16px 0 6px}p{margin:0 0 8px}
     .sub{color:var(--sub);font-size:12.5px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.num{font-variant-numeric:tabular-nums}
     .top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:4}
     .top{align-items:center}.brand{display:flex;gap:10px;align-items:center}.headright{display:flex;align-items:center;gap:14px}.connectbtn{background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:600;padding:6px 12px;border-radius:8px;white-space:nowrap}.connectbtn:hover{filter:brightness(1.08)}.connectbtn[aria-current=page]{background:var(--panel);color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}#count{min-width:5.5em;text-align:right}.tabs{display:flex;gap:2px;padding:2px;background:var(--muted-bg);border-radius:9px}.tabs[hidden]{display:none}.tabs a{padding:5px 14px;border-radius:7px;color:var(--sub);text-decoration:none;font-weight:550}.tabs a[aria-current=page]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}[data-view][hidden]{display:none}.mark{width:34px;height:34px;flex:none}.brand .sub{margin:0}
-    main{padding:20px 24px 48px;max-width:1240px;margin:0 auto}section{margin-bottom:28px}
+    main{width:100%;padding:28px 24px 48px;max-width:1480px;margin:0 auto}section{margin-bottom:28px}
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
     .stat{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--panel)}
     .stat .n{font-size:26px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap}.stat .n small{font-size:13px;color:var(--sub);font-weight:500}
@@ -1181,7 +1210,7 @@ public final class FeedServer: @unchecked Sendable {
     .filter[aria-pressed=true]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
     .maclist{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
     details.mac+details.mac{border-top:1px solid var(--line2)}details.mac[hidden]{display:none}
-    details.mac>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(190px,1.1fr) minmax(0,1.6fr) auto 150px 14px;gap:14px;align-items:center;padding:9px 16px}
+    details.mac>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(150px,1.1fr) minmax(0,1.6fr) auto 140px 14px;gap:14px;align-items:center;padding:9px 16px}
     details.mac>summary::-webkit-details-marker{display:none}details.mac>summary:hover{background:var(--line2)}details.mac[open]>summary{background:var(--muted-bg)}
     .who{display:flex;flex-direction:column;min-width:0}.who b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.who small{color:var(--sub);font-size:11.5px}
     .apps{display:flex;flex-wrap:wrap;gap:4px}
@@ -1194,7 +1223,7 @@ public final class FeedServer: @unchecked Sendable {
     .identity{display:grid;grid-template-columns:minmax(120px,auto) minmax(0,1fr);gap:6px 16px;margin:10px 0}.identity dt{color:var(--sub)}.identity dd{margin:0;overflow-wrap:anywhere}.identity code{word-break:break-word}
     @media(max-width:560px){.identity{grid-template-columns:1fr;gap:3px}.identity dd{margin-bottom:7px}}
     table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:7px 10px;vertical-align:top}
-    thead th{font-size:11.5px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
+    thead th{font-size:11.5px;font-weight:600;color:var(--sub);letter-spacing:0;border-bottom:1px solid var(--line)}
     tbody tr+tr td{border-top:1px solid var(--line2)}.name{font-weight:550}.name .sub{font-weight:400}
     .actions{text-align:right;white-space:nowrap}.actions>*{margin-left:6px}
     .tag.on{font-size:12px;color:var(--accent);font-weight:600}.warntext{color:var(--warn)}.badtext{color:var(--bad);font-weight:550}
@@ -1219,6 +1248,26 @@ public final class FeedServer: @unchecked Sendable {
     .apptable thead,.hist thead,.feed thead{display:none}.apptable tr,.feed tr{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 0}.apptable td,.feed td{padding:0;border:0!important}.apptable tbody tr+tr,.feed tbody tr+tr{border-top:1px solid var(--line2)}
     .apptable td:nth-child(3)::before{content:"Feed ";color:var(--sub)}.apptable td.actions,.feed td.actions,.feed td:nth-child(4){grid-column:1/-1;text-align:left}.actions>*{margin:4px 6px 0 0}
     .hist tr{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:6px 0}.hist td{padding:0;font-size:12.5px;border:0!important}.hist tbody tr+tr{border-top:1px solid var(--line2)}details.mac>summary{position:relative;padding-right:34px}.chev{position:absolute;right:16px;top:18px}input[type=search]{width:100%}.tools{width:100%}#filter{flex:1 1 100%;min-width:0;order:2}#refresh{order:3}#count{order:4;min-width:0;text-align:left}.filters{max-width:100%;flex-wrap:wrap}.filter{padding:5px 8px}}
+
+    [hidden]{display:none!important}a{text-underline-offset:3px}input{caret-color:var(--accent)}
+    ::-webkit-scrollbar{width:11px;height:11px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:3px solid var(--bg)}
+    .brand p{font-size:12px;margin:1px 0 0}.top{padding:14px 22px}.mark{width:30px;height:30px}
+    .pagehead{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}.pagehead h2{font-size:26px;letter-spacing:-.025em;font-weight:650;margin:0 0 4px}.pagehead p{margin:0;font-size:13.5px}.textlink{white-space:nowrap}
+    button{min-height:30px;font-weight:550}button.primary{color:var(--accent-ink)}
+    .connectlayout{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(340px,.85fr);gap:40px;align-items:start}
+    .setup{padding:12px 0}.setup h3,.pairpanel h3{font-size:14px;color:var(--text);text-transform:none;letter-spacing:0;margin:0 0 20px}
+    .steps{list-style:none;padding:0;margin:0;counter-reset:setup;display:flex;flex-direction:column;gap:24px}
+    .steps li{counter-increment:setup;display:grid;grid-template-columns:30px minmax(0,1fr);gap:12px;margin:0}
+    .steps li::before{content:counter(setup);display:grid;place-items:center;align-self:start;height:30px;background:var(--muted-bg);color:var(--accent);font-weight:650;border-radius:8px}
+    .steps b{font-size:14px;font-weight:600;display:block;margin:3px 0 5px}.steps p{color:var(--sub);max-width:65ch;margin:0 0 8px;line-height:1.55}
+    .pairpanel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;min-width:0}.pair{margin:24px 0 20px}.paircode{font-size:clamp(36px,4.5vw,64px);letter-spacing:.04em;line-height:1.1;overflow-wrap:anywhere}.pairactions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}.pairactions button{min-height:34px}
+    .lockstatus{color:var(--sub);font-size:12.5px;line-height:1.6}.lockstatus .chip{margin-right:6px}.address{padding:20px 0;margin:20px 0;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2)}.addressvalue{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}.address code{font-size:12px;padding:4px 6px;user-select:all;overflow-wrap:anywhere}
+    .connectfoot{display:flex;justify-content:space-between;gap:20px;margin-top:32px;padding-top:20px;border-top:1px solid var(--line);color:var(--sub);font-size:12.5px}.connectfoot p{max-width:70ch}.connectfoot a{white-space:nowrap}
+    .settingslist{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0 24px}.setting{display:grid;grid-template-columns:minmax(180px,.7fr) minmax(0,1.3fr);gap:40px;padding:24px 0}.setting+.setting{border-top:1px solid var(--line2)}.setting h3{font-size:14px;color:var(--text);text-transform:none;margin:0 0 6px;letter-spacing:0}.setting p{max-width:70ch}.setting .address{margin:0 0 10px;padding:0;border:0}
+    .tablewrap{padding:0 8px;overflow-x:auto}.feed td{padding:18px 12px}.feed th{padding:12px}.feed .name{font-weight:600;min-width:160px}.feed .num{font-size:12.5px}.stat{padding:16px}.detail{overflow-x:auto}
+    @media(min-width:821px) and (max-width:1100px){.brand p{display:none}.top{gap:10px}.tabs a{padding:5px 9px}.headright{gap:10px}.stats{grid-template-columns:1fr 1fr}.connectlayout{gap:24px}.pairpanel{padding:24px}details.mac>summary{grid-template-columns:minmax(130px,1fr) minmax(0,1fr) auto 14px}.seen{grid-column:1/4;text-align:left}.chev{grid-column:4;grid-row:1}}
+    @media(max-width:820px){.pagehead{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px}.pagehead h2{font-size:23px}.connectlayout{grid-template-columns:minmax(0,1fr);gap:24px}.pairpanel{order:-1;padding:24px}.paircode{font-size:48px}.pair{margin:20px 0}.connectfoot{flex-direction:column;gap:8px}.setting{grid-template-columns:1fr;gap:12px}.settingslist{padding:0 18px}.headright{margin-left:auto}.brand{min-width:0}.top h1{font-size:15px}.tabs{overflow-x:auto}.tabs a{padding:5px 10px;white-space:nowrap}.feed td{min-width:0}.feed .name{min-width:0}.feed .actions{white-space:normal}.feed .num{overflow-wrap:anywhere}}
+    @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
     """
 
     /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).

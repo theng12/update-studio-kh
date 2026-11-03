@@ -114,6 +114,14 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var enrolNonceHash: String?
     /// The Mac's last results, newest first, for the owner's page (absent in older state).
     public var history: [HistoryEntry]?
+    /// This Mac's last read-only hardware/network/app snapshot, as its agent reported it on
+    /// `/status` (absent until an agent that knows the field has reported once).
+    public var inventory: MacInventory?
+    /// The owner's own label for where this Mac sits. Set only from the publisher's page, never
+    /// from a report and never derived from the Mac's name (absent until the owner sets one).
+    public var site: String?
+    /// The owner's own tags for this Mac, from the publisher's page (absent until set).
+    public var tags: [String]?
     /// The one enrolment source the status page lists.
     public static let windowSource = "window"
     /// A Mac that claimed its own token with the pairing code.
@@ -130,7 +138,7 @@ public struct MachineState: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case machine, displayName, reportedName, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
              automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
-             automaticSet, pausedUntil
+             automaticSet, pausedUntil, inventory, site, tags
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,6 +161,9 @@ public struct MachineState: Codable, Sendable, Equatable {
         history = try c.decodeIfPresent([HistoryEntry].self, forKey: .history)
         automaticSet = try c.decodeIfPresent([String: AutomaticChange].self, forKey: .automaticSet)
         pausedUntil = try c.decodeIfPresent(String.self, forKey: .pausedUntil)
+        inventory = try c.decodeIfPresent(MacInventory.self, forKey: .inventory)
+        site = try c.decodeIfPresent(String.self, forKey: .site)
+        tags = try c.decodeIfPresent([String].self, forKey: .tags)
     }
 
     /// The setting the agent will actually follow.
@@ -278,6 +289,14 @@ public enum ReportPolicy {
     /// (every five minutes) and a result per order, so this is far above any real Mac's rate and
     /// only bounds a loop.
     public static let perMachinePerMinute = 60
+    /// The `inventory` snapshot a report may carry: a bounded hardware/network/app picture, not a
+    /// catalogue of the disk. The page shows these numbers when the listing is incomplete — the
+    /// cap is policy, so the owner is told what it is.
+    public static let maxInventoryApps = 128
+    public static let maxInventoryStringCharacters = 128
+    public static let maxInventoryAppPathCharacters = 512
+    public static let maxInventoryAddresses = 16
+    public static let maxInventoryAddressCharacters = 64
 }
 
 /// A period during which Macs may enrol themselves over the network; closed the rest of the time.

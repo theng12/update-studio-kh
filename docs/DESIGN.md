@@ -54,6 +54,24 @@ strictly forward.
 
 ## Server
 
+The publisher window follows Studio Launcher KH’s system typography, green accent, semantic status
+pills, compact buttons and light/dark surface tokens. Its primary views are Macs, Apps & updates,
+and Settings; Connect a Mac remains a distinct primary action. Connection setup places a short
+ordered checklist beside a large selectable pairing code and explicit copy actions. At narrow
+widths the code appears first and the checklist follows. Copy feedback is announced through a
+live status region; denied clipboard access offers manual copying instead of claiming success.
+Settings describes the actual listener, pairing lock state and existing per-Mac Automatic choices.
+It does not pretend to edit a running listener or introduce a global default that overwrites Macs.
+All owner action forms, confirmation boundaries and report semantics remain unchanged.
+The Macs list defaults to 25 per page, with a page-size choice including All. Search, status,
+site and tag filters, grouping and the current page survive refresh. Site and tags are owner
+metadata (128-character site, at most 20 tags of 64 characters) saved under the same loopback,
+Host and same-origin checks as existing owner actions. No site is inferred from a machine name.
+Mac details use a native HTML dialog with focus return and Escape; the original details/forms
+remain the no-script fallback. Refresh pauses while details are open, including a fetch that
+started before opening, to preserve edits. Hardware and icons follow actual reported values,
+never the connection name. Missing inventory reads Not reported. App inventory is read-only.
+
 `khu serve --feed <dir> --state <dir> --bind <ip> [--bind <ip>…] --port <p>`. Every address is
 bound before any is served. Each connection runs on its own thread (at most 32 at once; more get
 503) with a 15 s total read deadline and a 30 s send timeout, and artifacts stream from disk —

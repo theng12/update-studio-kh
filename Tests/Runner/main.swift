@@ -2546,7 +2546,8 @@ func pairingTests() {
         let during = start.addingTimeInterval(Double(EnrolPolicy.pairingLockMinutes) * 60 - 1)
         expect(post(server, "mac-b", p.code, now: during).status == 429 && r.machines["mac-b"] == nil, "PC3 while locked even the right code is refused")
         let page = String(data: server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": r.host]), remote: "127.0.0.1").data, encoding: .utf8) ?? ""
-        expect(page.contains("<b>Locked</b>"), "PC3 the page says it is locked")
+        expect(page.contains("Pairing locked</span>") && page.contains("No code is accepted until then.")
+               && !page.contains("Ready to connect</span>"), "PC3 both connection views show the active lock instead of a ready state")
         let after = start.addingTimeInterval(Double(EnrolPolicy.pairingLockMinutes) * 60 + 1)
         expect(post(server, "mac-b", p.code, now: after).status == 200, "PC3 the right code works when the lock ends")
     }
@@ -3480,6 +3481,7 @@ r41HealthMustHold()
         connectionFlowTests()
         connectionReloadTests()
         toolbarTests()
+        inventoryTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

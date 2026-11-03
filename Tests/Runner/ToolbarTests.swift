@@ -30,6 +30,68 @@ func toolbarTests() {
     try! StateStore.update(in: rig.state) { state in state.machines["fixture-mac"]?.installed["demo"] = "2.0" }
     expect(server.statusHTML().contains("2.0"), "T7 fresh reads reflect the latest saved app reports")
 
+    // Publisher redesign keeps connection settings informational and preserves every owner route.
+    try! Enrolment.ensurePairingCode(stateDir: rig.state)
+    let redesignPage = server.statusHTML(nonce: "redesign-test")
+    expect(redesignPage.contains("id=pairing-code") && redesignPage.contains(">Copy code</button>")
+           && redesignPage.contains(">Copy address</button>") && redesignPage.contains("id=copy-status"),
+           "T10 pairing and address have separate copy controls with accessible feedback")
+    expect(redesignPage.contains("data-view=settings") && redesignPage.contains("data-tab=settings")
+           && redesignPage.contains("Pairing protection") && redesignPage.contains("Every Mac keeps its own choices."),
+           "T11 settings exposes actual connection protection and existing automatic choices without resetting them")
+    expect(redesignPage.contains("label=b.textContent") && redesignPage.contains("b.textContent=label")
+           && redesignPage.contains("Copy was unavailable. Select the text and copy it manually."),
+           "T12 shared copy handler restores each action label and reports copy refusal honestly")
+    expect(redesignPage.contains("grid-template-columns:minmax(0,1.15fr) minmax(340px,.85fr)")
+           && redesignPage.contains("[hidden]{display:none!important}") && redesignPage.contains("prefers-reduced-motion"),
+           "T13 responsive publisher layout preserves hidden views and reduced-motion preference")
+
+    expect(redesignPage.contains("id=page-size") && redesignPage.contains("id=site-filter") && redesignPage.contains("id=tag-filter")
+           && redesignPage.contains("<dialog id=mac-dialog") && redesignPage.contains("dialog.showModal()"),
+           "T14 fleet keeps search with pagination, site/tag controls and modal details")
+    let metadataBody = JSON.encode(["machine": "fixture-mac", "site": "Office <West>", "tags": "Staff, Editing, Staff"], pretty: false)
+    let metadataRequest = HTTPRequest(method: "POST", path: "/api/mac-metadata",
+        headers: ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790"], body: metadataBody)
+    let previousMac = try! StateStore.read(in: rig.state).machines["fixture-mac"]!
+    expect(server.handleRequest(metadataRequest, remote: "100.64.0.5").status == 403,
+           "T15 remote peers cannot change owner site and tags")
+    expect(server.handleRequest(metadataRequest, remote: "127.0.0.1").status == 200,
+           "T16 owner can save a site and deduplicated tags")
+    let tagged = try! StateStore.read(in: rig.state).machines["fixture-mac"]!
+    expect(tagged.site == "Office <West>" && tagged.tags == ["Editing", "Staff"]
+           && tagged.tokenHash == previousMac.tokenHash && tagged.pending.map(\.id) == previousMac.pending.map(\.id)
+           && tagged.automatic == previousMac.automatic,
+           "T17 metadata edits preserve connection, waiting orders and automatic choices")
+    expect(server.statusHTML().contains("Office &lt;West&gt;"), "T18 metadata is escaped before rendering")
+    let beforeBadMetadata = try! Data(contentsOf: rig.state.appendingPathComponent("state.json"))
+    let badMetadata = HTTPRequest(method: "POST", path: "/api/mac-metadata",
+        headers: ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790"],
+        body: JSON.encode(["machine": "fixture-mac", "site": String(repeating: "x", count: 129)], pretty: false))
+    expect(server.handleRequest(badMetadata, remote: "127.0.0.1").status == 400
+           && (try! Data(contentsOf: rig.state.appendingPathComponent("state.json"))) == beforeBadMetadata,
+           "T19 overlong metadata is refused without changing state")
+    expect(PublisherFleet.icon(nil) == PublisherFleet.icon("unknown")
+           && PublisherFleet.icon("Macmini9,1") != PublisherFleet.icon("MacBookPro18,1"),
+           "T20 device icons use reported identifiers with an honest generic fallback")
+
+    let inventoryReport: [String: Any] = ["machine": "fixture-mac", "site": "Untrusted site",
+        "tags": ["untrusted"], "inventory": ["model_id": "Mac14,13", "model_name": "Mac Studio",
+        "apps": [["id": "com.example.editor", "name": "Editor <One>", "maker": "Maker <Two>", "path": "/Applications/Editor.app"]]]]
+    let reportResponse = server.handleRequest(HTTPRequest(method: "POST", path: "/status",
+        headers: ["authorization": "Bearer \(token)"], body: try! JSONSerialization.data(withJSONObject: inventoryReport)), remote: "100.64.0.9")
+    let reportedMac = try! StateStore.read(in: rig.state).machines["fixture-mac"]!
+    expect(reportResponse.status == 200 && reportedMac.inventory?.model_id == "Mac14,13"
+           && reportedMac.site == "Office <West>" && reportedMac.tags == ["Editing", "Staff"],
+           "T21 inventory reports cannot overwrite owner site and tags")
+    let inventoryPage = server.statusHTML()
+    expect(inventoryPage.contains("Editor &lt;One&gt;") && inventoryPage.contains("Maker &lt;Two&gt;")
+           && inventoryPage.contains("Copy last reachable report"),
+           "T22 reported inventory is escaped and connection facts offer copy actions")
+    _ = server.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(token)"],
+        body: Data(#"{"machine":"fixture-mac","installed":{"demo":"2.0"}}"#.utf8)), remote: "100.64.0.9")
+    expect((try! StateStore.read(in: rig.state)).machines["fixture-mac"]?.inventory == reportedMac.inventory,
+           "T23 an older status report preserves the last inventory instead of clearing it")
+
     // Capture the actual owner-route audit, including a duplicate request that creates nothing.
     let auditRig = Rig("order-audit")
     try! auditRig.publish("demo", "2.0", auditRig.artifact("demo.zip", "demo"))

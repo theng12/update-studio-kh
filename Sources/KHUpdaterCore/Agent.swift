@@ -353,6 +353,12 @@ public enum Agent {
         ]
         if let name = MacName.current(expectedMachine: config.machine) { report["display_name"] = name }
         if let until = helper.pausedUntil, helper.paused(at: now) { report["paused_until"] = until }
+        // A read-only snapshot of this Mac's own hardware, addresses and installed apps, bounded
+        // like every other report. Fields that could not be read stay absent; the machine's name
+        // is never used as hardware, and the installed managed-app maps above are untouched.
+        if let inventory = MacInventory.collect(now: now, shell: shell).asJSONObject() {
+            report["inventory"] = inventory
+        }
         let statusBody = try JSONSerialization.data(withJSONObject: report)
         let (_, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
         guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }

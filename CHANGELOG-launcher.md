@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.6 — 2026-11-03
+- Update Studio receives this Mac’s reported hardware, connection details and installed-app inventory without asking for new macOS permissions.
+- Missing details remain unreported; app inventory is read-only and does not install or remove other makers’ apps.
+
 ## 0.1.5 — 2026-11-03
 - Mac names follow Hub’s current human label after matching its controller ID to the existing connection; renaming keeps the connection and sign-in intact.
 - A new Mac connects through a native Connect to Update Studio screen with its publisher, Mac name, pairing code and connection result.
