@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.11 — 2026-11-03
+- Other apps lists Tailscale, Chrome, Telegram, Yam Display, Word and Excel, with official sources and vendor signature checks.
+- Choose individual Macs or confirm a group assignment. Assignments start off; turning off cancels waiting installs and keeps installed apps.
+- Official sources and vendor identities are editable. Retirement keeps each app’s source and history so it can be restored with assignments off.
+- Waiting installs follow edited sources and the visible shared download limit. Older Launchers wait for a compatible version.
+- Packages stay verified and ready for an administrator to finish on the Mac. Accounts, sign-ins and licences stay yours.
+
 ## 1.0.10 — 2026-11-03
 - A Launcher-matched header, spacing and controls bring Macs, Apps & updates and connection setup into one consistent window.
 - Connect a Mac uses a short checklist and a large pairing code, with separate Copy code and Copy address actions.

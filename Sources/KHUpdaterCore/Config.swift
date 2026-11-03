@@ -122,6 +122,8 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var site: String?
     /// The owner's own tags for this Mac, from the publisher's page (absent until set).
     public var tags: [String]?
+    /// Optional vendor assignments are off until explicitly enabled for this Mac.
+    public var vendorAssignments: [String: Bool]?
     /// The one enrolment source the status page lists.
     public static let windowSource = "window"
     /// A Mac that claimed its own token with the pairing code.
@@ -138,7 +140,7 @@ public struct MachineState: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case machine, displayName, reportedName, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
              automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
-             automaticSet, pausedUntil, inventory, site, tags
+             automaticSet, pausedUntil, inventory, site, tags, vendorAssignments
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -164,6 +166,7 @@ public struct MachineState: Codable, Sendable, Equatable {
         inventory = try c.decodeIfPresent(MacInventory.self, forKey: .inventory)
         site = try c.decodeIfPresent(String.self, forKey: .site)
         tags = try c.decodeIfPresent([String].self, forKey: .tags)
+        vendorAssignments = try c.decodeIfPresent([String: Bool].self, forKey: .vendorAssignments)
     }
 
     /// The setting the agent will actually follow.
@@ -176,18 +179,21 @@ public struct ServerCommand: Codable, Sendable, Equatable {
     /// action refuses it rather than guessing.
     public static let update = "update"
     public static let rollback = "rollback"
+    public static let vendorInstall = "vendor-install"
 
     public var id: String
     public var machine: String
     public var app: String
     public var createdAt: String
     public var action: String
+    public var vendor: VendorOrder?
     public init(id: String = UUID().uuidString, machine: String, app: String, createdAt: String = ISO.string(Date()),
-                action: String = ServerCommand.update) {
+                action: String = ServerCommand.update, vendor: VendorOrder? = nil) {
         self.id = id; self.machine = machine; self.app = app; self.createdAt = createdAt; self.action = action
+        self.vendor = vendor
     }
 
-    private enum CodingKeys: String, CodingKey { case id, machine, app, createdAt, action }
+    private enum CodingKeys: String, CodingKey { case id, machine, app, createdAt, action, vendor }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -195,6 +201,7 @@ public struct ServerCommand: Codable, Sendable, Equatable {
         app = try c.decode(String.self, forKey: .app)
         createdAt = try c.decode(String.self, forKey: .createdAt)
         action = try c.decodeIfPresent(String.self, forKey: .action) ?? ServerCommand.update
+        vendor = try c.decodeIfPresent(VendorOrder.self, forKey: .vendor)
     }
 }
 
@@ -204,6 +211,7 @@ public struct ServerCommand: Codable, Sendable, Equatable {
 /// instead — the opposite of what the owner asked for.
 public enum AgentCapability {
     public static let ownerRollback = "owner-rollback-v1"
+    public static let vendorInstall = "vendor-install-v1"
 }
 
 /// One install result as the page shows it: which app, the version it was on, the version the feed

@@ -614,7 +614,21 @@ public final class FeedServer: @unchecked Sendable {
                 // A rollback order is withheld from an agent that does not say it understands one:
                 // an older agent would carry the same order out as an update.
                 let deliverable = ms.pending.filter {
-                    $0.action == ServerCommand.update || names.contains(AgentCapability.ownerRollback)
+                    switch $0.action {
+                    case ServerCommand.update: return true
+                    case ServerCommand.rollback: return names.contains(AgentCapability.ownerRollback)
+                    case ServerCommand.vendorInstall:
+                        guard names.contains(AgentCapability.vendorInstall), let payload = $0.vendor,
+                              ms.vendorAssignments?[payload.entry.id] == true,
+                              let catalog = try? VendorCatalog.load(from: VendorCatalog.url(in: stateDir.path)),
+                              let preferences = try? VendorPreferences.load(stateDir),
+                              !preferences.retired.contains(payload.entry.id),
+                              payload.byteCap == preferences.byteCap,
+                              var current = catalog.entries.first(where: { $0.id == payload.entry.id }) else { return false }
+                        current.enabled = true
+                        return current == payload.entry
+                    default: return names.contains(AgentCapability.ownerRollback)
+                    }
                 }
                 // Signed with the key every agent is pinned to, and naming this Mac and the moment
                 // it was made: a forged or replayed reply is refused at the Mac.
@@ -715,6 +729,9 @@ public final class FeedServer: @unchecked Sendable {
                 page.headers = ["Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-\(nonce)'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'",
                                 "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"]
                 return page
+            }
+            if req.method == "POST", ["/api/vendor-edit", "/api/vendor-retire", "/api/vendor-restore", "/api/vendor-assign"].contains(req.path) {
+                return vendorRequest(req)
             }
             if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
                                         || req.path == "/api/automatic" || req.path == "/api/enrol-window"
@@ -1142,7 +1159,7 @@ public final class FeedServer: @unchecked Sendable {
         \(state.removed.isEmpty ? "" : "<section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>")</div>
         \(connect)
         \(settings)
-        <section data-view=apps><div class=pagehead><div><h2>Apps &amp; updates</h2><p class=sub>Published versions, release notes and updates for your connected Macs.</p></div></div><p class=sub>Update N Macs updates every connected Mac that is behind. Each Mac reports its result here.</p>\(feedSection)</section>
+        <section data-view=apps><div class=pagehead><div><h2>Apps &amp; updates</h2><p class=sub>Published versions, release notes and updates for your connected Macs.</p></div></div><p class=sub>Update N Macs updates every connected Mac that is behind. Each Mac reports its result here.</p>\(feedSection)\(vendorHTML(state))</section>
         <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main>\(script)</body></html>
         """
     }

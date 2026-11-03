@@ -117,7 +117,8 @@ public enum Recipe {
     ///    merely the new version as settled.
     public static func appDmg(shell: Shell, installedPath: String, artifactPath: String, feedVersion: String,
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
-                              fileManager fm: FileManager = .default) throws -> RecipeResult {
+                              fileManager fm: FileManager = .default,
+                              verifyStaged: ((String) throws -> Void)? = nil) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         guard !fm.fileExists(atPath: paths.journal.path) else {
@@ -142,6 +143,11 @@ public enum Recipe {
         guard info.executableIsRunnable(in: source) else { throw ArtifactFailure(description: "the DMG's app has no runnable executable; nothing was changed") }
 
         try stage(paths, from: source, info: info, shell: shell, fileManager: fm)
+        do { try verifyStaged?(paths.staged.path) }
+        catch {
+            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            throw error
+        }
         mounted = false
         let detachNote = detach(shell, mount)  // the staged copy is all that is needed from here
 

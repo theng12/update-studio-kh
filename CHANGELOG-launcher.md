@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.8 — 2026-11-03
+- Accept explicitly assigned Other apps from Update Studio, using official HTTPS downloads and verified vendor signatures.
+- App installs preserve rollback protection and refuse an existing app with a different identity.
+- Packages need an administrator to finish in the vendor’s Installer. Launcher shows the result and opens the setup folder; it never asks for account or licence details.
+- Other apps stay off until assigned. Turning off a waiting assignment leaves installed apps in place.
+
 ## 0.1.7 — 2026-11-03
 - Connect to Update Studio works over Tailscale HTTP on current macOS, with the exception limited to Tailscale addresses.
 - The first-run Update Studio address is editable and starts with the kit’s saved address; the publisher’s pinned key is still required.

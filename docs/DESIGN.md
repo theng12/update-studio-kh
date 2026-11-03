@@ -109,6 +109,8 @@ one slow or stalled Mac never holds up the others.
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
   defaults to `update` when absent, so an order signed before the field existed decodes unchanged
   and still means what it meant when the owner gave it.
+- `vendor-install` orders are delivered only to agents advertising `vendor-install-v1`. Other unknown actions retain the existing rollback-capable agent refusal path; legacy agents receive neither. The signed order carries the vendor entry, signature pins, payload kind and visible byte cap. Vendor IDs use `vendor-<id>` to keep results separate from KH releases.
+- Other apps adds owner-only `POST /api/vendor-edit`, `/api/vendor-assign`, `/api/vendor-retire` and `/api/vendor-restore`, under the same loopback/Host/Origin checks. The six catalog entries and all per-Mac assignments start off. Bulk assignment requires explicit confirmation. Turning off cancels waiting installs, preserving installed apps; retirement keeps the entry/history, turns assignments off and cancels pending installs. Restore leaves assignments off. Editing sources refreshes only waiting vendor orders, including the shared download limit; it never creates a new install. Catalog source type, page-link match, official hosts, Team ID/evidence and bundle ID are editable.
 - `/status` may report a bounded `display_name`. The helper reads the installed Hub’s current Machine ID, else the macOS computer name. The publisher stores the last reported name separately: a manual label survives unchanged reports, and the next actual Mac name change follows automatically. Older helpers omit the field and leave the label alone.
 - A Mac has a separate optional display label. Renaming changes that label and adds one history entry; the enrolment ID, token hash, pending orders and enrolment date stay unchanged. Duplicate labels remain separate records and show “same name” on the page.
 - Owner-only: `GET /`, `POST /api/rename-machine`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic`,
@@ -212,6 +214,8 @@ value it had when it was absent.
 
 ## Agent
 
+Vendor installs share the same run lock, machine-bound signed-order validation, durable done/outbox and replay protection. An explicit signed vendor order is required; Automatic never installs an optional app. Source pages use the bounded HTTP client; initial requests and every redirect stay on the catalog's official HTTPS hosts. A local vendor receipt records the outcome and supplies Launcher rows and the verified-installer folder handoff. Receipt-save errors preserve the actual install outcome and are reported separately. Accounts, sign-ins and licences are never read or changed.
+
 `khu agent --config <file>`. One run at a time per Mac (`agent.lock`); a second refuses. Between runs, the long-lived helper re-reads only its saved address and token so an explicit address change or confirmed Pair again takes effect on the next check. A changed pinned key, machine ID or runtime path is refused; other running settings remain intact. Each run:
 
 1. finish or undo any install a killed run left behind (the install journal);
@@ -272,6 +276,8 @@ same rule. A pause holds Automatic only: the owner's orders and Update now still
 stay status-only and get no switch. `KHU_NO_MENU` turns the icon off.
 
 ## Recipes
+
+Other apps require a pinned Apple Team ID with evidence and a valid vendor signature/notarization before install; a published checksum is auxiliary and cannot authorize installation. DMGs reuse the journal/staging/rollback app recipe, verify the staged copy's vendor signature before promotion or execution, and refuse an existing app with a different bundle identity. Vendor destinations are registered in agent-owned `vendor-apps.json` before any install and merged into every run's recovery pass; journal and rollback keys consistently use `vendor-<id>`. Settled automatic rollbacks retain the recipe's actual outcome. Auxiliary checksums hash the downloaded installer, while vendor signatures verify the mounted and staged app. Packages are verified and kept in the agent's owned download folder; they return `needs_admin` with their path and are never executed by the agent. Launcher opens the setup folder so the person can run the vendor's own Installer. No credential collection, sudo or new privilege mechanism is added. Optional app bundles use the signed-in user's existing configured path or the standard Applications name; lack of write access never triggers privilege escalation.
 
 `app-dmg` and `gateway`, in this order:
 
@@ -365,6 +371,9 @@ a replacement artifact or explicit order can retry without the old rollback reco
 again. Each spawn and exit clears the previous child's heartbeat. Live waits use a monotonic clock.
 
 ## Limits (not fixed, stated)
+
+- Other-app latest aliases and vendor-page links resolve live, so their versions are not pinned by the KH release feed. Vendor Team ID, bundle identity and notarization are the trust gate; a vendor may change or remove its download and then the install fails loudly. Page-link parsing accepts the vendor's published double-quoted hrefs; a changed page needs a catalog/source update. Chrome currently requires plain codesign verification plus Gatekeeper notarization because its official bundle has resource-fork detritus rejected by `--strict`.
+- A vendor source edit, retirement or assignment-off cancels/replaces orders still waiting at the publisher; it cannot recall an order already fetched and being executed by a Mac. Orders remain machine-bound and freshness-limited. Package completion by the person is not claimed as an installed result by the agent.
 
 - Persisted timestamps use wall-clock time, but each stub process restarts an open probation
   and measures live deadlines with a monotonic clock. Crash timestamps remain wall-clock

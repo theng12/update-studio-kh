@@ -40,7 +40,14 @@ public struct URLSessionHTTPClient: HTTPClient {
     /// ...and no transfer takes longer than this IN TOTAL, however steadily the peer drips: an
     /// inactivity timeout alone lets a stalled or malicious peer hold a run open for ever.
     public var totalTimeout: TimeInterval = 600
+    /// Vendor downloads and page lookups must stay on the catalog's official HTTPS hosts.
+    public var officialHosts: [String]?
     public init() {}
+
+    static func officialURL(_ url: URL, hosts: [String]) -> Bool {
+        url.scheme?.lowercased() == "https" && url.user == nil && url.password == nil
+            && (url.port == nil || url.port == 443) && hosts.contains(url.host?.lowercased() ?? "")
+    }
 
     public func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
         try send("GET", url, headers: headers, body: nil)
@@ -67,7 +74,10 @@ public struct URLSessionHTTPClient: HTTPClient {
         request.httpMethod = method
         request.httpBody = body
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        let sink = StreamSink(handle: handle, limit: limit)
+        if let officialHosts, !Self.officialURL(url, hosts: officialHosts) {
+            throw khuFail("download refused: URL is outside the vendor's official HTTPS hosts")
+        }
+        let sink = StreamSink(handle: handle, limit: limit, officialHosts: officialHosts)
         let session = URLSession(configuration: .ephemeral, delegate: sink, delegateQueue: nil)
         let task = session.dataTask(with: request)
         task.resume()
@@ -119,7 +129,21 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
     var status = 0
     var error: Error?
 
-    init(handle: FileHandle?, limit: Int64) { self.handle = handle; self.limit = limit }
+    let officialHosts: [String]?
+    init(handle: FileHandle?, limit: Int64, officialHosts: [String]?) {
+        self.handle = handle; self.limit = limit; self.officialHosts = officialHosts
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        if let officialHosts,
+           request.url.map({ URLSessionHTTPClient.officialURL($0, hosts: officialHosts) }) != true {
+            error = khuFail("download refused: redirect left the vendor's official HTTPS hosts")
+            completionHandler(nil)
+        } else {
+            completionHandler(request)
+        }
+    }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
@@ -269,6 +293,8 @@ public enum Agent {
                           control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
                           requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = []) throws -> AgentRunResult {
         var config = config
+        let vendors = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("vendor-apps.json")) ?? [:]
+        config.apps.merge(vendors) { configured, _ in configured }
         // From the Launcher: "<app>" installs or updates, "reinstall:<app>" installs the same
         // version again, "rollback:<app>" puts back the version this Mac kept.
         let reinstall = Set(asked.filter { $0.hasPrefix("reinstall:") }.map { String($0.dropFirst("reinstall:".count)) })
@@ -419,7 +445,7 @@ public enum Agent {
         // This Mac says which order actions it can carry out; the publisher withholds the rest, so
         // an agent that does not understand a rollback is never handed one to misread.
         let reply = try get(http, serverBase.appendingPathComponent("commands")
-            .appendingQuery("machine", config.machine).appendingQuery("capabilities", AgentCapability.ownerRollback), headers: headers)
+            .appendingQuery("machine", config.machine).appendingQuery("capabilities", AgentCapability.ownerRollback + "," + AgentCapability.vendorInstall), headers: headers)
         let signed = try JSON.decode(SignedReply.self, from: reply)
         let publisherKey = try Signing.loadPublicKey(base64: config.publicKey)
         guard let ordersBody = signed.replyData, let signature = signed.signatureData,
@@ -486,6 +512,11 @@ public enum Agent {
                     res = try install(app: item.app, feed: feed, installed: installed[item.app], config: config,
                                       serverBase: serverBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
                                       force: reinstall.contains(item.app))
+                case ServerCommand.vendorInstall:
+                    guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
+                        throw khuFail("vendor install requires an explicit signed order for this Mac")
+                    }
+                    res = try installVendor(command, config: config, stateDir: stateDir, http: http, shell: shell, control: control)
                 case ServerCommand.rollback:
                     res = try orderedRollback(app: item.app, order: item.id, installed: installed[item.app], config: config,
                                               stateDir: stateDir, shell: shell, control: control)
@@ -538,6 +569,9 @@ public enum Agent {
         }
         result.apps = snapshot(config: config, feed: feed, catalog: catalog, orders: orders, helper: helper, memory: memory,
                                executable: executable, http: http, serverBase: serverBase, stateDir: stateDir)
+        let vendorApps = vendorRows(stateDir: stateDir)
+        result.apps.removeAll { row in vendorApps.contains { $0.app == row.app } }
+        result.apps += vendorApps
         return result
     }
 
