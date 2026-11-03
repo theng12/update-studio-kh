@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.5 — 2026-11-03
+- Mac names follow Hub’s current human label after matching its controller ID to the existing connection; renaming keeps the connection and sign-in intact.
+- A new Mac connects through a native Connect to Update Studio screen with its publisher, Mac name, pairing code and connection result.
+- Settings explain the current connection and offer a connection check without enrolling the Mac again or changing its Automatic choices.
+- Pair again is an explicit, confirmed recovery for a removed connection: it requires the pairing code, keeps this Mac’s pinned key and app choices, and preserves the old sign-in in _trash.
+- A different publisher needs its trusted Launcher connection package; an unverified address or pairing code cannot replace the existing trust.
+
 ## 0.1.4 — 2026-11-03
 - Update Studio follows this Mac’s Hub Machine ID or computer name while keeping its enrolment connected.
 - A label set on the Update Studio page stays until the Mac’s own name changes again.

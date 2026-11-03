@@ -947,7 +947,6 @@ func r41HealthMustHold() {
 
 // Inject a jumping wall clock into the observation and a separate monotonic deadline source.
 func r28MonotonicWait() {
-    let start = Mono.now()
     var wall = Date()
     var calls = 0
     var ticks = 0.0
@@ -957,7 +956,8 @@ func r28MonotonicWait() {
         return false
     }, healthTimeout: 0.3, pollInterval: 0.01)
     let healthy = Recipe.waitHealthy(control, version: "1.0", clock: { ticks += 0.1; return ticks })
-    expect(!healthy && calls >= 3 && Mono.now() - start < 0.2,
+    // Bound the injected clock, so scheduler delays cannot turn a correct deadline into a failure.
+    expect(!healthy && calls >= 3 && ticks < 1,
            "R28 live health wait follows the monotonic deadline despite wall clock jumps")
     let realStart = Mono.now()
     let real = AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in false },
@@ -1970,6 +1970,20 @@ func launcherTests() {
     let root = tmpDir("ssd-root")
     func ssd(_ apps: [SSDApp]) -> SSDSource { SSDSource(volume: "KH-TEST", root: root, index: SSDIndex(apps: apps)) }
 
+    // L0. The display registry maps every app id to its approved visible name; an unknown id shows as itself.
+    do {
+        expect(AppNames.display("music-studio") == "Music Studio KH"
+               && AppNames.display("hub") == "Hub Studio KH"
+               && AppNames.display("gateway") == "Gateway Studio KH"
+               && AppNames.display("story") == "Story Studio KH"
+               && AppNames.display("updater") == "Studio Launcher KH"
+               && AppNames.display("kh-updater-app") == "Update Studio KH"
+               && AppNames.display("media-studio") == "Media Studio KH"
+               && AppNames.display("printer-studio") == "Printer Studio KH"
+               && AppNames.display("no-such-app") == "no-such-app",
+               "L0 the registry carries every canonical label (music-studio included) and an unknown id shows as itself")
+    }
+
     // L1. Feed plus SSD, matched by bundle ID; the same version comes from the SSD, an older one does not.
     do {
         let feed = feedWith(["media": entry("0.1.102", bundle: "com.t.media"), "printer": entry("1.0.3", bundle: "com.t.printer")])
@@ -2071,43 +2085,74 @@ func launcherTests() {
     // L8. Pause holds a real download where it is; resume finishes it; cancel stops it and rejects nothing.
     do {
         let rig = Rig("pause")
-        let big = rig.root.appendingPathComponent("big.bin")
-        FileManager.default.createFile(atPath: big.path, contents: nil)
-        let h = try! FileHandle(forWritingTo: big); try! h.truncate(atOffset: 400 << 20); try! h.close()
-        let server = FeedServer(feedDir: rig.feed, stateDir: rig.state, bind: "127.0.0.1", port: 18797, commandKey: rig.pair.privateKey)
-        let fd = try! server.listen()
-        Thread { try? server.serve(on: fd) }.start()
-        try? rig.publish("big", "1.0.0", big)
-        let name = (FeedPublisher.loadFeed(from: rig.feed)?.apps["big"]?.file)!
-        let url = URL(string: "http://127.0.0.1:18797/artifacts/\(name)")!
+        let pauseListener = FeedServer(feedDir: rig.feed, stateDir: rig.state, bind: "127.0.0.1", port: 0)
+        let pauseSocket = try! pauseListener.listen()
+        let url = URL(string: "http://127.0.0.1:\(FeedServer.boundPort(pauseSocket))/pause")!
+        let pauseReady = DispatchSemaphore(value: 0), releaseBody = DispatchSemaphore(value: 0)
+        Thread {
+            let client = accept(pauseSocket, nil, nil)
+            defer { if client >= 0 { close(client) }; close(pauseSocket) }
+            guard client >= 0, HTTP.readRequest(from: client) != nil else { return }
+            var noSignal: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+            let prefix = Data("HTTP/1.1 200 OK\r\nContent-Length: 1048577\r\nConnection: close\r\n\r\nx".utf8)
+            _ = prefix.withUnsafeBytes { send(client, $0.baseAddress, $0.count, 0) }
+            pauseReady.signal()
+            guard releaseBody.wait(timeout: .now() + 30) == .success else { return }
+            Data(repeating: 120, count: 1 << 20).withUnsafeBytes { bytes in
+                var offset = 0
+                while offset < bytes.count {
+                    let count = send(client, bytes.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
+                    if count <= 0 { break }
+                    offset += count
+                }
+            }
+        }.start()
         let out = rig.root.appendingPathComponent("out.part")
         DownloadControl.pause(false)
         var status = 0, failure: Error?
         let done = DispatchSemaphore(value: 0)
         Thread {
-            do { status = try URLSessionHTTPClient().download(url, headers: [:], to: out, limit: 400 << 20) } catch { failure = error }
+            do { status = try URLSessionHTTPClient().download(url, headers: [:], to: out, limit: 1048577) } catch { failure = error }
             done.signal()
         }.start()
-        Thread.sleep(forTimeInterval: 0.05)
+        expect(pauseReady.wait(timeout: .now() + 10) == .success, "L8 pause fixture holds an active incomplete download")
         DownloadControl.pause(true)
-        Thread.sleep(forTimeInterval: 0.6)
+        releaseBody.signal()
         let size = { ((try? FileManager.default.attributesOfItem(atPath: out.path))?[.size] as? NSNumber)?.int64Value ?? 0 }
-        let a = size(); Thread.sleep(forTimeInterval: 1.0); let b = size()
-        expect(b < 400 << 20 && b - a < 8 << 20, "L8 while paused the file stops growing (\(a) then \(b) bytes)")
+        let held = done.wait(timeout: .now() + 0.5) == .timedOut
+        expect(held && size() <= 1, "L8 while paused the file stops growing before the controlled body is written")
         DownloadControl.pause(false)
-        _ = done.wait(timeout: .now() + 60)
-        expect(status == 200 && failure == nil && size() == 400 << 20, "L8 resume finishes the download")
+        let finished = done.wait(timeout: .now() + 10) == .success
+        expect(finished && status == 200 && failure == nil && size() == 1048577, "L8 resume finishes the download")
+        // Hold an incomplete response so Cancel always reaches an active transfer, even from cache.
+        let cancelListener = FeedServer(feedDir: rig.feed, stateDir: rig.state, bind: "127.0.0.1", port: 0)
+        let cancelSocket = try! cancelListener.listen()
+        let cancelURL = URL(string: "http://127.0.0.1:\(FeedServer.boundPort(cancelSocket))/slow")!
+        let responseReady = DispatchSemaphore(value: 0), releaseResponse = DispatchSemaphore(value: 0)
+        Thread {
+            let client = accept(cancelSocket, nil, nil)
+            defer { if client >= 0 { close(client) }; close(cancelSocket) }
+            guard client >= 0, HTTP.readRequest(from: client) != nil else { return }
+            var noSignal: Int32 = 1
+            setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+            let prefix = Data("HTTP/1.1 200 OK\r\nContent-Length: 419430400\r\nConnection: close\r\n\r\nx".utf8)
+            _ = prefix.withUnsafeBytes { send(client, $0.baseAddress, $0.count, 0) }
+            responseReady.signal()
+            _ = releaseResponse.wait(timeout: .now() + 30)
+        }.start()
         let second = rig.root.appendingPathComponent("out2.part")
         var cancelled: Error?
         let done2 = DispatchSemaphore(value: 0)
         Thread {
-            do { _ = try URLSessionHTTPClient().download(url, headers: [:], to: second, limit: 400 << 20) } catch { cancelled = error }
+            do { _ = try URLSessionHTTPClient().download(cancelURL, headers: [:], to: second, limit: 400 << 20) } catch { cancelled = error }
             done2.signal()
         }.start()
-        Thread.sleep(forTimeInterval: 0.05)
-        DownloadControl.pause(true); Thread.sleep(forTimeInterval: 0.3); DownloadControl.cancel()
-        _ = done2.wait(timeout: .now() + 30)
-        expect("\(cancelled.map { "\($0)" } ?? "")".contains("cancelled on this Mac"), "L8 Cancel stops the download and says so")
+        expect(responseReady.wait(timeout: .now() + 10) == .success, "L8 cancellation fixture has an active incomplete response")
+        DownloadControl.cancel()
+        let stopped = done2.wait(timeout: .now() + 10) == .success
+        releaseResponse.signal()
+        expect(stopped && "\(cancelled.map { "\($0)" } ?? "")".contains("cancelled on this Mac"), "L8 Cancel stops the download and says so")
         DownloadControl.pause(false)
     }
     // L9. What's New follows the version on offer; the control window shows only where it is installed.
@@ -2214,6 +2259,18 @@ func launcherTests() {
         expect(MacName.current(home: home, applications: apps, computerName: "Computer Name") == "hub-machine-id", "W8 a Hub Machine ID wins")
         try! Data(#"{"controller_id":"changed-hub-id"}"#.utf8).write(to: settings)
         expect(MacName.current(home: home, applications: apps, computerName: "Computer Name") == "changed-hub-id", "W8 the name is read live after a change")
+        let labels = settings.deletingLastPathComponent().appendingPathComponent("machine_labels.json")
+        try! Data(#"{"local":"Human Mac 1103","other-id":"Not this Mac"}"#.utf8).write(to: labels)
+        expect(MacName.current(home: home, applications: apps, computerName: "Computer Name", expectedMachine: "changed-hub-id") == "Human Mac 1103",
+               "W8 a matching Hub controller reports its local human label without replacing the connection ID")
+        expect(MacName.current(home: home, applications: apps, computerName: "Computer Name", expectedMachine: "different-enrolment") == "changed-hub-id",
+               "W8 a different controller cannot donate its human label to this enrolment")
+        try! Data(#"{"local":"Human Mac 1409"}"#.utf8).write(to: labels)
+        expect(MacName.current(home: home, applications: apps, computerName: "Computer Name", expectedMachine: "changed-hub-id") == "Human Mac 1409",
+               "W8 Hub human-label edits are read live")
+        try! Data(#"{"local":""}"#.utf8).write(to: labels)
+        expect(MacName.current(home: home, applications: apps, computerName: "Computer Name", expectedMachine: "changed-hub-id", hostName: "short-host.local") == "short-host",
+               "W8 a cleared alias uses Hub’s short-hostname fallback, separately from the computer name")
     }
     // W9. The owner route validates and escapes labels, and keeps the same token.
     do {
@@ -3343,6 +3400,14 @@ func enrolWindowTests() {
 struct RunnerMain {
     static func main() {
         setvbuf(stdout, nil, _IOLBF, 0)  // a crash must not swallow the lines before it
+        if let record = ProcessInfo.processInfo.environment["KHU_NATIVE_UI_FIXTURE"] {
+            serveNativePreview(record: record)
+            return
+        }
+        if let record = ProcessInfo.processInfo.environment["KHU_PREVIEW_FIXTURE_RECORD"] {
+            makePreviewFixture(record: record)
+            return
+        }
         if let portPath = ProcessInfo.processInfo.environment["R2_GATEWAY_PORT"] {
             let server = FeedServer(feedDir: fm.temporaryDirectory, stateDir: fm.temporaryDirectory, bind: "127.0.0.1", port: 0)
             let fd = try! server.listen()
@@ -3376,6 +3441,8 @@ struct RunnerMain {
             pairingTests()
             helperTests()
             launcherTests()
+            connectionFlowTests()
+            connectionReloadTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -3410,6 +3477,9 @@ r41HealthMustHold()
         pairingTests()
         helperTests()
         launcherTests()
+        connectionFlowTests()
+        connectionReloadTests()
+        toolbarTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

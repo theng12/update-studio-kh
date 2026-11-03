@@ -14,6 +14,10 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     let stateDir: URL
     let machine: String
     let version: String?
+    /// This Mac's own updater settings, read once when the helper starts. Settings keeps it
+    /// current: saving a new Update Studio address updates `feedURL` here so the connection check
+    /// talks to what the page just saved. The token inside is never shown or sent anywhere.
+    var config: AgentConfig
     private var item: NSStatusItem!
     var itemIfReady: NSStatusItem? { item }
     var lastRun: Date?
@@ -22,6 +26,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     var ssd: [SSDSource] = []
 
     init(config: AgentConfig, version: String?) {
+        self.config = config
         stateDir = URL(fileURLWithPath: config.stateDir); machine = config.machine; self.version = version
     }
 

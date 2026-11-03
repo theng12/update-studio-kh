@@ -239,6 +239,7 @@ public final class FeedServer: @unchecked Sendable {
     public let stateDir: URL
     public let bind: String
     public let port: Int
+    public let publisherBind: String?
     public let maxConnections: Int
     /// The key that signs every order reply. Without it the server has no way to answer a Mac with
     /// something the Mac can tell apart from a forgery, so it refuses to answer at all.
@@ -256,11 +257,12 @@ public final class FeedServer: @unchecked Sendable {
                 commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32,
                 maxEnrolmentsPerWindow: Int = EnrolPolicy.maxPerWindow,
                 enrolAttemptsPerMinute: Int = EnrolPolicy.attemptsPerMinute,
-                reportPostsPerMinute: Int = ReportPolicy.perMachinePerMinute) {
+                reportPostsPerMinute: Int = ReportPolicy.perMachinePerMinute, publisherBind: String? = nil) {
         self.feedDir = feedDir
         self.stateDir = stateDir
         self.bind = bind
         self.port = port
+        self.publisherBind = (publisherBind ?? (Self.isTailnet(bind) ? bind : nil)).flatMap { Self.isTailnet($0) ? $0 : nil }
         self.commandKey = commandKey
         self.maxConnections = maxConnections
         self.maxEnrolmentsPerWindow = maxEnrolmentsPerWindow
@@ -707,7 +709,7 @@ public final class FeedServer: @unchecked Sendable {
                 // CSP stays `default-src 'none'` with no 'unsafe-inline' for scripts.
                 let nonce = Enrolment.randomBase64(bytes: 16)
                 var page = HTTPResponse(200, "text/html; charset=utf-8", statusHTML(nonce: nonce))
-                page.headers = ["Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-\(nonce)'; form-action 'self'; frame-ancestors 'none'",
+                page.headers = ["Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-\(nonce)'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'",
                                 "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"]
                 return page
             }
@@ -717,6 +719,7 @@ public final class FeedServer: @unchecked Sendable {
                                         || req.path == "/api/pairing-code" || req.path == "/api/rename-machine") {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
+                var createdOrders = 0
                 let response = transact { state -> HTTPResponse in
                     // Opening and closing the window, and removing a Mac, are decisions about this
                     // publisher rather than about one app on one Mac.
@@ -749,6 +752,7 @@ public final class FeedServer: @unchecked Sendable {
                         let feed = FeedPublisher.loadFeed(from: feedDir)
                         for (machine, var ms) in state.machines where Self.updateAvailable(ms, app: app, feed: feed, now: Date()) {
                             ms.pending.append(ServerCommand(machine: machine, app: app, action: ServerCommand.update))
+                            createdOrders += 1
                             state.machines[machine] = ms
                         }
                         return Self.ok
@@ -787,10 +791,18 @@ public final class FeedServer: @unchecked Sendable {
                         let action = req.path == "/api/request-rollback" ? ServerCommand.rollback : ServerCommand.update
                         if !ms.pending.contains(where: { $0.app == app && $0.action == action }) {
                             ms.pending.append(ServerCommand(machine: machine, app: app, action: action))
+                            createdOrders += 1
                         }
                     }
                     state.machines[machine] = ms
                     return Self.ok
+                }
+                if response.status == 200, createdOrders > 0 {
+                    let audit: [String: Any] = ["at": ISO.string(Date()), "path": req.path,
+                                               "app": f["app"] ?? "", "created": createdOrders, "source": "owner-page"]
+                    if let data = try? JSONSerialization.data(withJSONObject: audit, options: [.sortedKeys]) {
+                        FileHandle.standardError.write(Data("order-provenance ".utf8) + data + Data("\n".utf8))
+                    }
                 }
                 // The page's own buttons post a form: send the owner back to the page.
                 if response.status == 200, (req.headers["content-type"] ?? "").hasPrefix("application/x-www-form-urlencoded") {
@@ -847,7 +859,6 @@ public final class FeedServer: @unchecked Sendable {
         let window = state.enrolWindow
         let isOpen = window?.isOpen() ?? false
         var enrol = ""
-        var countdown = ""
         var leftText = ""
         if let window, isOpen {
             let seconds = Int(window.remaining())
@@ -857,16 +868,13 @@ public final class FeedServer: @unchecked Sendable {
             enrol = "<p><span class=\"dot ok\"></span><b>Open</b>: new Macs can connect without a code until \(h(stamp(window.until))), \(leftText) left"
                 + " — \(window.enrolled) of \(maxEnrolmentsPerWindow) new Macs enrolled in this window. A Mac that is not enrolled yet may claim a token for itself.</p>"
                 + form("/api/enrol-window", ["minutes": "0"], "Stop allowing new Macs")
-            countdown = "document.querySelectorAll('[data-until]').forEach(function(e){var u=Number(e.getAttribute('data-until'));"
-                + "function t(){var s=Math.round(u-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'}"
-                + "t();setInterval(t,1000)});"
         }
 
         // Every Mac, one compact row each, problems first. Each app has exactly one state, and
         // nothing the publisher cannot vouch for reads as fine.
         struct MacRow { var rank: Int; var name: String; var html: String; var state: String }
         var macRows: [MacRow] = []
-        var total = 0, connected = 0, upToDate = 0, needUpdate = 0, updates = 0, failedMacs = 0, offline = 0
+        var total = 0, connected = 0, upToDate = 0, needUpdate = 0, updates = 0, requested = 0, failedMacs = 0, offline = 0
         var joined: [String] = []
         for machine in state.machines.keys.sorted() {
             guard let ms = state.machines[machine], ms.tokenHash != nil else { continue }
@@ -902,7 +910,7 @@ public final class FeedServer: @unchecked Sendable {
                 let same = installed.flatMap { i in feedApp.map { VersionCompare.compare(i, $0.version) == 0 } } ?? false
                 let st: (String, String)
                 if let order {
-                    st = order.action == ServerCommand.rollback ? (agentTooOld ? "Rolling back (agent too old for rollback)" : "Rolling back", "info") : ("Updating", "info")
+                    st = order.action == ServerCommand.rollback ? (agentTooOld ? "Rollback requested (agent too old for rollback)" : "Rollback requested", "info") : ("Update requested", "info")
                     anyUpdating = true
                 } else if failed { st = ("Failed", "bad"); anyFailed = true }
                 else if !online { st = ("Not checked · no report for 10 min", "unknown") }
@@ -945,27 +953,37 @@ public final class FeedServer: @unchecked Sendable {
                         + "<button type=button class=copy data-copy=\"\(h(report))\">Copy error report</button></div>"
                 }
             }
-            if online { if anyFailed { failedMacs += 1 } else if anyUpdate { needUpdate += 1 } else if !anyUpdating && ms.lastSeen != nil { upToDate += 1 } }
+            if online {
+                if anyUpdating { requested += 1 }
+                if anyFailed { failedMacs += 1 }
+                else if anyUpdate || anyUpdating { needUpdate += 1 }
+                else if ms.lastSeen != nil { upToDate += 1 }
+            }
             if !online { offline += 1 }
             let overall: (String, String, String, Int)
             if ms.lastSeen == nil { overall = ("Not seen yet", "muted", "offline", 1) }
             else if !online { overall = ("Offline", "muted", "offline", 1) }
             else if anyFailed { overall = ("Failed · \(failSummary)", "bad", "failed", 0) }
-            else if anyUpdating { overall = ("Updating", "info", "updating", 2) }
+            else if anyUpdating { overall = ("Awaiting update result", "info", "updating", 2) }
             else if anyUpdate { overall = ("Update available", "warn", "update", 3) }
             else { overall = ("Up to date", "ok", "ok", 5) }
             let history = (ms.history ?? []).map { e in
                 "<tr><td>\(h(name(e.app)))</td><td class=num>\(h(e.from ?? "—")) → \(h(e.to ?? "previous"))</td><td class=num>\(h(stamp(e.at)))</td>"
                     + "<td class=\"\(Self.failureStatuses.contains(e.status) ? "badtext" : "")\">\(h(e.status == "renamed" ? (e.reason ?? "Renamed") : words(e.status)))</td></tr>"
             }.joined()
-            let model = Self.model(of: label).map { "<small>\(h($0))</small>" } ?? ""
+            let model = Self.model(of: label).map { "<small>From name: \(h($0))</small>" } ?? ""
             let seen = ms.lastSeen == nil ? "<span class=\"dot warn\"></span>Never seen"
                 : online ? "<span class=\"dot ok\"></span>Online · \(h(ago(ms.lastSeen)))"
                 : "<span class=\"dot bad\"></span><span class=badtext>Offline · \(h(ago(ms.lastSeen)))</span>"
-            let html = "<details class=\"mac s-\(overall.2)\" data-mac=\"\(h(label.lowercased()))\" data-state=\(overall.2)><summary>"
+            let html = "<details class=\"mac s-\(overall.2)\" data-machine=\"\(h(machine))\" data-mac=\"\(h(label.lowercased()))\" data-state=\(overall.2)><summary>"
                 + "<span class=who><b>\(h(label))</b>\(duplicate ? "<small>same name</small>" : "")\(model)</span><span class=apps>\(chips)</span>"
                 + "<span class=state>\(overall.0.isEmpty ? "" : "<span class=\"chip \(overall.1)\">\(h(overall.0))</span>")\(rowUpdate)</span><span class=\"seen num\">\(seen)</span><span class=chev aria-hidden=true></span></summary><div class=detail>"
                 + failures
+                + "<dl class=identity><dt>Connection ID</dt><dd><code>\(h(machine))</code> · stays fixed when this Mac is renamed</dd>"
+                + "<dt>Name last reported by this Mac</dt><dd>\(h(ms.reportedName ?? "Not reported separately by this helper"))</dd>"
+                + "<dt>Last report</dt><dd>\(h(ms.lastSeen.map { stamp($0) } ?? "Not seen yet"))</dd>"
+                + "<dt>Hardware details</dt><dd>\(h(Self.model(of: label).map { $0 + " — read from the name, not a hardware probe" } ?? "Not reported independently"))</dd></dl>"
+                + "<p class=sub>The reported name may come from Hub or macOS; this helper does not report its source separately. Changing this page’s label does not change the Mac, its location or its connection ID.</p>"
                 + (rows.isEmpty ? "<p class=sub>No versions yet: they appear after this Mac's first report.</p>"
                    : "<table class=apptable><thead><tr><th>App</th><th>Installed</th><th>Feed</th><th>State</th><th><span class=sr>Actions</span></th></tr></thead>\(rows)</table>")
                 + "<form method=post action=/api/rename-machine data-confirm=\"Rename this Mac’s label? Its connection stays the same.\"><input type=hidden name=machine value=\"\(h(machine))\"><label>Mac name <input name=name required maxlength=\(MacName.maxCharacters) value=\"\(h(label))\"></label> <button>Rename</button> <span class=sub>Up to \(MacName.maxCharacters) characters</span></form>"
@@ -978,7 +996,7 @@ public final class FeedServer: @unchecked Sendable {
         }
         macRows.sort { ($0.rank, $0.name) < ($1.rank, $1.name) }
         func count(_ states: Set<String>) -> Int { macRows.filter { states.contains($0.state) }.count }
-        let filters = [("all", "All", macRows.count), ("update", "Needs update", count(["update"])),
+        let filters = [("all", "All", macRows.count), ("update", "Needs update", count(["update", "updating"])),
                        ("failed", "Failed", count(["failed"])), ("offline", "Offline", count(["offline"]))]
             .map { "<button type=button class=filter data-f=\($0.0) aria-pressed=\($0.0 == "all" ? "true" : "false")>\($0.1) <span class=num>\($0.2)</span></button>" }.joined()
         let macs = macRows.isEmpty ? "<p class=empty>No Mac is connected yet. Connect one with the steps below.</p>"
@@ -986,7 +1004,7 @@ public final class FeedServer: @unchecked Sendable {
         let summary = "<div class=stats>"
             + "<div class=stat><span class=n>\(connected)<small> of \(total)</small></span><span>Connected<small>reported in the last 10 min</small></span></div>"
             + "<div class=stat><span class=\"n\(connected > 0 && upToDate == connected ? " ok" : "")\">\(upToDate)</span><span>Up to date<small>every app on the feed version</small></span></div>"
-            + "<div class=stat><span class=\"n\(needUpdate > 0 ? " warn" : "")\">\(needUpdate)</span><span>Needs update<small>\(updates) update\(updates == 1 ? "" : "s") available</small></span></div>"
+            + "<div class=stat><span class=\"n\(needUpdate > 0 ? " warn" : "")\">\(needUpdate)</span><span>Needs update<small>\(updates) available · \(requested) Mac\(requested == 1 ? "" : "s") awaiting results</small></span></div>"
             + "<div class=stat><span class=\"n\(failedMacs > 0 ? " bad" : offline > 0 ? " warn" : "")\">\(failedMacs + offline)</span><span>Failed or offline<small>\(failedMacs) failed · \(offline) offline</small></span></div>"
             + "</div>"
         let banner = isOpen ? "<p class=banner><span class=\"dot ok\"></span>New Macs can connect for \(leftText.replacingOccurrences(of: "id=left ", with: "")) left — \(joined.count) new Mac\(joined.count == 1 ? "" : "s") joined. <a href=#connect>See who joined</a></p>" : ""
@@ -998,11 +1016,15 @@ public final class FeedServer: @unchecked Sendable {
             + (codeLocked ? "<p><span class=\"dot bad\"></span><b>Locked</b> after \(EnrolPolicy.pairingWrongTries) wrong tries, until \(h(stamp(state.pairing?.lockedUntil ?? ""))). No code is accepted until then.</p>"
                           : "<p class=sub>Works at any time. \(EnrolPolicy.pairingWrongTries) wrong tries lock it for \(EnrolPolicy.pairingLockMinutes) minutes.</p>")
         let joinedList = isOpen ? "<div class=joined><h3>Joined in this window</h3>" + (joined.isEmpty ? "<p class=sub>None yet. This list updates every 10 s.</p>" : "<ul>\(joined.joined())</ul>") + "</div>" : ""
+        let destination = publisherBind.map { "<p>Update Studio address: <code>http://\(h($0)):\(port)</code></p>" }
+            ?? "<p class=warntext>This publisher has no configured Tailscale listener. Set its Tailscale address before connecting another Mac.</p>"
         let connect = "<section id=connect class=panel data-view=connect><h2>Connect a Mac</h2>"
-            + "<p class=sub>Needed first: Tailscale on the new Mac, signed in to the same network as this Mac.</p>"
-            + "<ol class=steps><li><b>The pairing code for new Macs.</b>\(pairing)\(enrol)</li>"
-            + "<li><b>On the new Mac, double-click “Connect to Studio Launcher KH”</b> from the kit in <code>~/Desktop/All YouTube Stuff/Studio Launcher KH - Connect a Mac/</code>, press Return to accept its name, and type this code.</li>"
-            + "<li><b>It appears in the Macs list</b> within a few minutes. Nothing installs by itself.</li></ol>\(joinedList)</section>"
+            + "<p>On the new Mac, open <b>Studio Launcher KH → Connect to Update Studio</b>.</p>"
+            + "<ol class=steps><li><b>Get Studio Launcher KH onto the new Mac</b><p>Use its installer from an install SSD, or save a Launcher copy here and transfer it to the new Mac. Copy the app into Applications and open it.</p><button type=button id=save-launcher hidden>Save Launcher copy…</button></li>"
+            + "<li><b>Connect both Macs through Tailscale</b><p>Sign in to a Tailscale network that lets the new Mac reach this publisher. Launcher already carries this publisher’s address and trusted key; it does not discover another server automatically.</p>\(destination)</li>"
+            + "<li><b>Enter this code in Launcher</b><p>Confirm the name for the new Mac, enter the pairing code in Launcher’s <b>Connect to Update Studio</b> screen, then click <b>Connect</b>.</p>\(pairing)\(enrol)</li>"
+            + "<li><b>Check the connection</b><p>Launcher shows the result. The new Mac appears here after its first report. Launcher’s own automatic updates start on by default; no other app is silently installed by connecting.</p></li></ol>\(joinedList)"
+            + "<p class=sub>Already connected Macs keep their connection and Automatic choices. This code stays valid until you choose New code; changing it does not disconnect existing Macs.</p></section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
         let sizes = ByteCountFormatter()
@@ -1043,29 +1065,40 @@ public final class FeedServer: @unchecked Sendable {
         let news = latest.dropFirst().filter { $0.hasPrefix("- ") }.map { "<li>\(h(String($0.dropFirst(2))))</li>" }.joined()
         let version = "<details class=news><summary><span class=link>v\(h(String((latest.first ?? "unknown").split(separator: " ").first ?? "unknown"))) · What's new</span></summary><div class=newsbody><h2>What's new</h2><ul>\(news)</ul></div></details>"
         // Filters and search (kept across the refresh), open rows kept open, confirm, copy, countdown.
-        let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">\(countdown)" + #"""
-        var views=document.querySelectorAll('[data-view]'),nav=document.querySelector('.tabs');nav.hidden=false;
-        function show(){var v=location.hash.slice(1)||sessionStorage.getItem('khu-view')||'macs';if(['macs','apps','connect'].indexOf(v)<0)v='macs';var was=sessionStorage.getItem('khu-view');sessionStorage.setItem('khu-view',v);
-        views.forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});if(was&&was!=v)window.scrollTo(0,0)}
-        window.addEventListener('hashchange',show);show();
+        let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">" + #"""
+        setInterval(function(){document.querySelectorAll('[data-until]').forEach(function(e){var s=Math.round(Number(e.getAttribute('data-until'))-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'})},1000);
+        var S=sessionStorage,mode=S.getItem('khu-mode')||'all',refreshing=false;
+        function show(){var v=location.hash.slice(1)||S.getItem('khu-view')||'macs';if(['macs','apps','connect'].indexOf(v)<0)v='macs';var was=S.getItem('khu-view');S.setItem('khu-view',v);
+        document.querySelectorAll('[data-view]').forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});if(was&&was!=v)window.scrollTo(0,0)}
+        function bind(){document.querySelector('.tabs').hidden=false;show();
         document.querySelectorAll('details.mac>summary').forEach(function(m){m.addEventListener('click',function(e){var f=e.target.closest('form');if(f){e.preventDefault();f.requestSubmit()}})});
-        var S=sessionStorage,f=document.getElementById('filter'),mode=S.getItem('khu-mode')||'all';
+        var f=document.getElementById('filter');
         function run(){var q=f.value.trim().toLowerCase(),n=0;document.querySelectorAll('details.mac').forEach(function(d){var st=d.getAttribute('data-state');
-        var ok=(!q||d.getAttribute('data-mac').indexOf(q)>=0)&&(mode=='all'||st==mode);d.hidden=!ok;if(ok)n++});
+        var ok=(!q||d.getAttribute('data-mac').indexOf(q)>=0)&&(mode=='all'||st==mode||(mode=='update'&&st=='updating'));d.hidden=!ok;if(ok)n++});
         document.querySelectorAll('.filter').forEach(function(b){b.setAttribute('aria-pressed',b.getAttribute('data-f')==mode)});
         document.getElementById('count').textContent=(q||mode!='all')?n+' shown':'';var nm=document.getElementById('nomatch');if(nm){nm.hidden=n>0;document.querySelector('.maclist').hidden=n==0}S.setItem('khu-filter',f.value);S.setItem('khu-mode',mode)}
         if(f){document.querySelector('.tools').hidden=false;f.value=S.getItem('khu-filter')||'';f.addEventListener('input',run);
         document.querySelectorAll('.filter').forEach(function(b){b.addEventListener('click',function(){mode=b.getAttribute('data-f');run()})});run()}
-        var open=JSON.parse(S.getItem('khu-open')||'[]');document.querySelectorAll('details.mac').forEach(function(d){var k=d.getAttribute('data-mac');
-        if(open.indexOf(k)>=0)d.open=true;d.addEventListener('toggle',function(){var o=JSON.parse(S.getItem('khu-open')||'[]').filter(function(x){return x!=k});if(d.open)o.push(k);S.setItem('khu-open',JSON.stringify(o))})});
+        var open=JSON.parse(S.getItem('khu-open')||'[]');document.querySelectorAll('details.mac').forEach(function(d){var k=d.getAttribute('data-machine');
+        if(open.indexOf(k)>=0)d.open=true;d.addEventListener('toggle',function(){var o=JSON.parse(S.getItem('khu-open')||'[]').filter(function(x){return x!=k});if(d.open&&o.indexOf(k)<0)o.push(k);S.setItem('khu-open',JSON.stringify(o))})});
         document.querySelectorAll('form[data-confirm]').forEach(function(x){x.addEventListener('submit',function(e){if(!confirm(x.getAttribute('data-confirm')))e.preventDefault()})});
         document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=b.getAttribute('data-copy'),done=function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy error report'},2000)};
         if(navigator.clipboard){navigator.clipboard.writeText(t).then(done,fallback)}else fallback();function fallback(){var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done()}})});
-        var news=document.querySelector('details.news');function closeNews(){news.open=false}
-        document.addEventListener('keydown',function(e){if(e.key=='Escape')closeNews()});document.addEventListener('click',function(e){if(news.open&&!news.contains(e.target))closeNews()});
-        var y=S.getItem('khu-y');if(y!==null){S.removeItem('khu-y');window.scrollTo(0,Number(y))}
-        // Refresh in place: wait while someone is typing or reading the notes; a confirm box pauses scripts.
-        function tick(){var a=document.activeElement;if(news.open||document.querySelector('details.notes[open]')||(a&&a.tagName=='INPUT')){setTimeout(tick,5000);return}S.setItem('khu-y',String(window.scrollY));location.reload()}
+        document.getElementById('refresh').addEventListener('click',refresh);
+        var save=document.getElementById('save-launcher');if(save){save.hidden=!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.saveLauncher);save.addEventListener('click',function(){window.webkit.messageHandlers.saveLauncher.postMessage('save')})}}
+        window.addEventListener('hashchange',show);bind();
+        function closeNews(){document.querySelector('details.news').open=false}
+        document.addEventListener('keydown',function(e){if(e.key=='Escape')closeNews()});document.addEventListener('click',function(e){var news=document.querySelector('details.news');if(news.open&&!news.contains(e.target))closeNews()});
+        async function refresh(){if(refreshing)return;refreshing=true;var button=document.getElementById('refresh'),controller=new AbortController(),timeout=setTimeout(function(){controller.abort()},15000);
+        button.disabled=true;button.textContent='Refreshing…';document.getElementById('refresh-status').textContent='Fetching the latest fleet and app reports…';
+        var focused=document.activeElement,id=focused&&focused.id,start=focused&&focused.selectionStart,end=focused&&focused.selectionEnd,y=window.scrollY;
+        try{var response=await fetch(location.pathname,{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('Publisher returned '+response.status);
+        var doc=new DOMParser().parseFromString(await response.text(),'text/html'),main=doc.querySelector('main');if(!main||!main.querySelector('#refresh'))throw Error('Publisher state could not be read');
+        document.querySelector('main').replaceWith(main);bind();window.scrollTo(0,y);var active=id&&document.getElementById(id);if(active){active.focus({preventScroll:true});if(start!=null&&active.setSelectionRange)active.setSelectionRange(start,end)}
+        document.getElementById('refresh-status').textContent='Latest reports fetched at '+new Date().toLocaleTimeString()+'. Last seen shows when each Mac reported.';
+        }catch(error){document.getElementById('refresh-status').textContent='Refresh failed: '+(error.name=='AbortError'?'publisher did not respond within 15 seconds':error.message)+'. Showing the previous reports. Try Refresh again.';
+        }finally{clearTimeout(timeout);refreshing=false;button=document.getElementById('refresh');button.disabled=false;button.textContent='Refresh'}}
+        function tick(){var a=document.activeElement;if(!document.querySelector('details.news').open&&!document.querySelector('details.notes[open]')&&!(a&&(a.tagName=='INPUT'||a.tagName=='TEXTAREA')))refresh();setTimeout(tick,REFRESH*1000)}
         setTimeout(tick,REFRESH*1000);
         """#.replacingOccurrences(of: "REFRESH", with: isOpen ? "10" : "30") + "</script>"
         return """
@@ -1076,7 +1109,7 @@ public final class FeedServer: @unchecked Sendable {
         <div class=headright>\(version)<a class=connectbtn href=#connect data-tab=connect>+ Connect a Mac</a></div></header>
         <main>
         <div data-view=macs><section>\(summary)\(banner)</section>
-        <section><div class=sechead><h2>Macs</h2><div class=tools hidden><div class=filters role=group aria-label="Show">\(filters)</div><span id=count class=sub></span><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac"></div></div>\(macs)
+        <section><h2>Macs</h2><div class=tools hidden><div class=filters role=group aria-label="Show Macs">\(filters)</div><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac"><button type=button id=refresh>Refresh</button><span id=count class=sub></span></div><p id=refresh-status class=sub role=status aria-live=polite>Latest saved reports. Last seen shows when each Mac reported.</p>\(macs)
         </section>
         \(state.removed.isEmpty ? "" : "<section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>")</div>
         \(connect)
@@ -1138,7 +1171,8 @@ public final class FeedServer: @unchecked Sendable {
     button:hover{background:var(--muted-bg)}button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:550}button.primary:hover{filter:brightness(1.08)}
     button.small{padding:2px 9px;font-size:12.5px}button.quiet{border-color:transparent;color:var(--sub)}button.danger{color:var(--bad)}button.danger:hover{background:var(--bad-bg)}
     input[type=number]{width:4.5em;padding:4px 6px;border:1px solid var(--field);border-radius:7px;background:var(--panel)}::placeholder{color:var(--sub);opacity:1}
-    input[type=search]{width:200px;max-width:100%;padding:5px 10px;border:1px solid var(--field);border-radius:8px;background:var(--panel)}
+    input[type=search]{flex:1 1 280px;min-width:180px;max-width:100%;padding:7px 10px;border:1px solid var(--field);border-radius:8px;background:var(--panel)}
+    button:disabled{cursor:wait;opacity:.65}.tools{margin-bottom:6px}#refresh-status{margin-bottom:12px;overflow-wrap:anywhere}
     :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
     .sechead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}.sechead h2{margin:0}
     .tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.tools[hidden]{display:none}
@@ -1157,6 +1191,8 @@ public final class FeedServer: @unchecked Sendable {
     .chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:550;white-space:nowrap}
     .chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--info-bg);color:var(--info)}.chip.muted{background:var(--muted-bg);color:var(--sub)}.chip.unknown{background:transparent;color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn)}
     .detail{padding:6px 16px 16px;border-top:1px solid var(--line2)}
+    .identity{display:grid;grid-template-columns:minmax(120px,auto) minmax(0,1fr);gap:6px 16px;margin:10px 0}.identity dt{color:var(--sub)}.identity dd{margin:0;overflow-wrap:anywhere}.identity code{word-break:break-word}
+    @media(max-width:560px){.identity{grid-template-columns:1fr;gap:3px}.identity dd{margin-bottom:7px}}
     table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:7px 10px;vertical-align:top}
     thead th{font-size:11.5px;font-weight:600;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line)}
     tbody tr+tr td{border-top:1px solid var(--line2)}.name{font-weight:550}.name .sub{font-weight:400}
@@ -1182,7 +1218,7 @@ public final class FeedServer: @unchecked Sendable {
     details.mac>summary{grid-template-columns:1fr;gap:6px;padding:10px 14px}.state{order:1}.apps{order:2}.seen{order:3;text-align:left}
     .apptable thead,.hist thead,.feed thead{display:none}.apptable tr,.feed tr{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 0}.apptable td,.feed td{padding:0;border:0!important}.apptable tbody tr+tr,.feed tbody tr+tr{border-top:1px solid var(--line2)}
     .apptable td:nth-child(3)::before{content:"Feed ";color:var(--sub)}.apptable td.actions,.feed td.actions,.feed td:nth-child(4){grid-column:1/-1;text-align:left}.actions>*{margin:4px 6px 0 0}
-    .hist tr{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:6px 0}.hist td{padding:0;font-size:12.5px;border:0!important}.hist tbody tr+tr{border-top:1px solid var(--line2)}details.mac>summary{position:relative;padding-right:34px}.chev{position:absolute;right:16px;top:18px}input[type=search]{width:100%}.tools{width:100%}#filter{order:2}#count{order:3;min-width:0;text-align:left}}
+    .hist tr{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:6px 0}.hist td{padding:0;font-size:12.5px;border:0!important}.hist tbody tr+tr{border-top:1px solid var(--line2)}details.mac>summary{position:relative;padding-right:34px}.chev{position:absolute;right:16px;top:18px}input[type=search]{width:100%}.tools{width:100%}#filter{flex:1 1 100%;min-width:0;order:2}#refresh{order:3}#count{order:4;min-width:0;text-align:left}.filters{max-width:100%;flex-wrap:wrap}.filter{padding:5px 8px}}
     """
 
     /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).

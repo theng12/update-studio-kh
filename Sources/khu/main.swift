@@ -237,7 +237,8 @@ struct KHUMain {
             var servers: [(FeedServer, Int32)] = []
             for address in (binds.isEmpty ? ["127.0.0.1"] : binds) {
                 let srv = FeedServer(feedDir: URL(fileURLWithPath: f), stateDir: URL(fileURLWithPath: s),
-                                     bind: address, port: port, commandKey: commandKey)
+                                     bind: address, port: port, commandKey: commandKey,
+                                     publisherBind: binds.first(where: { FeedServer.isTailnet($0) }))
                 do { servers.append((srv, try srv.listen())) } catch { fail("\(error)") }
                 print("serving on \(address):\(port)")
             }
@@ -281,7 +282,8 @@ struct KHUMain {
                 var requested: Set<String> = []
                 repeat {
                     do {
-                        let r = try Agent.runOnce(config: cfg, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [])
+                        let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))
+                        let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [])
                         print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
                         for note in r.notes { print("note: \(note)") }
                         menu?.finished(r, error: nil)

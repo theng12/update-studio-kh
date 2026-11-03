@@ -229,15 +229,17 @@ def app_config(home: Path, registry: dict) -> dict:
 
 # --------------------------------------------------------------------------- this Mac's name
 def hub_data_dir(home: Path) -> Path | None:
-    """Where the Studio Hub installed on this Mac keeps its own settings, if there is one."""
+    """Where the Hub installed on this Mac keeps its own settings, if there is one."""
     override = os.environ.get("STUDIOHUB_DATA_DIR")
     if override:
         return Path(override).expanduser()
     for folder in app_folders(home):
-        app = folder / "Studio Hub.app"
-        if app.is_dir():
-            # The Hub's launcher root is the `voice/` folder inside its own bundle.
-            return app / "Contents" / "Resources" / "voice"
+        # Both bundle names, matching the agent's own discovery: old installs keep the old name.
+        for bundle in ("Studio Hub.app", "Hub Studio KH.app"):
+            app = folder / bundle
+            if app.is_dir():
+                # The Hub's launcher root is the `voice/` folder inside its own bundle.
+                return app / "Contents" / "Resources" / "voice"
     return None
 
 

@@ -194,7 +194,7 @@ value it had when it was absent.
 
 ## Agent
 
-`khu agent --config <file>`. One run at a time per Mac (`agent.lock`); a second refuses. Each run:
+`khu agent --config <file>`. One run at a time per Mac (`agent.lock`); a second refuses. Between runs, the long-lived helper re-reads only its saved address and token so an explicit address change or confirmed Pair again takes effect on the next check. A changed pinned key, machine ID or runtime path is refused; other running settings remain intact. Each run:
 
 1. finish or undo any install a killed run left behind (the install journal);
 2. read installed versions, health and its own Automatic defaults;

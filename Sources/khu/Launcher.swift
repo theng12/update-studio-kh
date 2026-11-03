@@ -43,8 +43,15 @@ enum LauncherBundle {
             let staging = parent.appendingPathComponent(".\(name).khu-tmp-\(UUID().uuidString)")
             try write(bundle: staging, executable: exe, version: version ?? "0")
             if fm.fileExists(atPath: target.path) {
+                // The packaged copy carries the setup kit, so a regenerated one must carry it too:
+                // only a kit that still passes its own manifest check is copied over, byte for byte
+                // (no pin, key or address changes); one that no longer verifies is left behind.
+                _ = Connect.carryKit(from: target, into: staging)
                 try Trash.move(target, into: Trash.root(in: fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/KHUpdater/state")))
             }
+            // Signed the way packaging signs it, so Save Launcher can still export a copy this
+            // Mac regenerated itself (strict codesign is one of its checks).
+            _ = Connect.signBundle(staging)
             try fm.moveItem(at: staging, to: target)
         } catch {
             FileHandle.standardError.write(Data("Studio Launcher KH.app not written: \(error)\n".utf8))
@@ -95,49 +102,44 @@ enum LauncherBundle {
 }
 
 /// Studio Launcher KH.app opened by a person. With the helper set up, it asks the helper to show
-/// its window. Without one, it is the front door: it asks for the pairing code once, sets the
-/// helper up from the kit inside the app, then shows the window.
+/// its window. Without one, it is the front door: it opens the native "Connect to Update Studio"
+/// window, which shows the address this app's own kit names, takes the pairing code and this
+/// Mac's name, and connects on a background queue. KHU_CONNECT_HOME / KHU_CONNECT_KIT point the
+/// front door at a throwaway home and kit for isolated window checks; nobody sets them in real use.
 enum FrontDoor {
     static func run() -> Never {
         NSApplication.shared.setActivationPolicy(.accessory)
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        if Connect.isSetUp(home: home) { askHelper(seconds: 2); exit(0) }
+        let env = ProcessInfo.processInfo.environment
+        let isolated = env["KHU_CONNECT_HOME"] != nil
+        let home = env["KHU_CONNECT_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
+        if Connect.isSetUp(home: home) {
+            // An isolated home never waits on this Mac's real helper.
+            if !isolated { askHelper(seconds: 2) }
+            exit(0)
+        }
+        NSApp.finishLaunching()
         NSApp.activate(ignoringOtherApps: true)
-        guard let kit = Bundle.main.resourceURL?.appendingPathComponent("khu-agent"),
-              FileManager.default.fileExists(atPath: kit.appendingPathComponent("MANIFEST.json").path) else {
+        let kit = env["KHU_CONNECT_KIT"].map { URL(fileURLWithPath: $0) }
+            ?? Bundle.main.resourceURL?.appendingPathComponent("khu-agent")
+        guard let kit, FileManager.default.fileExists(atPath: kit.appendingPathComponent("MANIFEST.json").path) else {
             say("Studio Launcher KH is not set up on this Mac",
                 "This copy has no setup kit. Open Studio Launcher KH from the SSD's “1 Install Apps/0 - Start here - Studio Launcher KH” folder.")
             exit(1)
         }
-        var problem = ""
-        let name = NSTextField(string: Connect.proposedName())
-        let code = NSTextField(string: "")
-        code.placeholderString = "123-456"
-        while true {
-            let alert = NSAlert()
-            alert.messageText = "Set up Studio Launcher KH"
-            alert.informativeText = (problem.isEmpty ? "" : problem + "\n\n")
-                + "Type the pairing code shown in Update Studio KH on the Mac Studio, under Connect a Mac."
-            let form = NSGridView(views: [[NSTextField(labelWithString: "Name for this Mac"), name],
-                                          [NSTextField(labelWithString: "Pairing code"), code]])
-            form.frame = NSRect(x: 0, y: 0, width: 360, height: 56)
-            name.widthAnchor.constraint(equalToConstant: 220).isActive = true
-            alert.accessoryView = form
-            alert.addButton(withTitle: "Set Up")
-            alert.addButton(withTitle: "Cancel")
-            alert.window.initialFirstResponder = code
-            guard alert.runModal() == .alertFirstButtonReturn else { exit(0) }
-            do {
-                _ = try Connect.run(kit: kit, home: home, machine: name.stringValue.trimmingCharacters(in: .whitespaces).lowercased(),
-                                    code: code.stringValue.trimmingCharacters(in: .whitespaces))
-                break
-            } catch {
-                problem = "Not set up: \(error)"
-            }
+        // The kit is what names (and vouches for) the Update Studio this window shows: a kit whose
+        // manifest or publisher record does not verify is not one to connect with, said plainly.
+        do { _ = try Connect.publisher(kit: kit) }
+        catch {
+            say("This copy's setup kit cannot be used", "\(error)\n\nGet a fresh copy of Studio Launcher KH from the install SSD.")
+            exit(1)
         }
-        // The helper is starting under launchd; ask until it shows the list.
-        askHelper(seconds: 30)
-        exit(0)
+        switch ConnectionWindow.run(kit: kit, home: home) {
+        case .connected:
+            if !isolated { askHelper(seconds: 30) }   // The helper is starting under launchd; ask until it shows the list.
+            exit(0)
+        case .cancelled:
+            exit(0)
+        }
     }
 
     /// Asks every second until the helper says its window is showing.

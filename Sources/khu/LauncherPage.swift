@@ -24,6 +24,7 @@ header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;
 .seg{display:inline-flex;padding:2px;background:var(--muted-bg);border-radius:8px;gap:2px}.seg button{height:26px;min-width:30px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--sub);display:inline-grid;place-items:center}
 .seg button[aria-pressed=true]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}.seg svg{width:14px;height:14px}
 select,input[type=search]{height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 9px}input[type=search]{width:190px}
+.set input[type=text]{flex:1;min-width:0;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 9px;font:12px/1.4 ui-monospace,Menlo,monospace}
 input::placeholder{color:var(--sub)}
 main{flex:1;padding:18px 22px 8px}
 h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-child{margin-top:4px}
@@ -207,16 +208,36 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     notes.length>5?el('button',{class:'more',onclick:()=>{showAll[a.id]=!showAll[a.id];drawDetail()}},showAll[a.id]?'Show fewer':'Show '+(notes.length-5)+' more'):null)));
  const scrim=el('div',{class:'scrim d',onclick:()=>{detail=null;closeLayers()}},sheet);document.body.append(scrim);
  if(detail.notes){detail.notes=false;sheet.querySelector('#changes').scrollIntoView({block:'center'})}}
-function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remove());const s=S.settings;
+function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remove());const s=S.settings,c=S.connection||{destination:'',machine:''};
  const set=(key,value)=>post({action:'setting',key,value});
  const check=(key,label,on,note,disabled)=>el('div',{},el('div',{class:'row'+(disabled?' dis':'')},el('label',{},el('input',{type:'checkbox',checked:on,disabled,onchange:e=>set(key,e.target.checked)}),label)),note?el('p',{class:'note'},note):null);
  const seg=(key,opts,cur)=>el('div',{class:'seg',role:'group'},opts.map(([v,l])=>el('button',{'aria-pressed':String(cur==v),onclick:()=>set(key,v)},l)));
+ const connStatus=()=>c.checking?el('p',{class:'note',style:'margin-left:0'},'Checking the connection…')
+  :c.note?el('p',{style:'color:var(--bad);font-size:12px;margin:6px 0 0'},c.note)
+  :(c.ok&&c.checkedAt)?el('div',{class:'meta',style:'margin-top:6px'},el('span',{class:'chip ok'},'Connected'),el('span',{class:'when num'},ago(c.checkedAt)))
+  :el('p',{class:'note',style:'margin-left:0'},'Not checked yet.');
+ const chInput=el('input',{type:'text',value:c.destination||'',placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address'});
+ const connSection=el('section',{},el('h4',{},'Connection'),
+  el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},c.destination)),
+  el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.machine)),
+  connStatus(),
+  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection')),
+  // Offered only after a check the publisher refused with 401/403 (pairAvailable); the
+  // confirmation and the pairing code are collected by the native window that follows.
+  c.pairAvailable?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'pairAgain'})},'Pair again now')):null,
+  el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:chInput.value})},'Use this address')),
+  el('p',{class:'note',style:'margin-left:0'},'This Mac only accepts an address where Update Studio serves the updates its own key already signed. A different Update Studio needs its setup kit, not an address.'),
+  c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null);
+ const updater=S.apps.find(a=>a.id=='updater');
  const sheet=el('div',{class:'sheet set',role:'dialog','aria-modal':true,'aria-label':'Settings',onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},el('div',{class:'t'},el('h3',{},'Settings'),el('div',{class:'sub'},'Studio Launcher KH '+S.version))),
   el('div',{class:'body'},
    el('section',{},el('h4',{},'Updates'),el('div',{class:'row'},el('span',{},'Check for updates'),seg('checkManually',[[false,'Automatically'],[true,'Manually']],s.checkManually)),
     check('autoInstall','Install updates automatically',s.autoInstall&&!s.checkManually,s.checkManually?'Off while checking manually. Use Check for updates now, then Update.':'Each app’s own switch is in its … menu.',s.checkManually),
-    check('notify','Notify me when an update is ready',s.notify,null)),
+    check('notify','Notify me when an update is ready',s.notify,null),
+    // The updater's own switch is live data, and its automatic-on-connect default is stated, not implied.
+    updater?check('updaterAutomatic','Update Studio KH updates itself automatically',!!updater.automatic,'Automatic is on when a Mac connects; change it in Update Studio KH’s … menu.',true):null),
+   connSection,
    el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','Match system'],['dark','Dark'],['light','Light']],s.appearance)),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),

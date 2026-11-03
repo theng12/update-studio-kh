@@ -1,12 +1,12 @@
 #!/bin/sh
 # INSTALL STUDIO LAUNCHER KH
 #
-# Double-click this file on any Mac that runs one of the three apps — Story Studio, GatewayKH or
-# Studio Hub. It installs **Studio Launcher KH**, the small agent that keeps those apps up to date, and
+# Double-click this file on any Mac that runs one of the three apps — Story Studio KH, Gateway Studio KH or
+# Hub Studio KH. It installs **Studio Launcher KH**, the small agent that keeps those apps up to date, and
 # starts it. Nothing else on the Mac is changed and nothing needs the administrator password:
 # everything lives in your own ~/Library/KHUpdater.
 #
-# You can run it on every Mac in the fleet. On a Hub Mac Studio Hub already installs this agent by
+# You can run it on every Mac in the fleet. On a Hub Mac Hub Studio KH already installs this agent by
 # itself; whichever runs first installs, and the other one just says it is already there.
 #
 # What it does, in order:
@@ -63,7 +63,7 @@ fail() {
   finish "${2:-1}"
 }
 
-# A Python to run the installer with. Prefer the one inside an installed Studio Hub, because that
+# A Python to run the installer with. Prefer the one inside an installed Hub Studio KH, because that
 # is the interpreter this Mac's own app runs; fall back to the system one, and only use the copy on
 # this drive if there is nothing else (a drive can be unplugged mid-run).
 if [ -n "${KH_UPDATER_PYTHON:-}" ]; then
@@ -73,7 +73,7 @@ else
   for candidate in "/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3" \
                    "$HOME/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3" \
                    "/usr/bin/python3" \
-                   "$HERE/../Studio Hub KH/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3"; do
+                   "$HERE/../Hub Studio KH/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3"; do
     [ -x "$candidate" ] || continue
     # `/usr/bin/python3` is present on a Mac with no developer tools and only prints a prompt to
     # install them, so the candidate has to actually run.
@@ -83,7 +83,7 @@ else
   done
 fi
 
-[ -n "$PY" ] || fail "no Python could be found on this Mac (install Studio Hub, or the developer
+[ -n "$PY" ] || fail "no Python could be found on this Mac (install Hub Studio KH, or the developer
   command line tools) - run this file again afterwards." 2
 [ -f "$HELPER" ] || fail "the installer beside this file is missing ('$HELPER')."
 [ -f "$APPS" ] || fail "the apps config beside this file is missing ('$APPS')."

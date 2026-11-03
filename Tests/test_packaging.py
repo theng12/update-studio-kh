@@ -159,6 +159,24 @@ try:
     check(result.returncode != 0 and not (badhome / "Library/KHUpdater").exists()
           and any(trash.glob("*/staging/KHUpdater/base/config.json")),
           "failed staging moves partial install into destination trash")
+
+    # Display/discovery naming: the kit finds the Hub's settings under either bundle name.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("khu_install", ROOT / "packaging/connect-kit/khu-install.py")
+    khu = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(khu)
+    hub_home = work / "hub-home"
+    (hub_home / "Applications").mkdir(parents=True)
+    check(khu.hub_data_dir(hub_home) is None, "no Hub bundle on this Mac means no Hub data dir")
+    old_bundle = hub_home / "Applications" / "Studio Hub.app"
+    old_bundle.mkdir()
+    check(khu.hub_data_dir(hub_home) == old_bundle / "Contents" / "Resources" / "voice",
+          "hub_data_dir still finds the old Studio Hub.app bundle")
+    old_bundle.rmdir()
+    new_bundle = hub_home / "Applications" / "Hub Studio KH.app"
+    new_bundle.mkdir()
+    check(khu.hub_data_dir(hub_home) == new_bundle / "Contents" / "Resources" / "voice",
+          "hub_data_dir finds the Hub Studio KH.app bundle too")
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

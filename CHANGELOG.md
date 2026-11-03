@@ -2,6 +2,15 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.9 — 2026-11-03
+- The Update Studio app package supports both Apple silicon and Intel Macs, with macOS 13 as its minimum.
+- Mac filters sit at the front of the list, with a wider search field and a Refresh button that fetches the latest saved fleet and app reports.
+- Refresh keeps your view, search and expanded Macs, and shows when fetching fails.
+- Update requests awaiting a result stay in Needs update; a queued request no longer claims an installation is running.
+- The publisher log records which page action created update orders and how many it created, without recording sign-in details.
+- Mac details distinguish the fixed connection ID from the last reported name and show when hardware text was read from a name rather than a probe.
+- Connect a Mac points to Studio Launcher KH’s connection screen and can save a signed Launcher copy for another Mac without publishing a local Desktop path.
+
 ## 1.0.8 — 2026-11-03
 - Installers keep their declared macOS 13 minimum instead of requiring the build Mac’s newer OS.
 - Mac names follow the Hub Machine ID, or the computer name when Hub is not installed, while keeping their enrolment.

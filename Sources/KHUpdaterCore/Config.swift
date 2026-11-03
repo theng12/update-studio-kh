@@ -43,6 +43,19 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         self.intervalMinutes = intervalMinutes; self.once = once
     }
 
+    /// Pick up an explicit address/re-pair save between runs without changing the running helper's identity or layout.
+    public func reloadingConnection(from file: URL) throws -> AgentConfig {
+        let saved = try JSON.decode(AgentConfig.self, from: Data(contentsOf: file))
+        guard saved.publicKey == publicKey, saved.machine == machine,
+              saved.stateDir == stateDir, saved.stubBase == stubBase else {
+            throw khuFail("the saved connection changed this Mac's identity, key or paths; restart with the intended settings")
+        }
+        var current = self
+        current.feedURL = saved.feedURL
+        current.token = saved.token
+        return current
+    }
+
     private enum CodingKeys: String, CodingKey {
         case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion
     }

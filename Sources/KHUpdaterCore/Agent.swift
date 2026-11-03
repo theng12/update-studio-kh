@@ -351,7 +351,7 @@ public enum Agent {
             "automatic_default": config.apps.mapValues { $0.automatic },
             "automatic_local": helper.automatic.mapValues { ["on": $0.on, "at": $0.at] as [String: Any] },
         ]
-        if let name = MacName.current() { report["display_name"] = name }
+        if let name = MacName.current(expectedMachine: config.machine) { report["display_name"] = name }
         if let until = helper.pausedUntil, helper.paused(at: now) { report["paused_until"] = until }
         let statusBody = try JSONSerialization.data(withJSONObject: report)
         let (_, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
@@ -798,7 +798,7 @@ extension URL {
     }
 }
 
-/// Read the same Machine ID as the Hub, without changing the enrolment identity.
+/// Read Hub’s local human label only when its controller matches this enrolment.
 public enum MacName {
     public static let maxCharacters = 128
     public static func valid(_ name: String) -> Bool {
@@ -806,7 +806,9 @@ public enum MacName {
     }
     public static func current(home: URL = FileManager.default.homeDirectoryForCurrentUser,
                                applications: URL = URL(fileURLWithPath: "/Applications"),
-                               computerName: String? = SCDynamicStoreCopyComputerName(nil, nil) as String?) -> String? {
+                               computerName: String? = SCDynamicStoreCopyComputerName(nil, nil) as String?,
+                               expectedMachine: String? = nil,
+                               hostName: String = ProcessInfo.processInfo.hostName) -> String? {
         let fm = FileManager.default
         let settings = home.appendingPathComponent("Library/Application Support/StudioHub Standalone/hub/controller_settings.json")
         var candidates: [URL] = []
@@ -821,6 +823,13 @@ public enum MacName {
                   let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let name = value["controller_id"] as? String,
                   valid(name) else { continue }
+            if let expectedMachine, name == expectedMachine {
+                let labels = path.deletingLastPathComponent().appendingPathComponent("machine_labels.json")
+                if let data = try? Data(contentsOf: labels),
+                   let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let label = values["local"] as? String, valid(label) { return label }
+                if let shortHost = hostName.split(separator: ".").first.map(String.init), valid(shortHost) { return shortHost }
+            }
             return name
         }
         return computerName.flatMap { valid($0) ? $0 : nil }

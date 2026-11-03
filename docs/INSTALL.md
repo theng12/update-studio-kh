@@ -1,5 +1,21 @@
 # Installing KH Updater
 
+## Connect another Mac with Studio Launcher KH
+
+On the publisher Mac, open Update Studio KH → Connect a Mac. Use **Save Launcher copy…** to save a ZIP of the signed Launcher app with its verified connection kit, or use the Launcher installer on an install SSD. Transfer it to the new Mac; a path on the publisher’s Desktop is not an address the new Mac can use.
+
+On the new Mac, install Tailscale and sign in to a network that permits reaching the publisher. Put Studio Launcher KH in Applications, open it, and use **Connect to Update Studio**. Check the publisher shown by the trusted package, confirm the Mac name, enter the code from Update Studio, and click **Connect**. The app shows connecting, success or the reason it could not connect. It never discovers or trusts an arbitrary publisher from a code alone.
+
+Launcher’s own automatic updates start enabled, matching the existing setup default. Connecting does not silently install other apps. Settings show the current connection and let you check it without enrolling the Mac again. Changing publisher trust requires its trusted connection package; a failed connection check does not replace credentials.
+
+If Update Studio no longer recognises this Mac’s sign-in, remove its old enrolment on the publisher, then choose **Pair again** in Launcher’s connection settings. Confirm the recovery and enter the pairing code. Recovery keeps this Mac’s existing publisher key and connection ID, preserves its app and Automatic choices, and saves the previous config under `~/Library/KHUpdater/_trash` for restoration. A wrong code or different publisher key leaves the current config intact. Launcher never pairs again automatically.
+
+The pairing code has no time expiry. **New code** replaces it for future connections; existing Macs remain connected. Five wrong codes lock pairing for five minutes. The existing code-free enrolment window remains an explicit owner action for Hub bootstrap. No trust, enrolment, network or code-lifecycle policy changes as part of this interface.
+
+## Publisher operation and manual recovery
+
+The commands below document publisher administration and the kit’s underlying install procedure. Normal new-Mac setup uses the Launcher app above.
+
 Everything lives in the user's own `~/Library/KHUpdater` — no `sudo`, nothing in `/usr/local`.
 Build once on the dev Mac: `./build.sh` (gives `build/khu` and `build/khu-stub`), `./build.sh test`.
 
@@ -26,11 +42,15 @@ open http://127.0.0.1:8790/        # the status page (loopback only)
 
 ```bash
 ~/Library/KHUpdater/bin/khu publish --feed ~/Library/KHUpdater/feed --key ~/Library/KHUpdater/keys/private.key \
-  --app gateway --version 0.2.196 --artifact dist/gateway-kh-0.2.196.dmg --kind app-dmg
-~/Library/KHUpdater/bin/khu publish ... --app updater --version 1.0.1 --artifact build/khu --kind updater
+  --app gateway --version 0.2.196 --artifact dist/gateway-kh-0.2.196.dmg --kind app-dmg --changelog /path/to/gateway/CHANGELOG.md
+~/Library/KHUpdater/bin/khu publish ... --app updater --version 1.0.1 --artifact build/khu --kind updater --changelog CHANGELOG-launcher.md
 ```
 
-A version not newer than the feed's is refused (`--allow-same` to re-publish the same one).
+Those version numbers are examples: use the app’s new version and exact installer path. A version not newer than the feed's is refused (`--allow-same` exists, but never use it to replace an accepted installer with different application bytes).
+
+There is no Add App form in Update Studio. **Apps & updates** lists published versions, sizes and What's New and can request updates on connected Macs. To add a normal app DMG, publish it with a stable `--app` ID, its version, `--artifact` and a `--changelog` whose top entry matches. The publisher checks the DMG’s version and reads its bundle identity and icon, stores the installer by SHA-256 and signs the release with the existing publisher key. A new installation mechanism needs a supported recipe; a catalog record alone does not implement one.
+
+Use `--name` for its shown name, `--description` for the Launcher details description, and optional `--tagline` / `--feature` for other app words. Description is separate from What's New. Keep the same description in each SSD’s `apps.json` app record; indexing preserves those words. Metadata changes do not require rebuilding an unchanged app. Publishing or distributing still follows the release approval and gate.
 
 ## 3. Each Mac — once, with the kit installer
 

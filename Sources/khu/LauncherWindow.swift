@@ -11,6 +11,20 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     private var loaded = false
     private var iconCache: [String: String] = [:]
     private var progressTimer: Timer?
+    /// What the connection section of Settings last learned, in memory only: a check that is not
+    /// run reads as "Not checked yet", never as passed.
+    private struct ConnectionUI {
+        var checkedAt: String?
+        var ok: Bool?
+        var note: String?
+        var serverNote: String?
+        var serverOk: Bool?
+        /// True only after a check the publisher refused with 401/403 — the one state in which
+        /// Pair again is offered, never a guess from any other failure.
+        var pairAvailable = false
+    }
+    private var connectionUI = ConnectionUI()
+    private var connectionBusy = false
 
     init(helper: HelperMenu) {
         self.helper = helper
@@ -72,6 +86,10 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             "settings": ["checkManually": settings.checkManually ?? false, "autoInstall": settings.autoInstall ?? true,
                          "notify": settings.notify ?? false, "appearance": settings.appearance ?? "system",
                          "menuBarWhenClosed": settings.menuBarWhenClosed ?? true],
+            "connection": ["destination": helper.config.feedURL, "machine": helper.config.machine, "checking": connectionBusy,
+                           "checkedAt": connectionUI.checkedAt as Any, "ok": connectionUI.ok as Any, "note": connectionUI.note as Any,
+                           "serverNote": connectionUI.serverNote as Any, "serverOk": connectionUI.serverOk as Any,
+                           "pairAvailable": connectionUI.pairAvailable],
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state), let json = String(data: data, encoding: .utf8) else { return }
         web.evaluateJavaScript("render(\(json))")
@@ -111,6 +129,33 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:])
     }
 
+    /// One connection check at a time on this Mac's own credentials. Only a 401/403 refusal —
+    /// its own error type, never message matching — offers Pair again, and a success clears it.
+    private func runConnectionCheck() {
+        guard !connectionBusy else { return }
+        connectionBusy = true
+        connectionUI.note = nil
+        connectionUI.pairAvailable = false
+        reload()
+        let config = helper.config
+        DispatchQueue.global(qos: .userInitiated).async {
+            var ok = false, note: String?, refused = false
+            do { try Connect.check(config: config); ok = true }
+            catch {
+                note = "\(error)"
+                refused = error is Connect.SigninRefused
+            }
+            DispatchQueue.main.async {
+                self.connectionBusy = false
+                self.connectionUI.ok = ok
+                self.connectionUI.note = note
+                self.connectionUI.pairAvailable = refused
+                if ok { self.connectionUI.checkedAt = ISO.string(Date()) }
+                self.reload()
+            }
+        }
+    }
+
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         let id = body["app"] as? String ?? ""
@@ -145,6 +190,61 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         case "log": FileHandle.standardError.write(Data("launcher page: \(body["text"] ?? "")\n".utf8)); return
         case "pause": DownloadControl.pause(body["on"] as? Bool ?? !DownloadControl.paused)
         case "cancel": DownloadControl.cancel()
+        case "connectionCheck":
+            // One check at a time, on this Mac's own credentials: signed answer, pinned key, this
+            // Mac's name — never an enrolment, never a second attempt over the first.
+            runConnectionCheck()
+        case "pairAgain":
+            // Explicit local recovery only. The plain confirmation (old sign-in preserved,
+            // pairing code required) and the code entry live in the native window; a cancelled
+            // confirmation returns here without any network call or file write.
+            guard !connectionBusy else { break }
+            let file = Connect.configFile(stateDir: helper.stateDir)
+            connectionBusy = true
+            reload()
+            let outcome = ConnectionWindow.runRepair(configFile: file)
+            connectionBusy = false
+            guard outcome == .connected else { break }
+            // The renewed sign-in is on disk; this window reads it again and then proves it.
+            if let data = try? Data(contentsOf: file), let fresh = try? JSONDecoder().decode(AgentConfig.self, from: data) {
+                helper.config = fresh
+                helper.wake.signal()
+                runConnectionCheck()
+            } else {
+                connectionUI.ok = false
+                connectionUI.pairAvailable = false
+                connectionUI.note = "The renewed sign-in was saved but could not be read back here; quit and reopen Studio Launcher KH."
+                reload()
+            }
+        case "changeServer":
+            guard !connectionBusy, let typed = body["value"] as? String,
+                  !typed.trimmingCharacters(in: .whitespaces).isEmpty else { break }
+            connectionBusy = true
+            connectionUI.serverOk = nil
+            connectionUI.serverNote = "Checking that address…"
+            reload()
+            let file = Connect.configFile(stateDir: helper.stateDir)
+            DispatchQueue.global(qos: .userInitiated).async {
+                var saved: String?, note: String?
+                do { saved = try Connect.changeDestination(to: typed, file: file) }
+                catch { note = "\(error)" }
+                DispatchQueue.main.async {
+                    self.connectionBusy = false
+                    if let saved {
+                        self.helper.config.feedURL = saved
+                        self.helper.wake.signal()
+                        self.connectionUI.serverOk = true
+                        self.connectionUI.serverNote = "Saved. The next update check uses this address."
+                        self.connectionUI.checkedAt = nil
+                        self.connectionUI.ok = nil
+                        self.connectionUI.note = nil
+                    } else {
+                        self.connectionUI.serverOk = false
+                        self.connectionUI.serverNote = note
+                    }
+                    self.reload()
+                }
+            }
         case "setting":
             var s = HelperSettings.load(from: helper.stateDir)
             let v = body["value"]
