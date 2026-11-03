@@ -25,7 +25,8 @@ extension FeedServer {
                       let bundle = fields["bundle"], let evidence = fields["evidence"], !evidence.isEmpty,
                       let cap = fields["byteCap"].flatMap(Int64.init), cap > 0,
                       source.utf8.count <= 4096, hosts.utf8.count <= 4096, team.count <= 64,
-                      bundle.count <= 256, evidence.utf8.count <= 4096 else {
+                      bundle.count <= 256, evidence.utf8.count <= 4096,
+                      (fields["sourceMatch"] ?? "").utf8.count <= 4096 else {
                     return Self.text(400, "send source, official hosts, signing Team ID, bundle ID, evidence and a positive download byte limit")
                 }
                 var entry = catalog.entries[index]
@@ -99,12 +100,28 @@ extension FeedServer {
             }
             return Self.ok
         }
-        if response.status == 200, (req.headers["content-type"] ?? "").hasPrefix("application/x-www-form-urlencoded") {
+        let formPost = (req.headers["content-type"] ?? "").hasPrefix("application/x-www-form-urlencoded")
+        // A refusal of the owner's own form answers as a page in the page's style, with the
+        // reason and a way back — never as bare text the browser renders as a dead end.
+        if response.status >= 400, formPost {
+            return HTTPResponse(response.status, "text/html; charset=utf-8", Self.formErrorPage(String(decoding: response.data, as: UTF8.self)))
+        }
+        if response.status == 200, formPost {
             var back = HTTPResponse(303, "text/plain; charset=utf-8", "")
             back.headers = ["Location": "/#apps"]
             return back
         }
         return response
+    }
+
+    static func formErrorPage(_ message: String) -> String {
+        func esc(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        return "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
+            + "<title>Action refused</title><style>\(pageStyle)\(PublisherFleet.style)</style></head>"
+            + "<body><main><div class=failure><p>\(esc(message))</p><p><a href=\"/#apps\">Back to Apps &amp; updates</a></p></div></main></body></html>"
     }
 
     func vendorHTML(_ state: ServerState) -> String {
@@ -123,7 +140,8 @@ extension FeedServer {
                     let result = mac.lastResults?["vendor-" + entry.id]
                     let message = pending ? (mac.capabilities?.contains(AgentCapability.vendorInstall) == true ? "Install requested" : "Waiting for compatible Launcher")
                         : result.map { $0.status.replacingOccurrences(of: "_", with: " ") + ($0.reason.map { ": " + $0 } ?? "") } ?? (assigned ? "Assigned; no result yet" : "Off")
-                    return "<label class=setting><span><input type=checkbox name=\"mac-\(h(mac.machine))\"\(assigned ? " checked" : "")> \(h(mac.name))</span><span class=sub>\(h(message))</span></label>"
+                    let loud = result.map { Self.failureStatuses.contains($0.status) } ?? false
+                    return "<label class=macpick><span><input type=checkbox name=\"mac-\(h(mac.machine))\"\(assigned ? " checked" : "")> \(h(mac.name))</span><span class=\"\(loud ? "badtext" : "sub")\">\(h(message))</span></label>"
                 }.joined()
                 func input(_ name: String, _ label: String, _ value: String) -> String {
                     "<label>\(label)<input name=\"\(name)\" value=\"\(h(value))\" required></label>"
@@ -133,19 +151,20 @@ extension FeedServer {
                     "<option value=\"\(kind.rawValue)\"\(kind == entry.sourceKind ? " selected" : "")>\(label)</option>"
                 }.joined()
                 let sourceControl = "<label>Source type<select name=sourceKind>\(sourceOptions)</select></label><label>Page link must contain<input name=sourceMatch value=\"\(h(entry.sourceMatch ?? ""))\"></label>"
-                let edit = "<details class=notes><summary>Official source and identity</summary><form method=post action=/api/vendor-edit><input type=hidden name=app value=\"\(id)\">"
+                let edit = "<details class=notes><summary>Official source and identity</summary><form class=metadata method=post action=/api/vendor-edit><input type=hidden name=app value=\"\(id)\">"
                     + sourceControl + input("source", "Official source URL", entry.sourceURL)
                     + input("hosts", "Official hosts (comma separated)", entry.officialHosts.joined(separator: ", "))
                     + input("team", "Signing Team ID", entry.teamID ?? "") + input("bundle", "Bundle ID", entry.bundleID ?? "")
                     + input("evidence", "Identity evidence", entry.teamIDEvidence ?? "")
                     + input("byteCap", "Download limit in bytes (for all other apps)", String(prefs.byteCap)) + "<button>Save source</button></form></details>"
                 let retire = "<form method=post action=/api/vendor-\(retired ? "restore" : "retire") data-confirm=\"\(retired ? "Restore this app? Assignments stay off." : "Retire this app and cancel its waiting installs?")\"><input type=hidden name=app value=\"\(id)\"><button>\(retired ? "Restore" : "Retire")</button></form>"
-                let assign = retired ? "<p class=sub>Retired. Source and history are kept; restore to assign again.</p>" : entry.sourceKind == .unresolved ? "<p role=alert>Installer source is not available. \(h(entry.notes ?? "Set a verified official source before assigning."))</p>" : "<details class=notes><summary>Choose Macs</summary><form method=post action=/api/vendor-assign data-confirm=\"Apply this choice to the selected Macs?\"><input type=hidden name=app value=\"\(id)\">\(macs.isEmpty ? "<p>No Macs enrolled.</p>" : macs)<label><input type=checkbox name=confirmed value=true required> Confirm this choice for the selected Macs</label><button name=on value=true>Assign and install</button><button name=on value=false>Turn off</button></form></details>"
+                let assign = retired ? "<p class=sub>Retired. Source and history are kept; restore to assign again.</p>" : entry.sourceKind == .unresolved ? "<p class=warntext>Installer source is not available. \(h(entry.notes ?? "Set a verified official source before assigning."))</p>" : "<details class=notes><summary>Choose Macs</summary><form method=post action=/api/vendor-assign data-confirm=\"Apply this choice to the selected Macs?\"><input type=hidden name=app value=\"\(id)\">\(macs.isEmpty ? "<p>No Macs enrolled.</p>" : macs)<label><input type=checkbox name=confirmed value=true required> Confirm this choice for the selected Macs</label><button name=on value=true>Assign and install</button><button name=on value=false>Turn off</button></form></details>"
                 return "<div class=setting><div><h3>\(h(entry.name))</h3><p class=sub>\(VendorOrder.kind(for: entry.id) == .pkg ? "Package signature is checked before an administrator finishes installation on the Mac." : "App signature is checked before installation; existing app identity must match.")</p>\(retire)</div><div>\(assign)\(edit)</div></div>"
             }.joined()
-            return "<h2>Other apps</h2><p class=sub>Off until assigned. Downloads use official sources and verified vendor signatures. Accounts and licences stay yours. Turning off cancels waiting installs and keeps installed apps. Download limit: \(prefs.byteCap) bytes.</p><div class=settingslist>\(rows)</div>"
+            let limit = ByteCountFormatter.string(fromByteCount: prefs.byteCap, countStyle: .file)
+            return "<h2 class=vendors>Other apps</h2><p class=sub>Off until assigned. Downloads use official sources and verified vendor signatures. Accounts and licences stay yours. Turning off cancels waiting installs and keeps installed apps. Download limit: \(limit).</p><div class=settingslist>\(rows)</div>"
         } catch {
-            return "<h2>Other apps</h2><p role=alert>Catalog could not be read: \(h("\(error)")). Existing files were kept.</p>"
+            return "<h2 class=vendors>Other apps</h2><div class=failure><p>Catalog could not be read: \(h("\(error)")). Existing files were kept.</p></div>"
         }
     }
 }

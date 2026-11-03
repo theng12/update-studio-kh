@@ -925,7 +925,9 @@ public final class FeedServer: @unchecked Sendable {
             let feedApps = Set(feed?.apps.keys.map { $0 } ?? [])
             let reported = ms.lastSeen == nil ? Set<String>()
                 : Set(ms.installed.keys).union(ms.automaticDefault.map { Set($0.keys).intersection(feedApps) } ?? feedApps)
-            let apps = reported.union(ms.pending.map(\.app)).sorted { name($0) < name($1) }
+            // Vendor apps report in the Other apps section below; a duplicate row here would read
+            // "Not checked · not in feed" and offer feed-style rollback for a vendor journal.
+            let apps = reported.union(ms.pending.map(\.app)).filter { !$0.hasPrefix("vendor-") }.sorted { name($0) < name($1) }
             var anyFailed = false, anyUpdating = false, anyUpdate = false
             var chips = "", rows = "", failures = "", failSummary = "", rowUpdate = ""
             for app in apps {
@@ -1165,7 +1167,8 @@ public final class FeedServer: @unchecked Sendable {
     }
 
     static let failureStatuses: Set<String> = ["failed", "install_failed", "download_failed", "download_mismatch", "rolled_back",
-                                               "rollback_failed", "rollback_unhealthy", "rollback_blocked", "unresolved"]
+                                               "rollback_failed", "rollback_unhealthy", "rollback_blocked", "unresolved",
+                                               "blocked", "refused", "needs_admin", "needs_person"]
     /// A Mac not seen for longer than this shows as offline, never with its last known state.
     static let offlineAfter: TimeInterval = 10 * 60
     static func isOnline(_ ms: MachineState, now: Date) -> Bool {
@@ -1281,6 +1284,8 @@ public final class FeedServer: @unchecked Sendable {
     .lockstatus{color:var(--sub);font-size:12.5px;line-height:1.6}.lockstatus .chip{margin-right:6px}.address{padding:20px 0;margin:20px 0;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2)}.addressvalue{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}.address code{font-size:12px;padding:4px 6px;user-select:all;overflow-wrap:anywhere}
     .connectfoot{display:flex;justify-content:space-between;gap:20px;margin-top:32px;padding-top:20px;border-top:1px solid var(--line);color:var(--sub);font-size:12.5px}.connectfoot p{max-width:70ch}.connectfoot a{white-space:nowrap}
     .settingslist{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0 24px}.setting{display:grid;grid-template-columns:minmax(180px,.7fr) minmax(0,1.3fr);gap:40px;padding:24px 0}.setting+.setting{border-top:1px solid var(--line2)}.setting h3{font-size:14px;color:var(--text);text-transform:none;margin:0 0 6px;letter-spacing:0}.setting p{max-width:70ch}.setting .address{margin:0 0 10px;padding:0;border:0}
+    .macpick{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0}.macpick+.macpick{border-top:1px solid var(--line2)}
+    .vendors{margin-top:28px}input[type=checkbox]{accent-color:var(--accent)}
     .tablewrap{padding:0 8px;overflow-x:auto}.feed td{padding:18px 12px}.feed th{padding:12px}.feed .name{font-weight:600;min-width:160px}.feed .num{font-size:12.5px}.stat{padding:16px}.detail{overflow-x:auto}
     @media(min-width:821px) and (max-width:1100px){.brand p{display:none}.top{gap:10px}.tabs a{padding:5px 9px}.headright{gap:10px}.stats{grid-template-columns:1fr 1fr}.connectlayout{gap:24px}.pairpanel{padding:24px}details.mac>summary{grid-template-columns:minmax(130px,1fr) minmax(0,1fr) auto 14px}.seen{grid-column:1/4;text-align:left}.chev{grid-column:4;grid-row:1}}
     @media(max-width:820px){.pagehead{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px}.pagehead h2{font-size:23px}.connectlayout{grid-template-columns:minmax(0,1fr);gap:24px}.pairpanel{order:-1;padding:24px}.paircode{font-size:48px}.pair{margin:20px 0}.connectfoot{flex-direction:column;gap:8px}.setting{grid-template-columns:1fr;gap:12px}.settingslist{padding:0 18px}.headright{margin-left:auto}.brand{min-width:0}.top h1{font-size:15px}.tabs{overflow-x:auto}.tabs a{padding:5px 10px;white-space:nowrap}.feed td{min-width:0}.feed .name{min-width:0}.feed .actions{white-space:normal}.feed .num{overflow-wrap:anywhere}}

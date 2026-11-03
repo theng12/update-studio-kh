@@ -139,12 +139,12 @@ function buttons(a,big){const out=[],m=mainAction(a);
  if(a.status=='Updating…'&&!big)return [progress(a)];
  if(m)out.push(el('button',{class:'btn main '+m[2],onclick:e=>{e.stopPropagation();post({action:m[1],app:a.id})}},m[0]));
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
-function card(a){const tag=a.tagline||a.description||(a.statusOnly?'Updates itself from its own installer.':null);
+function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);
  const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter')openDetail(a.id)}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
-  a.status=='Failed'&&a.reason?el('div',{class:'reason'},plain(a.reason)):null,
+  a.reason?el('div',{class:'reason'},plain(a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
@@ -195,13 +195,13 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
  const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':true,'aria-label':a.name,style:a.accent?'--app:'+a.accent:null,onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},icon(a),el('div',{class:'t'},el('h3',{},a.name),a.tagline?el('div',{class:'sub'},a.tagline):null,
     el('div',{class:'meta',style:'margin-top:8px'},chip(a),versionLine(a),a.released?el('span',{class:'when'},'· '+day(a.released)):null),
-    a.status=='Failed'&&a.reason?el('div',{class:'reason',style:'margin-top:6px'},plain(a.reason)):null,
+    a.reason?el('div',{class:'reason',style:'margin-top:6px'},plain(a.reason)):null,
     a.status=='Updating…'?el('div',{style:'margin-top:10px;max-width:420px'},progress(a)):el('div',{class:'foot',style:'margin-top:12px;max-width:340px'},...buttons(a,true))),
    el('div',{class:'nav'},el('button',{class:'btn icon',title:'Previous app','aria-label':'Previous app',onclick:()=>step(-1)},svg('M10 3 5 8l5 5')),
     el('button',{class:'btn icon',title:'Next app','aria-label':'Next app',onclick:()=>step(1)},svg('M6 3l5 5-5 5')),
     el('button',{class:'btn icon',title:'Close','aria-label':'Close',onclick:()=>{detail=null;closeLayers()}},svg('M4 4l8 8M12 4l-8 8')))),
   el('div',{class:'cols'},
-   el('div',{},a.description?el('p',{class:'desc'},a.description):el('p',{class:'desc sub'},a.statusOnly?'This app updates itself from its own installer. Its setup folder on the SSD has the steps.':'No description yet.'),
+   el('div',{},a.description?el('p',{class:'desc'},a.description):el('p',{class:'desc sub'},a.statusOnly?(a.source=='Official vendor'?(a.setup?'The verified official installer is waiting in its setup folder.':'This app is installed from its official vendor’s installer.'):'This app updates itself from its own installer. Its setup folder on the SSD has the steps.'):'No description yet.'),
     a.features&&a.features.length?[el('h4',{},'Features'),el('ol',{class:'feat'},a.features.map(f=>el('li',{},el('b',{},f.title),f.text?el('span',{},f.text):null)))]:null),
    el('div',{},facts.length?[el('h4',{},'Latest release'),el('dl',{class:'facts'},facts.map(f=>el('div',{},el('dt',{},f[0]),el('dd',{class:'num'},f[1]))))]:null,
     el('h4',{id:'changes'},'What’s changed'),notes.length?el('ul',{class:'changes'},notes.slice(0,limit).map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.'),

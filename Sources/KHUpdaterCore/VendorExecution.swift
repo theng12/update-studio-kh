@@ -49,14 +49,21 @@ extension Agent {
         return ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []).compactMap { file in
             guard file.pathExtension == "json", let receipt = try? AtomicFile.readJSON(VendorReceipt.self, from: file) else { return nil }
             let version = (try? BundleInfo.read(receipt.destination)).flatMap { $0.identifier == receipt.order.entry.bundleID ? $0.version : nil }
+            // A package the administrator finished installing reads as installed, not as still waiting.
+            var status = receipt.status
+            var reason = receipt.reason
+            if version != nil, status == "needs_admin" { status = "installed"; reason = "Administrator finished the installation." }
             var row = HelperApp(app: "vendor-" + receipt.order.entry.id, installed: version, available: nil,
                 statusOnly: true, automatic: false,
-                status: receipt.status.replacingOccurrences(of: "_", with: " "), reason: receipt.reason)
+                status: status.replacingOccurrences(of: "_", with: " "), reason: reason)
             row.name = receipt.order.entry.name
             row.source = "Official vendor"
             row.bundlePath = version == nil ? nil : receipt.destination
             row.bytes = receipt.order.byteCap
-            row.setupFolder = receipt.installerPath.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
+            // The setup-folder handoff exists only while a person must act on the kept installer;
+            // a refused, blocked or failed payload is never offered back as something to open.
+            row.setupFolder = (status == "needs_admin" || status == "needs_person")
+                ? receipt.installerPath.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path } : nil
             return row
         }.sorted { $0.name < $1.name }
     }

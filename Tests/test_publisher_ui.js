@@ -15,6 +15,12 @@ for (const rect of fleetSource.matchAll(/<rect[^>]+>/g)) {
   if (rx) assert(Number.isFinite(Number(rx[1] ?? rx[2] ?? rx[3])), 'SVG rect corner radius must parse as a numeric HTML attribute');
 }
 
+// The Launcher's embedded page must recognize vendor rows and never hide a reason it has.
+const launcherSource = fs.readFileSync(path.join(__dirname, '../Sources/khu/LauncherPage.swift'), 'utf8');
+assert(launcherSource.includes("a.source=='Official vendor'"), 'launcher copy must recognize official vendor rows');
+assert(!launcherSource.includes("a.status=='Failed'&&a.reason?el"), 'launcher must show the reason for every status that carries one');
+assert(launcherSource.includes("a.setup?'The verified official installer is waiting in its setup folder.'"), 'setup-folder copy must depend on a real setup folder');
+
 async function check(label, clipboardWorks, modal) {
   const timers = [], copied = [], pageStatus = {textContent: ''}, modalStatus = {textContent: ''};
   const button = {textContent: label, getAttribute: () => 'fixture-value',

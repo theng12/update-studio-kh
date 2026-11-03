@@ -55,6 +55,30 @@ func vendorPublisherTests() {
     expect(post("/api/vendor-assign", ["app": unpinned.entries[0].id, "mac-mac-a": "on", "on": "true"]).status == 400, "VP17 invalid catalog assignment reports an owner input error")
     expect(rig.server.statusHTML().contains("Download limit in bytes (for all other apps)"), "VP18 shared limit scope is shown")
     expect(rig.server.statusHTML().contains("<details class=notes><summary>Choose Macs</summary>"), "VP19 open assignment editor uses the existing timed-refresh pause so selections survive")
+    expect(rig.server.statusHTML().contains("<form class=metadata method=post action=/api/vendor-edit>"), "VP20 the source editor uses the page's own form component")
+    expect(rig.server.statusHTML().contains("class=macpick") && FeedServer.pageStyle.contains(".macpick{"), "VP21 Mac rows use a compact picker row, not the settings grid")
+    expect(FeedServer.pageStyle.contains("input[type=checkbox]{accent-color:var(--accent)}")
+        && rig.server.statusHTML().contains("<h2 class=vendors>Other apps</h2>")
+        && FeedServer.pageStyle.contains(".vendors{margin-top:28px}"), "VP22 checkboxes and the section heading follow the page's accent and rhythm")
+    expect(rig.server.statusHTML().contains("Download limit: 2 MB") && !rig.server.statusHTML().contains("2000000 bytes"), "VP23 the owner-facing limit is formatted; raw bytes stay only in the field")
+    let refusedForm = post("/api/vendor-assign", ["app": "chrome", "on": "true"], form: true)
+    expect(refusedForm.status == 400 && refusedForm.contentType.contains("text/html")
+        && String(decoding: refusedForm.data, as: UTF8.self).contains("class=failure")
+        && String(decoding: refusedForm.data, as: UTF8.self).contains("select enrolled Macs"),
+        "VP24 a refused form answers as a styled page with the reason and a way back")
+    var oversized = edited; oversized["sourceMatch"] = String(repeating: "x", count: 5000)
+    expect(post("/api/vendor-edit", oversized, form: true).status == 400, "VP25 an oversized link match is refused before it enters the catalog or a signed order")
+    expect(["blocked", "refused", "needs_admin", "needs_person"].allSatisfy(FeedServer.failureStatuses.contains), "VP26 vendor refusals and handoffs count as failures wherever the page styles them")
+    var repinned = try! VendorCatalog.load(from: VendorCatalog.url(in: rig.state.path))
+    repinned.entries[0].teamID = "NEWTEAM123"
+    try! repinned.save(to: VendorCatalog.url(in: rig.state.path))
+    expect(post("/api/vendor-assign", confirmed, form: true).status == 303
+        && !rig.server.statusHTML().contains("vendor-chrome"),
+        "VP27 waiting vendor installs live only in Other apps, never as a confusing per-Mac feed row")
+    var unresolved = try! VendorCatalog.load(from: VendorCatalog.url(in: rig.state.path))
+    unresolved.entries[0].sourceKind = .unresolved
+    try! unresolved.save(to: VendorCatalog.url(in: rig.state.path))
+    expect(rig.server.statusHTML().contains("<p class=warntext>Installer source is not available."), "VP28 an unusable source warns in the page's own warning style")
 }
 
 func vendorExecutionTests() {
@@ -109,7 +133,29 @@ func vendorExecutionTests() {
         expect(marker(rig.installed) == "1.0.0" && !Recipe.isUnresolved(stateDir: rig.state.path, app: command.app),
                "VE5 next agent run restores an interrupted vendor swap without any fresh order or config entry")
         let row = recovered.apps.first { $0.app == command.app }
-        expect(row?.source == "Official vendor" && row?.setupFolder != nil && row?.installed == "1.0.0",
-               "VE6 recovered vendor registration preserves the native receipt and setup-folder handoff")
+        expect(row?.source == "Official vendor" && row?.setupFolder == nil && row?.installed == "1.0.0",
+               "VE6 recovered vendor registration keeps the native receipt; an installed app offers no setup folder")
+    }
+    do {
+        let rig = VendorRig("vendor-rows-honesty")
+        let order = VendorOrder(entry: rig.entry(id: "chrome"), kind: .pkg, byteCap: 1 << 20)
+        let receipts = rig.state.appendingPathComponent("vendor-receipts")
+        try! fm.createDirectory(at: receipts, withIntermediateDirectories: true)
+        let installer = rig.state.appendingPathComponent("vendor-downloads/chrome/chrome.pkg").path
+        let missing = rig.apps.appendingPathComponent("Chrome.app").path
+        try! AtomicFile.writeJSON(VendorReceipt(order: order, destination: missing, installerPath: installer,
+            status: "needs_admin", reason: "fixture: waiting for the administrator"), to: VendorReceipt.file(rig.state, "chrome"))
+        var rows = Agent.vendorRows(stateDir: rig.state)
+        expect(rows.count == 1 && rows[0].status == "needs admin" && rows[0].setupFolder?.hasSuffix("vendor-downloads/chrome") == true,
+               "VE7 a package waiting for the administrator keeps its setup-folder handoff")
+        makeApp(URL(fileURLWithPath: missing), version: "2.0.0")
+        rows = Agent.vendorRows(stateDir: rig.state)
+        expect(rows[0].status == "installed" && rows[0].installed == "2.0.0" && rows[0].setupFolder == nil,
+               "VE8 needs admin resolves to installed once the matching bundle exists")
+        try! AtomicFile.writeJSON(VendorReceipt(order: order, destination: missing, installerPath: installer,
+            status: "blocked", reason: "fixture: signature refused"), to: VendorReceipt.file(rig.state, "chrome"))
+        rows = Agent.vendorRows(stateDir: rig.state)
+        expect(rows[0].status == "blocked" && rows[0].setupFolder == nil,
+               "VE9 a blocked payload is never offered back as a setup folder")
     }
 }
