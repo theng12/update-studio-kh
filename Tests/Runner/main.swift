@@ -2644,6 +2644,8 @@ func enrolWindowTests() {
         let hash = r.machines["mac1"]?.tokenHash
         let reply = enrolPost(r.server, machine: "mac1", nonce: enrolNonce())
         expect(reply.status == 409, "E3 an already-enrolled Mac is refused over the network (\(reply.status))")
+        expect(String(decoding: reply.data, as: UTF8.self) == "This Mac's name is already in use. If this Mac was reset, remove it in Update Studio (Remove Mac), then connect again.",
+               "E3 reconnect refusal explains Remove Mac in plain words")
         expect(r.machines["mac1"]?.tokenHash == hash && r.window?.enrolled == 0,
                "E3 the refused Mac's token is NOT rotated and nothing was counted")
         let use = r.server.handleRequest(HTTPRequest(method: "POST", path: "/status",

@@ -2,6 +2,9 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.12 — 2026-11-04
+- When a reset Mac cannot reconnect because its name is already in use, the message explains how to remove the old entry in Update Studio and connect again.
+
 ## 1.0.11 — 2026-11-03
 - Other apps lists Tailscale, Chrome, Telegram, Yam Display, Word and Excel, with official sources and vendor signature checks.
 - Choose individual Macs or confirm a group assignment. Assignments start off; turning off cancels waiting installs and keeps installed apps.

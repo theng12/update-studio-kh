@@ -486,7 +486,7 @@ public final class FeedServer: @unchecked Sendable {
                     && record.lastSeen == nil && record.enrolNonceHash == Enrolment.sha256Hex(nonce)
             } ?? false
             guard state.machines[machine] == nil || retry else {
-                return Self.text(409, "that Mac is already enrolled with this publisher, so another device on the tailnet cannot take its place; if it was reset, the owner removes it on the publisher first (Remove Mac on the status page, or `khu remove`) and then it connects again with the pairing code")
+                return Self.text(409, "This Mac's name is already in use. If this Mac was reset, remove it in Update Studio (Remove Mac), then connect again.")
             }
             // A resend is the same enrolment, not a second one: it must not spend another slot.
             guard retry || window.map({ $0.enrolled < maxEnrolmentsPerWindow }) ?? true else {
