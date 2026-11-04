@@ -116,12 +116,16 @@ enum FrontDoor {
         let env = ProcessInfo.processInfo.environment
         let isolated = env["KHU_CONNECT_HOME"] != nil
         let home = env["KHU_CONNECT_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
+        // The running helper is the authority even when this SSD copy cannot find its config.
+        if !isolated && askHelper(seconds: 2) { exit(0) }
         if Connect.isSetUp(home: home) {
-            // An isolated home never waits on this Mac's real helper.
+            // An isolated home never starts this Mac's real helper.
             if !isolated {
                 do { try Connect.startInstalledAgent(home: home) }
                 catch { say("Studio Launcher could not start", "\(error)"); exit(1) }
-                askHelper(seconds: 2)
+                if !askHelper(seconds: 30) {
+                    say("Studio Launcher KH did not answer", "Your connection is saved. Restart this Mac, then open Studio Launcher again.")
+                }
             }
             exit(0)
         }
@@ -143,7 +147,9 @@ enum FrontDoor {
         }
         switch ConnectionWindow.run(kit: kit, home: home) {
         case .connected:
-            if !isolated { askHelper(seconds: 30) }   // The helper is starting under launchd; ask until it shows the list.
+            if !isolated && !askHelper(seconds: 30) {
+                say("Studio Launcher KH did not answer", "Your connection is saved. Close this window and open Studio Launcher again.")
+            }
             exit(0)
         case .cancelled:
             exit(0)
@@ -151,7 +157,7 @@ enum FrontDoor {
     }
 
     /// Asks every second until the helper says its window is showing.
-    static func askHelper(seconds: Int) {
+    static func askHelper(seconds: Int) -> Bool {
         var shown = false
         let center = DistributedNotificationCenter.default()
         let token = center.addObserver(forName: LauncherBundle.shownNotification, object: nil, queue: nil) { _ in shown = true }
@@ -160,9 +166,7 @@ enum FrontDoor {
             center.postNotificationName(LauncherBundle.openNotification, object: nil, userInfo: nil, deliverImmediately: true)
             RunLoop.current.run(until: Date().addingTimeInterval(1))
         }
-        if !shown {
-            say("Studio Launcher KH did not answer", "Its helper is not running yet. Try again in a minute; if it still does not open, restart this Mac.")
-        }
+        return shown
     }
 
     static func say(_ title: String, _ text: String) {

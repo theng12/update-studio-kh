@@ -44,7 +44,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     private init(mode: Mode) {
         self.mode = mode
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 380),
-                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                          styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         super.init()
 
         let repair: Bool
@@ -187,11 +187,24 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
 
     private static func present(_ controller: ConnectionWindow) -> Outcome {
         NSApp.activate(ignoringOtherApps: true)
+        controller.window.level = .normal
+        if let screen = controller.window.screen ?? NSScreen.main {
+            let frame = screen.visibleFrame
+            controller.window.setFrameOrigin(NSPoint(x: frame.midX - controller.window.frame.width / 2,
+                                                     y: frame.midY - controller.window.frame.height / 2))
+        }
         controller.window.makeKeyAndOrderFront(nil)
         controller.window.initialFirstResponder = controller.codeField
-        let result = NSApp.runModal(for: controller.window)
+        // Keep all windows usable while the existing synchronous caller waits for this result.
+        while !controller.ended {
+            if let event = NSApp.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.1),
+                                          inMode: .default, dequeue: true) {
+                NSApp.sendEvent(event)
+            }
+            NSApp.updateWindows()
+        }
         controller.window.orderOut(nil)
-        return result == .OK ? .connected : .cancelled
+        return controller.outcome
     }
 
     // MARK: states
@@ -297,7 +310,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         guard !ended else { return }
         ended = true
         outcome = result
-        NSApp.stopModal(withCode: result == .connected ? .OK : .cancel)
+        window.orderOut(nil)
     }
 
     // MARK: NSWindowDelegate

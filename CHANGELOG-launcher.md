@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.10 — 2026-11-04
+- Opening a Launcher copy uses this Mac's running helper before asking to connect, and gives a starting helper time to open the main window.
+- A refused saved sign-in opens connection settings with Pair again; existing app choices and saved data stay in place.
+- The connection window opens in the centre and behaves like a normal window, so other windows remain usable.
+- Includes incomplete-setup repair and safe connection retries from 0.1.9.
+
 ## 0.1.9 — 2026-11-04
 - Connect repairs an incomplete local setup while keeping saved app data and earlier versions.
 - A connection interrupted during local setup can be retried without removing the Mac again.

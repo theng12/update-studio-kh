@@ -48,6 +48,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loaded = true; reload()
+        runConnectionCheck()
         // KHU_PAGE_SCRIPT runs once on the page, for screenshots; nobody sets it in real use.
         if let script = ProcessInfo.processInfo.environment["KHU_PAGE_SCRIPT"], !script.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { webView.evaluateJavaScript(script) }
@@ -152,6 +153,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                 self.connectionUI.pairAvailable = refused
                 if ok { self.connectionUI.checkedAt = ISO.string(Date()) }
                 self.reload()
+                if refused { self.web.evaluateJavaScript("settingsOpen=true;drawSettings()") }
             }
         }
     }

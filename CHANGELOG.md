@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.13 — 2026-11-04
+- Studio Launcher 0.1.10 opens an existing helper before offering pairing, checks saved connections, and offers Pair again when a saved sign-in is refused.
+- Launcher's connection window opens centred and leaves other windows usable.
+- Includes incomplete connection repair, safe retries and plain name-in-use recovery instructions.
+
 ## 1.0.12 — 2026-11-04
 - Studio Launcher 0.1.9 repairs incomplete connections without discarding saved app data, and lets interrupted setup be retried.
 - When a reset Mac cannot reconnect because its name is already in use, the message explains how to remove the old entry in Update Studio and connect again.
