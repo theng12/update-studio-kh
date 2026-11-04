@@ -28,6 +28,12 @@ case "$1" in
       echo 'Bootstrap failed: 5: Input/output error' >&2; exit 1
     fi
     : > "$FAKE_LAUNCHCTL_LOADED" ;;
+  bootout)
+    if [[ -n "${FAKE_LAUNCHCTL_BOOTOUT_FAIL:-}" ]]; then
+      echo 'Bootout failed: 3: No such process' >&2; exit 1
+    fi
+    # The job is no longer loaded: the marker is moved aside, never deleted.
+    [[ -f "$FAKE_LAUNCHCTL_LOADED" ]] && mv "$FAKE_LAUNCHCTL_LOADED" "$FAKE_LAUNCHCTL_LOADED.off" ;;
 esac
 """)
 (fake_bin / "launchctl").chmod(0o755)
@@ -138,6 +144,108 @@ try:
           and recorded() == [["print", label], ["bootstrap", domain, str(fail_home / "Library/LaunchAgents/com.khupdater.agent.plist")]],
           "a failed start keeps the whole install in place and trashes nothing")
 
+    # Incomplete installations repair in place; launchctl remains a recording fake.
+    def reset_launchd(tag, running=False):
+        for file in [calls, loaded]:
+            if file.exists():
+                file.rename(work / (file.name + "-" + tag))
+        if running:
+            loaded.touch()
+
+    def incomplete(tag, plist_only=False):
+        h = work / tag
+        h.mkdir()
+        k = h / "Library/KHUpdater"
+        p = h / "Library/LaunchAgents/com.khupdater.agent.plist"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(plist.read_bytes())
+        if not plist_only:
+            (k / "state/downloads").mkdir(parents=True)
+            (k / "state/downloads/keep").write_text("saved-app-data")
+            (k / "base/versions/0.8.0").mkdir(parents=True)
+            old = k / "base/versions/0.8.0/khu"
+            old.write_text("old-version")
+            old.chmod(0o755)
+            (k / "base/current").symlink_to("versions/0.8.0/khu")
+        return h, k, p
+
+    cfg["apps"] = {"updater": {"bundlePath": "", "recipe": "updater", "automatic": False}}
+    config.write_text(json.dumps(cfg))
+    for tag, plist_only in [("repair-data", False), ("repair-plist", True)]:
+        reset_launchd(tag, running=True)
+        h, k, p = incomplete(tag, plist_only)
+        old_plist = p.read_bytes()
+        result = run(installer, config, h, "--repair")
+        check(result.returncode == 0 and (k / "base/config.json").is_file(), tag + " finishes setup")
+        check(recorded() == [["print", label], ["bootout", label], ["bootstrap", domain, str(p)]],
+              tag + " stops the loaded job and starts exactly one replacement")
+        check(any(x.read_bytes() == old_plist for x in (h / "Library/_trash").glob("repair-*/agent.plist")),
+              tag + " preserves the replaced LaunchAgent")
+        if not plist_only:
+            check((k / "state/downloads/keep").read_text() == "saved-app-data"
+                  and (k / "base/versions/0.8.0/khu").read_text() == "old-version"
+                  and (k / "base/previous").resolve() == (k / "base/versions/0.8.0/khu").resolve(),
+                  "repair preserves saved data, old version and rollback link")
+        before = (k / "base/config.json").read_bytes()
+        reset_launchd(tag + "-repeat")
+        check(run(installer, config, h, "--repair").returncode != 0
+              and (k / "base/config.json").read_bytes() == before and recorded() == [],
+              "repair never overwrites an existing connection")
+
+    reset_launchd("repair-stop-failed", running=True)
+    h, k, p = incomplete("repair-stop-failed")
+    before = p.read_bytes()
+    result = run(installer, config, h, "--repair", env={**fake_env, "FAKE_LAUNCHCTL_BOOTOUT_FAIL": "1"})
+    check(result.returncode != 0 and not (k / "base/config.json").exists() and p.read_bytes() == before
+          and (k / "state/downloads/keep").read_text() == "saved-app-data"
+          and recorded() == [["print", label], ["bootout", label]],
+          "failed stop leaves all original files unchanged and starts no second job")
+
+    reset_launchd("repair-start-failed")
+    h, k, p = incomplete("repair-start-failed")
+    result = run(installer, config, h, "--repair", env={**fake_env, "FAKE_LAUNCHCTL_FAIL": "1"})
+    check(result.returncode != 0 and (k / "base/config.json").is_file()
+          and "Open Studio Launcher again" in result.stderr
+          and (k / "state/downloads/keep").read_text() == "saved-app-data",
+          "failed repair start keeps completed setup and gives the reopen recovery step")
+
+    for component in ["KHUpdater", "KHUpdater/base", "KHUpdater/bin", "KHUpdater/state"]:
+        reset_launchd("symlink-" + component.replace("/", "-"))
+        h = work / ("symlink-" + component.replace("/", "-")); h.mkdir()
+        outside = h / "outside"; outside.mkdir(); (outside / "keep").write_text("untouched")
+        link = h / "Library" / component; link.parent.mkdir(parents=True, exist_ok=True); link.symlink_to(outside)
+        result = run(installer, config, h, "--repair")
+        check(result.returncode != 0 and (outside / "keep").read_text() == "untouched" and recorded() == [],
+              "repair refuses linked " + component + " before touching launchd")
+
+    reset_launchd("repair-stage-failed", running=True)
+    h, k, p = incomplete("repair-stage-failed")
+    template = kit / "com.khupdater.agent.plist"
+    template_bytes = template.read_bytes()
+    template.write_text("invalid plist")
+    result = run(installer, config, h, "--repair")
+    template.write_bytes(template_bytes)
+    check(result.returncode != 0 and not (k / "base/config.json").exists()
+          and (k / "state/downloads/keep").read_text() == "saved-app-data" and recorded() == [],
+          "invalid repair staging leaves data and the running job untouched")
+
+    reset_launchd("repair-copy-failed")
+    h, k, p = incomplete("repair-copy-failed")
+    old_current = os.readlink(k / "base/current")
+    old_plist = p.read_bytes()
+    broken_cp = fake_bin / "cp"
+    broken_cp.write_text('#!/bin/bash\nlast="${!#}"\nif [[ "$last" == "$FAIL_COPY_TO" ]]; then printf partial > "$last"; exit 1; fi\nexec /bin/cp "$@"\n')
+    broken_cp.chmod(0o755)
+    result = run(installer, config, h, "--repair", env={**fake_env, "FAIL_COPY_TO": str(k / "base/config.json")})
+    broken_cp.rename(work / "kept-failing-cp")
+    check(result.returncode != 0 and not (k / "base/config.json").exists()
+          and os.readlink(k / "base/current") == old_current and p.read_bytes() == old_plist
+          and (k / "state/downloads/keep").read_text() == "saved-app-data",
+          "failed config copy restores originals and retires the partial config")
+    check(run(installer, config, h, "--repair").returncode == 0,
+          "repair can retry successfully after a partial copy failure")
+
+    reset_launchd("before-fresh-invalid")
     badhome = work / "bad-home"
     badhome.mkdir()
     cfg["token"] = "__TOKEN_FROM_ENROL__"

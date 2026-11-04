@@ -3,6 +3,7 @@
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
 ## 1.0.12 — 2026-11-04
+- Studio Launcher 0.1.9 repairs incomplete connections without discarding saved app data, and lets interrupted setup be retried.
 - When a reset Mac cannot reconnect because its name is already in use, the message explains how to remove the old entry in Update Studio and connect again.
 
 ## 1.0.11 — 2026-11-03

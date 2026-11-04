@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.9 — 2026-11-04
+- Connect repairs an incomplete local setup while keeping saved app data and earlier versions.
+- A connection interrupted during local setup can be retried without removing the Mac again.
+- Reopening Launcher retries starting a helper that could not start after setup.
+
 ## 0.1.8 — 2026-11-03
 - Accept explicitly assigned Other apps from Update Studio, using official HTTPS downloads and verified vendor signatures.
 - App installs preserve rollback protection and refuse an existing app with a different identity.

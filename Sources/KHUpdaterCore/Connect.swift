@@ -1,8 +1,8 @@
 import Foundation
 
-/// Sets up the helper on a Mac that has none, from the agent kit inside Studio Launcher KH.app:
-/// the same steps as the Connect kit's installer (check the kit, claim a token with the pairing
-/// code, check the signed reply, then the kit's own `install-agent.sh` installs and starts it).
+/// Sets up the helper from the verified kit inside Studio Launcher KH.app. A signed pairing
+/// reply comes before installation; incomplete local files select the installer's repair mode,
+/// and the same claim survives a failed install so another attempt can finish it.
 public enum Connect {
     public struct Publisher: Codable, Sendable { public var feedURL: String; public var enrolURL: String; public var publicKey: String }
     struct Manifest: Codable { struct Pin: Codable { var bytes: Int; var sha256: String }; var files: [String: Pin] }
@@ -36,6 +36,14 @@ public enum Connect {
     public static func run(kit: URL, home: URL, machine: String, code: String, destination typed: String? = nil,
                            http: HTTPClient = URLSessionHTTPClient(),
                            shell: Shell = SystemShell(), now: Date = Date()) throws -> String {
+        try FileLock.withExclusive(home.appendingPathComponent("Library/.khu-connect.lock")) {
+            try runLocked(kit: kit, home: home, machine: machine, code: code, destination: typed,
+                          http: http, shell: shell, now: now)
+        }
+    }
+
+    private static func runLocked(kit: URL, home: URL, machine: String, code: String, destination typed: String?,
+                                  http: HTTPClient, shell: Shell, now: Date) throws -> String {
         guard !isSetUp(home: home) else { throw khuFail("Studio Launcher KH is already set up on this Mac") }
         _ = try SafeName.component(machine, what: "name for this Mac")
         var pub = try publisher(kit: kit)
@@ -44,7 +52,28 @@ public enum Connect {
             pub.enrolURL = URL(string: pub.feedURL)!.deletingLastPathComponent().appendingPathComponent("enrol").absoluteString
         }
         guard let enrolURL = URL(string: pub.enrolURL) else { throw khuFail("the kit's publisher address is not a URL") }
-        let nonce = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        // Keep the same claim after a failed local install, so retrying can recover its signed reply.
+        let library = home.appendingPathComponent("Library")
+        let claimFile = library.appendingPathComponent(".khu-connect-claim.json")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        struct Claim: Codable { var machine: String; var feedURL: String; var publicKey: String; var nonce: String }
+        let savedClaim = (try? Data(contentsOf: claimFile)).flatMap { try? JSON.decode(Claim.self, from: $0) }
+        let nonce: String
+        if let claim = savedClaim, claim.machine == machine, claim.feedURL == pub.feedURL,
+           claim.publicKey == pub.publicKey, claim.nonce.count == 64,
+           claim.nonce.allSatisfy({ "0123456789abcdef".contains($0) }) {
+            nonce = claim.nonce
+        } else {
+            nonce = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+            if FileManager.default.fileExists(atPath: claimFile.path) {
+                _ = try Trash.move(claimFile, into: library.appendingPathComponent("_trash"))
+            }
+            let claim = Claim(machine: machine, feedURL: pub.feedURL, publicKey: pub.publicKey, nonce: nonce)
+            guard FileManager.default.createFile(atPath: claimFile.path, contents: JSON.encode(claim),
+                                                 attributes: [.posixPermissions: 0o600]) else {
+                throw khuFail("This Mac could not save the connection attempt. Try connecting again.")
+            }
+        }
         let body = try JSONSerialization.data(withJSONObject: ["machine": machine, "nonce": nonce, "code": code])
         let (data, status): (Data, Int)
         do { (data, status) = try http.post(enrolURL, headers: ["Content-Type": "application/json"], body: body) }
@@ -70,17 +99,36 @@ public enum Connect {
             "stateDir": "set-by-installer", "intervalMinutes": 5, "once": false,
             "apps": ["updater": ["bundlePath": "", "recipe": "updater", "automatic": true]],
         ]
-        let library = home.appendingPathComponent("Library")
-        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
         let temp = library.appendingPathComponent(".khu-connect-\(UUID().uuidString).json")
         FileManager.default.createFile(atPath: temp.path, contents: try JSONSerialization.data(withJSONObject: config),
                                        attributes: [.posixPermissions: 0o600])
         defer { _ = try? Trash.move(temp, into: library.appendingPathComponent("_trash")) }
-        let result = try shell.run("/bin/bash", arguments: [kit.appendingPathComponent("install-agent.sh").path, temp.path, home.path], timeout: 120)
-        guard result.exitCode == 0 else {
-            throw khuFail((result.stderr + result.stdout).trimmingCharacters(in: .whitespacesAndNewlines))
+        let remnants = ["Library/KHUpdater", "Library/LaunchAgents/com.khupdater.agent.plist"].contains {
+            (try? FileManager.default.attributesOfItem(atPath: home.appendingPathComponent($0).path)) != nil
         }
+        var arguments = [kit.appendingPathComponent("install-agent.sh").path, temp.path, home.path]
+        if remnants { arguments.append("--repair") }
+        let result = try shell.run("/bin/bash", arguments: arguments, timeout: 120)
+        guard result.exitCode == 0 else {
+            if isSetUp(home: home) {
+                throw khuFail("Setup finished, but Studio Launcher could not start. Close this window and open Studio Launcher again.")
+            }
+            throw khuFail("Local setup could not be completed. Your saved data is kept. Try Connect again.")
+        }
+        _ = try? Trash.move(claimFile, into: library.appendingPathComponent("_trash"))
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Retry a completed setup whose LaunchAgent could not start; never start a second copy.
+    public static func startInstalledAgent(home: URL, shell: Shell = SystemShell()) throws {
+        let domain = "gui/\(getuid())"
+        let loaded = try shell.run("/bin/launchctl", arguments: ["print", "\(domain)/com.khupdater.agent"], timeout: 15)
+        if loaded.exitCode == 0 { return }
+        let plist = home.appendingPathComponent("Library/LaunchAgents/com.khupdater.agent.plist")
+        let result = try shell.run("/bin/launchctl", arguments: ["bootstrap", domain, plist.path], timeout: 30)
+        guard result.exitCode == 0 else {
+            throw khuFail("Studio Launcher could not start. Your saved data is kept. Restart this Mac, then open Studio Launcher again.")
+        }
     }
 
     // MARK: staying connected (the settings page), never a second enrolment

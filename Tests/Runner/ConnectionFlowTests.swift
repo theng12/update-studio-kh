@@ -126,13 +126,72 @@ func connectionFlowTests() {
                && saved?.feedURL == "http://\(r.bind):\(r.port)/release.json",
                "CF4 the saved settings carry this Mac's name, the pinned key, its token and the kit's address")
         let leftovers = ((try? fm.contentsOfDirectory(atPath: home.appendingPathComponent("Library").path)) ?? [])
-            .filter { $0.hasPrefix(".khu-connect") }
+            .filter { $0.hasPrefix(".khu-connect-") }
         expect(leftovers.isEmpty, "CF4 the temporary file holding the token is not left behind")
         expectThrows("CF4 a second connect is refused as already connected before anything is sent", contains: "already set up") {
             _ = try Connect.run(kit: k, home: home, machine: "cf-mac", code: code, http: OfflineHTTP(), shell: SystemShell())
         }
         expect(r.machines["cf-mac"] != nil && saved.map { r.machines["cf-mac"]?.tokenHash == Enrolment.sha256Hex($0.token) } == true,
                "CF4 the publisher record and the stored token still match each other")
+    }
+
+    // CF16. Incomplete local files select the installer repair path without discarding saved data.
+    for remnant in ["Library/KHUpdater/state/keep.txt", "Library/LaunchAgents/com.khupdater.agent.plist"] {
+        let r = EnrolRig("cf16-" + (remnant.contains("state") ? "state" : "plist"))
+        let code = pairingCode(r)
+        let home = r.rig.root.appendingPathComponent("home")
+        let saved = home.appendingPathComponent(remnant)
+        try! fm.createDirectory(at: saved.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! Data("saved-data".utf8).write(to: saved)
+        let shell = CaptureShell()
+        let result = try? Connect.run(kit: kit(for: r), home: home, machine: "repair-mac", code: code,
+                                      http: InProcessClient(server: r.server), shell: shell)
+        expect(result != nil && shell.calls.last?.last == "--repair",
+               "CF16 existing local files choose repair instead of the fresh installer")
+        expect((try? Data(contentsOf: saved)) == Data("saved-data".utf8),
+               "CF16 connection does not discard old files")
+    }
+
+    // CF17. A failed local install retries its original claim, without another Remove Mac.
+    do {
+        let r = EnrolRig("cf17")
+        let code = pairingCode(r)
+        let home = r.rig.root.appendingPathComponent("home")
+        let k = kit(for: r)
+        let client = InProcessClient(server: r.server)
+        let failed = CaptureShell(); failed.exitCode = 1
+        expectThrows("CF17 a failed local install explains retry in plain words", contains: "Try Connect again") {
+            _ = try Connect.run(kit: k, home: home, machine: "retry-mac", code: code, http: client, shell: failed)
+        }
+        let claim = home.appendingPathComponent("Library/.khu-connect-claim.json")
+        let firstNonce = r.machines["retry-mac"]?.enrolNonceHash
+        expect(firstNonce != nil && fm.fileExists(atPath: claim.path), "CF17 a failed setup keeps its pending claim")
+        expect((try! fm.attributesOfItem(atPath: claim.path))[.posixPermissions] as? Int == 0o600,
+               "CF17 pending connection claims are private")
+        let result = try? Connect.run(kit: k, home: home, machine: "retry-mac", code: code,
+                                      http: client, shell: SystemShell())
+        expect(result != nil && Connect.isSetUp(home: home) && r.machines["retry-mac"]?.enrolNonceHash == firstNonce,
+               "CF17 retry completes with the same signed claim rather than a duplicate-name refusal")
+        expect(!fm.fileExists(atPath: claim.path), "CF17 completed connection retires its pending claim")
+    }
+
+    // CF18. Reopening a completed install starts a missing job and leaves a loaded one alone.
+    do {
+        let home = tmpDir("cf18")
+        let domain = "gui/\(getuid())"
+        let loaded = CaptureShell()
+        expect((try? Connect.startInstalledAgent(home: home, shell: loaded)) != nil && loaded.calls.count == 1,
+               "CF18 a loaded helper is never started twice")
+        let absent = FakeShell(responses: [
+            "/bin/launchctl print": ShellResult(exitCode: 1, stdout: "", stderr: ""),
+            "/bin/launchctl bootstrap \(domain)": ShellResult(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        expect((try? Connect.startInstalledAgent(home: home, shell: absent)) != nil,
+               "CF18 reopening retries the saved LaunchAgent after a start failure")
+        let refused = CaptureShell(); refused.exitCode = 1
+        expectThrows("CF18 a start failure gives a plain recovery step", contains: "Restart this Mac") {
+            try Connect.startInstalledAgent(home: home, shell: refused)
+        }
     }
 
     // CF5. The settings connection check: this Mac's own credentials answer, and each refusal is

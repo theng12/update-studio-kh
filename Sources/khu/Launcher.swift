@@ -118,7 +118,11 @@ enum FrontDoor {
         let home = env["KHU_CONNECT_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
         if Connect.isSetUp(home: home) {
             // An isolated home never waits on this Mac's real helper.
-            if !isolated { askHelper(seconds: 2) }
+            if !isolated {
+                do { try Connect.startInstalledAgent(home: home) }
+                catch { say("Studio Launcher could not start", "\(error)"); exit(1) }
+                askHelper(seconds: 2)
+            }
             exit(0)
         }
         NSApp.finishLaunching()

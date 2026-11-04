@@ -172,6 +172,14 @@ token, and it is the only way a Mac gets a token without the owner touching the 
   refused (403) instead of guessed at — fail closed, and the launch agent binds the Tailscale
   address.
 
+Launcher connection attempts are serialized per home. A pending claim keeps its machine, address,
+publisher key and nonce in a private local file until installation succeeds; a failed local install
+can resend that same claim without creating another duplicate-name refusal. A home with installer
+remnants but no `base/config.json` selects the installer's explicit `--repair` mode after verifying
+the signed pairing reply. Saved state and earlier versions are kept. A complete installation still
+uses the confirmed Pair again flow, preserving its saved trust and app choices. Reopening Launcher
+starts its saved LaunchAgent only when launchd does not already have that job loaded.
+
 **Removing a Mac is what makes re-enrolment possible.** `POST /api/remove-machine` (`Remove Mac` on
 the page) or `khu remove --state <dir> --machine <id>` drops the live record — its token hash and its
 waiting orders with it, so the old token cannot report or fetch orders — and appends

@@ -8,6 +8,8 @@ On the new Mac, install Tailscale and sign in to a network that permits reaching
 
 Launcher’s own automatic updates start enabled, matching the existing setup default. Connecting does not silently install other apps. Settings show the current connection and let you check it without enrolling the Mac again. Changing publisher trust requires its trusted connection package; a failed connection check does not replace credentials.
 
+If Connect finds leftover installation files without saved connection settings, it repairs the incomplete setup while keeping the Mac’s app data and previous versions. Keep the same name and enter the current pairing code. If local setup fails, try Connect again; Launcher keeps the same pairing attempt. If setup finishes but the helper cannot start, close the window and reopen Launcher to retry starting it.
+
 If Update Studio no longer recognises this Mac’s sign-in, remove its old enrolment on the publisher, then choose **Pair again** in Launcher’s connection settings. Confirm the recovery and enter the pairing code. Recovery keeps this Mac’s existing publisher key and connection ID, preserves its app and Automatic choices, and saves the previous config under `~/Library/KHUpdater/_trash` for restoration. A wrong code or different publisher key leaves the current config intact. Launcher never pairs again automatically.
 
 The pairing code has no time expiry. **New code** replaces it for future connections; existing Macs remain connected. Five wrong codes lock pairing for five minutes. The existing code-free enrolment window remains an explicit owner action for Hub bootstrap. No trust, enrolment, network or code-lifecycle policy changes as part of this interface.
