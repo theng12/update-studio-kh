@@ -7,7 +7,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - SSD installers are checked against their checksums; newer installed apps, existing pauses and saved connections are preserved. Apps that cannot be updated safely say why.
 - Launcher keeps its app list and connection setup together; a new Mac can install Launcher before connecting.
 - After repeated healthy reports, older helper versions move to the restorable _trash folder. The current and previous versions stay, and Settings can switch this cleanup off.
-- The SSD action supports the released Story installer’s normal packaging. Installer cleanup uses the attached DMG’s device ID and refuses SSD volume paths.
+- The SSD action supports the released Story installer’s normal packaging. Installer cleanup uses the mounted device ID, supports APFS images, and refuses SSD volume paths.
 - Pause-download tests clean up their temporary files after success or failure.
 
 ## 0.1.10 — 2026-11-04

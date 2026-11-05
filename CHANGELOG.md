@@ -5,6 +5,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> â€
 ## 1.0.14 â€” 2026-11-05
 - Includes Studio Launcher KH 0.1.11 with the SSD Update installed apps action and plain per-app results.
 - SSD repair keeps newer installed versions, saved connections and pauses, and checks installer hashes before use.
+- Installer cleanup supports APFS disk images and uses their mounted device IDs; SSD volumes are never detached.
 - Older helper versions move to restorable storage after healthy reports; the current and previous versions are kept.
 - Fixes large temporary pause-test downloads being left behind.
 

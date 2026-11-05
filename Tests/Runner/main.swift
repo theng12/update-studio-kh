@@ -83,7 +83,7 @@ final class RecordingShell: Shell, @unchecked Sendable {
         }
         if executable == "/usr/bin/hdiutil" {
             if arguments.first == "attach" {
-                let plist: [String: Any] = ["system-entities": [["dev-entry": "/dev/disk9"], ["mount-point": mount.path]]]
+                let plist: [String: Any] = ["system-entities": [["dev-entry": "/dev/disk9"], ["dev-entry": "/dev/disk9s1", "mount-point": mount.path]]]
                 let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
                 return ShellResult(exitCode: 0, stdout: String(decoding: data, as: UTF8.self), stderr: "")
             }
@@ -171,7 +171,7 @@ func recipeTests() {
         expect(marker(rig.installed) == "1.2.3" && marker(rig.rollback) == "1.0.0", "previous bundle kept as rollback")
         expect(!fm.fileExists(atPath: rig.journal.path), "journal cleared after a finished install")
         expect(rig.shell.detaches >= 1, "R22 DMG detached after staging")
-        expect(rig.shell.calls.filter { $0.hasPrefix("/usr/bin/hdiutil detach") }.allSatisfy { $0.hasSuffix(" /dev/disk9") },
+        expect(rig.shell.calls.filter { $0.hasPrefix("/usr/bin/hdiutil detach") }.allSatisfy { $0.hasSuffix(" /dev/disk9s1") },
                "DMG cleanup uses the attached device ID, never a volume path")
     }
     // R24 / S-pre: a DMG holding another app (right version) is refused before anything stops.
@@ -3438,6 +3438,11 @@ struct RunnerMain {
             let ctl = AppControl(isRunning: { true }, quit: { true }, launch: { kill(getpid(), SIGKILL) }, healthy: { _ in false }, healthSettle: 0)
             _ = try? Agent.runOnce(config: config, http: InProcessClient(server: server), control: { _, _ in ctl })
             exit(2)
+        }
+        dmgAttachmentTests()
+        if ProcessInfo.processInfo.environment["DMG_ATTACH_ONLY"] == "1" {
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
         }
         if ProcessInfo.processInfo.environment["LAUNCHER_ONLY"] == "1" {
             launcherTests()

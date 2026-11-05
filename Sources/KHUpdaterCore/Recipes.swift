@@ -590,11 +590,17 @@ public enum Recipe {
         let reason = attach.stderr.split(separator: "\n").filter { !$0.contains("WARNING") }.joined(separator: " ")
         guard attach.exitCode == 0 else { throw khuFail("hdiutil attach failed: \(reason.prefix(200))") }
         let devices = devEntries(fromPlist: attach.stdout)
-        guard let mount = mountPoint(fromPlist: attach.stdout), devices.count == 1 else {
+        let data = attach.stdout.data(using: .utf8) ?? Data()
+        let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
+        let mounts = (plist?["system-entities"] as? [[String: Any]] ?? []).filter { $0["mount-point"] is String }
+        // APFS adds a synthesized disk; detach the device belonging to the mounted volume.
+        guard mounts.count == 1, let mount = mounts[0]["mount-point"] as? String, mount.hasPrefix("/"),
+              let device = mounts[0]["dev-entry"] as? String,
+              device.range(of: #"^/dev/disk[0-9]+(?:s[0-9]+)*$"#, options: .regularExpression) != nil else {
             for device in devices { _ = detach(shell, device) }
             throw khuFail("could not determine the DMG mount point and device")
         }
-        return (mount, devices[0])
+        return (mount, device)
     }
 
     /// Returns "" on success, or a note saying the image is still mounted.

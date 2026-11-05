@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import sys
 import shutil
@@ -69,16 +70,18 @@ def run_launcher(root, image, version, index_sha256):
                             capture_output=True, check=True, timeout=120)
     attached = plistlib.loads(result.stdout)
     entities = attached['system-entities']
-    mounts = [Path(entity['mount-point']) for entity in entities if 'mount-point' in entity]
+    mounts = [entity for entity in entities if isinstance(entity.get('mount-point'), str)]
     devices = list(dict.fromkeys(entity['dev-entry'] for entity in entities
                                 if isinstance(entity.get('dev-entry'), str)
                                 and entity['dev-entry'].startswith('/dev/disk')
                                 and entity['dev-entry'][len('/dev/disk'):].isdigit()))
-    if len(mounts) != 1 or len(devices) != 1:
+    device = mounts[0].get('dev-entry') if len(mounts) == 1 else None
+    if (len(mounts) != 1 or not mounts[0]['mount-point'].startswith('/')
+            or not isinstance(device, str) or not re.fullmatch(r'/dev/disk[0-9]+(?:s[0-9]+)*', device)):
         for device in devices:
             subprocess.run(['/usr/bin/hdiutil', 'detach', device], capture_output=True, timeout=60)
         raise ValueError('The Launcher installer did not return one mounted volume and device.')
-    mount, device = mounts[0], devices[0]
+    mount = Path(mounts[0]['mount-point'])
     try:
         apps = list(mount.glob('*.app'))
         if len(apps) != 1:

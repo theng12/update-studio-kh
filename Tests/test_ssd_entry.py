@@ -34,22 +34,37 @@ class SSDEntryTests(unittest.TestCase):
         (app / 'Contents/MacOS').mkdir(parents=True)
         (app / 'Contents/MacOS/Launcher').write_bytes(b'fixture executable')
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(CFBundleIdentifier='com.khupdater.launcher', CFBundleShortVersionString='0.1.11', CFBundleExecutable='Launcher')))
-        attachment = plistlib.dumps({'system-entities': [{'dev-entry': '/dev/disk987'}, {'dev-entry': '/dev/disk987s1', 'mount-point': str(mount)}]})
-        for signature_ok in [True, False]:
-            def run(command, **kwargs):
-                if command[1] == 'attach':
-                    return subprocess.CompletedProcess(command, 0, stdout=attachment)
-                if command[0] == '/usr/bin/codesign' and not signature_ok:
-                    raise subprocess.CalledProcessError(1, command)
-                return subprocess.CompletedProcess(command, 0)
-            with patch.object(ENTRY.subprocess, 'run', side_effect=run) as calls:
-                if signature_ok:
-                    self.assertEqual(ENTRY.run_launcher(self.root, self.image, '0.1.11', 'fixture-index-pin'), 0)
-                else:
-                    with self.assertRaises(subprocess.CalledProcessError):
-                        ENTRY.run_launcher(self.root, self.image, '0.1.11', 'fixture-index-pin')
-                detaches = [call.args[0] for call in calls.call_args_list if call.args[0][:2] == ['/usr/bin/hdiutil', 'detach']]
-                self.assertEqual(detaches, [['/usr/bin/hdiutil', 'detach', '/dev/disk987']])
+        for synthesized in [False, True]:
+            device = '/dev/disk988s1' if synthesized else '/dev/disk987s1'
+            entities = [{'dev-entry': '/dev/disk987'}]
+            if synthesized:
+                entities += [{'dev-entry': '/dev/disk987s1'}, {'dev-entry': '/dev/disk988'}]
+            entities.append({'dev-entry': device, 'mount-point': str(mount)})
+            attachment = plistlib.dumps({'system-entities': entities})
+            for signature_ok in [True, False]:
+                with self.subTest(apfs=synthesized, signature_ok=signature_ok):
+                    def run(command, **kwargs):
+                        if command[1] == 'attach':
+                            return subprocess.CompletedProcess(command, 0, stdout=attachment)
+                        if command[0] == '/usr/bin/codesign' and not signature_ok:
+                            raise subprocess.CalledProcessError(1, command)
+                        return subprocess.CompletedProcess(command, 0)
+                    with patch.object(ENTRY.subprocess, 'run', side_effect=run) as calls:
+                        if signature_ok:
+                            self.assertEqual(ENTRY.run_launcher(self.root, self.image, '0.1.11', 'fixture-index-pin'), 0)
+                        else:
+                            with self.assertRaises(subprocess.CalledProcessError):
+                                ENTRY.run_launcher(self.root, self.image, '0.1.11', 'fixture-index-pin')
+                        detaches = [call.args[0] for call in calls.call_args_list if call.args[0][:2] == ['/usr/bin/hdiutil', 'detach']]
+                        self.assertEqual(detaches, [['/usr/bin/hdiutil', 'detach', device]])
+
+    def test_mount_path_cannot_be_used_as_device(self):
+        attachment = plistlib.dumps({'system-entities': [{'dev-entry': '/dev/disk987'}, {'dev-entry': '/Volumes/KH-STUDIO-ATLAS', 'mount-point': '/Volumes/fixture'}]})
+        with patch.object(ENTRY.subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 0, stdout=attachment), subprocess.CompletedProcess([], 0)]) as calls:
+            with self.assertRaisesRegex(ValueError, 'one mounted volume and device'):
+                ENTRY.run_launcher(self.root, self.image, '0.1.11', 'fixture-index-pin')
+            self.assertEqual(calls.call_args_list[-1].args[0], ['/usr/bin/hdiutil', 'detach', '/dev/disk987'])
+            self.assertEqual(len(calls.call_args_list), 2)
 
     def test_bad_mount_layout_detaches_only_its_device(self):
         attachment = plistlib.dumps({'system-entities': [{'dev-entry': '/dev/disk987'}, {'mount-point': '/Volumes/first'}, {'mount-point': '/Volumes/second'}]})

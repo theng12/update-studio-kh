@@ -48,7 +48,7 @@ final class VendorShell: Shell, @unchecked Sendable {
         lock.lock(); calls.append(key); lock.unlock()
         if executable == "/usr/bin/hdiutil" {
             if arguments.first == "attach" {
-                let plist: [String: Any] = ["system-entities": [["dev-entry": "/dev/disk9"], ["mount-point": mount.path]]]
+                let plist: [String: Any] = ["system-entities": [["dev-entry": "/dev/disk9"], ["dev-entry": "/dev/disk9s1", "mount-point": mount.path]]]
                 let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
                 return ShellResult(exitCode: 0, stdout: String(decoding: data, as: UTF8.self), stderr: "")
             }
