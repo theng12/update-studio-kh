@@ -54,6 +54,20 @@ stores the artifact under its own hash, so two apps' files never collide; refuse
 newer than the feed's (`--allow-same` re-publishes the same one); and moves `published_at`
 strictly forward.
 
+Optional `network` settings inside those signed bytes contain ordered `feedURLs` and `hosts`,
+keyed by enrolled machine ID. Host roles start off; enabled roles name an existing tailnet bind
+address and port. `khu network --feed <dir> --key <keyfile> --config <network.json>` verifies the
+existing feed, validates these settings and signs the next publication under `publish.lock`.
+Ordinary app publications preserve them. The private key stays with the original publisher.
+
+An enabled host mirrors the original publisher's exact signed release, verifies each artifact's
+signed size and hash and each signed icon hash, then publishes the release atomically. A failed
+sync keeps the last working release. Current and previous artifact sets stay; older copies move
+to `_trash`. Its per-user `com.khupdater.feed-host` LaunchAgent runs `khu serve --feed-only`;
+that server exposes only release and artifact downloads, with no enrolment or control routes.
+Disabling the role stops only that job and retires its plist. No SSH, network configuration or
+firewall changes are part of this role; a macOS permission request needs the owner's decision.
+
 ## Server
 
 The publisher window follows Studio Launcher KH’s system typography, green accent, semantic status
@@ -230,15 +244,24 @@ Vendor installs share the same run lock, machine-bound signed-order validation, 
 
 1. finish or undo any install a killed run left behind (the install journal);
 2. read installed versions, health and its own Automatic defaults;
-3. re-send any result the server did not take last time (before the feed, so a publisher that
-   cannot be reached for one is still told what happened here);
-4. `POST /status` with this Mac's Automatic defaults, so the page shows what will really happen;
-5. fetch `release.json`, verify against the pinned key, require schema 1 and a real date; refuse
+3. `POST /status` with this Mac's Automatic defaults, so the page shows what will really happen;
+4. re-send results the server did not take last time, before fetching the feed; if the publisher
+   is unreachable, keep those results in the outbox without retrying every one against it;
+5. try the configured signed download addresses, with the original publisher as fallback;
+   fetch `release.json`, verify against the pinned key, require schema 1 and a real date; refuse
    a feed older than the newest seen, a different feed with the same date, or one dated more than
    a day ahead (which is then not remembered). A self-update the stub rolled back is marked
    rejected by its remembered installed SHA; those bytes are not installed again until the
    artifact changes or an explicit order arrives;
 6. fetch `SignedReply` of orders, verify the signature and freshness, refuse one for another Mac.
+
+Verified signed network settings are remembered for later runs. Download sources receive no
+bearer token; status, results and signed orders keep using the original `feedURL` endpoint.
+A host refreshes from that original publisher, never its own mirror. If the publisher has a
+transport failure and mirror settings are already known, explicit local install requests may
+continue from a verified mirror. Remote orders and Automatic wait; HTTP refusals and invalid
+signed replies remain errors. Artifact transfers can retry other configured sources, checking
+the same signed size and hash on every attempt.
 
 An order runs once (by id; a redelivered one is re-reported, not re-run). Done records are not
 trimmed before fetching orders, and IDs in the latest reply are protected from trimming. An order for the

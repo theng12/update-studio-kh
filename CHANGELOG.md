@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.15 — 2026-11-05
+- An optional feed-host role keeps verified copies of the signed app feed and installers on a chosen Mac. It starts off and needs no signing key on that Mac.
+- Signed settings can give clients a preferred download host and fallback addresses while keeping sign-in and remote orders with the original publisher.
+- Local install requests can use a verified mirror when the publisher is unavailable. Remote orders and Automatic wait for the publisher; refused sign-ins still fail clearly.
+- Includes Studio Launcher KH 0.1.12. Existing connections, pauses and app choices stay in place.
+
 ## 1.0.14 — 2026-11-05
 - Includes Studio Launcher KH 0.1.11 with the SSD Update installed apps action and plain per-app results.
 - SSD repair keeps newer installed versions, saved connections and pauses, and checks installer hashes before use.

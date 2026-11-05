@@ -198,6 +198,7 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     public var updaterArtifacts: [String: String]?
     public var feedPublishedAt: String?
     public var feedSHA256: String?
+    public var feedNetwork: FeedNetwork?
     public init() {}
 
     /// `protected` is what the publisher still lists as an order for this Mac. Those id keep their
@@ -244,6 +245,7 @@ public enum Agent {
 
     static func validate(_ config: AgentConfig) throws {
         _ = try SafeName.component(config.machine, what: "machine id")
+        _ = try config.network?.validated()
         var seen: [String: String] = [:]
         for (app, cfg) in config.apps {
             _ = try SafeName.component(app, what: "app id")
@@ -347,10 +349,15 @@ public enum Agent {
             if Recipe.isUnresolved(stateDir: stateDir.path, app: app) { health[app] = "unresolved install" }
         }
         if let mine = selfVersion(config: config, executable: executable) { installed["updater"] = mine; health["updater"] = "running" }
+        if let host = try? AtomicFile.readJSON([String: String].self, from: stateDir.appendingPathComponent("feed-host-status.json")) {
+            health["feed-host"] = host["status"]
+        }
 
         let headers = ["Authorization": "Bearer \(config.token)"]
+        var publisherAvailable = true
         /// The status a result post answered with, or nil when it could not be made at all.
         func post(_ commandID: String, _ done: AgentMemory.Done) -> Int? {
+            guard publisherAvailable else { return nil }
             let body = (try? JSONSerialization.data(withJSONObject: [
                 "machine": config.machine, "app": done.app, "status": done.status, "reason": done.reason,
             ])) ?? Data()
@@ -361,13 +368,6 @@ public enum Agent {
         /// Taken, or the publisher no longer has that order (404): either way there is nothing left
         /// to report, and re-posting an order it does not know about for ever is not a retry.
         func delivered(_ code: Int?) -> Bool { code == 200 || code == 404 }
-
-        // 2. Results that could not be delivered last time go first — before the feed, so that a
-        // publisher which cannot be reached for one is still told what happened on this Mac.
-        for (id, done) in memory.done where !done.sent {
-            if delivered(post(id, done)) { memory.done[id]?.sent = true }
-        }
-        try remember()
 
         // 3. Status, with this Mac's own Automatic defaults so the page shows what will really happen,
         // and what the person at this Mac set from the menu-bar icon.
@@ -386,10 +386,24 @@ public enum Agent {
             report["inventory"] = inventory
         }
         let statusBody = try JSONSerialization.data(withJSONObject: report)
-        let (_, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
-        guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }
-        result.statusPosted = true
-        if let base = config.stubBase, let executable {
+        let network = memory.feedNetwork ?? config.network
+        let statusCode: Int?
+        do { statusCode = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody).1 }
+        catch {
+            guard network?.feedURLs.isEmpty == false else { throw error }
+            statusCode = nil; publisherAvailable = false
+            result.notes.append("publisher unavailable; local installs may use the signed mirror, remote orders and Automatic wait")
+        }
+        if let statusCode {
+            guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }
+            result.statusPosted = true
+        }
+        // Keep result delivery before feed processing, without retrying every result against an offline publisher.
+        for (id, done) in memory.done where !done.sent {
+            if delivered(post(id, done)) { memory.done[id]?.sent = true }
+        }
+        try remember()
+        if result.statusPosted, let base = config.stubBase, let executable {
             do {
                 let retired = try HelperRetirement.observe(layout: StubLayout(base: URL(fileURLWithPath: base)),
                     stateDir: stateDir, executable: URL(fileURLWithPath: executable), now: now,
@@ -399,8 +413,30 @@ public enum Agent {
         }
 
         // 4. The feed: signed, understood, and not older than one already seen.
-        let feed = try verifiedFeed(http: http, serverBase: serverBase, config: config, memory: &memory, now: now)
+        let selected = try selectFeed(http: http, serverBase: serverBase, config: config, memory: &memory, now: now)
+        let feed = selected.feed
+        let artifactBase = selected.base
+        memory.feedNetwork = feed.network ?? config.network
+        let artifactFallbacks = try feedSources(config: config, memory: memory, serverBase: serverBase)
+            .map { $0.deletingLastPathComponent() }.filter { $0 != artifactBase }
         try remember()
+        let role = memory.feedNetwork?.hosts[config.machine]
+        if role?.enabled == true || FileManager.default.fileExists(atPath: stateDir.appendingPathComponent("feed-host-status.json").path) {
+            do {
+                if role?.enabled == true {
+                    _ = try FeedMirror.sync(releaseData: selected.release, sourceBase: artifactBase,
+                        root: FeedHostRole.feedDirectory(in: stateDir), publicKey: config.publicKey, http: http, now: now)
+                }
+                let hostExecutable = config.stubBase.map { URL(fileURLWithPath: $0).appendingPathComponent("current/khu").path } ?? executable
+                let status = try FeedHostRuntime.reconcile(role: role, stateDir: stateDir, executable: hostExecutable, shell: shell)
+                try AtomicFile.writeJSON(["status": status], to: stateDir.appendingPathComponent("feed-host-status.json"))
+                result.notes.append("feed host: " + status)
+            } catch {
+                let reason = "failed: " + String(String(describing: error).prefix(160))
+                try? AtomicFile.writeJSON(["status": reason], to: stateDir.appendingPathComponent("feed-host-status.json"))
+                result.notes.append("feed host " + reason)
+            }
+        }
         Catalog.remember(ssd, feed: feed, in: stateDir)
         let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))
         // Install from the Launcher's list: an app this Mac does not have yet goes to /Applications.
@@ -452,20 +488,33 @@ public enum Agent {
         // 5. Orders, signed by the publisher's key and naming this Mac and the moment it signed.
         // This Mac says which order actions it can carry out; the publisher withholds the rest, so
         // an agent that does not understand a rollback is never handed one to misread.
-        let reply = try get(http, serverBase.appendingPathComponent("commands")
-            .appendingQuery("machine", config.machine).appendingQuery("capabilities", AgentCapability.ownerRollback + "," + AgentCapability.vendorInstall), headers: headers)
-        let signed = try JSON.decode(SignedReply.self, from: reply)
-        let publisherKey = try Signing.loadPublicKey(base64: config.publicKey)
-        guard let ordersBody = signed.replyData, let signature = signed.signatureData,
-              Signing.verify(ordersBody, signature: signature, publicKey: publisherKey) else {
-            throw khuFail("the orders were not signed by this publisher's key; refused")
+        var orders = CommandsReply(machine: config.machine, commands: [], automatic: [:])
+        if publisherAvailable {
+            let response: (Data, Int)?
+            do {
+                response = try http.get(serverBase.appendingPathComponent("commands")
+                    .appendingQuery("machine", config.machine).appendingQuery("capabilities", AgentCapability.ownerRollback + "," + AgentCapability.vendorInstall), headers: headers)
+            } catch {
+                guard memory.feedNetwork?.feedURLs.isEmpty == false else { throw error }
+                response = nil; publisherAvailable = false
+                result.notes.append("publisher orders unavailable; only local requests can run")
+            }
+            if let response {
+                guard response.1 == 200 else { throw khuFail("orders were refused (\(response.1))") }
+                let signed = try JSON.decode(SignedReply.self, from: response.0)
+                let publisherKey = try Signing.loadPublicKey(base64: config.publicKey)
+                guard let ordersBody = signed.replyData, let signature = signed.signatureData,
+                      Signing.verify(ordersBody, signature: signature, publicKey: publisherKey) else {
+                    throw khuFail("the orders were not signed by this publisher's key; refused")
+                }
+                orders = try JSON.decode(CommandsReply.self, from: ordersBody)
+                guard orders.machine == config.machine else { throw khuFail("orders for \(orders.machine), not \(config.machine); refused") }
+                guard let signedAt = ISO.date(orders.at), abs(signedAt.timeIntervalSince(now)) <= orderFreshness else {
+                    throw khuFail("orders signed at \(orders.at) are not fresh; refused (a replayed order is not an order)")
+                }
+                reportedIDs = Set(orders.commands.map { $0.id })
+            }
         }
-        let orders = try JSON.decode(CommandsReply.self, from: ordersBody)
-        guard orders.machine == config.machine else { throw khuFail("orders for \(orders.machine), not \(config.machine); refused") }
-        guard let signedAt = ISO.date(orders.at), abs(signedAt.timeIntervalSince(now)) <= orderFreshness else {
-            throw khuFail("orders signed at \(orders.at) are not fresh; refused (a replayed order is not an order)")
-        }
-        reportedIDs = Set(orders.commands.map { $0.id })
 
         var todo: [(app: String, id: String, action: String, explicit: Bool)] = []
         for command in orders.commands where command.machine == config.machine {
@@ -487,7 +536,7 @@ public enum Agent {
         }
         // A pause from the menu holds Automatic only; the owner's orders and "Update now" still run.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
-        where !helper.paused(at: now) && helper.installsAutomatically && !statusOnly.contains(cfg.recipe)
+        where publisherAvailable && !helper.paused(at: now) && helper.installsAutomatically && !statusOnly.contains(cfg.recipe)
             && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic) {
             guard !todo.contains(where: { $0.app == app }), let entry = feed.apps[app] else { continue }
             guard memory.rejected[app] != entry.sha256 else { continue }  // failed here before: wait for a new artifact
@@ -518,8 +567,8 @@ public enum Agent {
                     // A click in the Launcher installs the SSD copy when it is at least as new as the feed's.
                     let local = requested.contains(item.app) ? catalog.first { $0.id == item.app }?.ssd : nil
                     res = try install(app: item.app, feed: feed, installed: installed[item.app], config: config,
-                                      serverBase: serverBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
-                                      force: reinstall.contains(item.app))
+                                      serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
+                                      force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks)
                 case ServerCommand.vendorInstall:
                     guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
                         throw khuFail("vendor install requires an explicit signed order for this Mac")
@@ -576,7 +625,7 @@ public enum Agent {
             }  // the rest wait for the new version
         }
         result.apps = snapshot(config: config, feed: feed, catalog: catalog, orders: orders, helper: helper, memory: memory,
-                               executable: executable, http: http, serverBase: serverBase, stateDir: stateDir)
+                               executable: executable, http: http, serverBase: artifactBase, stateDir: stateDir)
         let vendorApps = vendorRows(stateDir: stateDir)
         result.apps.removeAll { row in vendorApps.contains { $0.app == row.app } }
         result.apps += vendorApps
@@ -639,7 +688,10 @@ public enum Agent {
     }
 
     static func verifiedFeed(http: HTTPClient, serverBase: URL, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> Feed {
-        let releaseData = try get(http, serverBase.appendingPathComponent("release.json"))
+        try selectFeed(http: http, serverBase: serverBase, config: config, memory: &memory, now: now).feed
+    }
+
+    static func checkedFeed(_ releaseData: Data, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> Feed {
         let release = try JSON.decode(Release.self, from: releaseData)
         let pub = try Signing.loadPublicKey(base64: config.publicKey)
         guard let feedData = release.feedData, let signature = release.signatureData,
@@ -699,7 +751,7 @@ public enum Agent {
 
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
-                        local: CatalogEntry.Local? = nil, force: Bool = false) throws -> RecipeResult {
+                        local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = []) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         if statusOnly.contains(cfg.recipe) { return RecipeResult(status: "status_only", reason: "updated by its own updater") }
         if let local { return try installLocal(local, app: app, installed: force ? nil : installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control) }
@@ -720,7 +772,7 @@ public enum Agent {
 
         let artifact: URL
         do {
-            artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http)
+            artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http, fallbacks: artifactFallbacks)
         } catch let error as ArtifactFailure {
             return RecipeResult(status: "failed", reason: "\(error)")
         } catch let error as DeliveryMismatch {
@@ -770,7 +822,7 @@ public enum Agent {
 
     /// Stream the artifact to `downloads/<app>/`, checked against the signed size and SHA-256
     /// before any recipe sees it. The previous download for the app goes to `_trash`.
-    static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient) throws -> URL {
+    static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient, fallbacks: [URL] = []) throws -> URL {
         let name = try SafeName.component(entry.file, what: "artifact name")
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         let fm = FileManager.default
@@ -790,6 +842,9 @@ public enum Agent {
         } catch {
             do { try Trash.move(part, into: Trash.root(in: stateDir)) }
             catch { throw khuFail("download failed and its partial file could not be moved to _trash: \(error)") }
+            if let next = fallbacks.first {
+                return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http, fallbacks: Array(fallbacks.dropFirst()))
+            }
             throw error
         }
     }

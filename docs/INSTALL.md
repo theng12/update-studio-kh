@@ -131,6 +131,29 @@ was reset is removed first — `Remove Mac` on the page, or
 `khu remove --state ~/Library/KHUpdater/state --machine <id>` — and then enrols again the same way. The page lists every Mac with the time it connected, so the owner
 can see who claimed one.
 
+### Optional feed hosting
+
+Hosting starts off. The original publisher keeps the signing key, enrolment, status and orders.
+An agent may host verified downloads when its exact enrolled machine ID has an enabled role in
+signed `network` settings. Publish those settings with `khu network --feed <feed-dir> --key
+<existing-key-file> --config <network.json>` on the original publisher only. The JSON has ordered
+`feedURLs` and a `hosts` dictionary; each host role has `enabled`, `bind` and `port`. Use the chosen
+Mac's existing tailnet address; client URLs end in `/release.json`, with the original publisher
+last. Publish the host role first, verify that its mirror serves the signed feed and artifacts,
+then publish the preferred client URLs. Do not guess a machine ID from its display name.
+
+The agent mirrors every signed artifact and icon before publishing its local feed, then manages
+only `com.khupdater.feed-host` in its user's LaunchAgents. It runs `khu serve --feed-only`; the
+mirror has no sign-in or command routes and receives no signing key or enrolment token. Disable
+that machine's role to stop its job; mirror files stay restorable. No SSH, firewall changes or
+network reconfiguration are required. If macOS requests network or firewall permission, stop
+and tell the owner instead of granting it or finding a workaround.
+
+Clients keep `feedURL` pointing at the original publisher for control traffic. Signed mirror
+settings change download sources only. Once learned, those settings let explicit local requests
+use a verified mirror during publisher downtime; Automatic and remote orders wait. A refused
+sign-in remains an error. `khu agent --config <file> --install <app-id>` runs a local request once.
+
 ### What the agent does on each Mac
 
 The stub runs the binary `current` links to (`agent --config base/config.json`), keeps it alive, and puts

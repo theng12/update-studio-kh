@@ -10,11 +10,12 @@ struct KHUMain {
             khu <subcommand> ...
               keygen <dir>
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same]
+              network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
               remove --state <dir> --machine <id>
-              serve --feed <dir> --state <dir> --key <keyfile> --bind <ip> --port <p>
-              agent --config <file> [--once]
+              serve --feed <dir> --state <dir> [--key <keyfile>] --bind <ip> --port <p> [--feed-only]
+              agent --config <file> [--once] [--install <app-id>]   (local install request runs once)
               rename-machine --state <dir> --from <device-id> --to <label>
               ssd-update --volume <path>   (update or repair installed apps from an SSD)
               ssd-index --volume <path> [--feed <dir>] [--changelog <id>=<repo or CHANGELOG.md>]...   (writes <path>/apps.json)
@@ -96,6 +97,24 @@ struct KHUMain {
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly)
                 print("published \(a) \(v)")
+            } catch { fail("\(error)") }
+        case "network":
+            var feed: String?, key: String?, file: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--feed": feed = value("--feed", &i)
+                case "--key": key = value("--key", &i)
+                case "--config": file = value("--config", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let feed, let key, let file else { usage() }
+            do {
+                let network = try JSON.decode(FeedNetwork.self, from: Data(contentsOf: URL(fileURLWithPath: file)))
+                try FeedPublisher.configureNetwork(feedDir: URL(fileURLWithPath: feed), keyFile: URL(fileURLWithPath: key), network: network)
+                print("signed feed host and download-address settings published")
             } catch { fail("\(error)") }
         case "enrol":
             var state: String?, machine: String?
@@ -208,13 +227,14 @@ struct KHUMain {
                 print("removed \(removal.machine): its token and \(removal.droppedOrders.count) waiting order(s) are gone; it is kept in the removed list, and enrols again through an open window or `khu enrol`")
             } catch { fail("\(error)") }
         case "serve":
-            var feed: String?, state: String?, key: String?, binds: [String] = [], port: Int = 8790
+            var feed: String?, state: String?, key: String?, binds: [String] = [], port: Int = 8790, feedOnly = false
             var i = 1
             while i < args.count {
                 switch args[i] {
                 case "--feed": feed = value("--feed", &i)
                 case "--state": state = value("--state", &i)
                 case "--key": key = value("--key", &i)
+                case "--feed-only": feedOnly = true
                 case "--bind": binds.append(value("--bind", &i))  // repeatable: loopback for the owner, the Tailscale IP for the Macs
                 case "--port":
                     let text = value("--port", &i)
@@ -228,22 +248,25 @@ struct KHUMain {
                 i += 1
             }
             guard let f = feed, let s = state else { usage() }
+            if feedOnly && key != nil { fail("a feed-only host never receives a signing key") }
             // Orders are signed with this key, and the Macs refuse an unsigned or unverifiable one,
             // so a publisher without it can publish but never command.
             let commandKey: Curve25519.Signing.PrivateKey?
             do { commandKey = try key.map { try Signing.loadPrivateKey(from: URL(fileURLWithPath: $0)) } }
             catch { fail("\(error)") }
-            if commandKey == nil {
+            if commandKey == nil && !feedOnly {
                 FileHandle.standardError.write(Data("warning: no --key given, so this publisher cannot sign orders and the Macs will refuse them\n".utf8))
             }
-            do { try Enrolment.ensurePairingCode(stateDir: URL(fileURLWithPath: s)) }
-            catch { FileHandle.standardError.write(Data("warning: no pairing code could be made, so new Macs cannot pair: \(error)\n".utf8)) }
+            if !feedOnly {
+                do { try Enrolment.ensurePairingCode(stateDir: URL(fileURLWithPath: s)) }
+                catch { FileHandle.standardError.write(Data("warning: no pairing code could be made, so new Macs cannot pair: \(error)\n".utf8)) }
+            }
             // Every address is bound before any is served, so a bad --bind fails the start.
             var servers: [(FeedServer, Int32)] = []
             for address in (binds.isEmpty ? ["127.0.0.1"] : binds) {
                 let srv = FeedServer(feedDir: URL(fileURLWithPath: f), stateDir: URL(fileURLWithPath: s),
                                      bind: address, port: port, commandKey: commandKey,
-                                     publisherBind: binds.first(where: { FeedServer.isTailnet($0) }))
+                                     publisherBind: binds.first(where: { FeedServer.isTailnet($0) }), feedOnly: feedOnly)
                 do { servers.append((srv, try srv.listen())) } catch { fail("\(error)") }
                 print("serving on \(address):\(port)")
             }
@@ -252,12 +275,13 @@ struct KHUMain {
             }
             while true { Thread.sleep(forTimeInterval: 3600) }
         case "agent":
-            var config: String?, once = false
+            var config: String?, once = false, installs: Set<String> = []
             var i = 1
             while i < args.count {
                 switch args[i] {
                 case "--config": config = value("--config", &i)
                 case "--once": once = true
+                case "--install": installs.insert(value("--install", &i))
                 default: usage()
                 }
                 i += 1
@@ -266,7 +290,7 @@ struct KHUMain {
             let cfg: AgentConfig
             do {
                 var loaded = try JSONDecoder().decode(AgentConfig.self, from: Data(contentsOf: URL(fileURLWithPath: c)))
-                loaded.once = once || loaded.once
+                loaded.once = once || loaded.once || !installs.isEmpty
                 cfg = loaded
             } catch { fail("cannot read the agent config \(c): \(error)") }
             // The stub rolls a fresh version back unless it hears from this very child within 2 minutes.
@@ -283,8 +307,9 @@ struct KHUMain {
                 }.start()
             }
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
+            let initialRequests = installs
             func loop() {
-                var requested: Set<String> = []
+                var requested = initialRequests
                 repeat {
                     do {
                         let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))

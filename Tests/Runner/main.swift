@@ -3439,6 +3439,13 @@ struct RunnerMain {
             _ = try? Agent.runOnce(config: config, http: InProcessClient(server: server), control: { _, _ in ctl })
             exit(2)
         }
+        if ProcessInfo.processInfo.environment["FEED_NETWORK_ONLY"] == "1" {
+            feedNetworkTests()
+            feedMirrorTests()
+            feedHostRuntimeTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         dmgAttachmentTests()
         if ProcessInfo.processInfo.environment["DMG_ATTACH_ONLY"] == "1" {
             print("TESTS: \(passed) passed, \(failed) failed")
@@ -3484,6 +3491,9 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        feedNetworkTests()
+        feedMirrorTests()
+        feedHostRuntimeTests()
         // Signing basics stay covered.
         let key = Signing.generateKeyPair()
         let data = Data("hello".utf8)

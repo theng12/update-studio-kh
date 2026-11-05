@@ -56,6 +56,7 @@ public struct Feed: Codable, Sendable, Equatable {
     public var schema: Int
     public var published_at: String
     public var apps: [String: FeedApp]
+    public var network: FeedNetwork?
 
     public init(schema: Int = Feed.supportedSchema, published_at: String, apps: [String: FeedApp] = [:]) {
         self.schema = schema; self.published_at = published_at; self.apps = apps
@@ -67,6 +68,7 @@ public struct Feed: Codable, Sendable, Equatable {
     public func validated() throws -> Feed {
         guard schema == Feed.supportedSchema else { throw khuFail("feed schema \(schema) is not supported") }
         guard publishedAt != nil else { throw khuFail("feed published_at is not a date: \(published_at)") }
+        _ = try network?.validated()
         for (app, entry) in apps {
             _ = try SafeName.component(app, what: "app id")
             _ = try SafeName.component(entry.file, what: "artifact name")

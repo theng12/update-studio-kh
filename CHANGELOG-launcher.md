@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.12 — 2026-11-05
+- Download apps from a preferred signed-feed host, with fallback to the original publisher when needed. Every feed and installer still has to match the pinned signature and checksum.
+- Local install requests can continue from a verified mirror while the original publisher is unavailable; remote orders and Automatic wait safely.
+- A chosen Mac can host verified app downloads through an optional role that starts off. The signing key stays with the original publisher.
+
 ## 0.1.11 — 2026-11-05
 - The install SSD offers Update installed apps: install Launcher and update or repair the KH apps already on this Mac, with a result for each app.
 - SSD installers are checked against their checksums; newer installed apps, existing pauses and saved connections are preserved. Apps that cannot be updated safely say why.

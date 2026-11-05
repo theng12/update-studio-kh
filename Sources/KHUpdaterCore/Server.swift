@@ -250,6 +250,7 @@ public final class FeedServer: @unchecked Sendable {
     public let enrolAttemptsPerMinute: Int
     /// `/status` and result posts one Mac may make per minute.
     public let reportPostsPerMinute: Int
+    public let feedOnly: Bool
     private let enrolLimiter: RateLimiter
     private let reportLimiter: RateLimiter
 
@@ -257,7 +258,7 @@ public final class FeedServer: @unchecked Sendable {
                 commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32,
                 maxEnrolmentsPerWindow: Int = EnrolPolicy.maxPerWindow,
                 enrolAttemptsPerMinute: Int = EnrolPolicy.attemptsPerMinute,
-                reportPostsPerMinute: Int = ReportPolicy.perMachinePerMinute, publisherBind: String? = nil) {
+                reportPostsPerMinute: Int = ReportPolicy.perMachinePerMinute, publisherBind: String? = nil, feedOnly: Bool = false) {
         self.feedDir = feedDir
         self.stateDir = stateDir
         self.bind = bind
@@ -268,6 +269,7 @@ public final class FeedServer: @unchecked Sendable {
         self.maxEnrolmentsPerWindow = maxEnrolmentsPerWindow
         self.enrolAttemptsPerMinute = enrolAttemptsPerMinute
         self.reportPostsPerMinute = reportPostsPerMinute
+        self.feedOnly = feedOnly
         self.enrolLimiter = RateLimiter(attempts: enrolAttemptsPerMinute)
         self.reportLimiter = RateLimiter(attempts: reportPostsPerMinute)
     }
@@ -531,6 +533,8 @@ public final class FeedServer: @unchecked Sendable {
                 return HTTPResponse(status: 200, contentType: "application/octet-stream", body: .file(url, size.int64Value))
             }
         }
+
+        if feedOnly { return Self.text(404, "this host serves signed updates only") }
 
         // A Mac enrolling itself: the one route with no token, refused by the checks inside `enrol`.
         if req.method == "POST" && req.path == "/enrol" { return enrol(req, remote: remote, now: now) }

@@ -52,9 +52,10 @@ credential-free agent kit per Mac.
   this Mac (publisher plus one agent, a real update and a real rollback) before the fleet.
 - **No `sudo`, nothing outside `~/Library`.** The agent and the publisher run as the signed-in user;
   `~/Library/KHUpdater` and `~/Library/LaunchAgents` are the whole footprint.
-- **One endpoint, one key, no secrets on a drive.** Macs trust the pinned `publicKey` in the config
-  and refuse anything unsigned or unverifiable; only the publisher holds the private key, and a kit
-  or `.sspack` never carries one.
+- **One signer and control endpoint, no secrets on a drive.** Macs trust the pinned `publicKey`
+  and refuse anything unsigned or unverifiable. Signed feed settings may name download mirrors;
+  sign-in, status and orders stay with the original publisher. Only the publisher holds the private
+  key; mirrors, kits and `.sspack` files never carry one. A feed-host role starts off.
 
 ## Tests
 

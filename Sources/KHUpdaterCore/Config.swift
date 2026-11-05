@@ -36,6 +36,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     public var stubBase: String?
     /// Fallback only: when this agent runs from `<stubBase>/versions/<v>/khu`, `<v>` is its version.
     public var updaterVersion: String?
+    public var network: FeedNetwork?
     public init(feedURL: String, publicKey: String, stateDir: String, machine: String, token: String,
                 apps: [String: AppConfig] = [:], intervalMinutes: Int = 5, once: Bool = false) {
         self.feedURL = feedURL; self.publicKey = publicKey; self.stateDir = stateDir
@@ -53,11 +54,12 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         var current = self
         current.feedURL = saved.feedURL
         current.token = saved.token
+        current.network = saved.network
         return current
     }
 
     private enum CodingKeys: String, CodingKey {
-        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion
+        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network
     }
     /// Optional fields really are optional: a hand-written config may leave them out.
     public init(from decoder: Decoder) throws {
@@ -72,6 +74,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         once = try c.decodeIfPresent(Bool.self, forKey: .once) ?? false
         stubBase = try c.decodeIfPresent(String.self, forKey: .stubBase)
         updaterVersion = try c.decodeIfPresent(String.self, forKey: .updaterVersion)
+        network = try c.decodeIfPresent(FeedNetwork.self, forKey: .network)
     }
 }
 
