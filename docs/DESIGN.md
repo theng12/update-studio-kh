@@ -27,6 +27,8 @@ same day's re-review (E25 and E26, with E18 and E21 extended): the prune running
 window opens and only past the abandonment age, `machines` required of a state file, `GET /commands`
 bounded and probe-safe, and a page's refusal not spending the Mac's allowance.
 
+The 2026-11-05 SSD/helper-retirement review found two checksum races: mounting the original SSD path after hashing it, and rereading an index changed after Launcher verification. Both are fixed: installers use private reverified copies, and the bootstrap passes the original index hash into the native single-read decoder. `SSDUpdateTests.swift` and `test_ssd_entry.py` cover both substitutions. The final adversarial pass found no remaining confirmed issue in those paths.
+
 ## Feed
 
 A directory holding `release.json` and `artifacts/<sha12>-<file>`. `release.json` is the feed
@@ -293,7 +295,7 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
 2. attach the DMG (plist output), require exactly one `.app`, the feed's exact version, the
    expected bundle identifier (`bundleID` in the config, else the installed app's), and a
    runnable executable; copy it with `ditto` into `.<name>.khu-staging` beside the installed
-   app and check the copy — all before anything is stopped; detach;
+   app and check the copy — all before anything is stopped; detach by the device ID captured from that attach, never a volume path;
 3. write the install journal (naming both paths AND the target version, so recovery can prove
    which side it found); quit the app and stop its service. A refusal relaunches what was
    running and changes nothing;
@@ -347,7 +349,9 @@ a pid of this bundle is refused, never signalled. It counts as stopped once the 
 quiet; health requires the same listener ownership check, the expected on-disk version,
 and a running bundle process.
 
-`story`, `hub`: status only — those apps keep their own updaters. `updater`: self-update (below).
+`story`, `hub`: status only in the online agent — those apps keep their own updaters. `updater`: self-update (below).
+
+The explicit SSD `ssd-update --volume` action updates or repairs installed KH bundles, including equal versions, and installs only Launcher when absent. It keeps newer versions, checks the SSD index identities and SHA-256, copies each installer privately and verifies those bytes again before mounting, and verifies the staged app signature through the existing journal/rollback recipe. A local pause holds this action. Running Hub, Story or Gateway is kept because this action has no Production quiet-point proof. The selected SSD index/checksum is the offline authority; it is not an authenticated online feed. The staged signature check accepts the exact exit-1 “code has no resources but signature indicates they must be present” verdict of accepted normal unsealed KH releases (Story 1.4.381); any other diagnostic or additional error still refuses. This does not change vendor signature/notarization checks or owner-rollback verification. Per-app refusals are shown and make the final result nonzero. Saved connections, grants and pauses are never rewritten.
 
 Helpers run with absolute paths and hard deadlines: both pipes are drained while they run; on a
 deadline they get SIGTERM, then SIGKILL, and are reaped before the error is raised. The HTTP
@@ -365,6 +369,8 @@ budget documents the derived-name bound and safely permits longer components.
 Links change by renaming a fresh symlink over the old one (old one copied to `_trash`), so a
 kill at any instant leaves whole versions; `previous` moves before `current`. Installing the
 version already running is a no-op, and a version directory is never overwritten.
+
+After a status report is accepted, optional helper retirement observes fresh heartbeats from the settled current child. It defaults on, waits 300 seconds across repeated reports, and resets on a restart, rollback, stale heartbeat or missed report interval. Its setting can disable cleanup or change the healthy duration. Only real older version directories move to restorable `_trash`; current and previous stay protected under `switch.lock`. A cleanup failure is a note and does not block updates.
 
 Every new target `current` resolves to — first start, self-update, rollback — starts a probation:
 three non-zero exits within 5 minutes, or no heartbeat from THIS child (matching nonce and pid)

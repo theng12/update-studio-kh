@@ -16,6 +16,7 @@ struct KHUMain {
               serve --feed <dir> --state <dir> --key <keyfile> --bind <ip> --port <p>
               agent --config <file> [--once]
               rename-machine --state <dir> --from <device-id> --to <label>
+              ssd-update --volume <path>   (update or repair installed apps from an SSD)
               ssd-index --volume <path> [--feed <dir>] [--changelog <id>=<repo or CHANGELOG.md>]...   (writes <path>/apps.json)
               connect --kit <dir> --machine <id> --code <pairing code>
             """.utf8))
@@ -40,6 +41,10 @@ struct KHUMain {
         if args.first == "notify", args.count == 3, Bundle.main.bundlePath.hasSuffix(".app") { Notifier.post(title: args[1], body: args[2]) }
         if args.isEmpty { usage() }
         switch args[0] {
+        case "ssd-update":
+            guard [3, 5].contains(args.count), args[1] == "--volume", args[2].hasPrefix("/") else { usage() }
+            if args.count == 5, args[3] != "--index-sha256" { usage() }
+            SSDCommand.run(volume: URL(fileURLWithPath: args[2]), indexSHA256: args.count == 5 ? args[4] : nil)
         case "keygen":
             guard args.count >= 2 else { usage() }
             let dir = URL(fileURLWithPath: args[1])

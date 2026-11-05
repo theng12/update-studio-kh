@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.14 — 2026-11-05
+- Includes Studio Launcher KH 0.1.11 with the SSD Update installed apps action and plain per-app results.
+- SSD repair keeps newer installed versions, saved connections and pauses, and checks installer hashes before use.
+- Older helper versions move to restorable storage after healthy reports; the current and previous versions are kept.
+- Fixes large temporary pause-test downloads being left behind.
+
 ## 1.0.13 — 2026-11-04
 - Studio Launcher 0.1.10 opens an existing helper before offering pairing, checks saved connections, and offers Pair again when a saved sign-in is refused.
 - Launcher's connection window opens centred and leaves other windows usable.

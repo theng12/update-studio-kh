@@ -235,6 +235,7 @@ function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remov
    el('section',{},el('h4',{},'Updates'),el('div',{class:'row'},el('span',{},'Check for updates'),seg('checkManually',[[false,'Automatically'],[true,'Manually']],s.checkManually)),
     check('autoInstall','Install updates automatically',s.autoInstall&&!s.checkManually,s.checkManually?'Off while checking manually. Use Check for updates now, then Update.':'Each app’s own switch is in its … menu.',s.checkManually),
     check('notify','Notify me when an update is ready',s.notify,null),
+    check('retireHelpers','Keep the current and previous helper versions',s.retireHelpers,s.helperCleanupAvailable?'Older versions move to restorable _trash after '+(s.helperHealthySeconds/60).toLocaleString()+' minutes of repeated healthy reports.':'Cleanup settings could not be read. Older versions are kept.',!s.helperCleanupAvailable),
     // The updater's own switch is live data, and its automatic-on-connect default is stated, not implied.
     updater?check('updaterAutomatic','Update Studio KH updates itself automatically',!!updater.automatic,'Automatic is on when a Mac connects; change it in Update Studio KH’s … menu.',true):null),
    connSection,

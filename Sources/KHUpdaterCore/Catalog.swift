@@ -23,8 +23,8 @@ public struct AppMeta: Sendable, Equatable {
 
     /// The single app inside a DMG, read read-only and detached again.
     public static func read(dmg path: String, shell: Shell = SystemShell()) throws -> AppMeta {
-        let mount = try Recipe.attach(shell, path)
-        defer { _ = Recipe.detach(shell, mount) }
+        let (mount, device) = try Recipe.attach(shell, path)
+        defer { _ = Recipe.detach(shell, device) }
         return try read(app: try Recipe.singleApp(in: mount, fileManager: .default))
     }
 

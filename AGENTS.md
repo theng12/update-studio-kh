@@ -40,7 +40,9 @@ credential-free agent kit per Mac.
 - **Whole-cycle release.** A change is not finished until, in order: `./build.sh build`, the
   unfiltered test set below, a commit on its own branch, and an agent kit rebuilt from that same
   commit (`packaging/build-agent-kit.sh`) for the Studio Hub kit to carry. KH Updater has no remote;
-  the branch commit and the kit built from it are the release.
+  the branch commit and the kit built from it are the release. Before closeout, refresh the four
+  install SSD kits and hash-check the copies as specified in `docs/INSTALL.md` → Publish a release.
+  This is a standard step for every KH app release; Updater serializes the SSD writes.
 - **Roll out through Studio Hub, all Macs at once** (owner, 2026-10-25). The agent ships inside the
   Hub release and installs per user on launch; the Hub's own site-by-site rollout is the only
   pacing. No SSH, no per-Mac AirDrop, no staged pilot.
@@ -56,12 +58,13 @@ credential-free agent kit per Mac.
 
 ## Tests
 
-Run all three; a release needs the whole set, unfiltered:
+Run all four; a release needs the whole set, unfiltered:
 
 ```bash
 ./build.sh test                        # Swift core + CLI: Tests/Runner, prints "TESTS: N passed, M failed"
 python3 -I Tests/test_packaging.py     # kit builder and install-agent.sh
 ./Tests/test_publisher_init.sh         # publisher setup against a temporary home and "drive"
+python3 -B -I Tests/test_ssd_entry.py   # SSD bootstrap checksums, private copy and index pin
 ```
 
 The two packaging suites must stay inside temporary homes and a stand-in `launchctl` first on

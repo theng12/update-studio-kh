@@ -171,6 +171,8 @@ func recipeTests() {
         expect(marker(rig.installed) == "1.2.3" && marker(rig.rollback) == "1.0.0", "previous bundle kept as rollback")
         expect(!fm.fileExists(atPath: rig.journal.path), "journal cleared after a finished install")
         expect(rig.shell.detaches >= 1, "R22 DMG detached after staging")
+        expect(rig.shell.calls.filter { $0.hasPrefix("/usr/bin/hdiutil detach") }.allSatisfy { $0.hasSuffix(" /dev/disk9") },
+               "DMG cleanup uses the attached device ID, never a volume path")
     }
     // R24 / S-pre: a DMG holding another app (right version) is refused before anything stops.
     do {
@@ -1456,7 +1458,9 @@ func round2Tests(only: Int? = nil) {
             let shell = AttachNoMount()
             expectThrows("R3-1 attach without a mount point fails", contains: "mount point") { _ = try Recipe.attach(shell, "/tmp/x.dmg") }
             let detaches = shell.calls.filter { $0.first == "detach" }
-            expect(detaches == [["detach", "-force", "/dev/disk9"]], "R3-1 attach without a mount point detaches its whole-disk device, not the .dmg path")
+            expect(detaches == [["detach", "/dev/disk9"]], "R3-1 attach without a mount point detaches its whole-disk device, not the .dmg path")
+            expect(!Recipe.detach(shell, "/Volumes/KH-STUDIO-ATLAS").isEmpty && shell.calls.filter { $0.first == "detach" } == detaches,
+                   "DMG cleanup refuses an SSD volume path without invoking hdiutil")
         }
     }
 }
@@ -2083,8 +2087,7 @@ func launcherTests() {
         expect(later?.apps.contains { $0.app == "story" } == false, "L7 an app only an unplugged SSD had is not listed: there is nothing to install")
     }
     // L8. Pause holds a real download where it is; resume finishes it; cancel stops it and rejects nothing.
-    do {
-        let rig = Rig("pause")
+    withPauseFixture { rig in
         let pauseListener = FeedServer(feedDir: rig.feed, stateDir: rig.state, bind: "127.0.0.1", port: 0)
         let pauseSocket = try! pauseListener.listen()
         let url = URL(string: "http://127.0.0.1:\(FeedServer.boundPort(pauseSocket))/pause")!
@@ -2375,8 +2378,10 @@ func launcherTests() {
         let call = shell.calls.first ?? []
         expect(call.count == 4 && call[1].hasSuffix("install-agent.sh") && call[3] == home.path, "L6 the right code runs the kit's install-agent.sh for this home")
         expect(r.machines["new-mac"]?.enrolmentSource == MachineState.pairingSource, "L6 the Mac is enrolled by pairing")
-        let leftover = (try? fm.contentsOfDirectory(atPath: home.appendingPathComponent("Library").path))?.filter { $0.hasPrefix(".khu-connect") } ?? ["?"]
+        let leftover = (try? fm.contentsOfDirectory(atPath: home.appendingPathComponent("Library").path))?.filter { $0.hasPrefix(".khu-connect") && $0.hasSuffix(".json") } ?? ["?"]
         expect(leftover.isEmpty, "L6 the temporary config holding the token is moved to _trash, not left in Library")
+        expect(fm.fileExists(atPath: home.appendingPathComponent("Library/.khu-connect.lock").path),
+               "L6 the stable connection lock stays for concurrent retries")
         try! Data("#!/bin/bash\necho changed\n".utf8).write(to: kit.appendingPathComponent("install-agent.sh"))
         expectThrows("L6 a kit changed on the drive is refused before anything is sent", contains: "was changed") {
             _ = try Connect.run(kit: kit, home: r.rig.root.appendingPathComponent("home2"), machine: "other-mac", code: code, http: client, shell: shell)
@@ -3434,6 +3439,31 @@ struct RunnerMain {
             _ = try? Agent.runOnce(config: config, http: InProcessClient(server: server), control: { _, _ in ctl })
             exit(2)
         }
+        if ProcessInfo.processInfo.environment["LAUNCHER_ONLY"] == "1" {
+            launcherTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["SSD_UPDATE_ONLY"] == "1" {
+            ssdUpdateTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["HELPER_RETIREMENT_ONLY"] == "1" {
+            helperRetirementTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["SSD_HELPER_ONLY"] == "1" {
+            ssdHelperTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        pauseFixtureCleanupTests()
+        if ProcessInfo.processInfo.environment["PAUSE_FIXTURE_ONLY"] == "1" {
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["R6_ONLY"] == "1" {
             ownerRollbackTests()
             print("TESTS: \(passed) passed, \(failed) failed")
@@ -3484,6 +3514,9 @@ r41HealthMustHold()
         connectionReloadTests()
         toolbarTests()
         inventoryTests()
+        helperRetirementTests()
+        ssdUpdateTests()
+        ssdHelperTests()
         vendorCatalogTests()
         vendorOrderTests()
         vendorInstallerTests()

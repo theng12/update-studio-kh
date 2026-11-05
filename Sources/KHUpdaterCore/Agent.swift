@@ -389,6 +389,14 @@ public enum Agent {
         let (_, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
         guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }
         result.statusPosted = true
+        if let base = config.stubBase, let executable {
+            do {
+                let retired = try HelperRetirement.observe(layout: StubLayout(base: URL(fileURLWithPath: base)),
+                    stateDir: stateDir, executable: URL(fileURLWithPath: executable), now: now,
+                    maximumReportGap: Double(max(1, config.intervalMinutes)) * 60 + 60)
+                if !retired.isEmpty { result.notes.append("older helper versions moved to _trash: " + retired.joined(separator: ", ")) }
+            } catch { result.notes.append("helper version cleanup did not finish: \(error)") }
+        }
 
         // 4. The feed: signed, understood, and not older than one already seen.
         let feed = try verifiedFeed(http: http, serverBase: serverBase, config: config, memory: &memory, now: now)

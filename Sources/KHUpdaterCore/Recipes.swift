@@ -126,9 +126,9 @@ public enum Recipe {
         }
 
         // 2. Verify and stage while the old app keeps running.
-        let mount = try attach(shell, artifactPath)
+        let (mount, device) = try attach(shell, artifactPath)
         var mounted = true
-        defer { if mounted { _ = detach(shell, mount) } }
+        defer { if mounted { _ = detach(shell, device) } }
         let source = try singleApp(in: mount, fileManager: fm)
         let info: BundleInfo
         do { info = try BundleInfo.read(source) }
@@ -149,7 +149,7 @@ public enum Recipe {
             throw error
         }
         mounted = false
-        let detachNote = detach(shell, mount)  // the staged copy is all that is needed from here
+        let detachNote = detach(shell, device)  // the staged copy is all that is needed from here
 
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote])
@@ -583,28 +583,29 @@ public enum Recipe {
         return false
     }
 
-    static func attach(_ shell: Shell, _ artifactPath: String) throws -> String {
+    static func attach(_ shell: Shell, _ artifactPath: String) throws -> (mount: String, device: String) {
         let attach = try shell.run("/usr/bin/hdiutil",
                                    arguments: ["attach", "-readonly", "-nobrowse", "-noautoopen", "-plist", artifactPath], timeout: 180)
         // hdiutil prints a deprecation WARNING first on newer macOS; the reason is in the other lines.
         let reason = attach.stderr.split(separator: "\n").filter { !$0.contains("WARNING") }.joined(separator: " ")
         guard attach.exitCode == 0 else { throw khuFail("hdiutil attach failed: \(reason.prefix(200))") }
-        guard let mount = mountPoint(fromPlist: attach.stdout) else {
-            // Attached but no mount point: detach the device it became (detaching the .dmg path does nothing).
-            for device in devEntries(fromPlist: attach.stdout) {
-                _ = try? shell.run("/usr/bin/hdiutil", arguments: ["detach", "-force", device], timeout: 60)
-            }
-            throw khuFail("could not determine the DMG mount point")
+        let devices = devEntries(fromPlist: attach.stdout)
+        guard let mount = mountPoint(fromPlist: attach.stdout), devices.count == 1 else {
+            for device in devices { _ = detach(shell, device) }
+            throw khuFail("could not determine the DMG mount point and device")
         }
-        return mount
+        return (mount, devices[0])
     }
 
     /// Returns "" on success, or a note saying the image is still mounted.
-    static func detach(_ shell: Shell, _ mount: String) -> String {
-        for arguments in [["detach", mount], ["detach", "-force", mount]] {
+    static func detach(_ shell: Shell, _ device: String) -> String {
+        guard device.range(of: #"^/dev/disk[0-9]+(?:s[0-9]+)*$"#, options: .regularExpression) != nil else {
+            return "refused to detach an unrecognized DMG device"
+        }
+        for arguments in [["detach", device], ["detach", "-force", device]] {
             if let result = try? shell.run("/usr/bin/hdiutil", arguments: arguments, timeout: 60), result.exitCode == 0 { return "" }
         }
-        return "the DMG is still mounted at \(mount)"
+        return "the DMG device is still mounted at \(device)"
     }
 
     static func mountPoint(fromPlist output: String) -> String? {

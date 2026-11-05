@@ -134,11 +134,12 @@ public enum VendorInstaller {
                             shell: Shell, control: AppControl, fm: FileManager) -> Outcome {
         // `Recipe.appDmg` attaches again for its own verify-and-stage; this attach exists only so
         // the pinned identity can be judged before anything runs or is replaced.
-        let mount: String
-        do { mount = try Recipe.attach(shell, file.path) }
+        let attachment: (mount: String, device: String)
+        do { attachment = try Recipe.attach(shell, file.path) }
         catch { return Outcome(status: "failed", reason: "\(error); nothing was changed", installerPath: file.path) }
+        let mount = attachment.mount
         var mounted = true
-        defer { if mounted { _ = Recipe.detach(shell, mount) } }
+        defer { if mounted { _ = Recipe.detach(shell, attachment.device) } }
 
         let source: String
         do { source = try Recipe.singleApp(in: mount, fileManager: fm) }
@@ -182,7 +183,7 @@ public enum VendorInstaller {
             }
         }
 
-        let detachNote = Recipe.detach(shell, mount)
+        let detachNote = Recipe.detach(shell, attachment.device)
         guard detachNote.isEmpty else {
             return Outcome(status: "needs_person", reason: detachNote + "; nothing was changed", installerPath: file.path)
         }

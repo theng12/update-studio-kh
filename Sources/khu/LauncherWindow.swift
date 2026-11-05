@@ -62,6 +62,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         let apps = helper.apps, busy = helper.installingApp, ssd = helper.ssd, error = helper.lastError, last = helper.lastRun
         helper.lock.unlock()
         let settings = HelperSettings.load(from: helper.stateDir)
+        let cleanup = try? HelperRetirementSettings.load(from: helper.stateDir)
         let hidden = Set(settings.hidden ?? [])
         var rows: [[String: Any]] = []
         for app in apps {
@@ -86,7 +87,9 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             "paused": settings.paused(at: Date()),
             "settings": ["checkManually": settings.checkManually ?? false, "autoInstall": settings.autoInstall ?? true,
                          "notify": settings.notify ?? false, "appearance": settings.appearance ?? "system",
-                         "menuBarWhenClosed": settings.menuBarWhenClosed ?? true],
+                         "menuBarWhenClosed": settings.menuBarWhenClosed ?? true,
+                         "retireHelpers": cleanup?.enabled ?? false, "helperCleanupAvailable": cleanup != nil,
+                         "helperHealthySeconds": cleanup?.healthySeconds ?? 0],
             "connection": ["destination": helper.config.feedURL, "machine": helper.config.machine, "checking": connectionBusy,
                            "checkedAt": connectionUI.checkedAt as Any, "ok": connectionUI.ok as Any, "note": connectionUI.note as Any,
                            "serverNote": connectionUI.serverNote as Any, "serverOk": connectionUI.serverOk as Any,
@@ -248,6 +251,16 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                 }
             }
         case "setting":
+            if body["key"] as? String == "retireHelpers" {
+                do {
+                    var cleanup = try HelperRetirementSettings.load(from: helper.stateDir)
+                    guard let enabled = body["value"] as? Bool else { break }
+                    cleanup.enabled = enabled
+                    try cleanup.save(to: helper.stateDir)
+                } catch { helper.alert("Helper cleanup could not be changed", "\(error)") }
+                reload()
+                return
+            }
             var s = HelperSettings.load(from: helper.stateDir)
             let v = body["value"]
             switch body["key"] as? String {

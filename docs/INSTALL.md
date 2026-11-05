@@ -16,6 +16,16 @@ If Update Studio no longer recognises this Mac’s sign-in, remove its old enrol
 
 The pairing code has no time expiry. **New code** replaces it for future connections; existing Macs remain connected. Five wrong codes lock pairing for five minutes. The existing code-free enrolment window remains an explicit owner action for Hub bootstrap. No trust, enrolment, network or code-lifecycle policy changes as part of this interface.
 
+## Update or repair installed apps from an SSD
+
+Open **Update installed apps.command** at the install SSD’s root. It checks the Launcher installer’s SHA-256 and app signature before opening the local results window. No publisher connection is needed for the app repair pass.
+
+The action installs Studio Launcher KH if it is missing, then checks the KH apps already in this user’s Applications folders against `apps.json`. Each installer must match its SHA-256 and contain the expected signed app and version. Newer installed versions are kept. The same version may be installed again to repair damaged app files; missing optional apps are skipped. An app that is paused, busy, unreadable or unsafe to replace gets a plain reason in the results instead of a forced installation. Saved connections, grants and pause settings are not changed.
+
+On a connected Mac, the verified Launcher kit can also promote the helper through its existing current/previous rollback layout. On a never-connected Mac, open the installed Launcher and use the normal pairing code once; the SSD action never creates or replaces a connection identity.
+
+Helper version cleanup is on by default after sustained healthy reports. It keeps the current version and the previous fallback, moves older versions to the helper’s `_trash`, and can be switched off in Launcher Settings. The SSDs remain mounted when the action finishes.
+
 ## Publisher operation and manual recovery
 
 The commands below document publisher administration and the kit’s underlying install procedure. Normal new-Mac setup uses the Launcher app above.
@@ -49,6 +59,10 @@ open http://127.0.0.1:8790/        # the status page (loopback only)
   --app gateway --version 0.2.196 --artifact dist/gateway-kh-0.2.196.dmg --kind app-dmg --changelog /path/to/gateway/CHANGELOG.md
 ~/Library/KHUpdater/bin/khu publish ... --app updater --version 1.0.1 --artifact build/khu --kind updater --changelog CHANGELOG-launcher.md
 ```
+
+Every KH app release includes a four-SSD refresh before closeout: refresh KH-STUDIO-ATLAS, KH-STUDIO-NOVA, KH-STUDIO-ORICO and KH-STUDIO-UGREEN from the released artifacts; update each SSD’s `apps.json`, installer checksums, version notes and setup helpers; read back and hash every copied installer and helper; keep the current and one previous version, moving older material to restorable `_trash`; leave all four SSDs mounted. A missing drive or failed copy is an unfinished release step and must be reported. Update Studio owns serialized SSD writes across app releases.
+
+The one-click SSD action reads the current `apps.json` each time it starts. App identities, versions, installer paths, sizes and checksums come from that refreshed index, rather than a fixed version list in Launcher. The same click therefore handles future released app versions after the SSD refresh. It still keeps newer installed versions, preserves pauses and never installs absent optional apps.
 
 Those version numbers are examples: use the app’s new version and exact installer path. A version not newer than the feed's is refused (`--allow-same` exists, but never use it to replace an accepted installer with different application bytes).
 
