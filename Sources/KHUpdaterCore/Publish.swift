@@ -17,6 +17,45 @@ public enum FeedPublisher {
         return try JSON.decode(Feed.self, from: data).validated()
     }
 
+    private struct Retention: Decodable {
+        struct Entry: Decodable { var current: FeedApp; var previous: FeedApp? }
+        var apps: [String: Entry]
+    }
+
+    /// Adopt the publisher's existing pins once, without selecting or rebuilding versions.
+    public static func withPreviousInstallers(_ feed: Feed, in dir: URL) throws -> Feed {
+        guard feed.previous == nil else { return feed }
+        var result = feed
+        result.previous = [:]
+        let ledger = dir.appendingPathComponent("artifact-retention.json")
+        if FileManager.default.fileExists(atPath: ledger.path) {
+            let saved = try JSON.decode(Retention.self, from: Data(contentsOf: ledger))
+            for (app, current) in feed.apps {
+                guard let entry = saved.apps[app] else { continue }
+                if VersionCompare.isNewer(current.version, than: entry.current.version) {
+                    // A publish may finish before the operator refreshes its ledger.
+                    result.previous?[app] = entry.current
+                } else {
+                    guard entry.current.version == current.version, entry.current.sha256 == current.sha256,
+                          entry.current.file == current.file, entry.current.bytes == current.bytes else {
+                        throw khuFail("\(app) retention ledger does not match the signed current installer")
+                    }
+                    result.previous?[app] = entry.previous
+                }
+            }
+        }
+        if result.previous?.isEmpty == true { result.previous = nil }
+        _ = try result.validated()
+        for (app, entry) in result.previous ?? [:] {
+            let file = dir.appendingPathComponent("artifacts").appendingPathComponent(entry.file)
+            let measured = try Signing.sha256Hex(fileAt: file)
+            guard measured.hex == entry.sha256, measured.bytes == entry.bytes else {
+                throw khuFail("\(app) retained previous installer hash or size mismatch")
+            }
+        }
+        return result
+    }
+
     /// For display only (the status page). Unverified.
     public static func loadFeed(from dir: URL) -> Feed? {
         guard let release = try? AtomicFile.readJSON(Release.self, from: releaseFile(in: dir)),
@@ -48,6 +87,7 @@ public enum FeedPublisher {
                     throw khuFail("refused \(version): the feed already has \(existing.version) (--allow-same re-publishes the same version)")
                 }
             }
+            feed = try withPreviousInstallers(feed, in: feedDir)
             let (sha, bytes) = try Signing.sha256Hex(fileAt: artifact)
             guard bytes > 0 else { throw khuFail("\(artifact.path) is empty") }
             let base = String(try SafeName.component(artifact.lastPathComponent, what: "artifact").prefix(100))
@@ -92,6 +132,11 @@ public enum FeedPublisher {
                     if !FileManager.default.fileExists(atPath: iconURL.path) { try png.write(to: iconURL, options: .atomic) }
                     entry.icon = iconName; entry.iconSha256 = iconSha
                 }
+            }
+            if let old, VersionCompare.isNewer(version, than: old.version) {
+                var previous = feed.previous ?? [:]
+                previous[app] = old
+                feed.previous = previous
             }
             feed.apps[app] = entry
             // Strictly later than the last release, so an agent's high-water mark always moves forward.

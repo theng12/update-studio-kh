@@ -3441,6 +3441,7 @@ struct RunnerMain {
         }
         if ProcessInfo.processInfo.environment["FEED_NETWORK_ONLY"] == "1" {
             feedNetworkTests()
+            controllerHandoffTests()
             feedMirrorTests()
             feedHostRuntimeTests()
             print("TESTS: \(passed) passed, \(failed) failed")
@@ -3492,6 +3493,7 @@ struct RunnerMain {
             exit(failed == 0 ? 0 : 1)
         }
         feedNetworkTests()
+        controllerHandoffTests()
         feedMirrorTests()
         feedHostRuntimeTests()
         // Signing basics stay covered.

@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.16 — 2026-11-06
+- Includes Studio Launcher KH 0.1.13 with observed feed-host health, corrected supervised-host startup and verified current/fallback installer retention.
+- Signed controller handoffs let prepared Macs keep their existing enrollment and app settings when moving to the same trusted publisher at a new address. No move happens unless it is explicitly published and the destination passes its checks.
+- Authenticated requests do not follow redirects. Existing sign-ins, pauses and app choices remain in place.
+
 ## 1.0.15 — 2026-11-05
 - An optional feed-host role keeps verified copies of the signed app feed and installers on a chosen Mac. It starts off and needs no signing key on that Mac.
 - Signed settings can give clients a preferred download host and fallback addresses while keeping sign-in and remote orders with the original publisher.

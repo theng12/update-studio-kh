@@ -11,6 +11,9 @@ private final class NetworkClient: HTTPClient, @unchecked Sendable {
     var statusCode = 200
     var downloadOffline: Set<String> = []
     var commands = Data()
+    var statusReports: [[String: Any]] = []
+    var validateHealth = false
+    var acceptedStatus = false
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
         gets.append(url)
         if url.host == "100.64.0.2" && headers["Authorization"] != nil { credentialOnMirror = true }
@@ -20,6 +23,14 @@ private final class NetworkClient: HTTPClient, @unchecked Sendable {
     }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
         if statusOffline { throw URLError(.cannotConnectToHost) }
+        if url.path == "/status", let report = try JSONSerialization.jsonObject(with: body) as? [String: Any] {
+            statusReports.append(report)
+            if validateHealth, FeedServer.reportRefusal(installed: report["installed"] as? [String: String],
+                health: report["health"] as? [String: String], defaults: report["automatic_default"] as? [String: Bool]) != nil {
+                return (Data(), 400)
+            }
+            acceptedStatus = statusCode == 200
+        }
         return (Data(), statusCode)
     }
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
@@ -32,8 +43,9 @@ private final class NetworkClient: HTTPClient, @unchecked Sendable {
     }
 }
 private struct NetworkShell: Shell {
+    var hostStatus = ""
     func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
-        ShellResult(exitCode: 0, stdout: "", stderr: "")
+        ShellResult(exitCode: 0, stdout: executable == "/bin/launchctl" ? hostStatus : "", stderr: "")
     }
 }
 
@@ -127,6 +139,39 @@ func feedNetworkTests() {
         let after = try Data(contentsOf: FeedPublisher.releaseFile(in: publisher))
         expect(before == after, "FN invalid network settings cannot replace a signed release")
     } catch { expect(false, "FN signed network publication: \(error)") }
+    do {
+        let state = tmpDir("host-report-recovery")
+        let statusFile = state.appendingPathComponent("feed-host-status.json")
+        let legacy = "feed host installed and started (launchd job com.khupdater.feed-host)"
+        expect(legacy.utf8.count == 69 && FeedServer.reportRefusal(installed: nil,
+            health: ["feed-host": legacy], defaults: nil) != nil, "FN controller rejects the released 69-byte host status")
+        try AtomicFile.writeJSON(["status": legacy], to: statusFile)
+        var local = config; local.stateDir = state.path
+        let http = NetworkClient(); http.validateHealth = true
+        // No release is supplied: stop after status and source selection, before any host reconciliation.
+        do {
+            _ = try Agent.runOnce(config: local, http: http,
+                shell: NetworkShell(hostStatus: "state = spawn scheduled\nlast exit code = 78\n"), now: now, appFolders: [])
+        } catch { /* The missing release is expected; assertions below prove the status path completed. */ }
+        let health = http.statusReports.first?["health"] as? [String: String]
+        expect(http.acceptedStatus && !http.gets.isEmpty, "FN stale host status no longer blocks reports or feed refresh")
+        expect(health?["feed-host"] == "not running (last exit 78)", "FN status reports observed failure instead of stale success")
+        let saved = try AtomicFile.readJSON([String: String].self, from: statusFile)
+        expect(saved?["status"] == health?["feed-host"] && saved?["checked_at"] == ISO.string(now),
+               "FN status file is refreshed before the status post")
+        try AtomicFile.writeJSON(["status": "setup failed", "error": "failed: bootstrap refused"], to: statusFile)
+        let retry = NetworkClient(); retry.validateHealth = true
+        do {
+            _ = try Agent.runOnce(config: local, http: retry,
+                shell: NetworkShell(hostStatus: "state = running\npid = 123\n"), now: now, appFolders: [])
+        } catch { /* Missing release again stops before host reconciliation. */ }
+        let retriedHealth = retry.statusReports.first?["health"] as? [String: String]
+        let retriedFile = try AtomicFile.readJSON([String: String].self, from: statusFile)
+        expect(retry.acceptedStatus && retriedHealth?["feed-host"] == "running (pid 123); setup failed",
+               "FN prior setup failure remains visible in bounded publisher health")
+        expect(retriedFile?["error"] == "failed: bootstrap refused" && retriedFile?["status"] == retriedHealth?["feed-host"],
+               "FN observation preserves failure detail until reconciliation succeeds")
+    } catch { expect(false, "FN host status recovery: \(error)") }
     let server = FeedServer(feedDir: root, stateDir: root.appendingPathComponent("server"), bind: "127.0.0.1", port: 0, feedOnly: true)
     expect(server.handleRequest(HTTPRequest(method: "POST", path: "/enrol"), remote: "127.0.0.1").status == 404,
            "FN feed-only host exposes no enrolment route")

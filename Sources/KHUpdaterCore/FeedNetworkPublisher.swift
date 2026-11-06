@@ -8,6 +8,7 @@ extension FeedPublisher {
             guard var feed = try loadVerifiedFeed(from: feedDir, publicKey: key.publicKey) else {
                 throw khuFail("publish the apps before configuring a feed host")
             }
+            feed = try withPreviousInstallers(feed, in: feedDir)
             feed.network = checked
             feed.published_at = ISO.string(max(now, (feed.publishedAt ?? .distantPast).addingTimeInterval(0.001)))
             try saveFeed(try feed.validated(), to: feedDir, key: key)

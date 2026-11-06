@@ -2,6 +2,16 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.13 — 2026-11-06
+- A signed controller move can keep this Mac's existing connection and app choices. It checks the destination's matching signed feed and existing sign-in before saving, and keeps a private rollback copy.
+- Authenticated updater requests refuse redirects, so a connection token stays with its explicitly chosen controller.
+- Feed-host health reports fit the publisher's existing limits, so a failed host no longer blocks this Mac's reports or signed-feed refresh.
+- A supervised feed host starts through the actual current executable link. Its status reflects the observed launchd process or exit, instead of treating an accepted start request as success.
+- A distributor can download the current and one older installer for each app from the publisher's existing verified retention records, including on its first start.
+- Publishing a new app version updates that app's fallback automatically without changing the other apps' versions.
+- Replaced distributor installers go to macOS Trash. A Trash failure stays visible and can be retried without breaking the signed downloads or their recovery copy.
+- Empty retention records keep older-feed compatibility; stale records recover from their verified older current version instead of blocking an unrelated publication.
+
 ## 0.1.12 — 2026-11-05
 - Download apps from a preferred signed-feed host, with fallback to the original publisher when needed. Every feed and installer still has to match the pinned signature and checksum.
 - Local install requests can continue from a verified mirror while the original publisher is unavailable; remote orders and Automatic wait safely.

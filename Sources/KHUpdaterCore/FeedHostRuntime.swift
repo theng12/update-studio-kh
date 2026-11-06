@@ -8,6 +8,38 @@ import Foundation
 public enum FeedHostRuntime {
     static let label = "com.khupdater.feed-host"
 
+    static func executable(stubBase: String?, fallback: String?) -> String? {
+        func usable(_ path: String?) -> String? {
+            guard let path, FileManager.default.isExecutableFile(atPath: path),
+                  (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
+            return path
+        }
+        if let stubBase,
+           let binary = StubLayout(base: URL(fileURLWithPath: stubBase)).currentBinary(),
+           let path = usable(binary.path) { return path }
+        return usable(fallback)
+    }
+
+    /// A loaded job or successful bootstrap is not proof that its executable is running.
+    public static func status(shell: Shell = SystemShell()) -> String {
+        guard let result = try? shell.run("/bin/launchctl", arguments: ["print", "gui/\(getuid())/\(label)"], timeout: 15) else {
+            return "unknown (launchd status unavailable)"
+        }
+        guard result.exitCode == 0 else { return "unknown (launchd print exit \(result.exitCode))" }
+        let fields = result.stdout.split(separator: "\n").compactMap { line -> (String, String)? in
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2 else { return nil }
+            return (parts[0], parts[1])
+        }
+        let state = fields.first { $0.0 == "state" }?.1
+        let pid = fields.first { $0.0 == "pid" }.flatMap { Int32($0.1) }
+        if state == "running", let pid, pid > 0 { return "running (pid \(pid))" }
+        if let code = fields.first(where: { $0.0 == "last exit code" }).flatMap({ Int32($0.1) }), code != 0 {
+            return "not running (last exit \(code))"
+        }
+        return "loaded; running not confirmed"
+    }
+
     /// `role` nil or disabled stops only this job (and retires its plist to `_trash`); enabled
     /// validates the role, requires the local mirror's `release.json`, then installs or reloads
     /// the job. launchctl refusals are reported as thrown errors with the command that retries
@@ -81,10 +113,7 @@ public enum FeedHostRuntime {
                     + "Its plist is kept at \(plist.path); start it later with: launchctl bootstrap \(domain) \(plist.path)")
             }
         }
-        if unchanged && loaded { return "feed host already runs these settings; left untouched" }
-        if unchanged { return "feed host started (launchd job \(label))" }
-        return loaded ? "feed host settings updated; its job was restarted"
-                      : "feed host installed and started (launchd job \(label))"
+        return status(shell: shell)
     }
 
     private static func write(_ plist: [String: Any], to url: URL) throws {

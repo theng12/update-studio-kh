@@ -37,7 +37,8 @@ func feedMirrorTests() {
         return (feed, JSON.encode(Release(feed: body, signature: try Signing.sign(body, with: key))))
     }
     func sync(_ data: Data, at destination: URL = root) throws -> Feed {
-        try FeedMirror.sync(releaseData: data, sourceBase: origin, root: destination, publicKey: publicKey, http: http, now: now)
+        try FeedMirror.sync(releaseData: data, sourceBase: origin, root: destination, publicKey: publicKey, http: http, now: now,
+                            retireArtifact: { _ = try Trash.move($0, into: destination.appendingPathComponent("fixture-system-trash")) })
     }
     do {
         let (first, release1) = try make(1)
@@ -64,8 +65,8 @@ func feedMirrorTests() {
         _ = try sync(release3)
         expect(!fm.fileExists(atPath: root.appendingPathComponent("artifacts/" + first.apps["fixture"]!.file).path)
                && fm.fileExists(atPath: root.appendingPathComponent("artifacts/" + second.apps["fixture"]!.file).path), "FM only current and previous artifacts remain live")
-        let retired = try fm.subpathsOfDirectory(atPath: root.appendingPathComponent("_trash").path)
-        expect(retired.contains(where: { $0.hasSuffix(first.apps["fixture"]!.file) }), "FM older bytes stay restorable in _trash")
+        let retired = try fm.subpathsOfDirectory(atPath: root.appendingPathComponent("fixture-system-trash").path)
+        expect(retired.contains(where: { $0.hasSuffix(first.apps["fixture"]!.file) }), "FM older artifacts use the system Trash destination")
         let other = Curve25519.Signing.PrivateKey()
         let body = JSON.encode(second)
         let untrusted = JSON.encode(Release(feed: body, signature: try Signing.sign(body, with: other)))
@@ -98,5 +99,113 @@ func feedMirrorTests() {
         let outside = tmpDir("mirror-outside")
         try fm.createSymbolicLink(at: linked.appendingPathComponent("artifacts"), withDestinationURL: outside)
         expectThrows("FM destination symlink refused", contains: "symbolic link") { _ = try sync(release1, at: linked) }
+        let (older, _) = try make(5)
+        let (current, _) = try make(6)
+        func signed(_ feed: Feed) throws -> Data {
+            let body = JSON.encode(feed)
+            return JSON.encode(Release(feed: body, signature: try Signing.sign(body, with: key)))
+        }
+        var seeded = current
+        seeded.previous = older.apps
+        let fresh = tmpDir("mirror-seeded-previous")
+        _ = try sync(signed(seeded), at: fresh)
+        expect(fm.fileExists(atPath: fresh.appendingPathComponent("artifacts/fixture-5.dmg").path)
+               && fm.fileExists(atPath: fresh.appendingPathComponent("artifacts/fixture-6.dmg").path),
+               "FM fresh mirror downloads both signed installer versions")
+        seeded.published_at = ISO.string(now.addingTimeInterval(7))
+        seeded.apps["fixture"]?.notes = "metadata publication"
+        _ = try sync(signed(seeded), at: fresh)
+        expect(fm.fileExists(atPath: fresh.appendingPathComponent("artifacts/fixture-5.dmg").path),
+               "FM metadata publication preserves each app's older version")
+        let (next, _) = try make(8)
+        var promoted = next; promoted.previous = current.apps
+        _ = try sync(signed(promoted), at: fresh)
+        expect(!fm.fileExists(atPath: fresh.appendingPathComponent("artifacts/fixture-5.dmg").path)
+               && fm.fileExists(atPath: fresh.appendingPathComponent("artifacts/fixture-6.dmg").path),
+               "FM signed pins retain exactly current plus one older installer")
+        let trashed = try fm.subpathsOfDirectory(atPath: fresh.appendingPathComponent("fixture-system-trash").path)
+        expect(trashed.contains(where: { $0.hasSuffix("fixture-5.dmg") }), "FM third installer goes through the system Trash callback")
+        let (later, _) = try make(9)
+        var refused = later; refused.previous = next.apps
+        let nextRelease = try signed(refused)
+        var retirements = 0
+        expectThrows("FM system Trash failure stays visible", contains: "fixture Trash unavailable") {
+            _ = try FeedMirror.sync(releaseData: nextRelease, sourceBase: origin, root: fresh, publicKey: publicKey,
+                                    http: http, now: now, retireArtifact: { file in
+                retirements += 1
+                if retirements == 2 { throw khuFail("fixture Trash unavailable") }
+                _ = try Trash.move(file, into: fresh.appendingPathComponent("fixture-system-trash"))
+            })
+        }
+        expect(try Data(contentsOf: fresh.appendingPathComponent("release.json")) == nextRelease,
+               "FM partial Trash failure keeps the complete newly signed pins live")
+        expect(try Data(contentsOf: fresh.appendingPathComponent("previous-release.json")) == nextRelease,
+               "FM recovery snapshot names only the two installers kept live")
+        expect(fm.fileExists(atPath: fresh.appendingPathComponent("artifacts/fixture-8.dmg").path)
+               && fm.fileExists(atPath: fresh.appendingPathComponent("artifacts/fixture-9.dmg").path),
+               "FM failed retirement never removes a live or fallback installer")
+        try Trash.move(fresh.appendingPathComponent("release.json"), into: Trash.root(in: fresh))
+        _ = try sync(nextRelease, at: fresh)
+        expect(try Data(contentsOf: fresh.appendingPathComponent("release.json")) == nextRelease,
+               "FM pinned recovery retries unfinished Trash without downloading retired versions")
+        var invalid = current; invalid.previous = current.apps
+        expectThrows("FM signed fallback must be an older version", contains: "previous installer must be older") { _ = try invalid.validated() }
+        invalid.previous = ["unknown": older.apps["fixture"]!]
+        expectThrows("FM signed fallback cannot introduce another app", contains: "previous installer must be older") { _ = try invalid.validated() }
+
+        let publisher = tmpDir("publisher-retained-previous")
+        let sourceArtifacts = publisher.appendingPathComponent("artifacts")
+        try fm.createDirectory(at: sourceArtifacts, withIntermediateDirectories: true)
+        for (name, bytes) in http.files { try bytes.write(to: sourceArtifacts.appendingPathComponent(name)) }
+        let ledger = ["apps": ["fixture": ["current": current.apps["fixture"]!, "previous": older.apps["fixture"]!]]]
+        try AtomicFile.writeJSON(ledger, to: publisher.appendingPathComponent("artifact-retention.json"))
+        let noLedger = tmpDir("publisher-no-retention")
+        expect(try FeedPublisher.withPreviousInstallers(current, in: noLedger).previous == nil,
+               "FM absent ledger preserves legacy mirror retention semantics")
+        try AtomicFile.writeJSON(["apps": [String: [String: FeedApp]]()], to: noLedger.appendingPathComponent("artifact-retention.json"))
+        expect(try FeedPublisher.withPreviousInstallers(current, in: noLedger).previous == nil,
+               "FM empty ledger does not sign empty fallback metadata")
+        let adopted = try FeedPublisher.withPreviousInstallers(current, in: publisher)
+        expect(adopted.previous == older.apps, "FM publisher reuses the existing per-app retention ledger")
+        let previousArtifact = sourceArtifacts.appendingPathComponent("fixture-5.dmg")
+        try Data("corrupt previous".utf8).write(to: previousArtifact)
+        expectThrows("FM publisher refuses an invalid previous seed", contains: "hash or size mismatch") {
+            _ = try FeedPublisher.withPreviousInstallers(current, in: publisher)
+        }
+        try http.files["fixture-5.dmg"]!.write(to: previousArtifact)
+        let fixtureKey = publisher.appendingPathComponent("fixture.key")
+        try Signing.savePrivateKey(key, to: fixtureKey)
+        try FeedPublisher.saveFeed(current, to: publisher, key: key)
+        try FeedPublisher.configureNetwork(feedDir: publisher, keyFile: fixtureKey, network: FeedNetwork(), now: now.addingTimeInterval(7))
+        let configured = try FeedPublisher.loadVerifiedFeed(from: publisher, publicKey: key.publicKey)!
+        expect(configured.apps == current.apps && configured.previous == older.apps,
+               "FM host setup signs existing previous pins without changing app versions")
+        let nextArtifact = publisher.appendingPathComponent("next.dmg")
+        try http.files["fixture-8.dmg"]!.write(to: nextArtifact)
+        try FeedPublisher.publish(feedDir: publisher, keyFile: fixtureKey, app: "fixture", version: "1.0.8", artifact: nextArtifact,
+                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(8))
+        let published = try FeedPublisher.loadVerifiedFeed(from: publisher, publicKey: key.publicKey)!
+        expect(published.previous?["fixture"] == current.apps["fixture"], "FM every publish automatically replaces just that app's fallback")
+        try FeedPublisher.publish(feedDir: publisher, keyFile: fixtureKey, app: "other", version: "1.0.1", artifact: nextArtifact,
+                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(9))
+        let unrelated = try FeedPublisher.loadVerifiedFeed(from: publisher, publicKey: key.publicKey)!
+        expect(unrelated.previous?["fixture"] == current.apps["fixture"], "FM another app's publish preserves the older installer pin")
+        try fm.createDirectory(at: noLedger.appendingPathComponent("artifacts"), withIntermediateDirectories: true)
+        try http.files["fixture-6.dmg"]!.write(to: noLedger.appendingPathComponent("artifacts/fixture-6.dmg"))
+        try FeedPublisher.saveFeed(current, to: noLedger, key: key)
+        try FeedPublisher.publish(feedDir: noLedger, keyFile: fixtureKey, app: "fixture", version: "1.0.8", artifact: nextArtifact,
+                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(8))
+        let withoutLedger = try FeedPublisher.loadVerifiedFeed(from: noLedger, publicKey: key.publicKey)!
+        expect(withoutLedger.previous?["fixture"] == current.apps["fixture"],
+               "FM publishing without a ledger still pins the displaced current version")
+        let staleLedger = ["apps": ["fixture": ["current": older.apps["fixture"]!]]]
+        try AtomicFile.writeJSON(staleLedger, to: publisher.appendingPathComponent("artifact-retention.json"))
+        let recoveredPins = try FeedPublisher.withPreviousInstallers(current, in: publisher)
+        expect(recoveredPins.previous == older.apps, "FM stale ledger current becomes the verified older fallback")
+        let invalidLedger = ["apps": ["fixture": ["current": current.apps["fixture"]!, "previous": current.apps["fixture"]!]]]
+        try AtomicFile.writeJSON(invalidLedger, to: publisher.appendingPathComponent("artifact-retention.json"))
+        expectThrows("FM invalid same-version fallback fails loudly instead of dropping protection", contains: "previous installer must be older") {
+            _ = try FeedPublisher.withPreviousInstallers(current, in: publisher)
+        }
     } catch { expect(false, "FM mirror checks: \(error)") }
 }

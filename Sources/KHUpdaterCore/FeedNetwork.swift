@@ -18,14 +18,29 @@ public struct FeedHostRole: Codable, Sendable, Equatable {
     }
 }
 
-/// Carried inside the signed feed; absent means no host role and no download-address change.
+/// An explicit same-signer controller move; download mirrors alone never receive credentials.
+public struct ControllerHandoff: Codable, Sendable, Equatable {
+    public var from: String
+    public var to: String
+    public init(from: String, to: String) { self.from = from; self.to = to }
+    public func validated() throws -> ControllerHandoff {
+        _ = try FeedNetwork.feedURL(from)
+        _ = try FeedNetwork.feedURL(to)
+        guard from != to else { throw khuFail("controller handoff requires different source and destination addresses") }
+        return self
+    }
+}
+
+/// Carried inside the signed feed; absent means no host role or connection change.
 public struct FeedNetwork: Codable, Sendable, Equatable {
     public var feedURLs: [String]
     public var hosts: [String: FeedHostRole]
-    public init(feedURLs: [String] = [], hosts: [String: FeedHostRole] = [:]) {
-        self.feedURLs = feedURLs; self.hosts = hosts
+    public var controller: ControllerHandoff?
+    public init(feedURLs: [String] = [], hosts: [String: FeedHostRole] = [:], controller: ControllerHandoff? = nil) {
+        self.feedURLs = feedURLs; self.hosts = hosts; self.controller = controller
     }
     public func validated() throws -> FeedNetwork {
+        _ = try controller?.validated()
         for address in feedURLs { _ = try Self.feedURL(address) }
         guard Set(feedURLs).count == feedURLs.count else { throw khuFail("feed addresses must not repeat") }
         for (machine, role) in hosts {

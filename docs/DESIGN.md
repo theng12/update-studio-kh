@@ -54,6 +54,16 @@ stores the artifact under its own hash, so two apps' files never collide; refuse
 newer than the feed's (`--allow-same` re-publishes the same one); and moves `published_at`
 strictly forward.
 
+Unreleased distributor change (not in helper 0.1.12): optional signed `previous` entries name one
+older installer per app. The publisher adopts the existing `artifact-retention.json` pins after
+checking their bytes, then updates only the published app's fallback. Mirrors download both sets
+on a fresh start and protect those per-app pins across unrelated publications. Dropped distributor
+artifacts go to native macOS Trash; stage/recovery material still uses `_trash`. After all pins
+are verified, the new signed release and its recovery copy are published before predecessor
+retirement. A Trash failure remains an error to retry but cannot remove a live signed pin.
+Tests substitute a temporary Trash destination. The owner enables Finder's 30-day removal on 1301 only; this Mac's
+Trash settings and stable application payloads are not changed by this operation.
+
 Optional `network` settings inside those signed bytes contain ordered `feedURLs` and `hosts`,
 keyed by enrolled machine ID. Host roles start off; enabled roles name an existing tailnet bind
 address and port. `khu network --feed <dir> --key <keyfile> --config <network.json>` verifies the
@@ -255,8 +265,31 @@ Vendor installs share the same run lock, machine-bound signed-order validation, 
    artifact changes or an explicit order arrives;
 6. fetch `SignedReply` of orders, verify the signature and freshness, refuse one for another Mac.
 
+Feed-host status is re-observed through `launchctl print` before each status report and saved
+with its check time. A loaded job or successful bootstrap alone never claims a running process;
+only a running state with a positive PID does. Compact observed status fits the existing 64-byte
+health limit, including when replacing an older oversized status file. Setup errors remain in
+that file and add a bounded failure marker to publisher health until reconciliation succeeds.
+The supervised host resolves and validates `StubLayout.currentLink`, which points at the
+executable itself, not a directory containing `khu`. A missing or unusable current target falls
+back to the running executable if it is an executable regular file; otherwise hosting refuses.
+
 Verified signed network settings are remembered for later runs. Download sources receive no
-bearer token; status, results and signed orders keep using the original `feedURL` endpoint.
+bearer token; status, results and signed orders keep using the saved `feedURL` endpoint.
+An optional signed `network.controller` handoff names exact `from` and `to` feed addresses.
+Only an agent still using `from` considers it, after completing that run's existing work.
+It re-verifies the signed handoff against its freshness history, requires the destination to
+serve the exact same envelope without credentials, then checks its existing token through a
+fresh, machine-bound signed commands reply. Only then does it atomically save the new address;
+identity, token, pin, app settings and unknown fields stay intact. Concurrent local edits refuse
+the move. A 0600 rollback config is retained under the config directory's `_trash`; no pairing
+or install order is dispatched. A newly signed reverse handoff supports an operator-led rollback.
+The CLI supplies the actual config path; library calls without one never rewrite settings.
+Authenticated HTTP requests refuse redirects. Public feed redirects retain their existing
+behavior and vendor redirects remain restricted to official HTTPS hosts. Older clients ignore
+this optional field and require a helper update or a deliberate local address change.
+This is a connection handoff, not a state-export or cutover command: operators must first stage
+the same signer and enrollment state at the destination and keep a single authoritative writer.
 A host refreshes from that original publisher, never its own mirror. If the publisher has a
 transport failure and mirror settings are already known, explicit local install requests may
 continue from a verified mirror. Remote orders and Automatic wait; HTTP refusals and invalid

@@ -25,11 +25,18 @@ credential-free agent kit per Mac.
   it went. The running tool follows the same rule for its own files: superseded downloads, bundles
   and version links go to `_trash/` folders, never away (`## Recipes`, `## Stub`). `_trash/` is the
   owner's to empty; never tidy inside it.
-- **Never re-run `packaging/publisher-init.sh`, and never copy or create the signing key.** It ran
-  on 2026-10-26 on the Mac Studio: the key is `~/Library/KHUpdater/keys/private.key` (mode 0600) and
-  the owner keeps plain backups on the kit SSDs himself. A new key orphans every enrolled Mac — the
-  script refuses to overwrite one, and so must you. Its own refusals (`--backup-to` off this Mac's
-  disk, an existing key, an existing plist) are the rule, not an obstacle.
+  Owner exception, 2026-11-06: superseded distributor installers on 1301 go to native macOS Trash,
+  and Finder's 30-day Trash removal is enabled there only. This Mac's Trash stays untouched;
+  tests inject a fake Trash destination. Other runtime and repository `_trash` rules remain.
+- **Never re-run `packaging/publisher-init.sh`; agents never read, print, copy, hold or create production signing-key bytes.**
+  Owner exception, 2026-11-06: the owner authorized moving the EXISTING signer to 1301, preserving
+  every Mac's pinned public key. Only the owner runs the SSD export/import commands; agents may
+  prepare and syntax-check them, never execute them. The imported key is 0600 in a 0700 directory;
+  verification prints only the public-key fingerprint and its match result. After verified import,
+  the owner-run command moves the SSD transfer copy into that SSD's restorable `_trash`.
+  This Mac keeps its signer until 1301 signs a real order accepted by a Mac; retiring this Mac's
+  signer into `_trash` requires a separate owner OK. A new key would orphan enrolled Macs.
+  The original setup ran on 2026-10-26; its overwrite refusals remain in force.
 - **The kit installer activates the agent** (owner, 2026-10-26: "sure switch it on").
   `packaging/install-agent.sh` installs *and* loads the LaunchAgent, matching Studio Hub's
   `components/hub/backend/khu_agent.py` (`Bootstrap.activate`): probe
@@ -54,8 +61,10 @@ credential-free agent kit per Mac.
   `~/Library/KHUpdater` and `~/Library/LaunchAgents` are the whole footprint.
 - **One signer and control endpoint, no secrets on a drive.** Macs trust the pinned `publicKey`
   and refuse anything unsigned or unverifiable. Signed feed settings may name download mirrors;
-  sign-in, status and orders stay with the original publisher. Only the publisher holds the private
-  key; mirrors, kits and `.sspack` files never carry one. A feed-host role starts off.
+  sign-in, status and orders stay with the saved controller unless an explicit same-signer signed
+  controller handoff is verified. Only the publisher holds the production private key; mirrors,
+  app kits and `.sspack` files never carry one. The owner's SSD key-transfer exception above is
+  separate from app kits. A feed-host role and controller handoff both start off.
 
 ## Tests
 

@@ -8,7 +8,10 @@ public enum FeedMirror {
     }
 
     public static func sync(releaseData: Data, sourceBase: URL, root: URL, publicKey: String,
-                            http: HTTPClient, now: Date = Date()) throws -> Feed {
+                            http: HTTPClient, now: Date = Date(),
+                            retireArtifact: (URL) throws -> Void = {
+                                try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+                            }) throws -> Feed {
         let incoming = try verified(releaseData, publicKey: publicKey, now: now)
         try noSymlink(root)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -58,21 +61,31 @@ public enum FeedMirror {
                 for file in try fm.contentsOfDirectory(at: stage, includingPropertiesForKeys: nil) {
                     let destination = artifacts.appendingPathComponent(file.lastPathComponent)
                     try noSymlink(destination)
-                    if fm.fileExists(atPath: destination.path) { try Trash.move(destination, into: trash) }
+                    if fm.fileExists(atPath: destination.path) { try retireArtifact(destination) }
                     try fm.moveItem(at: file, to: destination)
                 }
                 let changed = old != incoming
                 let keptPrevious = changed ? (old ?? prior) : prior
-                let protected = Set(wanted.keys).union(try keptPrevious.map { Set(try items(in: $0).keys) } ?? [])
+                let protected = incoming.previous != nil ? Set(wanted.keys)
+                    : Set(wanted.keys).union(try keptPrevious.map { Set(try items(in: $0).keys) } ?? [])
                 let stored = try fm.contentsOfDirectory(at: artifacts, includingPropertiesForKeys: nil)
                 for file in stored { try noSymlink(file) }
-                for file in stored where !protected.contains(file.lastPathComponent) {
-                    try Trash.move(file, into: trash)
+                let retired = stored.filter { !protected.contains($0.lastPathComponent) }
+                if incoming.previous == nil {
+                    for file in retired { try retireArtifact(file) }
                 }
                 try Trash.move(stage, into: trash)
-                if changed, let oldData { try AtomicFile.write(oldData, to: previous) }
-                // Publish last: a cleanup failure must leave the working release in place.
+                if incoming.previous != nil {
+                    // Recovery must name the same two versions that will remain after retirement.
+                    try AtomicFile.write(releaseData, to: previous)
+                } else if changed, let oldData {
+                    try AtomicFile.write(oldData, to: previous)
+                }
                 try AtomicFile.write(releaseData, to: release)
+                if incoming.previous != nil {
+                    // A Trash failure can leave extra bytes, never break the live signed pins.
+                    for file in retired { try retireArtifact(file) }
+                }
                 return incoming
             } catch {
                 _ = try? Trash.move(stage, into: trash)
@@ -99,7 +112,7 @@ public enum FeedMirror {
             if let existing = result[name], existing != item { throw khuFail("conflicting signed mirror artifact: \(name)") }
             result[name] = item
         }
-        for entry in feed.apps.values {
+        for entry in Array(feed.apps.values) + Array((feed.previous ?? [:]).values) {
             try add(entry.file, sha: entry.sha256, bytes: entry.bytes)
             if let icon = entry.icon, let sha = entry.iconSha256 {
                 try add(icon, sha: sha, bytes: nil)

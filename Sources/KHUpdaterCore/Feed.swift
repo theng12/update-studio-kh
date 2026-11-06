@@ -56,6 +56,8 @@ public struct Feed: Codable, Sendable, Equatable {
     public var schema: Int
     public var published_at: String
     public var apps: [String: FeedApp]
+    /// Signed fallback pins for distributors; older clients keep reading only `apps`.
+    public var previous: [String: FeedApp]?
     public var network: FeedNetwork?
 
     public init(schema: Int = Feed.supportedSchema, published_at: String, apps: [String: FeedApp] = [:]) {
@@ -69,11 +71,19 @@ public struct Feed: Codable, Sendable, Equatable {
         guard schema == Feed.supportedSchema else { throw khuFail("feed schema \(schema) is not supported") }
         guard publishedAt != nil else { throw khuFail("feed published_at is not a date: \(published_at)") }
         _ = try network?.validated()
-        for (app, entry) in apps {
+        func validate(_ app: String, _ entry: FeedApp) throws {
             _ = try SafeName.component(app, what: "app id")
             _ = try SafeName.component(entry.file, what: "artifact name")
             guard VersionCompare.isValid(entry.version) else { throw khuFail("\(app) has an invalid version \(entry.version)") }
             guard entry.sha256.count == 64, entry.bytes > 0 else { throw khuFail("\(app) has no usable sha256/size") }
+        }
+        for (app, entry) in apps { try validate(app, entry) }
+        for (app, entry) in previous ?? [:] {
+            try validate(app, entry)
+            guard let current = apps[app], VersionCompare.isNewer(current.version, than: entry.version),
+                  current.file != entry.file else {
+                throw khuFail("\(app) previous installer must be older than its current version")
+            }
         }
         return self
     }

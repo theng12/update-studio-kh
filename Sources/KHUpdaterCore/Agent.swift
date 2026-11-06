@@ -49,6 +49,11 @@ public struct URLSessionHTTPClient: HTTPClient {
             && (url.port == nil || url.port == 443) && hosts.contains(url.host?.lowercased() ?? "")
     }
 
+    static func allowsRedirect(original: URLRequest?, destination: URL, officialHosts: [String]?) -> Bool {
+        guard let original, original.value(forHTTPHeaderField: "Authorization") == nil else { return false }
+        return officialHosts.map { officialURL(destination, hosts: $0) } ?? true
+    }
+
     public func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
         try send("GET", url, headers: headers, body: nil)
     }
@@ -136,9 +141,8 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        if let officialHosts,
-           request.url.map({ URLSessionHTTPClient.officialURL($0, hosts: officialHosts) }) != true {
-            error = khuFail("download refused: redirect left the vendor's official HTTPS hosts")
+        if request.url.map({ URLSessionHTTPClient.allowsRedirect(original: task.originalRequest, destination: $0, officialHosts: officialHosts) }) != true {
+            error = khuFail("redirect refused: authenticated requests stay on their controller and vendor requests stay on official HTTPS hosts")
             completionHandler(nil)
         } else {
             completionHandler(request)
@@ -271,7 +275,8 @@ public enum Agent {
                                control: ((String, AppConfig) -> AppControl)? = nil,
                                executable: String? = Bundle.main.executablePath, now: Date = Date(),
                                requested: Set<String> = [], installing: ((String?) -> Void)? = nil,
-                               ssd: [SSDSource] = [], appFolders: [URL] = Catalog.applicationFolders) throws -> AgentRunResult {
+                               ssd: [SSDSource] = [], appFolders: [URL] = Catalog.applicationFolders,
+                               connectionFile: URL? = nil) throws -> AgentRunResult {
         // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
         let stateURL = URL(fileURLWithPath: config.stateDir)
         var config = config
@@ -283,7 +288,7 @@ public enum Agent {
         return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"), wait: false) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
-                          requested: requested, installing: installing ?? { _ in }, ssd: ssd)
+                          requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile)
         }
     }
 
@@ -293,7 +298,8 @@ public enum Agent {
 
     static func runLocked(config: AgentConfig, stateDir: URL, http: HTTPClient, shell: Shell,
                           control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
-                          requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = []) throws -> AgentRunResult {
+                          requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = [],
+                          connectionFile: URL? = nil) throws -> AgentRunResult {
         var config = config
         let vendors = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("vendor-apps.json")) ?? [:]
         config.apps.merge(vendors) { configured, _ in configured }
@@ -349,8 +355,16 @@ public enum Agent {
             if Recipe.isUnresolved(stateDir: stateDir.path, app: app) { health[app] = "unresolved install" }
         }
         if let mine = selfVersion(config: config, executable: executable) { installed["updater"] = mine; health["updater"] = "running" }
-        if let host = try? AtomicFile.readJSON([String: String].self, from: stateDir.appendingPathComponent("feed-host-status.json")) {
-            health["feed-host"] = host["status"]
+        let hostStatusFile = stateDir.appendingPathComponent("feed-host-status.json")
+        if FileManager.default.fileExists(atPath: hostStatusFile.path) {
+            var host = (try? AtomicFile.readJSON([String: String].self, from: hostStatusFile)) ?? [:]
+            if host["error"] == nil, let old = host["status"], old.hasPrefix("failed:") { host["error"] = old }
+            let observed = FeedHostRuntime.status(shell: shell)
+            let status = observed + (host["error"] == nil ? "" : "; setup failed")
+            host["status"] = status
+            host["checked_at"] = ISO.string(now)
+            try AtomicFile.writeJSON(host, to: hostStatusFile)
+            health["feed-host"] = status
         }
 
         let headers = ["Authorization": "Bearer \(config.token)"]
@@ -427,13 +441,13 @@ public enum Agent {
                     _ = try FeedMirror.sync(releaseData: selected.release, sourceBase: artifactBase,
                         root: FeedHostRole.feedDirectory(in: stateDir), publicKey: config.publicKey, http: http, now: now)
                 }
-                let hostExecutable = config.stubBase.map { URL(fileURLWithPath: $0).appendingPathComponent("current/khu").path } ?? executable
+                let hostExecutable = FeedHostRuntime.executable(stubBase: config.stubBase, fallback: executable)
                 let status = try FeedHostRuntime.reconcile(role: role, stateDir: stateDir, executable: hostExecutable, shell: shell)
-                try AtomicFile.writeJSON(["status": status], to: stateDir.appendingPathComponent("feed-host-status.json"))
+                try AtomicFile.writeJSON(["status": status, "checked_at": ISO.string(now)], to: hostStatusFile)
                 result.notes.append("feed host: " + status)
             } catch {
                 let reason = "failed: " + String(String(describing: error).prefix(160))
-                try? AtomicFile.writeJSON(["status": reason], to: stateDir.appendingPathComponent("feed-host-status.json"))
+                try? AtomicFile.writeJSON(["status": "setup failed", "error": reason, "checked_at": ISO.string(now)], to: hostStatusFile)
                 result.notes.append("feed host " + reason)
             }
         }
@@ -629,6 +643,14 @@ public enum Agent {
         let vendorApps = vendorRows(stateDir: stateDir)
         result.apps.removeAll { row in vendorApps.contains { $0.app == row.app } }
         result.apps += vendorApps
+        if feed.network?.controller != nil, let connectionFile {
+            do {
+                if try followControllerHandoff(release: selected.release, config: config, memory: memory,
+                                               file: connectionFile, http: http, now: now) {
+                    result.notes.append("controller connection moved; this Mac's enrolment and app choices were kept")
+                }
+            } catch { result.notes.append("controller move did not finish: \(error)") }
+        }
         return result
     }
 

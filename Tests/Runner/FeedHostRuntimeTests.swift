@@ -5,16 +5,21 @@ import Foundation
 private final class FeedHostShell: Shell, @unchecked Sendable {
     var calls: [String] = []
     var loaded = false
+    var statusOutput = "state = running\n pid = 123\n"
     var bootstrap = ShellResult(exitCode: 0, stdout: "", stderr: "")
     var bootout = ShellResult(exitCode: 0, stdout: "", stderr: "")
     func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
         calls.append(([executable] + arguments).joined(separator: " "))
         switch arguments.first {
         case "print":
-            return ShellResult(exitCode: loaded ? 0 : 1, stdout: "",
+            return ShellResult(exitCode: loaded ? 0 : 1, stdout: statusOutput,
                                stderr: loaded ? "" : "Could not find service \"\(arguments.last ?? "")\"")
-        case "bootstrap": return bootstrap
-        case "bootout": return bootout
+        case "bootstrap":
+            if bootstrap.exitCode == 0 { loaded = true }
+            return bootstrap
+        case "bootout":
+            if bootout.exitCode == 0 { loaded = false }
+            return bootout
         default: throw khuFail("feed-host fixture refused unexpected command: \(executable) \(arguments.joined(separator: " "))")
         }
     }
@@ -41,8 +46,35 @@ private struct FeedHostFixture {
 
 func feedHostRuntimeTests() {
     let role = FeedHostRole(enabled: true, bind: "127.0.0.1", port: 8791)
-    let executable = "/Users/tester/Library/KHUpdater/base/current/khu"
+    let executable = "/Users/tester/Library/KHUpdater/base/current"
     let domain = "gui/\(getuid())"
+
+    do {
+        let base = tmpDir("feedhost-executable")
+        let layout = StubLayout(base: base)
+        let binary = try layout.binary(for: "0.1.12")
+        try fm.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: binary)
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: binary.path)
+        try StubSwitcher(layout: layout).install(version: "0.1.12")
+        let path = FeedHostRuntime.executable(stubBase: base.path, fallback: "/unused")
+        expect(path == binary.path && fm.isExecutableFile(atPath: path ?? ""),
+               "FH0 host uses the executable current symlink, not current/khu")
+        expect(!fm.isExecutableFile(atPath: layout.currentLink.appendingPathComponent("khu").path),
+               "FH0 released current/khu path is not executable")
+        expect(FeedHostRuntime.executable(stubBase: nil, fallback: binary.path) == binary.path,
+               "FH0 non-supervised hosts keep their executable")
+        expect(FeedHostRuntime.executable(stubBase: base.appendingPathComponent("missing").path, fallback: binary.path) == binary.path,
+               "FH0 missing current falls back to the running executable")
+        let directoryBase = tmpDir("feedhost-directory-current")
+        try fm.createSymbolicLink(atPath: directoryBase.appendingPathComponent("current").path, withDestinationPath: binary.deletingLastPathComponent().path)
+        expect(FeedHostRuntime.executable(stubBase: directoryBase.path, fallback: binary.path) == binary.path,
+               "FH0 a directory current target falls back to the running executable")
+        expect(FeedHostRuntime.executable(stubBase: nil, fallback: base.path) == nil,
+               "FH0 directory executable is refused")
+        expect(FeedHostRuntime.executable(stubBase: base.appendingPathComponent("missing").path, fallback: "/missing/khu") == nil,
+               "FH0 no usable executable returns nil before installing a job")
+    } catch { expect(false, "FH0 executable layout: \(error)") }
 
     // FH1: off is the default and must create, install and start nothing.
     do {
@@ -114,7 +146,7 @@ func feedHostRuntimeTests() {
                "FH3 an unchanged loaded service is not bootstrapped or booted out again")
         let after = try Data(contentsOf: fx.plist)
         expect(after == before, "FH3 the plist is not rewritten")
-        expect(message.contains("untouched"), "FH3 reconcile says the service was left alone")
+        expect(message == "running (pid 123)", "FH3 reconcile reports the observed running process")
     } catch { expect(false, "FH3 reconcile threw: \(error)") }
 
     // FH4: off stops only this exact job and retires only its own plist.
@@ -166,4 +198,27 @@ func feedHostRuntimeTests() {
             as! [String: Any]
         expect((plist["ProgramArguments"] as! [String]).contains("8799"), "FH6 the new port reaches the plist")
     } catch { expect(false, "FH6 reconcile threw: \(error)") }
+
+    do {
+        let fx = FeedHostFixture("feedhost-exited", mirror: true)
+        let shell = FeedHostShell()
+        shell.statusOutput = "state = spawn scheduled\nlast exit code = 78\n"
+        let first = try FeedHostRuntime.reconcile(role: role, stateDir: fx.state, executable: executable,
+                                                shell: shell, home: fx.home)
+        expect(first == "not running (last exit 78)", "FH7 bootstrap acceptance does not claim a failed host is running")
+        let again = try FeedHostRuntime.reconcile(role: role, stateDir: fx.state, executable: executable,
+                                                shell: shell, home: fx.home)
+        expect(again == first && shell.count("bootstrap") == 1, "FH7 loaded exited host stays failed without forced restart")
+        shell.statusOutput = "state = waiting\n"
+        expect(FeedHostRuntime.status(shell: shell) == "loaded; running not confirmed", "FH7 loaded job without a process stays unconfirmed")
+        shell.statusOutput = "state = running\npid = 123\nlast exit code = 78\n"
+        expect(FeedHostRuntime.status(shell: shell) == "running (pid 123)", "FH7 fresh running process supersedes historical exit")
+        shell.loaded = false
+        expect(FeedHostRuntime.status(shell: shell) == "unknown (launchd print exit 1)",
+               "FH7 refused observation does not assert the job is absent")
+        for status in [first, again, FeedHostRuntime.status(shell: shell)] {
+            expect(FeedServer.reportRefusal(installed: nil, health: ["feed-host": status], defaults: nil) == nil,
+                   "FH7 observed status fits the existing controller health bound")
+        }
+    } catch { expect(false, "FH7 observed status: \(error)") }
 }

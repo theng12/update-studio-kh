@@ -276,6 +276,14 @@ public enum Connect {
                 + "Another Update Studio needs its setup kit — a typed address alone cannot establish trust")
         }
         _ = try JSON.decode(Feed.self, from: feedData).validated()
+        return try saveDestination(feedURL, file: file, expected: raw)
+    }
+
+    /// Shared compare-before-replace save; preserves unknown settings and refuses a concurrent edit.
+    static func saveDestination(_ feedURL: String, file: URL, expected raw: Data) throws -> String {
+        guard var settings = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
+            throw khuFail("this Mac's updater settings are not readable JSON")
+        }
         settings["feedURL"] = feedURL
         let body = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
         let temp = file.deletingLastPathComponent().appendingPathComponent(".\(file.lastPathComponent).\(UUID().uuidString)")
