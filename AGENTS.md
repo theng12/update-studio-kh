@@ -34,8 +34,9 @@ credential-free agent kit per Mac.
   prepare and syntax-check them, never execute them. The imported key is 0600 in a 0700 directory;
   verification prints only the public-key fingerprint and its match result. After verified import,
   the owner-run command moves the SSD transfer copy into that SSD's restorable `_trash`.
-  This Mac keeps its signer until 1301 signs a real order accepted by a Mac; retiring this Mac's
-  signer into `_trash` requires a separate owner OK. A new key would orphan enrolled Macs.
+  This Mac keeps its signer until at least 2026-12-07 and until every enrolled Mac has updated or
+  moved to 1301, whichever is later; only then may it be retired into restorable `_trash` with a
+  separate owner OK. No key operation happens before then. A new key would orphan enrolled Macs.
   The original setup ran on 2026-10-26; its overwrite refusals remain in force.
 - **The kit installer activates the agent** (owner, 2026-10-26: "sure switch it on").
   `packaging/install-agent.sh` installs *and* loads the LaunchAgent, matching Studio Hub's
@@ -47,8 +48,9 @@ credential-free agent kit per Mac.
 - **Whole-cycle release.** A change is not finished until, in order: `./build.sh build`, the
   unfiltered test set below, a commit on its own branch, and an agent kit rebuilt from that same
   commit (`packaging/build-agent-kit.sh`) for the Studio Hub kit to carry. KH Updater has no remote;
-  the branch commit and the kit built from it are the release. Before closeout, refresh the four
-  install SSD kits and hash-check the copies as specified in `docs/INSTALL.md` → Publish a release.
+  the branch commit and the kit built from it are the release. Before closeout, refresh the three
+  active install SSD kits (ATLAS, NOVA and UGREEN; never ORICO, now the NAS data drive) and
+  hash-check the copies as specified in `docs/INSTALL.md` → Publish a release.
   This is a standard step for every KH app release; Updater serializes the SSD writes.
 - **Roll out through Studio Hub, all Macs at once** (owner, 2026-10-25). The agent ships inside the
   Hub release and installs per user on launch; the Hub's own site-by-site rollout is the only

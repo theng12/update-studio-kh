@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.17 — 2026-11-07
+- Includes Studio Launcher KH 0.1.14, whose connection setup and Pair again instructions say "the controller Mac" instead of "the Mac Studio".
+- Existing connections, paused apps and signed releases are unchanged.
+
 ## 1.0.16 — 2026-11-06
 - Includes Studio Launcher KH 0.1.13 with observed feed-host health, corrected supervised-host startup and verified current/fallback installer retention.
 - Signed controller handoffs let prepared Macs keep their existing enrollment and app settings when moving to the same trusted publisher at a new address. No move happens unless it is explicitly published and the destination passes its checks.

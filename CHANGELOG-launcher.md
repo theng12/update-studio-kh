@@ -2,6 +2,9 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.14 — 2026-11-07
+- Connection setup and Pair again now say "the controller Mac" instead of "the Mac Studio", matching whichever Mac runs Update Studio KH.
+
 ## 0.1.13 — 2026-11-06
 - A signed controller move can keep this Mac's existing connection and app choices. It checks the destination's matching signed feed and existing sign-in before saving, and keeps a private rollback copy.
 - Authenticated updater requests refuse redirects, so a connection token stays with its explicitly chosen controller.

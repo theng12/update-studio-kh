@@ -65,7 +65,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         switch mode {
         case .firstRun(let kit, _):
             intro = Self.wrap("Studio Launcher KH sets up this Mac from the kit inside this app. "
-                + "Type the pairing code shown in Update Studio KH on the Mac Studio, under Connect a Mac.")
+                + "Type the pairing code shown in Update Studio KH on the controller Mac, under Connect a Mac.")
             // An edited address changes the route, never the kit's pinned publisher key.
             destination.stringValue = (try? Connect.publisher(kit: kit))?.feedURL ?? "unknown"
             destination.setAccessibilityLabel("Update Studio address")
@@ -73,7 +73,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         case .repair(_, let plan):
             intro = Self.wrap("Your current sign-in file will be preserved in ~/Library/KHUpdater/_trash, and this Mac "
                 + "keeps its name, its apps and its pinned key. Type the pairing code shown in Update Studio KH "
-                + "on the Mac Studio, under Connect a Mac. Nothing is sent until you press Pair again.")
+                + "on the controller Mac, under Connect a Mac. Nothing is sent until you press Pair again.")
             destination.stringValue = plan.feedURL
             destination.isEditable = false
             destination.isBezeled = false
