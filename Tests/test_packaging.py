@@ -67,6 +67,76 @@ try:
         minimums = [line.split()[1] for line in output.splitlines() if line.strip().startswith("minos ")]
         check(bool(minimums) and all(tuple(map(int, (v.split(".") + ["0", "0"])[:2])) <= (13, 0) for v in minimums),
               f"{binary} supports the declared macOS 13 minimum")
+    # Universal-build regression: mocked kits only, no compile. Thin build outputs are refused,
+    # universal ones ship unchanged, and build.sh/build-launcher.sh keep the universal shape.
+    import shutil
+    fake_root = work / "universal-root"
+    (fake_root / "packaging").mkdir(parents=True)
+    (fake_root / "examples").mkdir()
+    (fake_root / "build").mkdir()
+    for rel in ("packaging/build-agent-kit.sh", "packaging/install-agent.sh",
+                "packaging/com.khupdater.agent.plist", "examples/agent-config.json"):
+        shutil.copy(ROOT / rel, fake_root / rel)
+    # Stand-in lipo first on this block's PATH only (like the launchctl fake): the fixtures are
+    # text, so the real lipo would reject them; real Mach-O inputs are exercised by the kit run
+    # below against the actual ./build.sh build binaries.
+    univ_bin = work / "lipo-bin"
+    univ_bin.mkdir()
+    (univ_bin / "lipo").write_text(
+        '#!/bin/bash\n'
+        '[[ "$1" == "-archs" ]] || exit 2\n'
+        "archs=$(cat \"$2\")\n"
+        '[[ "$archs" == *arm64* || "$archs" == *x86_64* ]] || { echo "lipo: not a mach-o" >&2; exit 1; }\n'
+        "printf '%s\\n' \"$archs\"\n")
+    (univ_bin / "lipo").chmod(0o755)
+    univ_env = {**fake_env, "PATH": f"{univ_bin}:{fake_env['PATH']}"}
+    fake_builder = fake_root / "packaging/build-agent-kit.sh"
+    universal_blob = "arm64 x86_64\n"
+    (fake_root / "build/khu-stub").write_text(universal_blob)
+    (fake_root / "build/khu-stub").chmod(0o755)
+    thin = fake_root / "build/khu"
+    thin.write_text("arm64\n")
+    thin.chmod(0o755)
+    out = fake_root / "kit-thin"
+    result = run(fake_builder, "1.0.0", out, env=univ_env)
+    check(result.returncode != 0 and "must be universal arm64+x86_64" in result.stderr and not out.exists(),
+          "kit refuses a thin arm64-only khu before creating any output")
+    thin.write_text(universal_blob)
+    (fake_root / "build/khu-stub").write_text("x86_64\n")
+    result = run(fake_builder, "1.0.0", out, env=univ_env)
+    check(result.returncode != 0 and "must be universal arm64+x86_64" in result.stderr and not out.exists(),
+          "kit refuses a thin x86_64-only khu-stub too, so both slices are asserted")
+    (fake_root / "build/khu-stub").write_text("payload with no architectures\n")
+    result = run(fake_builder, "1.0.0", out, env=univ_env)
+    check(result.returncode != 0 and "must be universal arm64+x86_64" in result.stderr
+          and "not a Mach-O" in result.stderr and not out.exists(),
+          "an unrecognised build/khu-stub fails the same gate with a reason instead of crashing")
+    (fake_root / "build/khu-stub").write_text(universal_blob)
+    check(run(fake_builder, "1.0.0", out, env=univ_env).returncode == 0
+          and (out / "bin/khu").read_text() == universal_blob
+          and (out / "bin/khu-stub").read_text() == universal_blob,
+          "kit ships universal inputs unchanged")
+    check(run(fake_builder, "1.0.0", out, env=univ_env).returncode != 0
+          and (out / "bin/khu").read_text() == universal_blob,
+          "overwrite refusal still follows the universal check")
+
+    # Static shape of build.sh/build-launcher.sh: per-arch compile, lipo merge at macos13.0,
+    # native test runner intact, and the launcher no longer re-merges duplicate slices.
+    build_sh = (ROOT / "build.sh").read_text()
+    check("universal build/khu" in build_sh and "universal build/khu-stub" in build_sh
+          and 'TARGET="$(uname -m)' not in build_sh,
+          "build.sh produces both universal binaries instead of a uname-sized thin one")
+    check("apple-macos13.0" in build_sh and '"${arch}-${FLOOR}"' in build_sh
+          and "lipo -create" in build_sh,
+          "each slice keeps its own macos13.0 target and is merged with lipo")
+    check("build/khu-tests" in build_sh and "./build/khu-tests" in build_sh
+          and '"$(uname -m)-${FLOOR}"' in build_sh,
+          "test mode still compiles and runs the native test runner")
+    launcher_sh = (ROOT / "packaging/build-launcher.sh").read_text()
+    check("khu-universal" not in launcher_sh and "build/khu-x86" not in launcher_sh
+          and "build/khu launcher-bundle" in launcher_sh,
+          "launcher consumes the shared universal build/khu without re-merging slices")
+
     kit = work / "Agent Kit"
     builder = ROOT / "packaging/build-agent-kit.sh"
     installer = kit / "install-agent.sh"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build first with ./build.sh build. The kit contains no machine credentials.
+# Build first with ./build.sh build (universal arm64+x86_64). The kit contains no machine credentials.
 set -euo pipefail
 umask 077
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,6 +9,15 @@ fi
 VERSION="$1"
 OUT="$2"
 [[ -x "$ROOT/build/khu" && -x "$ROOT/build/khu-stub" ]] || { echo 'Run ./build.sh build first.' >&2; exit 1; }
+# Both slices, or a Mac of the other architecture installs a helper that cannot launch.
+# lipo resolves from PATH like every other command, so the packaging test can stand in a fake.
+for bin in khu khu-stub; do
+    archs="$(lipo -archs "$ROOT/build/$bin" 2>/dev/null || true)"
+    if [[ " $archs " != *" arm64 "* || " $archs " != *" x86_64 "* ]]; then
+        echo "build/$bin must be universal arm64+x86_64 (found: ${archs:-not a Mach-O}); run ./build.sh build." >&2
+        exit 1
+    fi
+done
 [[ ! -e "$OUT" && ! -L "$OUT" ]] || { echo 'Output already exists; choose a new directory.' >&2; exit 1; }
 mkdir -p "$(dirname "$OUT")"
 mkdir "$OUT"
