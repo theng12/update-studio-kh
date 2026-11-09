@@ -17,7 +17,7 @@ class ReleaseProofTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="khu-release-proof-"))
         self.config = self.root / "policy.json"
-        self.config.write_text(json.dumps({"projects": {"kh-updater": {"path": str(self.root), "lanes": {"fast": {}}}}}))
+        self.config.write_text(json.dumps({"projects": {"kh-updater": {"path": str(self.root), "lanes": {"fast": {"paths": ["Sources"]}}}}}))
         self.log = self.root / "fast.log"
         self.log.write_bytes(b"checks passed\n")
         self.receipt = {"project": "kh-updater", "lane": "fast", "status": "pass", "exitCode": 0,
@@ -46,6 +46,7 @@ class ReleaseProofTests(unittest.TestCase):
         self.assertEqual(row["status"], "skipped-unchanged")
         self.assertEqual(row["ranOnSource"], "prior-source")
         self.assertEqual(row["verifiedForSource"], "current-source")
+        self.assertEqual(row["verificationScope"], {"authority": "shared-testctl-input-key", "paths": ["Sources"]})
         self.assertEqual(result["installedLive"], "not-checked")
 
     def test_fresh_execution_is_labelled_passed(self):

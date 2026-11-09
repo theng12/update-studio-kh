@@ -41,6 +41,8 @@ def collect(config, repo, started_at, testctl, check=checked):
             raise ValueError(f"receipt time needs a timezone: {lane}")
         rows.append({"lane": lane, "status": "passed" if at >= started else "skipped-unchanged",
                      "ranOnSource": receipt["tree"]["head"], "verifiedForSource": head,
+                     "verificationScope": {"authority": "shared-testctl-input-key",
+                                           "paths": project["lanes"][lane].get("paths") or None},
                      "receiptKey": receipt["key"], "startedAt": receipt["startedAt"],
                      "commands": receipt["commands"], "log": log, "receipt": receipt})
     return {"schema": 1, "source": head, "releaseStartedAt": started_at,

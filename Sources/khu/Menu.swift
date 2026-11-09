@@ -173,9 +173,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         request(app)
     }
     func request(_ app: String) {
-        lock.lock(); let wasIdle = installingApp == nil; requested.insert(app); lock.unlock()
-        if wasIdle { DownloadControl.updateProgress("preparing") }
-        installing(app)
+        // Only the agent's item-start callback owns live progress; a click just queues work.
+        lock.lock(); requested.insert(app); lock.unlock()
         wake.signal()
     }
 
