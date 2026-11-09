@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds build/Update Studio KH.app (ad-hoc signed, like gateway-kh) and build/Update-Studio-KH-<version>.dmg.
+# Builds the signed publisher app and build/Update-Studio-KH-<version>.dmg.
 # Usage: packaging/build-app.sh <version>
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -43,7 +43,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-codesign --force --deep --sign - "$APP"
+IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
+[ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
+codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
 codesign --verify --deep --strict "$APP"
 
 mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Update Studio KH.app"; ln -s /Applications "$TMP/dmg/Applications"

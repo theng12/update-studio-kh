@@ -6,9 +6,9 @@ On the controller Mac, 1301, open Update Studio KH → Connect a Mac. Use **Save
 
 On the new Mac, install Tailscale and sign in to a network that permits reaching controller 1301. Put Studio Launcher KH in Applications, open it, and use **Connect to Update Studio**. The Update Studio address starts with the trusted package’s saved address (controller 1301's `http://100.82.91.102:8790/release.json` in the current package) and can be edited to another Tailscale IPv4 address; the package’s publisher key stays pinned. Confirm the Mac name, enter the code from Update Studio, and click **Connect**. The app shows connecting, success or the reason it could not connect. It never discovers or trusts an arbitrary publisher from a code alone.
 
-Opening any Launcher copy first asks this user's running helper to open the main window. An existing installation starts its saved helper if needed and waits for its window instead of showing the pairing form. The main window checks its saved connection; a refused sign-in opens Settings with Pair again, while an unreachable publisher keeps the saved connection. First-run connection opens as a centred normal window, leaving other windows usable.
+The installed Launcher app stays exactly as packaged when the raw helper updates. Target Macs never regenerate or sign its bundle and need no private app-signing key. A missing or damaged Launcher requires the signed Launcher installer; the raw helper keeps running and reports that requirement. Opening any Launcher copy first asks this user's running helper to open the main window. An existing installation starts its saved helper if needed and waits for its window instead of showing the pairing form. The main window checks its saved connection; a refused sign-in opens Settings with Pair again, while an unreachable publisher keeps the saved connection. First-run connection opens as a centred normal window, leaving other windows usable.
 
-Launcher’s own automatic updates start enabled, matching the existing setup default. Connecting does not silently install other apps. Settings show the current connection and let you check it without enrolling the Mac again. Changing publisher trust requires its trusted connection package; a failed connection check does not replace credentials.
+Helper automatic updates start enabled, matching the existing setup default. After signed pairing, setup first requests the pinned publisher’s signed helper release and checks the download’s size and SHA-256. An unavailable feed or interrupted download uses the verified kit inside this Launcher; an invalid signature, checksum or refused request stops setup. Pairing itself still needs the controller. A newer kit is never downgraded by an older network release. Connecting does not silently install other apps. Settings show the current connection and let you check it without enrolling the Mac again. Changing publisher trust requires its trusted connection package; a failed connection check does not replace credentials.
 
 If Connect finds leftover installation files without saved connection settings, it repairs the incomplete setup while keeping the Mac’s app data and previous versions. Keep the same name and enter the current pairing code. If local setup fails, try Connect again; Launcher keeps the same pairing attempt. If setup finishes but the helper cannot start, close the window and reopen Launcher to retry starting it.
 
@@ -60,7 +60,7 @@ open http://127.0.0.1:8790/        # the status page (loopback only)
 ~/Library/KHUpdater/bin/khu publish ... --app updater --version 1.0.1 --artifact build/khu --kind updater --changelog CHANGELOG-launcher.md
 ```
 
-Every KH app release includes a three-SSD refresh before closeout: refresh KH-STUDIO-ATLAS, KH-STUDIO-NOVA and KH-STUDIO-UGREEN from the released artifacts; update each SSD’s `apps.json`, installer checksums, version notes and setup helpers; read back and hash every copied installer and helper; keep the current and one previous version, moving older material to restorable `_trash`; leave all three SSDs mounted. A missing drive or failed copy is an unfinished release step and must be reported. ORICO is the NAS data drive and is never used for a release refresh or accessed by agents. Update Studio owns serialized SSD writes across app releases.
+Every KH app release includes a three-SSD refresh before closeout: refresh KH-STUDIO-ATLAS, KH-STUDIO-NOVA and KH-STUDIO-UGREEN from the released artifacts; update each SSD’s `apps.json`, installer checksums, version notes and setup helpers; read back and hash every copied installer and helper; keep the current and one previous version, moving older material to restorable `_trash`; leave all three SSDs mounted. A missing drive or failed copy is an unfinished release step and must be reported. ORICO is the owner's Time Machine drive and is never used for a release refresh or accessed by agents. Update Studio owns serialized SSD writes across app releases.
 
 The one-click SSD action reads the current `apps.json` each time it starts. App identities, versions, installer paths, sizes and checksums come from that refreshed index, rather than a fixed version list in Launcher. The same click therefore handles future released app versions after the SSD refresh. It still keeps newer installed versions, preserves pauses and never installs absent optional apps.
 
@@ -74,8 +74,8 @@ Use `--name` for its shown name, `--description` for the Launcher details descri
 
 `packaging/build-agent-kit.sh <updater-version> <new-output-directory>` packages the two
 `./build.sh build` binaries, the existing agent plist, a config example and `install-agent.sh`.
-The kit has no credentials. It contains the build Mac's architecture only; check the destination
-architecture before copying it. No sudo, package receipt or system-wide daemon is needed.
+The kit has no credentials. Its helper and supervisor must each contain both arm64 and x86_64
+slices; the kit builder refuses thin inputs. No sudo, package receipt or system-wide daemon is needed.
 
 On the destination, as the signed-in user, run:
 
@@ -116,6 +116,22 @@ Terminal, or log in and run the installer again.
 
 The local smoke check is `python3 -I Tests/test_packaging.py` after `./build.sh build`; it uses only
 temporary homes and a stand-in `launchctl` first on `PATH`, and never opens an app.
+
+Release checks use the Developer-owned `~/Developer/portfolio/bin/testctl` policy for `kh-updater`.
+Use `testctl plan kh-updater` before the coordinated gate and `testctl run kh-updater <lane>` for
+its configured lanes. The policy must point at the exact release checkout. After the gate,
+`python3 -B -I packaging/release-proof.py --started-at <gate-start-UTC> --out <new-proof.json>`
+collects matching receipts and independently rehashes their logs. Older matching results are
+labelled `skipped-unchanged` and retain the source on which they ran. The collector runs no tests,
+defines no lanes, and refuses receipts for another checkout or a changed log. Packaged launch,
+update/rollback and intended-machine evidence remain separate required release checks; a test
+receipt never claims those passed. `Tests/test_release_proof.py` checks the collector itself.
+
+Both native app packagers use `KHU_SIGN_IDENTITY`, defaulting to the existing
+`KH Studio Local Signing` identity. A missing identity fails packaging; ad-hoc signing is refused.
+The private app-signing key stays on the build Mac. Compare designated requirements across two
+differing packaged versions, verify signatures and kit hashes after the final outer seal, and
+run the isolated packaged launch check before distribution. Target Macs preserve the signed app.
 
 ### Enrolment — where the config's token comes from
 

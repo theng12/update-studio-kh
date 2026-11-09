@@ -433,7 +433,7 @@ func connectionFlowTests() {
             let app = root.appendingPathComponent(name)
             let contents = app.appendingPathComponent("Contents")
             try! fm.createDirectory(at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
-            let plist: [String: Any] = ["CFBundleIdentifier": "com.khupdater.launcher.test", "CFBundleName": name,
+            let plist: [String: Any] = ["CFBundleIdentifier": "com.khupdater.launcher", "CFBundleName": name,
                                         "CFBundleDisplayName": name, "CFBundleExecutable": "khu-bin", "CFBundlePackageType": "APPL",
                                         "CFBundleShortVersionString": version, "CFBundleVersion": version,
                                         "LSMinimumSystemVersion": "13.0"]
@@ -466,9 +466,14 @@ func connectionFlowTests() {
                == (try? Data(contentsOf: kitDir.appendingPathComponent("publisher.json")))
                && (try? Connect.publisher(kit: carried)) != nil,
                "CF8 the carried kit is byte-identical and still passes its manifest check")
-        expect(Connect.signBundle(staging), "CF8 the regenerated bundle is ad-hoc signed like packaging signs it")
-        let verified = (try? SystemShell().run("/usr/bin/codesign", arguments: ["--verify", "--deep", "--strict", staging.path], timeout: 60))?.exitCode
-        expect(verified == 0, "CF8 the regenerated bundle passes strict codesign for Save Launcher (got \(String(describing: verified)))")
+        let verifier = CaptureShell()
+        expect(Connect.packagedLauncherVerifies(staging, shell: verifier), "CF8 an intact packaged Launcher is kept")
+        expect(verifier.calls == [["/usr/bin/codesign", "--verify", "--deep", "--strict", staging.path]],
+               "CF8 runtime only verifies the existing bundle; no signing key or bundle rewrite")
+        let refused = CaptureShell(); refused.exitCode = 1
+        expect(!Connect.packagedLauncherVerifies(staging, shell: refused), "CF8 a damaged signature is not accepted")
+        expect(!Connect.packagedLauncherVerifies(root.appendingPathComponent("Absent.app"), shell: verifier),
+               "CF8 a missing Launcher needs the signed installer")
 
         let tampered = bundle("Tampered.app", "0.1.4")
         _ = addKit(to: tampered)

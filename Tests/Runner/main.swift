@@ -1716,7 +1716,7 @@ func ownerRollbackTests() {
         child.standardError = FileHandle.nullDevice
         try! child.run()
         child.waitUntilExit()
-        expect(child.terminationReason == .uncaughtSignal && child.terminationStatus == SIGKILL
+        expect(child.terminationReason == .uncaughtSignal && child.terminationStatus == SIGTERM
                && fm.fileExists(atPath: r.journal.path),
                "R6-12 a run killed as the swapped bundle launched leaves the owner swap in the journal")
         r.run()
@@ -3435,7 +3435,7 @@ struct RunnerMain {
             let key = try! Signing.loadPrivateKey(from: base.appendingPathComponent("private.key"))
             let server = FeedServer(feedDir: base.appendingPathComponent("feed"), stateDir: base.appendingPathComponent("state"),
                                     bind: "127.0.0.1", port: 8790, commandKey: key)
-            let ctl = AppControl(isRunning: { true }, quit: { true }, launch: { kill(getpid(), SIGKILL) }, healthy: { _ in false }, healthSettle: 0)
+            let ctl = AppControl(isRunning: { true }, quit: { true }, launch: { kill(getpid(), SIGTERM) }, healthy: { _ in false }, healthSettle: 0)
             _ = try? Agent.runOnce(config: config, http: InProcessClient(server: server), control: { _, _ in ctl })
             exit(2)
         }
@@ -3488,6 +3488,7 @@ struct RunnerMain {
             helperTests()
             launcherTests()
             connectionFlowTests()
+            setupSourceTests()
             connectionReloadTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
@@ -3528,6 +3529,7 @@ r41HealthMustHold()
         helperTests()
         launcherTests()
         connectionFlowTests()
+        setupSourceTests()
         connectionReloadTests()
         toolbarTests()
         inventoryTests()

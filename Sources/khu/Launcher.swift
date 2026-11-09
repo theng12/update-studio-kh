@@ -20,9 +20,8 @@ extension HelperMenu {
     }
 }
 
-/// Studio Launcher KH.app in /Applications (or ~/Applications when that is not writable): the
-/// same helper binary in a bundle, so Spotlight finds it and opening it shows the window. The
-/// helper refreshes it whenever its own binary changes; the old copy goes to _trash.
+/// The packaged Launcher forwards to the running helper. Raw helper updates must keep that
+/// app's signature and kit intact; only a verified packaged app update replaces the bundle.
 enum LauncherBundle {
     static let openNotification = Notification.Name("com.khupdater.launcher.open")
     static let shownNotification = Notification.Name("com.khupdater.launcher.shown")
@@ -30,32 +29,13 @@ enum LauncherBundle {
     static let name = "Studio Launcher KH.app"
 
     static func ensure(version: String?) {
-        guard ProcessInfo.processInfo.environment["KHU_NO_BUNDLE"] == nil, !Bundle.main.bundlePath.hasSuffix(".app"),
-              let exe = Bundle.main.executablePath.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath() }) else { return }
+        guard ProcessInfo.processInfo.environment["KHU_NO_BUNDLE"] == nil,
+              !Bundle.main.bundlePath.hasSuffix(".app") else { return }
         let fm = FileManager.default
-        let parent = fm.isWritableFile(atPath: "/Applications") ? URL(fileURLWithPath: "/Applications")
-            : fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
-        let target = parent.appendingPathComponent(name)
-        let inside = target.appendingPathComponent("Contents/MacOS/Studio Launcher KH")
-        if let a = try? Signing.sha256Hex(fileAt: exe).hex, let b = try? Signing.sha256Hex(fileAt: inside).hex, a == b { return }
-        do {
-            try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-            let staging = parent.appendingPathComponent(".\(name).khu-tmp-\(UUID().uuidString)")
-            try write(bundle: staging, executable: exe, version: version ?? "0")
-            if fm.fileExists(atPath: target.path) {
-                // The packaged copy carries the setup kit, so a regenerated one must carry it too:
-                // only a kit that still passes its own manifest check is copied over, byte for byte
-                // (no pin, key or address changes); one that no longer verifies is left behind.
-                _ = Connect.carryKit(from: target, into: staging)
-                try Trash.move(target, into: Trash.root(in: fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/KHUpdater/state")))
-            }
-            // Signed the way packaging signs it, so Save Launcher can still export a copy this
-            // Mac regenerated itself (strict codesign is one of its checks).
-            _ = Connect.signBundle(staging)
-            try fm.moveItem(at: staging, to: target)
-        } catch {
-            FileHandle.standardError.write(Data("Studio Launcher KH.app not written: \(error)\n".utf8))
-        }
+        let locations = [URL(fileURLWithPath: "/Applications").appendingPathComponent(name),
+                         fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications").appendingPathComponent(name)]
+        if locations.contains(where: { Connect.packagedLauncherVerifies($0) }) { return }
+        FileHandle.standardError.write(Data("Install the signed Studio Launcher KH package from the install SSD. The helper keeps running; it cannot rebuild a signed app on this Mac.\n".utf8))
     }
 
     /// Also used by packaging (`khu launcher-bundle`), which adds the setup kit to Resources.

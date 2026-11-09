@@ -24,8 +24,15 @@ public enum Connect {
         guard let manifest = try? JSON.decode(Manifest.self, from: Data(contentsOf: kit.appendingPathComponent("MANIFEST.json"))) else {
             throw khuFail("this copy of Studio Launcher KH has no setup kit inside it")
         }
+        guard manifest.files["publisher.json"] != nil, manifest.files["install-agent.sh"] != nil else {
+            throw khuFail("the setup kit is missing its pinned publisher or installer")
+        }
+        let root = kit.resolvingSymlinksInPath().path + "/"
         for (name, pin) in manifest.files {
-            guard let data = try? Data(contentsOf: kit.appendingPathComponent(name)),
+            let file = kit.appendingPathComponent(name)
+            guard !name.hasPrefix("/"), !name.split(separator: "/").contains(".."),
+                  file.resolvingSymlinksInPath().path.hasPrefix(root),
+                  let data = try? Data(contentsOf: file),
                   data.count == pin.bytes, Signing.sha256Hex(data) == pin.sha256 else {
                 throw khuFail("the setup kit inside this app was changed (\(name)); use a fresh copy from the SSD")
             }
@@ -100,13 +107,19 @@ public enum Connect {
             "apps": ["updater": ["bundlePath": "", "recipe": "updater", "automatic": true]],
         ]
         let temp = library.appendingPathComponent(".khu-connect-\(UUID().uuidString).json")
-        FileManager.default.createFile(atPath: temp.path, contents: try JSONSerialization.data(withJSONObject: config),
-                                       attributes: [.posixPermissions: 0o600])
+        guard FileManager.default.createFile(atPath: temp.path, contents: try JSONSerialization.data(withJSONObject: config),
+                                             attributes: [.posixPermissions: 0o600]) else {
+            throw khuFail("This Mac could not save its setup settings. Try connecting again.")
+        }
         defer { _ = try? Trash.move(temp, into: library.appendingPathComponent("_trash")) }
         let remnants = ["Library/KHUpdater", "Library/LaunchAgents/com.khupdater.agent.plist"].contains {
             (try? FileManager.default.attributesOfItem(atPath: home.appendingPathComponent($0).path)) != nil
         }
-        var arguments = [kit.appendingPathComponent("install-agent.sh").path, temp.path, home.path]
+        let selectedKit = try setupKit(kit, publisher: pub, library: library, http: http)
+        defer {
+            if selectedKit != kit { _ = try? Trash.move(selectedKit, into: library.appendingPathComponent("_trash")) }
+        }
+        var arguments = [selectedKit.appendingPathComponent("install-agent.sh").path, temp.path, home.path]
         if remnants { arguments.append("--repair") }
         let result = try shell.run("/bin/bash", arguments: arguments, timeout: 120)
         guard result.exitCode == 0 else {
@@ -116,7 +129,79 @@ public enum Connect {
             throw khuFail("Local setup could not be completed. Your saved data is kept. Try Connect again.")
         }
         _ = try? Trash.move(claimFile, into: library.appendingPathComponent("_trash"))
-        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = selectedKit == kit ? "the verified copy inside this Launcher" : "the publisher's verified download"
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) + "\nSetup used \(source)."
+    }
+
+    /// Pairing still requires the controller. Only transport failure falls back to the verified
+    /// local kit; a bad signature, refused request or mismatched download must stay an error.
+    static func setupKit(_ kit: URL, publisher pub: Publisher, library: URL, http: HTTPClient) throws -> URL {
+        guard try publisher(kit: kit).publicKey == pub.publicKey else { throw khuFail("the setup publisher does not match this kit's pin") }
+        guard let feedURL = URL(string: pub.feedURL) else { throw khuFail("the kit's feed address is not a URL") }
+        let data: Data, status: Int
+        do { (data, status) = try http.get(feedURL, headers: [:]) }
+        catch let error as URLError where [.notConnectedToInternet, .cannotConnectToHost, .cannotFindHost, .timedOut, .networkConnectionLost].contains(error.code) {
+            return kit
+        }
+        if status == 404 || (500...599).contains(status) { return kit }
+        guard status == 200 else { throw khuFail("Update Studio refused the setup download (HTTP \(status)); nothing was installed") }
+        let release = try JSON.decode(Release.self, from: data)
+        guard let body = release.feedData, let signature = release.signatureData,
+              Signing.verify(body, signature: signature, publicKey: try Signing.loadPublicKey(base64: pub.publicKey)) else {
+            throw khuFail("the setup feed was not signed by the kit's publisher; nothing was installed")
+        }
+        let feed = try JSON.decode(Feed.self, from: body).validated()
+        guard let entry = feed.apps["updater"] else { return kit }
+        guard entry.kind == "updater" else { throw khuFail("the setup feed does not describe a helper binary") }
+        let localVersion = (try? String(contentsOf: kit.appendingPathComponent("VERSION"), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let localVersion, VersionCompare.isNewer(localVersion, than: entry.version) { return kit }
+        let staging = library.appendingPathComponent(".khu-connect-kit-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: kit, to: staging)
+        do {
+            let binary = staging.appendingPathComponent("bin/khu")
+            let part = staging.appendingPathComponent("helper.part")
+            let code: Int
+            do {
+                code = try http.download(feedURL.deletingLastPathComponent().appendingPathComponent("artifacts").appendingPathComponent(entry.file),
+                                         headers: [:], to: part, limit: entry.bytes)
+            } catch let error as URLError where [.notConnectedToInternet, .cannotConnectToHost, .cannotFindHost, .timedOut, .networkConnectionLost].contains(error.code) {
+                try Trash.move(staging, into: library.appendingPathComponent("_trash"))
+                return kit
+            }
+            if (500...599).contains(code) {
+                try Trash.move(staging, into: library.appendingPathComponent("_trash"))
+                return kit
+            }
+            guard code == 200 else { throw khuFail("the setup helper download was refused (HTTP \(code))") }
+            let digest = try Signing.sha256Hex(fileAt: part)
+            guard digest.bytes == entry.bytes, digest.hex == entry.sha256 else {
+                throw khuFail("the setup helper does not match its signed size and checksum; nothing was installed")
+            }
+            try Trash.move(binary, into: staging.appendingPathComponent("_trash"))
+            try FileManager.default.moveItem(at: part, to: binary)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+            let version = staging.appendingPathComponent("VERSION")
+            try Data((entry.version + "\n").utf8).write(to: version, options: .atomic)
+            let manifestURL = staging.appendingPathComponent("MANIFEST.json")
+            var manifest = try JSON.decode(Manifest.self, from: Data(contentsOf: manifestURL))
+            for name in ["bin/khu", "VERSION"] {
+                let bytes = try Data(contentsOf: staging.appendingPathComponent(name))
+                manifest.files[name] = Manifest.Pin(bytes: bytes.count, sha256: Signing.sha256Hex(bytes))
+            }
+            // Keep the kit's manifest metadata, including its format and bootstrap stage.
+            guard var object = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any],
+                  let encoded = try JSONSerialization.jsonObject(with: JSON.encode(manifest)) as? [String: Any] else {
+                throw khuFail("the setup kit manifest is not an object")
+            }
+            object["files"] = encoded["files"]
+            object["agent_version"] = entry.version
+            try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]).write(to: manifestURL, options: .atomic)
+            _ = try publisher(kit: staging)
+            return staging
+        } catch {
+            _ = try? Trash.move(staging, into: library.appendingPathComponent("_trash"))
+            throw error
+        }
     }
 
     /// Retry a completed setup whose LaunchAgent could not start; never start a second copy.
@@ -150,16 +235,10 @@ public enum Connect {
         return true
     }
 
-    /// Ad-hoc signed the way packaging/build-launcher.sh signs the app it ships, so a regenerated
-    /// Launcher still passes `codesign --verify --deep --strict`. Returns false — and says so on
-    /// stderr instead of swallowing it — when codesign refused; the bundle itself is kept.
-    @discardableResult
-    public static func signBundle(_ bundle: URL, shell: Shell = SystemShell()) -> Bool {
-        let outcome = try? shell.run("/usr/bin/codesign", arguments: ["--force", "--deep", "-s", "-", bundle.path], timeout: 60)
-        if let outcome, outcome.exitCode == 0 { return true }
-        let reason = outcome.map { $0.stderr.isEmpty ? "codesign exited \($0.exitCode)" : $0.stderr } ?? "codesign did not run"
-        FileHandle.standardError.write(Data("regenerated Studio Launcher KH.app could not be signed: \(reason)\n".utf8))
-        return false
+    /// Verification only: a target Mac never signs or regenerates the packaged Launcher.
+    public static func packagedLauncherVerifies(_ bundle: URL, shell: Shell = SystemShell()) -> Bool {
+        guard (try? BundleInfo.read(bundle.path))?.identifier == "com.khupdater.launcher" else { return false }
+        return (try? shell.run("/usr/bin/codesign", arguments: ["--verify", "--deep", "--strict", bundle.path], timeout: 60))?.exitCode == 0
     }
 
     /// The settings file the installer wrote: `<KHUpdater>/base/config.json`, beside the state
