@@ -70,10 +70,13 @@ public enum FeedPublisher {
 
     /// Publish one app. Serialised across processes; the artifact is stored under its own hash
     /// (`<sha12>-<name>`), so two apps' files can never overwrite each other and bytes an older
-    /// feed still names are never replaced.
+    /// feed still names are never replaced. After the signed release commits, installers and
+    /// icons no pin names any more retire to `retireArtifact` — the native macOS Trash when
+    /// nothing is injected (`## Feed`), never the operator's Trash from a fixture feed in `Tests`.
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
-                               meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, now: Date = Date()) throws {
+                               meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, now: Date = Date(),
+                               retireArtifact: ((URL) throws -> Void)? = nil) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
         let key = try Signing.loadPrivateKey(from: keyFile)
@@ -142,7 +145,60 @@ public enum FeedPublisher {
             // Strictly later than the last release, so an agent's high-water mark always moves forward.
             let previous = feed.publishedAt ?? .distantPast
             feed.published_at = ISO.string(max(now, previous.addingTimeInterval(0.001)))
-            try saveFeed(try feed.validated(), to: feedDir, key: key)
+            let signed = try feed.validated()
+            // Every pin this signed release carries, plus what the retention ledger still holds
+            // as a recovery copy, read before the commit so an unreadable ledger refuses the
+            // publish itself rather than quietly retiring the pins it names.
+            var keep = Set<String>()
+            for entry in Array(signed.apps.values) + Array((signed.previous ?? [:]).values) {
+                keep.insert(entry.file)
+                if let icon = entry.icon { keep.insert(icon) }
+            }
+            keep.formUnion(try ledgerNames(in: feedDir))
+            try saveFeed(signed, to: feedDir, key: key)
+            // `## Feed`: the signed release is committed first; only now may installers it no
+            // longer names leave the feed directory. A failure here cannot undo the release or
+            // any pin — it is reported loudly, and the next publish retires whatever was left.
+            let retireOne: (URL) throws -> Void = retireArtifact ?? { try retireToTrash($0, in: feedDir) }
+            for file in try FileManager.default.contentsOfDirectory(atPath: artifactsDir.path) {
+                guard !keep.contains(file) else { continue }
+                do { try retireOne(artifactsDir.appendingPathComponent(file)) }
+                catch {
+                    throw khuFail("\(app) \(version) is published and its signed pins are live, but \(file) cannot be "
+                                  + "moved to the Trash: \(error). Publishing any app again finishes this retirement.")
+                }
+            }
+        }
+    }
+
+    /// The names the retention ledger pins: recovery copies that can outlive a signed feed's own
+    /// references, and whose bytes `withPreviousInstallers` verifies before adopting them.
+    private static func ledgerNames(in dir: URL) throws -> Set<String> {
+        let file = dir.appendingPathComponent("artifact-retention.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        let saved = try JSON.decode(Retention.self, from: Data(contentsOf: file))
+        var names = Set<String>()
+        for entry in saved.apps.values {
+            names.insert(entry.current.file)
+            if let icon = entry.current.icon { names.insert(icon) }
+            if let previous = entry.previous {
+                names.insert(previous.file)
+                if let icon = previous.icon { names.insert(icon) }
+            }
+        }
+        return names
+    }
+
+    /// Where an artifact with no pin left goes: the native macOS Trash — except for a feed inside
+    /// the system's temporary directory, which every test fixture uses, where the bytes stay
+    /// restorable under the feed's own `_trash` so a test run never touches the operator's Trash.
+    private static func retireToTrash(_ file: URL, in feedDir: URL) throws {
+        let temp = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        let base = temp.hasSuffix("/") ? temp : temp + "/"
+        if feedDir.standardizedFileURL.path.hasPrefix(base) {
+            _ = try Trash.move(file, into: Trash.root(in: feedDir))
+        } else {
+            try FileManager.default.trashItem(at: file, resultingItemURL: nil)
         }
     }
 }
