@@ -4,6 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${1:?usage: packaging/build-app.sh <version>}"
+IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
+[ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
 APP="build/Update Studio KH.app"; DMG="build/Update-Studio-KH-$VERSION.dmg"
 TMP="$(mktemp -d)"
 mkdir -p build
@@ -43,8 +45,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
-[ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
 codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
 codesign --verify --deep --strict "$APP"
 
