@@ -184,6 +184,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             s.hidden = h.sorted(); try? s.save(to: helper.stateDir)
         case "automatic": helper.setAutomatic(id, body["on"] as? Bool ?? false)
         case "check": helper.rescanSSDs()
+        case "whatsNew": helper.whatsNew()
         case "copyReport":
             guard let app else { break }
             let report = ["Studio Launcher KH error report", "Mac: \(helper.machine)", "App: \(app.name) (\(app.app))",

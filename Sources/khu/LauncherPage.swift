@@ -90,12 +90,12 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
 </header>
 <main id=main></main>
-<footer><span id=checked></span><span id=hiddenNote></span><span id=err class=err></span></footer>
+<footer><span id=checked></span><span id=hiddenNote></span><span id=err class=err></span><button class=link id=whatsNew style="margin-left:auto" onclick="post({action:'whatsNew'})">What's New</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
-const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{store.set(k,v)}catch(e){}}};
+const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
 let view=store.get('view')||'grid',sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,showHidden=false,showAll={};
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
@@ -159,6 +159,7 @@ function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filte
  const key=a=>new Date(installed(a)?a.installedAt||0:a.released||0).getTime();
  list.sort(sort=='recent'?(x,y)=>key(y)-key(x):(x,y)=>x.name.localeCompare(y.name));return [list,hidden]}
 function render(state){if(state)Object.assign(S,state);
+ $('whatsNew').textContent=(S.version?'v'+S.version+' · ':'')+'What’s New';
  const [list,hidden]=visible(),mine=list.filter(installed),others=list.filter(a=>!installed(a));
  const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.status=='Update available').length;
  $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
@@ -244,7 +245,7 @@ function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remov
    el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','Match system'],['dark','Dark'],['light','Light']],s.appearance)),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),
-   el('section',{},el('h4',{},'What’s new in '+S.version+' (current)'),S.whatsNew.length?el('ul',{class:'changes'},S.whatsNew.map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes.'))),
+   el('section',{},el('h4',{},'About'),el('button',{class:'btn',onclick:()=>post({action:'whatsNew'})},'v'+S.version+' · What’s New'))),
   el('div',{class:'bottom'},el('button',{class:'btn primary',onclick:()=>{settingsOpen=false;closeLayers()}},'Done')));
  document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet))}
 $('vgrid').onclick=()=>{view='grid';store.set('view',view);render()};$('vlist').onclick=()=>{view='list';store.set('view',view);render()};
@@ -256,5 +257,5 @@ document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySel
  if((e.metaKey&&e.key=='f')){e.preventDefault();$('q').focus()}});
 setInterval(()=>{if(S.lastRun)$('checked').textContent=ago(S.lastRun)+' · Feed'+(S.sources.length?' + '+S.sources.join(', '):'')},30000);
 </script></body></html>
-"""#
+"""#.replacingOccurrences(of: "</style>", with: Changelog.layoutCSS + "</style>")
 }

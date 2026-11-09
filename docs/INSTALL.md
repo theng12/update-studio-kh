@@ -132,6 +132,8 @@ defines no lanes, and refuses receipts for another checkout or a changed log. Pa
 update/rollback and intended-machine evidence remain separate required release checks; a test
 receipt never claims those passed. `Tests/test_release_proof.py` checks the collector itself.
 
+Shared UI release inputs are versioned under `packaging/shared-ui` so the scoped test receipt covers them and isolated builds need no Developer-folder path. At release preparation, compare those three files with `~/Developer/kh-shared-ui` and refresh any changed inputs before the gate. `packaging/generate-ui.py` compiles the shared notes and layout values into the helper; both screens consume that compiled data.
+
 Both native app packagers use `KHU_SIGN_IDENTITY`, defaulting to the existing
 `KH Studio Local Signing` identity. A missing identity fails packaging; ad-hoc signing is refused.
 The private app-signing key stays on the build Mac. Compare designated requirements across two

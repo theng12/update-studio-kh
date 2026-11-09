@@ -62,7 +62,7 @@ def run(script, *args, env=fake_env):
 
 
 try:
-    for suite in ("test_release_proof.py", "test_signing.py", "test_launcher_progress.py"):
+    for suite in ("test_release_proof.py", "test_signing.py", "test_launcher_progress.py", "test_shared_ui.py"):
         check(subprocess.run([sys.executable, "-B", "-I", str(ROOT / "Tests" / suite)]).returncode == 0,
               f"{suite} isolated regression checks")
     # Inspect real binaries: the kit must run on the macOS version its app declares.

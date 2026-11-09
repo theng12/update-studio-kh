@@ -1141,11 +1141,9 @@ public final class FeedServer: @unchecked Sendable {
         }
         let removed = state.removed.isEmpty ? "<p class=sub>No Mac has been removed.</p>"
             : "<div class=tablewrap><table><thead><tr><th>Mac</th><th>Removed</th><th>Last seen then</th><th>Now</th></tr></thead>\(removedRows)</table></div>"
-        // The top CHANGELOG.md entry: "## <version> — <date>" and its "- " lines.
-        let latest = Changelog.text.components(separatedBy: "\n## ").dropFirst().first?
-            .components(separatedBy: "\n") ?? []
-        let news = latest.dropFirst().filter { $0.hasPrefix("- ") }.map { "<li>\(h(String($0.dropFirst(2))))</li>" }.joined()
-        let currentVersion = String((latest.first ?? "unknown").split(separator: " ").first ?? "unknown")
+        let latest = WhatsNew.publisher.first
+        let news = (latest?.items ?? []).map { "<li>\(h($0))</li>" }.joined()
+        let currentVersion = latest?.version ?? "unknown"
         let version = "<details class=news><summary><span class=link>v\(h(currentVersion)) · built \(h(Changelog.buildDate)) · What's new</span></summary><div class=newsbody><h2>What's new in v\(h(currentVersion))</h2><ul>\(news)</ul></div></details>"
         // Filters and search (kept across the refresh), open rows kept open, confirm, copy, countdown.
         let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">" + PublisherFleet.script + #"""
@@ -1318,7 +1316,7 @@ public final class FeedServer: @unchecked Sendable {
     @media(min-width:821px) and (max-width:1100px){.brand p{display:none}.top{gap:10px}.tabs a{padding:5px 9px}.headright{gap:10px}.stats{grid-template-columns:1fr 1fr}.connectlayout{gap:24px}.pairpanel{padding:24px}details.mac>summary{grid-template-columns:minmax(130px,1fr) minmax(0,1fr) auto 14px}.seen{grid-column:1/4;text-align:left}.chev{grid-column:4;grid-row:1}}
     @media(max-width:820px){.pagehead{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px}.pagehead h2{font-size:23px}.connectlayout{grid-template-columns:minmax(0,1fr);gap:24px}.pairpanel{order:-1;padding:24px}.paircode{font-size:48px}.pair{margin:20px 0}.connectfoot{flex-direction:column;gap:8px}.setting{grid-template-columns:1fr;gap:12px}.settingslist{padding:0 18px}.headright{margin-left:auto}.brand{min-width:0}.top h1{font-size:15px}.tabs{overflow-x:auto}.tabs a{padding:5px 10px;white-space:nowrap}.feed td{min-width:0}.feed .name{min-width:0}.feed .actions{white-space:normal}.feed .num{overflow-wrap:anywhere}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
-    """
+    """ + Changelog.layoutCSS
 
     /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).
     public func listen() throws -> Int32 {

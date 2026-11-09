@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "note": "Shared KH layout numbers. Values match Hub native/Design.swift and Gateway menubar/PageKit.swift (2026-11-08). Colours and fonts stay per app on purpose.",
+  "space": { "xs": 4, "tight": 6, "s": 8, "m": 12, "l": 16, "xl": 24, "page": 28 },
+  "sidebar": { "width": 220 },
+  "radius": { "control": 6, "card": 8, "sheet": 12 },
+  "type": {
+    "pageTitle":     { "size": 26, "weight": "semibold" },
+    "figure":        { "size": 22, "weight": "semibold", "digits": "tabular" },
+    "section":       { "size": 15, "weight": "semibold" },
+    "rowTitle":      { "size": 13, "weight": "semibold" },
+    "body":          { "size": 13, "weight": "regular" },
+    "secondary":     { "size": 12, "weight": "regular" },
+    "caption":       { "size": 11, "weight": "regular" },
+    "captionStrong": { "size": 11, "weight": "semibold" },
+    "mono":          { "size": 12, "weight": "regular", "family": "monospace" },
+    "monoCaption":   { "size": 11, "weight": "regular", "family": "monospace" }
+  },
+  "status": {
+    "ok":   "working / live / passed",
+    "warn": "needs attention, still working",
+    "bad":  "failed or stopped; always says why",
+    "off":  "switched off or not set up",
+    "info": "neutral fact, not checked yet, or in progress"
+  },
+  "toast": { "maxVisible": 3, "successSeconds": [5, 8], "errorSeconds": "until read or dismissed" }
+}

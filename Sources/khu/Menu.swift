@@ -52,6 +52,15 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
             NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { _ in self.rescanSSDs() }
         }
+        if let version {
+            let defaults = UserDefaults.standard
+            let key = "com.khupdater.lastWhatsNewVersion"
+            let previous = defaults.string(forKey: key)
+            defaults.set(version, forKey: key)
+            if let previous, VersionCompare.isNewer(version, than: previous) {
+                DispatchQueue.main.async { self.whatsNew() }
+            }
+        }
         NSApp.run()
     }
 
@@ -201,9 +210,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         catch { alert("That change could not be saved", "\(error)") }
     }
 
-    @objc private func whatsNew() {
+    @objc func whatsNew() {
         let lines = version.map(WhatsNew.lines(for:)) ?? []
-        alert("What's new in Studio Launcher KH \(version ?? "")",
+        alert("What's New · Studio Launcher KH \(version ?? "") (current)",
               lines.isEmpty ? "No notes for this version." : lines.map { "• " + $0 }.joined(separator: "\n"))
     }
 

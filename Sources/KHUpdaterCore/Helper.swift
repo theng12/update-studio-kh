@@ -111,10 +111,16 @@ public enum AppNames {
     public static func display(_ app: String) -> String { names[app] ?? app }
 }
 
-/// The CHANGELOG-launcher.md entry for one version, as plain lines without the "- ".
+/// Release notes compiled from the shared CHANGELOG parser, never a target-side file.
 public enum WhatsNew {
+    public struct Entry: Decodable, Sendable {
+        public var version: String
+        public var date: String?
+        public var items: [String]
+    }
+    public static let publisher = try! JSON.decode([Entry].self, from: Data(Changelog.textJSON.utf8))
+    public static let launcher = try! JSON.decode([Entry].self, from: Data(Changelog.launcherJSON.utf8))
     public static func lines(for version: String) -> [String] {
-        let entry = Changelog.launcher.components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(version + " ") }
-        return (entry ?? "").split(separator: "\n").dropFirst().filter { $0.hasPrefix("- ") }.map { String($0.dropFirst(2)) }
+        launcher.first { $0.version == version }?.items ?? []
     }
 }

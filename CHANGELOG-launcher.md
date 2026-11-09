@@ -8,6 +8,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> â€
 - New connections prefer the trusted publisher's download, with a checked copy inside Launcher available when that download is unavailable.
 - Includes a helper for Intel and Apple silicon Macs running macOS 13 or later.
 - Helper updates preserve the installed signed Launcher app.
+- Uses the shared layout sizes, opens What's New from its version link, and saves view choices correctly.
 
 ## 0.1.14 â€” 2026-11-07
 - Connection setup and Pair again now say "the controller Mac" instead of "the Mac Studio", matching whichever Mac runs Update Studio KH.

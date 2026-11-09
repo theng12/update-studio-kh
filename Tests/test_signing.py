@@ -20,6 +20,8 @@ class SigningTests(unittest.TestCase):
         for name in ("build.sh", "CHANGELOG.md", "CHANGELOG-launcher.md",
                      "packaging/build-launcher.sh", "packaging/build-agent-kit.sh",
                      "packaging/build-app.sh", "packaging/install-agent.sh",
+                     "packaging/generate-ui.py", "packaging/shared-ui/whats-new.py",
+                     "packaging/shared-ui/design-tokens.json", "packaging/shared-ui/UI-CONVENTIONS.md",
                      "packaging/com.khupdater.agent.plist", "examples/agent-config.json"):
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)

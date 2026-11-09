@@ -9,6 +9,10 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let menu = NSMenu(), item = NSMenuItem(), appMenu = NSMenu()
+        appMenu.addItem(withTitle: "What's New…", action: #selector(showWhatsNew), keyEquivalent: "").target = self
+        let versionItem = NSMenuItem(title: "Update Studio KH \(version)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        appMenu.addItem(versionItem)
         appMenu.addItem(withTitle: "Quit Update Studio KH", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.submenu = appMenu
         menu.addItem(item)
@@ -28,6 +32,32 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
         window.setFrameAutosaveName("KHUpdaterMain")
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "lastWhatsNewVersion")
+        defaults.set(version, forKey: "lastWhatsNewVersion")
+        if let previous, previous.compare(version, options: .numeric) == .orderedAscending {
+            DispatchQueue.main.async { self.showWhatsNew() }
+        }
+    }
+
+    var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Not checked" }
+
+    @objc func showWhatsNew() {
+        let alert = NSAlert()
+        alert.messageText = "What's New · Update Studio KH \(version) (current)"
+        do {
+            guard let url = Bundle.main.url(forResource: "whats-new", withExtension: "json") else {
+                throw copyError("The packaged release notes are missing. Install the complete signed Update Studio package.")
+            }
+            struct Entry: Decodable { var version: String; var items: [String] }
+            let entries = try JSONDecoder().decode([Entry].self, from: Data(contentsOf: url))
+            guard let entry = entries.first(where: { $0.version == version }) else {
+                throw copyError("The packaged release notes do not match this app's version.")
+            }
+            alert.informativeText = entry.items.map { "• " + $0 }.joined(separator: "\n")
+        } catch { alert.informativeText = "Release notes could not be read: \(error.localizedDescription)" }
+        alert.addButton(withTitle: "Done")
+        alert.beginSheetModal(for: window)
     }
 
     // The page asks before Remove Mac, Update N Macs, Roll back and New code; a web view shows no confirm box unless the app does.
