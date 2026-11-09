@@ -28,16 +28,12 @@ credential-free agent kit per Mac.
   Owner exception, 2026-11-06: superseded distributor installers on 1301 go to native macOS Trash,
   and Finder's 30-day Trash removal is enabled there only. This Mac's Trash stays untouched;
   tests inject a fake Trash destination. Other runtime and repository `_trash` rules remain.
-- **Never re-run `packaging/publisher-init.sh`; agents never read, print, copy, hold or create production signing-key bytes.**
-  Owner exception, 2026-11-06: the owner authorized moving the EXISTING signer to 1301, preserving
-  every Mac's pinned public key. Only the owner runs the SSD export/import commands; agents may
-  prepare and syntax-check them, never execute them. The imported key is 0600 in a 0700 directory;
-  verification prints only the public-key fingerprint and its match result. After verified import,
-  the owner-run command moves the SSD transfer copy into that SSD's restorable `_trash`.
-  This Mac keeps its signer until at least 2026-12-07 and until every enrolled Mac has updated or
-  moved to 1301, whichever is later; only then may it be retired into restorable `_trash` with a
-  separate owner OK. No key operation happens before then. A new key would orphan enrolled Macs.
-  The original setup ran on 2026-10-26; its overwrite refusals remain in force.
+- **Never re-run `packaging/publisher-init.sh` or handle production signing-key bytes.**
+  Only the owner transfers the existing signer to 1301, preserving pinned public keys and
+  0600 key / 0700 directory permissions. Agents may prepare and syntax-check transfer commands,
+  never execute them; verify only public fingerprints. Keys never enter app kits.
+- **Retain This Mac’s signer until both 2026-12-07 and every enrolled Mac has updated or moved
+  to 1301.** Retire it only afterward, recoverably into `_trash`, with separate owner approval.
 - **The kit installer activates the agent** (owner, 2026-10-26: "sure switch it on").
   `packaging/install-agent.sh` installs *and* loads the LaunchAgent, matching Studio Hub's
   `components/hub/backend/khu_agent.py` (`Bootstrap.activate`): probe
