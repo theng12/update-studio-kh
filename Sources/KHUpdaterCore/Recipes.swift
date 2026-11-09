@@ -45,6 +45,10 @@ public struct BundleInfo: Equatable, Sendable {
     public var version: String
     public var identifier: String
     public var executable: String
+    /// `CFBundleVersion`, which a build sets and a bumped marketing version does not imply, so two
+    /// bundles can share `version` and still be different builds. Nil (never guessed) when the plist
+    /// has no usable value; an install/rollback judged on `version` alone is unaffected.
+    public var build: String? = nil
 
     public static func read(_ appPath: String) throws -> BundleInfo {
         let plist = URL(fileURLWithPath: appPath).appendingPathComponent("Contents/Info.plist")
@@ -57,7 +61,27 @@ public struct BundleInfo: Equatable, Sendable {
               let executable = dict["CFBundleExecutable"] as? String, !executable.isEmpty, !executable.contains("/") else {
             throw khuFail("\(appPath) is missing its version, a valid bundle identifier or its executable name")
         }
-        return BundleInfo(version: version, identifier: identifier, executable: executable)
+        return BundleInfo(version: version, identifier: identifier, executable: executable, build: buildValue(dict["CFBundleVersion"]))
+    }
+
+    /// A build number as it can be reported: one bounded line, or nil when there is none — a report
+    /// never invents a build from the marketing version.
+    private static func buildValue(_ raw: Any?) -> String? {
+        guard let value = raw as? String ?? (raw as? NSNumber).map({ $0.stringValue }) else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= ReportPolicy.maxVersionCharacters,
+              trimmed.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
+        return trimmed
+    }
+
+    /// The SHA-256 of the bundle's own executable — bytes read from the installed bundle now, which
+    /// is the strongest identity an already-installed app can report about itself. It says nothing
+    /// about the artifact the publisher signed: a release archive hash never proves these bytes.
+    public func executableSha256(in appPath: String) -> String? {
+        var status = stat()
+        let path = appPath + "/Contents/MacOS/" + executable
+        guard lstat(path, &status) == 0 else { return nil }
+        return try? Signing.sha256Hex(fileAt: URL(fileURLWithPath: path)).hex
     }
 
     /// Reverse-DNS characters only: never anything that could close a quote in a script.

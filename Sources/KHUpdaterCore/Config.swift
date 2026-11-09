@@ -283,6 +283,9 @@ public enum ReportPolicy {
     /// The longest app id accepted in a report's maps or in a result. `SafeName` is the harder rule
     /// for a name that becomes a file name; this bounds the rest.
     public static let maxNameCharacters = 128
+    /// A per-app value in a report's maps: an app's marketing version or its reported
+    /// `installed_build`. A build appears only when the bundle carries one — never derived from a
+    /// marketing version — and a report that cannot read one carries no entry at all.
     public static let maxVersionCharacters = 64
     public static let maxHealthCharacters = 64
     /// A result's `status` and `reason`, which the page shows. A reason is one sentence.

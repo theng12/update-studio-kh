@@ -79,6 +79,11 @@ public struct HelperApp: Sendable, Equatable {
     /// The SSD the install would copy from, when it is not the feed.
     public var fromSSD: String?
     public var canRollBack = false
+    /// The bundle's own `CFBundleVersion`: nil when it carries none, so a row can never claim an
+    /// exact build its bundle does not state (a marketing version is shown beside it, not as it).
+    public var installedBuild: String?
+    /// SHA-256 of the installed executable's bytes as read from the bundle, nil when unreadable.
+    public var installedExecutableSha256: String?
 
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
                       failed = "Failed", updatesItself = "Updates itself", notInstalled = "Not installed",

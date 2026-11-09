@@ -353,13 +353,21 @@ public enum Agent {
             }
         }
 
-        // 1. What is installed and running here — none of this needs the feed.
+        // 1. What is installed and running here — none of this needs the feed. Beside each version,
+        // the identity a marketing version alone cannot give: the bundle's `CFBundleVersion` and the
+        // SHA-256 of its executable as read from disk now. Both stay absent when they cannot be
+        // read — an absent build is unknown, never "matching", and this bytes hash is about the
+        // installed executable only, never the artifact a release was signed from.
         var installed: [String: String] = [:]
+        var installedBuild: [String: String] = [:]
+        var installedExecutableSha256: [String: String] = [:]
         var health: [String: String] = [:]
         for (app, cfg) in config.apps {
             if cfg.recipe == "updater" { continue }
             if let info = try? BundleInfo.read(cfg.bundlePath) {
                 installed[app] = info.version
+                if let build = info.build { installedBuild[app] = build }
+                if let sha = info.executableSha256(in: cfg.bundlePath) { installedExecutableSha256[app] = sha }
                 switch LiveControl.isRunning(cfg.bundlePath) {
                 case true?: health[app] = "running"
                 case false?: health[app] = "not running"
@@ -407,6 +415,11 @@ public enum Agent {
             "automatic_default": config.apps.mapValues { $0.automatic },
             "automatic_local": helper.automatic.mapValues { ["on": $0.on, "at": $0.at] as [String: Any] },
         ]
+        // Absent unless read: an app whose bundle carries no build simply reports no build, so the
+        // page can tell "not checked" from an exact match. Neither key changes `installed`, which
+        // every older publisher and page already reads.
+        if !installedBuild.isEmpty { report["installed_build"] = installedBuild }
+        if !installedExecutableSha256.isEmpty { report["installed_executable_sha256"] = installedExecutableSha256 }
         if let name = MacName.current(expectedMachine: config.machine) { report["display_name"] = name }
         if let until = helper.pausedUntil, helper.paused(at: now) { report["paused_until"] = until }
         // A read-only snapshot of this Mac's own hardware, addresses and installed apps, bounded
@@ -678,8 +691,8 @@ public enum Agent {
         return ids.map { app -> HelperApp in
             let cfg = config.apps[app]
             let entry = catalog.first { $0.id == app }
-            let installed = cfg?.recipe == "updater" ? selfVersion(config: config, executable: executable)
-                : cfg.flatMap { try? BundleInfo.read($0.bundlePath) }?.version
+            let info = cfg?.recipe == "updater" ? nil : cfg.flatMap { try? BundleInfo.read($0.bundlePath) }
+            let installed = cfg?.recipe == "updater" ? selfVersion(config: config, executable: executable) : info?.version
             let last = memory.done.values.filter { $0.app == app }.max { $0.at < $1.at }.map { ($0.status, $0.reason) }
             // An app its SSD marks as updating itself is shown that way, whatever this Mac's recipe.
             let only = (cfg.map { statusOnly.contains($0.recipe) } ?? false) || (entry?.updatesItself ?? false)
@@ -688,6 +701,10 @@ public enum Agent {
             var row = HelperApp(app: app, installed: installed, available: available, statusOnly: only,
                                 automatic: !only && cfg != nil && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg!.automatic),
                                 status: status, reason: reason)
+            // The build and byte identity of what is installed now: nil when the bundle carries no
+            // build or its executable cannot be read — a row reports "not checked", never a match.
+            row.installedBuild = info?.build
+            if let cfg, let info { row.installedExecutableSha256 = info.executableSha256(in: cfg.bundlePath) }
             row.name = cfg?.recipe == "updater" ? "Studio Launcher KH" : (entry?.name ?? feed.apps[app]?.name ?? AppNames.display(app))
             row.source = entry?.source
             row.notes = entry?.notes ?? feed.apps[app]?.notes
