@@ -3482,6 +3482,11 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["IDENTITY_ONLY"] == "1" {
+            installedIdentityTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["E_ONLY"] == "1" {
             enrolWindowTests()
             pairingTests()
@@ -3490,6 +3495,7 @@ struct RunnerMain {
             connectionFlowTests()
             setupSourceTests()
             downloadProgressTests()
+            installedIdentityTests()
             connectionReloadTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
@@ -3532,6 +3538,7 @@ r41HealthMustHold()
         connectionFlowTests()
         setupSourceTests()
         downloadProgressTests()
+        installedIdentityTests()
         connectionReloadTests()
         toolbarTests()
         inventoryTests()

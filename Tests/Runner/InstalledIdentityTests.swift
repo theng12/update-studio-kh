@@ -7,8 +7,7 @@ import Darwin
 // installed build. These checks pin the agent's own report and the snapshot the menu reads —
 // what an installed bundle actually carries — while comparing it against a release's expected
 // build belongs to the verification run against real signed release identity. The publisher
-// stores no new field: it accepts and ignores these bounded keys, so state.json cannot grow.
-// Register with one line in Tests/Runner/main.swift: installedIdentityTests()
+// retains only the latest bounded maps; absent identity remains unknown.
 
 /// Rewrite the fixture bundle's Info.plist, with or without a CFBundleVersion.
 func identitySetBuild(_ app: URL, _ build: Any?) {
@@ -47,7 +46,7 @@ func installedIdentityTests() {
     // 1. BundleInfo carries the build only when the bundle carries one, and hashes real bytes.
     do {
         let root = tmpDir("identity-bundle")
-        defer { try? fm.removeItem(at: root) }
+        defer { _ = try? Trash.move(root, into: root.deletingLastPathComponent().appendingPathComponent("_trash")) }
 
         let one = makeApp(root.appendingPathComponent("One.app"), version: "1.0.0")
         identitySetBuild(one, "701")
@@ -73,8 +72,16 @@ func installedIdentityTests() {
         expect(try BundleInfo.read(one.path).build == "701", "a numeric CFBundleVersion still reads as the build")
         identitySetBuild(one, String(repeating: "b", count: ReportPolicy.maxVersionCharacters + 1))
         expect(try BundleInfo.read(one.path).build == nil, "a build longer than the report bound is not reported")
+        identitySetBuild(one, String(repeating: "ក", count: ReportPolicy.maxVersionCharacters / 3 + 1))
+        expect(try BundleInfo.read(one.path).build == nil, "the build bound counts UTF-8 bytes like the report receiver")
         identitySetBuild(one, "12\n34")
         expect(try BundleInfo.read(one.path).build == nil, "a build carrying control characters is not reported")
+        let missing = BundleInfo(version: "1", identifier: "com.example.missing", executable: "Missing")
+        expect(missing.executableSha256(in: one.path) == nil, "an unreadable executable stays unknown")
+        let alias = one.appendingPathComponent("Contents/MacOS/Alias")
+        try fm.createSymbolicLink(at: alias, withDestinationURL: one.appendingPathComponent("Contents/MacOS/Foo"))
+        let aliased = BundleInfo(version: "1", identifier: "com.example.alias", executable: "Alias")
+        expect(aliased.executableSha256(in: one.path) == nil, "an executable alias is not reported as verified bundle bytes")
         expect(BundleInfo(version: "1.0.0", identifier: "com.example.foo", executable: "Foo").build == nil,
                "a BundleInfo without a build defaults to unknown")
     } catch { expect(false, "installed identity bundle regression: \(error)") }
@@ -150,21 +157,42 @@ func installedIdentityTests() {
                "the executable hash is reported even when the bundle carries no build")
     } catch { expect(false, "installed identity report regression: \(error)") }
 
-    // 4. The publisher side: the bounded build keys are accepted and stored nowhere — an
-    //    oversized map changes nothing, so these keys cannot grow state.json without limit.
+    // 4. The latest bounded identity survives publisher readback; rejected reports cannot replace it.
     do {
         let rig = Rig("identity-bounds")
         let token = try Enrolment.enrol(stateDir: rig.state, machine: "mac1")
         let builds = Dictionary(uniqueKeysWithValues: (0..<ReportPolicy.maxApps).map { ("app\($0)", "1") })
+        let hashes = builds.mapValues { _ in String(repeating: "a", count: 64) }
         let ok = enrolStatusPost(rig.server, machine: "mac1", token: token,
-                                 body: ["machine": "mac1", "installed_build": builds, "installed_executable_sha256": builds])
-        expect(ok.status == 200, "a build report within the report bounds is accepted")
-        var long = builds; long["app0"] = String(repeating: "b", count: ReportPolicy.maxVersionCharacters + 1)
-        let ignored = enrolStatusPost(rig.server, machine: "mac1", token: token, body: ["machine": "mac1", "installed_build": long])
-        let stored = (try? Data(contentsOf: rig.state.appendingPathComponent("state.json"))) ?? Data()
-        expect(ignored.status == 200 && stored.range(of: Data(long["app0"]!.utf8)) == nil,
-               "a publisher that stores no build ignores the key: an oversized build never reaches state.json")
-        expect((try? StateStore.load(from: rig.state))?.machines["mac1"]?.installed == [:],
-               "no build map is stored on the machine record: the schema is unchanged")
+                                 body: ["machine": "mac1", "installed_build": builds, "installed_executable_sha256": hashes])
+        expect(ok.status == 200, "a bounded build/hash report is accepted")
+        let saved = try StateStore.load(from: rig.state).machines["mac1"]!
+        expect(saved.installedBuild == builds && saved.installedExecutableSha256 == hashes,
+               "publisher state persists actual reported identity for independent readback")
+        let stateURL = rig.state.appendingPathComponent("state.json")
+        let before = try Data(contentsOf: stateURL)
+        var tooMany = builds; tooMany["extra"] = "1"
+        let invalid: [[String: Any]] = [
+            ["installed_build": ["app0": String(repeating: "b", count: ReportPolicy.maxVersionCharacters + 1)]],
+            ["installed_build": tooMany], ["installed_build": ["app0": "12\n34"]],
+            ["installed_build": ["app0": ""]], ["installed_build": "wrong type"],
+            ["installed_executable_sha256": ["app0": "not-a-sha"]],
+            ["installed_executable_sha256": ["app0": String(repeating: "z", count: 64)]],
+            ["installed_executable_sha256": ["app0": 12]],
+        ]
+        for bad in invalid {
+            var body = bad; body["machine"] = "mac1"
+            let result = enrolStatusPost(rig.server, machine: "mac1", token: token, body: body)
+            expect(result.status == 400 && (try? Data(contentsOf: stateURL)) == before,
+                   "malformed or oversized identity is refused without changing stored evidence")
+        }
+        let oldHelper = enrolStatusPost(rig.server, machine: "mac1", token: token,
+                                       body: ["machine": "mac1", "installed": ["app0": "1"]])
+        let unknown = try StateStore.load(from: rig.state).machines["mac1"]!
+        expect(oldHelper.status == 200 && unknown.installedBuild == nil && unknown.installedExecutableSha256 == nil,
+               "a report without identity clears stale evidence to unknown")
+        let legacy = try JSONDecoder().decode(MachineState.self, from: Data(#"{"machine":"legacy"}"#.utf8))
+        expect(legacy.installedBuild == nil && legacy.installedExecutableSha256 == nil,
+               "state written before identity fields existed still loads as unknown")
     } catch { expect(false, "installed identity bounds regression: \(error)") }
 }

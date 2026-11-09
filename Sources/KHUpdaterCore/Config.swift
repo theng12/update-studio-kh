@@ -85,6 +85,9 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var name: String { displayName ?? machine }
     public var tokenHash: String?
     public var installed: [String: String]
+    /// Latest reported bundle identity; absent means the Mac did not check it.
+    public var installedBuild: [String: String]?
+    public var installedExecutableSha256: [String: String]?
     public var health: [String: String]
     public var lastSeen: String?
     /// Kept until the Mac reports a result for each one (by id): a dropped reply or a crash
@@ -141,7 +144,7 @@ public struct MachineState: Codable, Sendable, Equatable {
     /// keep loading: a publisher that cannot decode its own state serves 503 to every Mac for ever,
     /// which is a worse fault than any single missing field.
     private enum CodingKeys: String, CodingKey {
-        case machine, displayName, reportedName, tokenHash, installed, health, lastSeen, pending, lastResult, lastResults,
+        case machine, displayName, reportedName, tokenHash, installed, installedBuild, installedExecutableSha256, health, lastSeen, pending, lastResult, lastResults,
              automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
              automaticSet, pausedUntil, inventory, site, tags, vendorAssignments
     }
@@ -152,6 +155,8 @@ public struct MachineState: Codable, Sendable, Equatable {
         reportedName = try c.decodeIfPresent(String.self, forKey: .reportedName)
         tokenHash = try c.decodeIfPresent(String.self, forKey: .tokenHash)
         installed = try c.decodeIfPresent([String: String].self, forKey: .installed) ?? [:]
+        installedBuild = try c.decodeIfPresent([String: String].self, forKey: .installedBuild)
+        installedExecutableSha256 = try c.decodeIfPresent([String: String].self, forKey: .installedExecutableSha256)
         health = try c.decodeIfPresent([String: String].self, forKey: .health) ?? [:]
         lastSeen = try c.decodeIfPresent(String.self, forKey: .lastSeen)
         pending = try c.decodeIfPresent([ServerCommand].self, forKey: .pending) ?? []

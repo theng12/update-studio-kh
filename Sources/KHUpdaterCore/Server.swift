@@ -549,6 +549,26 @@ public final class FeedServer: @unchecked Sendable {
             if let refusal = Self.reportRefusal(installed: installed, health: health, defaults: defaults) {
                 return Self.text(400, refusal)
             }
+            let builds = body["installed_build"] as? [String: String]
+            let executableHashes = body["installed_executable_sha256"] as? [String: String]
+            for field in ["installed_build", "installed_executable_sha256"] {
+                if body[field] != nil && body[field] as? [String: String] == nil {
+                    return Self.text(400, "\(field) must be a map of app names to strings")
+                }
+            }
+            for values in [builds, executableHashes] {
+                if let refusal = Self.reportRefusal(installed: values, health: nil, defaults: nil) {
+                    return Self.text(400, refusal)
+                }
+            }
+            guard builds?.values.allSatisfy({ !$0.isEmpty && $0.rangeOfCharacter(from: .controlCharacters) == nil }) ?? true else {
+                return Self.text(400, "an installed build must be one nonempty bounded line")
+            }
+            guard executableHashes?.values.allSatisfy({ value in
+                value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+            }) ?? true else {
+                return Self.text(400, "an installed executable SHA-256 must be 64 lowercase hexadecimal characters")
+            }
             // The Mac's menu switches, each with its time; bounded like everything else it reports.
             let local = (body["automatic_local"] as? [String: [String: Any]] ?? [:]).compactMapValues { v -> (Bool, Date)? in
                 guard let on = v["on"] as? Bool, let at = (v["at"] as? String).flatMap(ISO.date) else { return nil }
@@ -574,6 +594,9 @@ public final class FeedServer: @unchecked Sendable {
                 if let reportedName { ms.report(name: reportedName) }
                 if case .accepted(let reportedInventory) = inventory { ms.inventory = reportedInventory }
                 if let installed { ms.installed = installed }
+                // Missing identity on a newer report is unknown, never a stale previous match.
+                ms.installedBuild = builds
+                ms.installedExecutableSha256 = executableHashes
                 if let health { ms.health = health }
                 if let defaults { ms.automaticDefault = defaults }
                 // Whichever change is later wins: a switch on the Mac, or the page's.

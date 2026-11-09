@@ -69,7 +69,7 @@ public struct BundleInfo: Equatable, Sendable {
     private static func buildValue(_ raw: Any?) -> String? {
         guard let value = raw as? String ?? (raw as? NSNumber).map({ $0.stringValue }) else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= ReportPolicy.maxVersionCharacters,
+        guard !trimmed.isEmpty, trimmed.utf8.count <= ReportPolicy.maxVersionCharacters,
               trimmed.rangeOfCharacter(from: .controlCharacters) == nil else { return nil }
         return trimmed
     }
@@ -80,7 +80,7 @@ public struct BundleInfo: Equatable, Sendable {
     public func executableSha256(in appPath: String) -> String? {
         var status = stat()
         let path = appPath + "/Contents/MacOS/" + executable
-        guard lstat(path, &status) == 0 else { return nil }
+        guard lstat(path, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG else { return nil }
         return try? Signing.sha256Hex(fileAt: URL(fileURLWithPath: path)).hex
     }
 
