@@ -30,10 +30,11 @@ func ssdHelperTests() {
     try! fm.createDirectory(at: kit.appendingPathComponent("bin"), withIntermediateDirectories: true)
     try! Data("0.1.11\n".utf8).write(to: kit.appendingPathComponent("VERSION"))
     try! Data("#!/bin/sh\nexit 0\n".utf8).write(to: kit.appendingPathComponent("bin/khu"))
+    try! Data("#!/bin/sh\nexit 0\n".utf8).write(to: kit.appendingPathComponent("install-agent.sh"))
     try! JSONSerialization.data(withJSONObject: ["feedURL": cfg.feedURL, "enrolURL": "http://127.0.0.1/enrol", "publicKey": cfg.publicKey])
         .write(to: kit.appendingPathComponent("publisher.json"))
     var pins: [String: [String: Any]] = [:]
-    for name in ["VERSION", "bin/khu", "publisher.json"] {
+    for name in ["VERSION", "bin/khu", "publisher.json", "install-agent.sh"] {
         let data = try! Data(contentsOf: kit.appendingPathComponent(name))
         pins[name] = ["bytes": data.count, "sha256": Signing.sha256Hex(data)]
     }

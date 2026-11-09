@@ -842,7 +842,10 @@ func agentAndServerTests() {
         try? rigO.publish("demo", "1.0.0", rigO.artifact("demo.zip", "z"))
         _ = s.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(tok)"],
                                         body: Data(#"{"machine":"mac2","installed":{"demo":"0.9.0"},"automatic_default":{"demo":true}}"#.utf8)), remote: "100.64.0.9")
-        expect(s.statusHTML().contains(" · What's new</span>") && s.statusHTML().contains("<h2>What's new</h2><ul><li>"), "the page shows the top CHANGELOG entry")
+        let publisherNotes = WhatsNew.publisher.first!
+        expect(s.statusHTML().contains("v\(publisherNotes.version) · built \(Changelog.buildDate) · What's new</span>")
+               && s.statusHTML().contains("<h2>What's new in v\(publisherNotes.version)</h2><ul><li>")
+               && s.statusHTML().contains(publisherNotes.items.first!), "the page shows the top CHANGELOG entry")
         expect(s.statusHTML().contains("Automatic: on"), "R32 a Mac whose own config is Automatic shows Automatic: on")
         // 1.0.2 page: one state per app, Update N Macs, history, failure details, notes, offline.
         expect(s.statusHTML().contains("Update available") && s.statusHTML().contains("Update 1 Mac"),
