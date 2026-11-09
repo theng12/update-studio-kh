@@ -173,7 +173,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         request(app)
     }
     func request(_ app: String) {
-        lock.lock(); requested.insert(app); lock.unlock()
+        lock.lock(); let wasIdle = installingApp == nil; requested.insert(app); lock.unlock()
+        if wasIdle { DownloadControl.updateProgress("preparing") }
         installing(app)
         wake.signal()
     }

@@ -126,7 +126,9 @@ function mainAction(a){if(a.status=='Updating…')return null;
  return a.open&&!a.helper?['Open','open','']:null}
 function progress(a){const p=a.progress||{},box=el('div',{class:'prog'});let line,bar;
  if(p.done!=null&&p.total>0){const pct=Math.min(100,Math.round(p.done/p.total*100));line=(p.paused?'Paused · ':'Downloading ')+mb(p.done)+' of '+mb(p.total)+' · '+pct+'%';bar=el('div',{class:'bar'},el('i',{style:'width:'+pct+'%'}))}
- else if(p.copying){line='Copying from '+p.copying;bar=el('div',{class:'bar loose'},el('i'))}else{line='Installing…';bar=el('div',{class:'bar loose'},el('i'))}
+ else if(p.done!=null){line=(p.paused?'Paused · ':'Downloading ')+mb(p.done);bar=el('div',{class:'bar loose'},el('i'))}
+ else if(p.copying){line='Copying from '+p.copying;bar=el('div',{class:'bar loose'},el('i'))}
+ else{line=p.phase=='installing'?'Installing…':p.phase=='checking'?'Checking download…':'Preparing installation…';bar=el('div',{class:'bar loose'},el('i'))}
  box.append(el('span',{class:'line num'},line),bar);
  const ctl=el('div',{class:'foot',style:'margin:0'},box);
  if(p.done!=null){ctl.append(el('button',{class:'btn icon',title:p.paused?'Resume':'Pause','aria-label':p.paused?'Resume':'Pause',onclick:e=>{e.stopPropagation();post({action:'pause',on:!p.paused})}},

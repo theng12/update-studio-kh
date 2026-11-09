@@ -70,7 +70,10 @@ public struct URLSessionHTTPClient: HTTPClient {
         guard FileManager.default.createFile(atPath: file.path, contents: nil),
               let handle = try? FileHandle(forWritingTo: file) else { throw khuFail("cannot write \(file.path)") }
         defer { try? handle.close() }
-        return try transfer("GET", url, headers: headers, body: nil, handle: handle, limit: limit).status
+        DownloadControl.updateProgress("downloading", received: 0)
+        let status = try transfer("GET", url, headers: headers, body: nil, handle: handle, limit: limit).status
+        DownloadControl.updateProgress("checking")
+        return status
     }
 
     private func transfer(_ method: String, _ url: URL, headers: [String: String], body: Data?,
@@ -116,6 +119,13 @@ public struct URLSessionHTTPClient: HTTPClient {
 public enum DownloadControl {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var state = (paused: false, cancelled: false)
+    nonisolated(unsafe) private static var transferProgress = (phase: "preparing", received: Int64?.none, total: Int64?.none)
+    public static var progress: (phase: String, received: Int64?, total: Int64?) {
+        lock.lock(); defer { lock.unlock() }; return transferProgress
+    }
+    static func updateProgress(_ phase: String, received: Int64? = nil, total: Int64? = nil) {
+        lock.lock(); transferProgress = (phase, received, total); lock.unlock()
+    }
     public static var paused: Bool { lock.lock(); defer { lock.unlock() }; return state.paused }
     public static var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return state.cancelled }
     public static func pause(_ on: Bool) { lock.lock(); state.paused = on; lock.unlock() }
@@ -131,6 +141,7 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
     let limit: Int64
     let done = DispatchSemaphore(value: 0)
     var received: Int64 = 0
+    var expected: Int64?
     var status = 0
     var error: Error?
 
@@ -152,6 +163,8 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        expected = response.expectedContentLength > 0 ? response.expectedContentLength : nil
+        if handle != nil { DownloadControl.updateProgress("downloading", received: 0, total: expected) }
         if response.expectedContentLength > limit {
             error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
             completionHandler(.cancel)
@@ -171,7 +184,10 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
         // Paused from the Launcher: hold this delivery, so the connection backs up and the sender
         // waits. Suspending the task alone lets data already in flight keep arriving.
         while DownloadControl.paused && !DownloadControl.cancelled { usleep(100_000) }
-        do { try handle.write(contentsOf: data) } catch { self.error = error; dataTask.cancel() }
+        do {
+            try handle.write(contentsOf: data)
+            DownloadControl.updateProgress("downloading", received: received, total: expected)
+        } catch { self.error = error; dataTask.cancel() }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -573,6 +589,7 @@ public enum Agent {
                 memory.updaterArtifacts = (memory.updaterArtifacts ?? [:]).merging([entry.version: entry.sha256]) { _, new in new }
                 try remember()
             }
+            DownloadControl.updateProgress("preparing")
             installing(item.app)
             defer { installing(nil) }
             do {
@@ -776,7 +793,10 @@ public enum Agent {
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = []) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         if statusOnly.contains(cfg.recipe) { return RecipeResult(status: "status_only", reason: "updated by its own updater") }
-        if let local { return try installLocal(local, app: app, installed: force ? nil : installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control) }
+        if let local {
+            DownloadControl.updateProgress("copying")
+            return try installLocal(local, app: app, installed: force ? nil : installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control)
+        }
         // An install this Mac could not finish or undo is not a settled app: an order for it must
         // not be answered "current" while a rollback is still owed. The next run picks it up.
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
@@ -804,6 +824,7 @@ public enum Agent {
             // this Mac has rejected — the next run downloads it again.
             return RecipeResult(status: "download_failed", reason: "\(error)")
         }
+        DownloadControl.updateProgress("installing")
         switch cfg.recipe {
         case "app-dmg", "gateway":
             return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,

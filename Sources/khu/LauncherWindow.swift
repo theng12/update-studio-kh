@@ -97,7 +97,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state), let json = String(data: data, encoding: .utf8) else { return }
         web.evaluateJavaScript("render(\(json))")
-        // While something installs, the progress line follows the download file as it grows.
+        // While something installs, keep its actual transfer counters and phase visible.
         if busy != nil, progressTimer == nil {
             progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.reload() }
         } else if busy == nil {
@@ -105,15 +105,13 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         }
     }
 
-    /// Bytes so far of the download in progress, read from its `.part` file, or nil when the
-    /// install copies from an SSD or is past the download.
+    /// Actual transfer bytes and phase; no guessed progress from a missing download file.
     private func progress(_ app: HelperApp) -> [String: Any] {
-        let dir = helper.stateDir.appendingPathComponent("downloads").appendingPathComponent(app.app)
-        let part = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).first { $0.hasSuffix(".part") }
-        let done = part.flatMap { (try? FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent($0).path))?[.size] as? NSNumber }
-        var p: [String: Any] = ["paused": DownloadControl.paused]
-        if let done { p["done"] = done; p["total"] = app.bytes.map { NSNumber(value: $0) } ?? NSNumber(value: 0) }
-        if done == nil, let ssd = app.fromSSD { p["copying"] = ssd }
+        let current = DownloadControl.progress
+        var p: [String: Any] = ["paused": DownloadControl.paused, "phase": current.phase]
+        if let received = current.received { p["done"] = NSNumber(value: received) }
+        if let total = app.bytes ?? current.total { p["total"] = NSNumber(value: total) }
+        if current.phase == "copying", let ssd = app.fromSSD { p["copying"] = ssd }
         return p
     }
 
