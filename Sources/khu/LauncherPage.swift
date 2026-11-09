@@ -244,7 +244,7 @@ function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remov
    el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','Match system'],['dark','Dark'],['light','Light']],s.appearance)),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),
-   el('section',{},el('h4',{},'What’s new in '+S.version),S.whatsNew.length?el('ul',{class:'changes'},S.whatsNew.map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes.'))),
+   el('section',{},el('h4',{},'What’s new in '+S.version+' (current)'),S.whatsNew.length?el('ul',{class:'changes'},S.whatsNew.map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes.'))),
   el('div',{class:'bottom'},el('button',{class:'btn primary',onclick:()=>{settingsOpen=false;closeLayers()}},'Done')));
  document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet))}
 $('vgrid').onclick=()=>{view='grid';store.set('view',view);render()};$('vlist').onclick=()=>{view='list';store.set('view',view);render()};

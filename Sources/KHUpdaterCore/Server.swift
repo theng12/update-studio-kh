@@ -1145,7 +1145,8 @@ public final class FeedServer: @unchecked Sendable {
         let latest = Changelog.text.components(separatedBy: "\n## ").dropFirst().first?
             .components(separatedBy: "\n") ?? []
         let news = latest.dropFirst().filter { $0.hasPrefix("- ") }.map { "<li>\(h(String($0.dropFirst(2))))</li>" }.joined()
-        let version = "<details class=news><summary><span class=link>v\(h(String((latest.first ?? "unknown").split(separator: " ").first ?? "unknown"))) · What's new</span></summary><div class=newsbody><h2>What's new</h2><ul>\(news)</ul></div></details>"
+        let currentVersion = String((latest.first ?? "unknown").split(separator: " ").first ?? "unknown")
+        let version = "<details class=news><summary><span class=link>v\(h(currentVersion)) · built \(h(Changelog.buildDate)) · What's new</span></summary><div class=newsbody><h2>What's new in v\(h(currentVersion))</h2><ul>\(news)</ul></div></details>"
         // Filters and search (kept across the refresh), open rows kept open, confirm, copy, countdown.
         let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">" + PublisherFleet.script + #"""
         setInterval(function(){document.querySelectorAll('[data-until]').forEach(function(e){var s=Math.round(Number(e.getAttribute('data-until'))-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'})},1000);

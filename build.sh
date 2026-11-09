@@ -5,7 +5,11 @@ IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
 [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
 mkdir -p build
 # CHANGELOG.md is compiled in, so the status page shows this build's version and what's new.
-{ printf 'public enum Changelog {\n    public static let text = #"""\n'; cat CHANGELOG.md; printf '"""#\n    public static let launcher = #"""\n'; cat CHANGELOG-launcher.md; printf '"""#\n}\n'; } > build/Changelog.swift
+BUILD_DATE="$(date +%Y-%m-%d)"
+{ printf 'public enum Changelog {\n    public static let text = #"""\n'; cat CHANGELOG.md; printf '"""#\n    public static let launcher = #"""\n'; cat CHANGELOG-launcher.md; printf '"""#\n    public static let buildDate = "%s"\n}\n' "$BUILD_DATE"; } > build/Changelog.swift
+# Shared whats-new.json for each changelog (UI-CONVENTIONS v1).
+python3 -I /Users/vengtheng/Developer/kh-shared-ui/whats-new.py CHANGELOG.md build/whats-new.json
+python3 -I /Users/vengtheng/Developer/kh-shared-ui/whats-new.py CHANGELOG-launcher.md build/whats-new-launcher.json
 CORE=(Sources/KHUStub/*.swift Sources/KHUpdaterCore/*.swift build/Changelog.swift)
 FLOOR="apple-macos13.0" # Match the app’s declared minimum, not this build Mac’s OS.
 ARCHS="arm64 x86_64"    # Both slices: a launchd job on the other architecture must still run.
