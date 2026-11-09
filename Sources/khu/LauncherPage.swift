@@ -252,9 +252,10 @@ $('vgrid').onclick=()=>{view='grid';store.set('view',view);render()};$('vlist').
 $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q').oninput=e=>{q=e.target.value.trim().toLowerCase();render()};
 $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove())});
-document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else{detail=null;settingsOpen=false;closeLayers()}}
+document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;closeLayers()}}
  if(detail&&!settingsOpen&&(e.key=='ArrowRight'||e.key=='ArrowLeft')){const l=visible()[0],i=l.findIndex(a=>a.id==detail.id),n=l[(i+(e.key=='ArrowRight'?1:-1)+l.length)%l.length];if(n){detail={id:n.id};drawDetail()}}
- if((e.metaKey&&e.key=='f')){e.preventDefault();$('q').focus()}});
+ if(e.metaKey&&e.key==','){e.preventDefault();settingsOpen=true;drawSettings()}
+ if(e.metaKey&&(e.key=='f'||e.key=='k')){e.preventDefault();$('q').focus()}});
 setInterval(()=>{if(S.lastRun)$('checked').textContent=ago(S.lastRun)+' · Feed'+(S.sources.length?' + '+S.sources.join(', '):'')},30000);
 </script></body></html>
 """#.replacingOccurrences(of: "</style>", with: Changelog.layoutCSS + "</style>")

@@ -49,6 +49,17 @@ class SharedUITests(unittest.TestCase):
         script += store + "store.set('view','list');assert.equal(store.get('view'),'list');refused=true;assert.equal(store.get('view'),null);store.set('view','grid');"
         subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
 
+    def test_shared_shortcuts_and_escape_preserve_underlying_layer(self):
+        page = (ROOT / 'Sources/khu/LauncherPage.swift').read_text()
+        handler = "document.addEventListener('keydown',e=>{" + page.split("document.addEventListener('keydown',e=>{", 1)[1].split('\nsetInterval', 1)[0]
+        script = "const assert=require('node:assert/strict');let keydown,detail={id:'app'},settingsOpen=true,closed=0,removed=0,drawn=0,focused=0;const document={addEventListener:(k,f)=>keydown=f,querySelector:()=>null,querySelectorAll:()=>[{remove:()=>removed++}]};const closeLayers=()=>closed++,drawSettings=()=>drawn++,$=()=>({focus:()=>focused++});"
+        script += handler + "keydown({key:'Escape'});assert.equal(settingsOpen,false);assert.equal(detail.id,'app');assert.equal(closed,0);assert.equal(removed,1);keydown({key:',',metaKey:true,preventDefault(){}});assert.equal(settingsOpen,true);assert.equal(drawn,1);keydown({key:'k',metaKey:true,preventDefault(){}});assert.equal(focused,1);"
+        subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+        server = (ROOT / 'Sources/KHUpdaterCore/Server.swift').read_text()
+        body = server.split("document.addEventListener('keydown',function(e){", 1)[1].split("});document.addEventListener('click'", 1)[0]
+        script = "const assert=require('node:assert/strict');let dialog=true,closed=0,focused=0;const location={hash:''},show=()=>{},closeNews=()=>closed++,document={querySelector:()=>dialog,getElementById:()=>({focus:()=>focused++})};const keydown=function(e){" + body + "};keydown({key:'Escape'});assert.equal(closed,0);dialog=false;keydown({key:'Escape'});assert.equal(closed,1);keydown({key:',',metaKey:true,preventDefault(){}});assert.equal(location.hash,'settings');keydown({key:'k',metaKey:true,preventDefault(){}});assert.equal(location.hash,'macs');assert.equal(focused,1);"
+        subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
     def test_source_interpolation_delimiter_is_refused(self):
         (self.root / 'CHANGELOG.md').write_text('## 1.2.3 — 2026-11-09\n- \\#(unexpectedCode())\n')
         with self.assertRaisesRegex(ValueError, 'raw-literal delimiter'):

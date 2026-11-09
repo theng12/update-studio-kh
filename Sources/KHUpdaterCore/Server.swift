@@ -1160,7 +1160,7 @@ public final class FeedServer: @unchecked Sendable {
         var save=document.getElementById('save-launcher');if(save){save.hidden=!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.saveLauncher);save.addEventListener('click',function(){window.webkit.messageHandlers.saveLauncher.postMessage('save')})}}
         window.addEventListener('hashchange',show);bind();
         function closeNews(){document.querySelector('details.news').open=false}
-        document.addEventListener('keydown',function(e){if(e.key=='Escape')closeNews()});document.addEventListener('click',function(e){var news=document.querySelector('details.news');if(news.open&&!news.contains(e.target))closeNews()});
+        document.addEventListener('keydown',function(e){if(e.key=='Escape'&&!document.querySelector('dialog[open]'))closeNews();if(e.metaKey&&e.key==','){e.preventDefault();location.hash='settings';show()}if(e.metaKey&&e.key=='k'){e.preventDefault();location.hash='macs';show();document.getElementById('filter').focus()}});document.addEventListener('click',function(e){var news=document.querySelector('details.news');if(news.open&&!news.contains(e.target))closeNews()});
         async function refresh(){if(refreshing||document.querySelector('dialog[open]'))return;refreshing=true;var button=document.getElementById('refresh'),controller=new AbortController(),timeout=setTimeout(function(){controller.abort()},15000);
         button.disabled=true;button.textContent='Refreshing…';document.getElementById('refresh-status').textContent='Fetching the latest fleet and app reports…';
         var focused=document.activeElement,id=focused&&focused.id,start=focused&&focused.selectionStart,end=focused&&focused.selectionEnd,y=window.scrollY;
