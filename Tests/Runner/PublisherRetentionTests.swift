@@ -7,7 +7,7 @@ import CryptoKit
 /// the real Trash is never touched.
 func publisherRetentionTests() {
     let root = tmpDir("publisher-retention")
-    defer { try? fm.removeItem(at: root) }
+    defer { _ = try? Trash.move(root, into: root.deletingLastPathComponent().appendingPathComponent("_trash")) }
     let key = Curve25519.Signing.PrivateKey()
     let keyFile = root.appendingPathComponent("fixture.key")
     try! Signing.savePrivateKey(key, to: keyFile)
@@ -209,6 +209,15 @@ func publisherRetentionTests() {
                "RET the ledger's recovery pin survives a publish that no longer names it")
         expect(moved == ["junk.bin"] && trashed(trash) == ["junk.bin"] as Set<String>,
                "RET unledgered junk still retires")
+        let refreshed: [String: [String: [String: FeedApp]]] = [
+            "apps": ["media": ["current": feed.apps["media"]!, "previous": feed.previous!["media"]!]]]
+        try AtomicFile.writeJSON(refreshed, to: dir.appendingPathComponent("artifact-retention.json"))
+        try publish(dir, "media", "1.0.2", "m3", retire: retire)
+        expect(!stored(dir).contains("orphan.bin") && trashed(trash).contains("orphan.bin"),
+               "RET the next normal publish retires a recovery copy after its ledger pin is released")
+        let live = try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!
+        expect(stored(dir).contains(live.apps["media"]!.file) && stored(dir).contains(live.previous!["media"]!.file),
+               "RET releasing an old ledger pin preserves the signed current and previous")
     } catch { expect(false, "RET ledger pin: \(error)") }
 
     // 6. Nothing injected: a fixture feed's default destination is the feed's own `_trash`, so
