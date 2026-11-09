@@ -12,7 +12,7 @@ def checked(command):
     return subprocess.run(command, check=True, capture_output=True, text=True).stdout
 
 
-def collect(config, repo, started_at, testctl, check=checked):
+def collect(config, repo, started_at, testctl, check=checked, lanes=None):
     config, repo = Path(config).resolve(), Path(repo).resolve()
     policy = json.loads(config.read_text())
     project = policy["projects"]["kh-updater"]
@@ -25,7 +25,10 @@ def collect(config, repo, started_at, testctl, check=checked):
     rows = []
     if not project["lanes"]:
         raise ValueError("the shared policy has no Updater lanes")
-    for lane in project["lanes"]:
+    selected = list(dict.fromkeys(lanes)) if lanes else list(project["lanes"])
+    if any(lane not in project["lanes"] for lane in selected):
+        raise ValueError("requested lane is not defined in the shared policy")
+    for lane in selected:
         result = json.loads(check([str(testctl), "check", "kh-updater", lane, "--config", str(config), "--json"]))
         receipt = result.get("receipt") or {}
         if not result.get("match") or receipt.get("status") != "pass" or receipt.get("exitCode") != 0:
@@ -57,8 +60,9 @@ def main():
     parser.add_argument("--testctl", type=Path, default=Path.home() / "Developer/portfolio/bin/testctl")
     parser.add_argument("--started-at", required=True, help="UTC release gate start; older matching evidence is labelled skipped-unchanged")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--lane", action="append", help="Collect only this existing shared lane; repeat for more lanes")
     args = parser.parse_args()
-    proof = collect(args.config, args.repo, args.started_at, args.testctl)
+    proof = collect(args.config, args.repo, args.started_at, args.testctl, lanes=args.lane)
     with args.out.open("x") as output:
         json.dump(proof, output, indent=2)
         output.write("\n")

@@ -119,9 +119,12 @@ temporary homes and a stand-in `launchctl` first on `PATH`, and never opens an a
 
 Release checks use the Developer-owned `~/Developer/portfolio/bin/testctl` policy for `kh-updater`.
 Use `testctl plan kh-updater` before the coordinated gate and `testctl run kh-updater <lane>` for
-its configured lanes. The policy must point at the exact release checkout. After the gate,
-`python3 -B -I packaging/release-proof.py --started-at <gate-start-UTC> --out <new-proof.json>`
-collects matching receipts and independently rehashes their logs. Older matching results are
+the chosen configured lane. The policy must point at the exact release checkout; the supported
+`--config` option can select a temporary copy with only that checkout path changed (resolve the
+shared receipts/tmp paths to their original absolute locations). The `full` lane already includes
+the fast lane's tests; do not repeat the fast lane to collect duplicate evidence. After the gate,
+`python3 -B -I packaging/release-proof.py --config <candidate-policy> --lane full --started-at <gate-start-UTC> --out <new-proof.json>`
+collects that lane's matching receipt and independently rehashes its log. Older matching results are
 labelled `skipped-unchanged` and retain the source on which they ran. The collector runs no tests,
 defines no lanes, and refuses receipts for another checkout or a changed log. Packaged launch,
 update/rollback and intended-machine evidence remain separate required release checks; a test

@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.15 — 2026-11-09
+- Shows actual download amounts and separates preparation, download checking and installation.
+- Queued apps keep their own status until their installation starts.
+- New connections prefer the trusted publisher's download, with a checked copy inside Launcher available when that download is unavailable.
+- Includes a helper for Intel and Apple silicon Macs running macOS 13 or later.
+- Helper updates preserve the installed signed Launcher app.
+
 ## 0.1.14 — 2026-11-07
 - Connection setup and Pair again now say "the controller Mac" instead of "the Mac Studio", matching whichever Mac runs Update Studio KH.
 

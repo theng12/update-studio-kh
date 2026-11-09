@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.18 — 2026-11-09
+- Includes Studio Launcher KH 0.1.15 with clearer download progress and setup for Intel and Apple silicon Macs.
+- Keeps the latest reported build details so matching version numbers are not mistaken for identical installed copies.
+- Keeps the current and previous installers, moving older unreferenced copies to the Trash after a release is published.
+
 ## 1.0.17 — 2026-11-07
 - Includes Studio Launcher KH 0.1.14, whose connection setup and Pair again instructions say "the controller Mac" instead of "the Mac Studio".
 - Existing connections, paused apps and signed releases are unchanged.

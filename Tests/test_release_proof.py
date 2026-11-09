@@ -72,6 +72,15 @@ class ReleaseProofTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.collect()
 
+    def test_selected_existing_lane_does_not_require_duplicate_runs(self):
+        policy = json.loads(self.config.read_text())
+        policy["projects"]["kh-updater"]["lanes"]["full"] = {}
+        self.config.write_text(json.dumps(policy))
+        result = proof.collect(self.config, self.root, "2026-11-09T01:00:00Z", "testctl", self.check, lanes=["fast"])
+        self.assertEqual([row["lane"] for row in result["checks"]], ["fast"])
+        with self.assertRaises(ValueError):
+            proof.collect(self.config, self.root, "2026-11-09T01:00:00Z", "testctl", self.check, lanes=["undefined"])
+
     def test_other_lane_is_refused(self):
         self.receipt["lane"] = "full"
         with self.assertRaises(ValueError):
