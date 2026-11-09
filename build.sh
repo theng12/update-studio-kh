@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
+[ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
 mkdir -p build
 # CHANGELOG.md is compiled in, so the status page shows this build's version and what's new.
 { printf 'public enum Changelog {\n    public static let text = #"""\n'; cat CHANGELOG.md; printf '"""#\n    public static let launcher = #"""\n'; cat CHANGELOG-launcher.md; printf '"""#\n}\n'; } > build/Changelog.swift
@@ -18,6 +20,8 @@ universal() {
     thin+=("${out}.${arch}")
   done
   lipo -create "${thin[@]}" -output "$out"
+  codesign --force --sign "$IDENTITY" --timestamp=none "$out"
+  codesign --verify --strict "$out"
 }
 case "${1:-build}" in
   build)

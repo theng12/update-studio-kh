@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import plistlib
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,6 +62,9 @@ def run(script, *args, env=fake_env):
 
 
 try:
+    for suite in ("test_release_proof.py", "test_signing.py"):
+        check(subprocess.run([sys.executable, "-B", "-I", str(ROOT / "Tests" / suite)]).returncode == 0,
+              f"{suite} isolated regression checks")
     # Inspect real binaries: the kit must run on the macOS version its app declares.
     for binary in ("khu", "khu-stub"):
         output = subprocess.check_output(["xcrun", "vtool", "-show-build", str(ROOT / "build" / binary)], text=True)
