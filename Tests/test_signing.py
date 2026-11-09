@@ -72,6 +72,7 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
     def test_raw_binaries_signed_after_merge(self):
         result = self.run_script("build.sh", "build")
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.calls.exists(), "raw artifacts must be signed")
         calls = self.calls.read_text().splitlines()
         self.assertEqual(len(calls), 4)
         for name in ("khu", "khu-stub"):
