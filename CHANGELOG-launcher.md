@@ -9,6 +9,8 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - Includes a helper for Intel and Apple silicon Macs running macOS 13 or later.
 - Helper updates preserve the installed signed Launcher app.
 - Uses the shared layout sizes, opens What's New from its version link, and saves view choices correctly.
+- The window no longer redraws itself while only the download numbers are moving, so it stops flickering and an open app or Settings dialog keeps its place, its focus and what you had typed.
+- An update you cancelled says it is stopping instead of going on showing "Installing…", and when an app is being tried again an earlier failure is labelled as the previous attempt rather than reading as a new one.
 
 ## 0.1.14 — 2026-11-07
 - Connection setup and Pair again now say "the controller Mac" instead of "the Mac Studio", matching whichever Mac runs Update Studio KH.

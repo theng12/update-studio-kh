@@ -62,9 +62,11 @@ def run(script, *args, env=fake_env):
 
 
 try:
-    for suite in ("test_release_proof.py", "test_signing.py", "test_launcher_progress.py", "test_shared_ui.py"):
+    for suite in ("test_release_proof.py", "test_signing.py", "test_launcher_progress.py", "test_app_services.py", "test_shared_ui.py"):
         check(subprocess.run([sys.executable, "-B", "-I", str(ROOT / "Tests" / suite)]).returncode == 0,
               f"{suite} isolated regression checks")
+    check(subprocess.run(["node", str(ROOT / "Tests" / "test_launcher_render.js")]).returncode == 0,
+          "Launcher render and dialog regression checks")
     # Inspect real binaries: the kit must run on the macOS version its app declares.
     for binary in ("khu", "khu-stub"):
         output = subprocess.check_output(["xcrun", "vtool", "-show-build", str(ROOT / "build" / binary)], text=True)

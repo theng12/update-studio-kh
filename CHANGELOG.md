@@ -2,8 +2,9 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
-## 1.0.18 — 2026-11-09
+## 1.0.18 — 2026-11-10
 - Includes Studio Launcher KH 0.1.15 with clearer download progress and setup for Intel and Apple silicon Macs.
+- Separates an app's desktop window from its verified background host during updates, and refuses replacement until both have stopped safely.
 - Keeps the latest reported build details so matching version numbers are not mistaken for identical installed copies.
 - Keeps the current and previous installers, moving older unreferenced copies to the Trash after a release is published.
 - Shares layout sizes and What's New data with the other KH apps.

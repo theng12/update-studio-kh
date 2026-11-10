@@ -96,7 +96,7 @@ const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.k
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,showHidden=false,showAll={};
+let view=store.get('view')||'grid',sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,showHidden=false,showAll={},addrDraft=null;
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -124,16 +124,25 @@ function mainAction(a){if(a.status=='Updating…')return null;
  if(!a.managed||a.installed==null)return a.available?['Install','install','primary']:null;
  if((a.status=='Update available'||a.status=='Failed')&&a.available)return ['Update','update','primary'];
  return a.open&&!a.helper?['Open','open','']:null}
-function progress(a){const p=a.progress||{},box=el('div',{class:'prog'});let line,bar;
- if(p.done!=null&&p.total>0){const pct=Math.min(100,Math.round(p.done/p.total*100));line=(p.paused?'Paused · ':'Downloading ')+mb(p.done)+' of '+mb(p.total)+' · '+pct+'%';bar=el('div',{class:'bar'},el('i',{style:'width:'+pct+'%'}))}
- else if(p.done!=null){line=(p.paused?'Paused · ':'Downloading ')+mb(p.done);bar=el('div',{class:'bar loose'},el('i'))}
- else if(p.copying){line='Copying from '+p.copying;bar=el('div',{class:'bar loose'},el('i'))}
- else{line=p.phase=='installing'?'Installing…':p.phase=='checking'?'Checking download…':'Preparing installation…';bar=el('div',{class:'bar loose'},el('i'))}
- box.append(el('span',{class:'line num'},line),bar);
+function progress(a){const p=a.progress||{},box=el('div',{class:'prog','data-prog':a.id});
+ box.append(el('span',{class:'line num'}),el('div',{class:'bar'},el('i')));paint(box,p);
  const ctl=el('div',{class:'foot',style:'margin:0'},box);
- if(p.done!=null){ctl.append(el('button',{class:'btn icon',title:p.paused?'Resume':'Pause','aria-label':p.paused?'Resume':'Pause',onclick:e=>{e.stopPropagation();post({action:'pause',on:!p.paused})}},
+ if(p.done!=null&&!p.cancelled){ctl.append(el('button',{class:'btn icon',title:p.paused?'Resume':'Pause','aria-label':p.paused?'Resume':'Pause',onclick:e=>{e.stopPropagation();post({action:'pause',on:!p.paused})}},
    svg(p.paused?'M5 3.5v9l7-4.5z':'M5 3.5v9M11 3.5v9')),el('button',{class:'btn icon',title:'Cancel','aria-label':'Cancel',onclick:e=>{e.stopPropagation();post({action:'cancel'})}},svg('M4 4l8 8M12 4l-8 8')))}
  return ctl}
+/// What the counters mean, in one place: the line a person reads and the bar's filled per cent.
+function phase(p){if(p.cancelled)return ['Stopping…',null];
+ if(p.done!=null&&p.total>0){const pct=Math.min(100,Math.round(p.done/p.total*100));
+  return [(p.paused?'Paused · ':'Downloading ')+mb(p.done)+' of '+mb(p.total)+' · '+pct+'%',pct]}
+ if(p.done!=null)return [(p.paused?'Paused · ':'Downloading ')+mb(p.done),null];
+ if(p.copying)return ['Copying from '+p.copying,null];
+ return [p.phase=='installing'?'Installing…':p.phase=='checking'?'Checking download…':'Preparing installation…',null]}
+/// Counters only: the line's words, the loose or filled bar and its width. Never a new element, so
+/// an open dialog keeps its focus and an indeterminate bar keeps running instead of restarting.
+function paint(box,p){const t=phase(p),line=box.firstChild,bar=box.lastChild,i=bar.firstChild,w=t[1]==null?'':t[1]+'%';
+ if(line.textContent!=t[0])line.textContent=t[0];
+ const cls=t[1]==null?'bar loose':'bar';if(bar.className!=cls)bar.className=cls;
+ if((i.style.width||'')!=w)i.style.width=w}
 function svg(d){const s=document.createElementNS('http://www.w3.org/2000/svg','svg');s.setAttribute('viewBox','0 0 16 16');const p=document.createElementNS('http://www.w3.org/2000/svg','path');
  p.setAttribute('d',d);p.setAttribute('fill',d.includes('z')?'currentColor':'none');p.setAttribute('stroke','currentColor');p.setAttribute('stroke-width','1.8');p.setAttribute('stroke-linecap','round');s.append(p);return s}
 function icon(a){return a.icon?el('img',{src:a.icon,alt:''}):el('div',{class:'ph','aria-hidden':true},svg('M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z'))}
@@ -146,7 +155,7 @@ function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor
  const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter')openDetail(a.id)}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
-  a.reason?el('div',{class:'reason'},plain(a.reason)):null,
+  a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
@@ -158,8 +167,25 @@ function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filte
  if(q)list=list.filter(a=>(a.name+' '+(a.tagline||'')).toLowerCase().includes(q));
  const key=a=>new Date(installed(a)?a.installedAt||0:a.released||0).getTime();
  list.sort(sort=='recent'?(x,y)=>key(y)-key(x):(x,y)=>x.name.localeCompare(y.name));return [list,hidden]}
+// A push from the helper is either news or a transfer tick. News redraws the page; a tick writes
+// its counters into the nodes already on screen. Redrawing for both was the flicker: every push
+// destroyed the whole grid and any open dialog and re-made it, which replayed the dialog's entry
+// animation twice a second, dropped keyboard focus and erased what had been typed in Settings.
+const tickOnly=(k,v)=>k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
+// What the page would look like if it were drawn from the state it holds right now — transfer
+// counters excepted, since those are written in rather than redrawn.
+const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,showAll,S],tickOnly);
+let sig='';
 function render(state){if(state)Object.assign(S,state);
  $('whatsNew').textContent=(S.version?'v'+S.version+' · ':'')+'What’s New';
+ $('checked').textContent=ago(S.lastRun)+' · Feed'+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');
+ $('err').textContent=S.error?'Last check failed: '+S.error:'';
+ const s=signature();
+ if(s==sig){move();return}
+ sig=s;draw()}
+/// The counters moved and nothing else did: write them in, touch no other node.
+function move(){document.querySelectorAll('[data-prog]').forEach(n=>{const a=S.apps.find(x=>x.id==n.getAttribute('data-prog'));paint(n,(a&&a.progress)||{})})}
+function draw(){const fk=(document.activeElement||{}).id;
  const [list,hidden]=visible(),mine=list.filter(installed),others=list.filter(a=>!installed(a));
  const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.status=='Update available').length;
  $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
@@ -169,11 +195,12 @@ function render(state){if(state)Object.assign(S,state);
  else if(!list.length)m.append(el('p',{class:'empty'},'No app matches “'+q+'”.'));
  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
   m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
- $('checked').textContent=ago(S.lastRun)+' · Feed'+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');
  $('hiddenNote').replaceChildren(hidden.length?el('button',{class:'link',onclick:()=>{showHidden=!showHidden;render()}},showHidden?'Hide hidden apps':hidden.length+' hidden · Show'):'');
- $('err').textContent=S.error?'Last check failed: '+S.error:'';
  document.documentElement.style.colorScheme=S.settings.appearance=='dark'?'dark':S.settings.appearance=='light'?'light':'light dark';
- if(detail)drawDetail();if(settingsOpen)drawSettings()}
+ if(detail)drawDetail();if(settingsOpen)drawSettings();
+ // shortcut: focus comes back only where the control has an id (search, sort, the address field);
+ // cards carry none, so a redraw cannot hand focus back to the card the person was on.
+ if(fk&&$(fk))$(fk).focus()}
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
@@ -191,14 +218,15 @@ function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remo
  m.style.left=Math.max(8,Math.min(innerWidth-w-8,r.right-w))+'px';m.style.top=(r.bottom+h+8>innerHeight?r.top-h-4:r.bottom+4)+'px';m.querySelector('button')?.focus()}
 function openDetail(id,notes){detail={id,notes};drawDetail()}
 function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.id),a=list[i]||S.apps.find(x=>x.id==detail.id);if(!a){detail=null;return}
+ const again=!!document.querySelector('.scrim.d');
  document.querySelectorAll('.scrim.d').forEach(x=>x.remove());
  const step=d=>{const n=list[(i+d+list.length)%list.length];if(n){detail={id:n.id};drawDetail()}};
  const facts=[['Version',a.available||a.installed],['Released',day(a.released)],['Size',mb(a.bytes)],['From',a.fromSSD||(a.source||null)]].filter(f=>f[1]);
  const notes=a.notes||[],limit=showAll[a.id]?notes.length:5;
- const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':true,'aria-label':a.name,style:a.accent?'--app:'+a.accent:null,onclick:e=>e.stopPropagation()},
+ const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':true,'aria-label':a.name,style:(a.accent?'--app:'+a.accent+';':'')+(again?'animation:none':''),onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},icon(a),el('div',{class:'t'},el('h3',{},a.name),a.tagline?el('div',{class:'sub'},a.tagline):null,
     el('div',{class:'meta',style:'margin-top:8px'},chip(a),versionLine(a),a.released?el('span',{class:'when'},'· '+day(a.released)):null),
-    a.reason?el('div',{class:'reason',style:'margin-top:6px'},plain(a.reason)):null,
+    a.reason?el('div',{class:'reason',style:'margin-top:6px'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
     a.status=='Updating…'?el('div',{style:'margin-top:10px;max-width:420px'},progress(a)):el('div',{class:'foot',style:'margin-top:12px;max-width:340px'},...buttons(a,true))),
    el('div',{class:'nav'},el('button',{class:'btn icon',title:'Previous app','aria-label':'Previous app',onclick:()=>step(-1)},svg('M10 3 5 8l5 5')),
     el('button',{class:'btn icon',title:'Next app','aria-label':'Next app',onclick:()=>step(1)},svg('M6 3l5 5-5 5')),
@@ -210,8 +238,11 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     el('h4',{id:'changes'},'What’s changed'),notes.length?el('ul',{class:'changes'},notes.slice(0,limit).map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.'),
     notes.length>5?el('button',{class:'more',onclick:()=>{showAll[a.id]=!showAll[a.id];drawDetail()}},showAll[a.id]?'Show fewer':'Show '+(notes.length-5)+' more'):null)));
  const scrim=el('div',{class:'scrim d',onclick:()=>{detail=null;closeLayers()}},sheet);document.body.append(scrim);
- if(detail.notes){detail.notes=false;sheet.querySelector('#changes').scrollIntoView({block:'center'})}}
-function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remove());const s=S.settings,c=S.connection||{destination:'',machine:''};
+ if(detail.notes){detail.notes=false;sheet.querySelector('#changes').scrollIntoView({block:'center'})}
+ // The dialog now shows exactly what the state holds, so a following tick writes counters into it
+ // instead of rebuilding it under the person's hands.
+ sig=signature()}
+function drawSettings(){const again=!!document.querySelector('.scrim.s');document.querySelectorAll('.scrim.s').forEach(x=>x.remove());const s=S.settings,c=S.connection||{destination:'',machine:''};
  const set=(key,value)=>post({action:'setting',key,value});
  const check=(key,label,on,note,disabled)=>el('div',{},el('div',{class:'row'+(disabled?' dis':'')},el('label',{},el('input',{type:'checkbox',checked:on,disabled,onchange:e=>set(key,e.target.checked)}),label)),note?el('p',{class:'note'},note):null);
  const seg=(key,opts,cur)=>el('div',{class:'seg',role:'group'},opts.map(([v,l])=>el('button',{'aria-pressed':String(cur==v),onclick:()=>set(key,v)},l)));
@@ -219,7 +250,9 @@ function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remov
   :c.note?el('p',{style:'color:var(--bad);font-size:12px;margin:6px 0 0'},c.note)
   :(c.ok&&c.checkedAt)?el('div',{class:'meta',style:'margin-top:6px'},el('span',{class:'chip ok'},'Connected'),el('span',{class:'when num'},ago(c.checkedAt)))
   :el('p',{class:'note',style:'margin-left:0'},'Not checked yet.');
- const chInput=el('input',{type:'text',value:c.destination||'',placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address'});
+ // What the person typed but has not applied yet outlives a redraw; once the new address is saved,
+ // the state carries it and the draft is dropped.
+ const chInput=el('input',{id:'addr',type:'text',value:addrDraft===null?(c.destination||''):addrDraft,placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address',oninput:e=>{addrDraft=e.target.value}});
  const connSection=el('section',{},el('h4',{},'Connection'),
   el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},c.destination)),
   el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.machine)),
@@ -228,11 +261,11 @@ function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remov
   // Offered only after a check the publisher refused with 401/403 (pairAvailable); the
   // confirmation and the pairing code are collected by the native window that follows.
   c.pairAvailable?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'pairAgain'})},'Pair again now')):null,
-  el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:chInput.value})},'Use this address')),
+  el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>{addrDraft=null;post({action:'changeServer',value:chInput.value})}},'Use this address')),
   el('p',{class:'note',style:'margin-left:0'},'This Mac only accepts an address where Update Studio serves the updates its own key already signed. A different Update Studio needs its setup kit, not an address.'),
   c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null);
  const updater=S.apps.find(a=>a.id=='updater');
- const sheet=el('div',{class:'sheet set',role:'dialog','aria-modal':true,'aria-label':'Settings',onclick:e=>e.stopPropagation()},
+ const sheet=el('div',{class:'sheet set',role:'dialog','aria-modal':true,'aria-label':'Settings',style:again?'animation:none':'',onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},el('div',{class:'t'},el('h3',{},'Settings'),el('div',{class:'sub'},'Studio Launcher KH '+S.version))),
   el('div',{class:'body'},
    el('section',{},el('h4',{},'Updates'),el('div',{class:'row'},el('span',{},'Check for updates'),seg('checkManually',[[false,'Automatically'],[true,'Manually']],s.checkManually)),
@@ -247,7 +280,7 @@ function drawSettings(){document.querySelectorAll('.scrim.s').forEach(x=>x.remov
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),
    el('section',{},el('h4',{},'About'),el('button',{class:'btn',onclick:()=>post({action:'whatsNew'})},'v'+S.version+' · What’s New'))),
   el('div',{class:'bottom'},el('button',{class:'btn primary',onclick:()=>{settingsOpen=false;closeLayers()}},'Done')));
- document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet))}
+ document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet));sig=signature()}
 $('vgrid').onclick=()=>{view='grid';store.set('view',view);render()};$('vlist').onclick=()=>{view='list';store.set('view',view);render()};
 $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q').oninput=e=>{q=e.target.value.trim().toLowerCase();render()};
 $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};

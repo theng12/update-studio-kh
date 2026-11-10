@@ -73,9 +73,15 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         let asked = requested; requested = []
         return asked
     }
+    /// Says which app the agent is working on right now. The Launcher's "Updating…" row is driven
+    /// by this flag, so the flag changing has to move the window too: pushing state only at the end
+    /// of a run left a stopped attempt still drawn as Installing.
     func installing(_ app: String?) {
         lock.lock(); installingApp = app; lock.unlock()
-        DispatchQueue.main.async { self.refreshIcon() }
+        DispatchQueue.main.async {
+            self.refreshIcon()
+            self.window?.reload()
+        }
     }
     func finished(_ result: AgentRunResult?, error: String?) {
         lock.lock()

@@ -11,6 +11,11 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     private var loaded = false
     private var iconCache: [String: String] = [:]
     private var progressTimer: Timer?
+    /// The exact state the page already holds, and whether a render is already queued. The page
+    /// rebuilds whatever a render touches, so a second push of the same state is a flash for no
+    /// news — and one click can ask for three pushes in the same turn.
+    private var pushed = ""
+    private var pushQueued = false
     /// What the connection section of Settings last learned, in memory only: a check that is not
     /// run reads as "Not checked yet", never as passed.
     private struct ConnectionUI {
@@ -47,7 +52,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        loaded = true; reload()
+        pushed = ""; loaded = true; reload()
         runConnectionCheck()
         // KHU_PAGE_SCRIPT runs once on the page, for screenshots; nobody sets it in real use.
         if let script = ProcessInfo.processInfo.environment["KHU_PAGE_SCRIPT"], !script.isEmpty {
@@ -78,7 +83,12 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             row["features"] = app.words.features?.map { ["title": $0.title, "text": $0.text ?? ""] }
             row["notes"] = (app.notes ?? "").split(separator: "\n").map { $0.hasPrefix("- ") ? String($0.dropFirst(2)) : String($0) }.filter { !$0.isEmpty }
             row["icon"] = icon(for: app)
-            if busy == app.app { row["progress"] = progress(app) }
+            if busy == app.app {
+                row["progress"] = progress(app)
+                // A row being worked on right now: whatever failure it carries is from the attempt
+                // before, so the page must not read it as this attempt already having failed.
+                row["retrying"] = app.status == HelperApp.failed
+            }
             rows.append(row)
         }
         let state: [String: Any] = [
@@ -95,20 +105,44 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                            "serverNote": connectionUI.serverNote as Any, "serverOk": connectionUI.serverOk as Any,
                            "pairAvailable": connectionUI.pairAvailable],
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: state), let json = String(data: data, encoding: .utf8) else { return }
-        web.evaluateJavaScript("render(\(json))")
-        // While something installs, keep its actual transfer counters and phase visible.
-        if busy != nil, progressTimer == nil {
-            progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.reload() }
-        } else if busy == nil {
+        guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]), let json = String(data: data, encoding: .utf8) else { return }
+        publish(json, busy: busy)
+    }
+
+    /// A push means the page rebuilds whatever it touches, so it has to mean something changed:
+    /// identical state is not sent at all, and several asks in one turn (one click refreshes three
+    /// times) become one render. Without this the window redrew twice a second for no news — the
+    /// flicker — and it did so under an open dialog, stealing focus and what had been typed.
+    private func publish(_ json: String, busy: String?) {
+        if json != pushed {
+            pushed = json
+            if !pushQueued {
+                pushQueued = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.loaded else { return }
+                    self.pushQueued = false
+                    self.web.evaluateJavaScript("render(\(self.pushed))")
+                }
+            }
+        }
+        // While something installs, keep its actual transfer counters and phase visible. In the
+        // common modes: in the default mode alone the tick stops behind a popup, a menu or a drag,
+        // and the window keeps showing the last frame it drew — "Installing…" included.
+        if busy == nil {
             progressTimer?.invalidate(); progressTimer = nil
+        } else if progressTimer == nil {
+            let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.reload() }
+            RunLoop.main.add(timer, forMode: .common)
+            progressTimer = timer
         }
     }
 
-    /// Actual transfer bytes and phase; no guessed progress from a missing download file.
+    /// Actual transfer bytes and phase; no guessed progress from a missing download file. A cancel
+    /// pressed on this Mac is reported as stopped, so a row never keeps counting down work that the
+    /// person already ended — the page reads it as "Stopping…" rather than an endless install.
     private func progress(_ app: HelperApp) -> [String: Any] {
         let current = DownloadControl.progress
-        var p: [String: Any] = ["paused": DownloadControl.paused, "phase": current.phase]
+        var p: [String: Any] = ["paused": DownloadControl.paused, "phase": current.phase, "cancelled": DownloadControl.cancelled]
         if let received = current.received { p["done"] = NSNumber(value: received) }
         if let total = app.bytes ?? current.total { p["total"] = NSNumber(value: total) }
         if current.phase == "copying", let ssd = app.fromSSD { p["copying"] = ssd }
@@ -282,7 +316,12 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         return a.runModal() == .alertFirstButtonReturn
     }
 
-    func windowWillClose(_ notification: Notification) { helper.windowClosed() }
+    /// A closed window has nobody to refresh: the tick stops here and the next `reload()` starts it
+    /// again if work is still running.
+    func windowWillClose(_ notification: Notification) {
+        progressTimer?.invalidate(); progressTimer = nil
+        helper.windowClosed()
+    }
 }
 
 /// WKUserContentController keeps its handler strongly; this keeps the window free to go.

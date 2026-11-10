@@ -353,9 +353,9 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
    expected bundle identifier (`bundleID` in the config, else the installed app's), and a
    runnable executable; copy it with `ditto` into `.<name>.khu-staging` beside the installed
    app and check the copy — all before anything is stopped; detach by the device ID captured from that attach, never a volume path;
-3. write the install journal (naming both paths AND the target version, so recovery can prove
-   which side it found); quit the app and stop its service. A refusal relaunches what was
-   running and changes nothing;
+3. write the install journal (naming both paths, the target version and any active owned service
+   labels, so recovery can prove which side it found); quit the app and stop its service, in that
+   order. A refusal keeps the installed bundle and requests restart of what was stopped;
 4. installed → rollback (the earlier rollback moves to `_trash`), staging → installed, the
    journal moving forward at each step. Any failure restores
    the previous bundle, relaunches it and says exactly what was restored — or, loudly, that it
@@ -405,6 +405,14 @@ listening socket on the port (`lsof -nP -iTCP:<port> -sTCP:LISTEN`); an unrelate
 a pid of this bundle is refused, never signalled. It counts as stopped once the port stays
 quiet; health requires the same listener ownership check, the expected on-disk version,
 and a running bundle process.
+
+Generic app hosts are discovered from the user's existing LaunchAgent metadata: the declared
+executable must be inside this bundle and match the live PID, with only `KeepAlive:
+{SuccessfulExit:false}` and no scheduled or socket activation. The journal captures active labels
+before desktop quit; service stop handles only those labels, sends SIGTERM and requires both an
+empty bundle process set and launchd's clean exit status. Unsupported or newly appearing processes
+block replacement. Relaunch and recovery revalidate saved labels before non-forcing `kickstart`,
+and health requires those hosts running again. Gateway keeps its separate PID/port protocol.
 
 `story`, `hub`: status only in the online agent — those apps keep their own updaters. `updater`: self-update (below).
 

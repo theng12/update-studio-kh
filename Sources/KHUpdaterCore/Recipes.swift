@@ -18,12 +18,15 @@ public struct RecipeResult: Sendable, Equatable {
 public struct AppControl {
     /// true/false, or nil when it cannot be told (treated as running: it must then quit).
     public var isRunning: () -> Bool?
-    /// Ask the app to quit; true once no process of it is left.
+    /// Ask the desktop app to quit; a separately verified service is stopped by stopService.
     public var quit: () -> Bool
     public var launch: () -> Void
-    /// Stop a service that outlives its app (the Gateway server); true once it is gone AND its
-    /// endpoint stays quiet. Ordinary apps have none.
+    /// Stop verified services that outlive their desktop app; true only once the bundle is quiet.
+    /// Gateway also verifies its service endpoint and listener ownership.
     public var stopService: () -> Bool
+    /// Persist only services that were running, so recovery never starts an intentionally stopped job.
+    public var serviceLabels: () -> [String]
+    public var restoreServices: ([String]) -> Void
     /// Healthy *as this version*: the new one after an install, the previous one after a rollback.
     public var healthy: (_ expectedVersion: String) -> Bool
     public var healthTimeout: TimeInterval
@@ -33,8 +36,10 @@ public struct AppControl {
     public var healthSettle: TimeInterval
     public init(isRunning: @escaping () -> Bool?, quit: @escaping () -> Bool, launch: @escaping () -> Void,
                 stopService: @escaping () -> Bool = { true }, healthy: @escaping (String) -> Bool,
-                healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10) {
+                healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10,
+                serviceLabels: @escaping () -> [String] = { [] }, restoreServices: @escaping ([String]) -> Void = { _ in }) {
         self.isRunning = isRunning; self.quit = quit; self.launch = launch; self.stopService = stopService
+        self.serviceLabels = serviceLabels; self.restoreServices = restoreServices
         self.healthy = healthy; self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
         self.healthSettle = healthSettle
     }
@@ -120,6 +125,8 @@ public struct InstallJournal: Codable, Sendable, Equatable {
     public var order: String? = nil
     /// `owner_rollback` for a swap the owner ordered; absent for an install.
     public var intent: String? = nil
+    /// The already-running owned services to restart after promotion, rollback or process recovery.
+    public var serviceLabels: [String]? = nil
 }
 
 public enum Recipe {
@@ -297,20 +304,24 @@ public enum Recipe {
                                      wasRunning: wasRunning, version: targetVersion)
         journal.order = order
         journal.intent = order == nil ? nil : "owner_rollback"
+        journal.serviceLabels = control.serviceLabels()
+        control.restoreServices(journal.serviceLabels ?? [])
         // The version this swap moves away from: an owner rollback reports it, so the agent can
         // reject that exact artifact instead of the one it installs.
         let displaced = journal.previousVersion
         try AtomicFile.writeJSON(journal, to: paths.journal)
 
         // 3. Stop what is running; on refusal, leave the old app as it was.
+        var appQuit = false
         func abandon(_ message: String) throws -> Never {
-            if wasRunning && control.isRunning() != true { control.launch() }
+            if wasRunning && (appQuit || control.isRunning() != true) { control.launch() }
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
             throw khuFail(message)
         }
-        guard control.quit() else { try abandon("the app did not quit; nothing was changed") }
-        guard control.stopService() else { try abandon("the service did not stop; the old app was relaunched and nothing was changed") }
+        guard control.quit() else { try abandon("the app did not quit; the installed app was kept") }
+        appQuit = true
+        guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
 
         // 4. Promote. Every throw from here restores the previous bundle before it is reported.
         do {
@@ -440,6 +451,7 @@ public enum Recipe {
     /// replace a different app — nor throw the journal away because the wrong path looked fine.
     static func recover(_ paths: Paths, control: AppControl, fileManager fm: FileManager) throws -> String {
         guard let journal = try AtomicFile.readJSON(InstallJournal.self, from: paths.journal) else { return "" }
+        control.restoreServices(journal.serviceLabels ?? [])
         let found = try? BundleInfo.read(journal.installed)
         let previousIsInPlace = found?.version == journal.previousVersion && found?.executableIsRunnable(in: journal.installed) == true
         let expectedNew = journal.version ?? (try? BundleInfo.read(journal.staged).version)
@@ -711,15 +723,107 @@ public enum LiveControl {
         return gone()
     }
 
-    public static func appDmg(_ installedPath: String, shell: Shell) -> AppControl {
-        AppControl(
+    /// Only a saved per-user job whose live PID runs its exact bundled executable is a service.
+    /// Unknown jobs and respawning KeepAlive policies remain blockers, never targets to force quit.
+    static func serviceProcesses(_ installedPath: String, shell: Shell, agents: URL) -> [String: pid_t] {
+        guard let info = try? BundleInfo.read(installedPath),
+              let files = try? FileManager.default.contentsOfDirectory(at: agents, includingPropertiesForKeys: nil),
+              let listed = try? shell.run("/bin/launchctl", arguments: ["list"], timeout: 15), listed.exitCode == 0 else { return [:] }
+        let prefix = realPath(installedPath) + "/Contents/"
+        let desktop = realPath(installedPath + "/Contents/MacOS/" + info.executable)
+        var live: [String: pid_t] = [:]
+        for line in listed.stdout.split(separator: "\n") {
+            let fields = line.split(whereSeparator: { $0.isWhitespace })
+            if fields.count == 3, Int(fields[1]) != nil {
+                if let pid = pid_t(fields[0]), pid > 1 { live[String(fields[2])] = pid }
+                else if fields[0] == "-" { live[String(fields[2])] = 0 }
+            }
+        }
+        var owned: [String: pid_t] = [:]
+        for file in files where file.pathExtension == "plist" {
+            guard let data = try? Data(contentsOf: file),
+                  let job = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let label = job["Label"] as? String, BundleInfo.isBundleID(label),
+                  let pid = live[label] else { continue }
+            // Scheduled/socket activation can restart a stopped job during a bundle exchange.
+            guard ["StartInterval", "StartCalendarInterval", "WatchPaths", "QueueDirectories", "StartOnMount", "Sockets", "MachServices"].allSatisfy({ job[$0] == nil }) else { continue }
+            // shortcut: only SuccessfulExit=false hosts; extend other policies with owned stop/restart proof.
+            guard let rules = job["KeepAlive"] as? [String: Any], rules.count == 1,
+                  rules["SuccessfulExit"] as? Bool == false else { continue }
+            let program = (job["Program"] as? String) ?? (job["ProgramArguments"] as? [String])?.first
+            guard let program, program.hasPrefix("/"),
+                  realPath(program).hasPrefix(prefix), realPath(program) != desktop else { continue }
+            if pid > 1 {
+                guard let actual = executablePath(pid), realPath(actual) == realPath(program) else { continue }
+            }
+            owned[label] = pid  // zero keeps a loaded job's pending restart subject to the exit check
+        }
+        return owned
+    }
+
+    static func servicesStopped(_ labels: Set<String>, shell: Shell) -> Bool {
+        if labels.isEmpty { return true }
+        guard let result = try? shell.run("/bin/launchctl", arguments: ["list"], timeout: 15), result.exitCode == 0 else { return false }
+        let stopped = Set(result.stdout.split(separator: "\n").compactMap { line -> String? in
+            let fields = line.split(whereSeparator: { $0.isWhitespace })
+            // A signal/crash exit could be waiting for KeepAlive's restart throttle.
+            return fields.count == 3 && fields[0] == "-" && fields[1] == "0" ? String(fields[2]) : nil
+        })
+        return labels.isSubset(of: stopped)
+    }
+
+    public static func appDmg(_ installedPath: String, shell: Shell, agentsDirectory: URL? = nil,
+                              quitWait: TimeInterval = 60) -> AppControl {
+        let agents = agentsDirectory ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
+        var requiredServices: Set<String> = []
+        var servicePlanFrozen = false
+        func appGone() -> Bool {
+            guard let all = processes(inBundle: installedPath) else { return false }
+            let jobs = serviceProcesses(installedPath, shell: shell, agents: agents)
+            if !servicePlanFrozen {
+                requiredServices = Set(jobs.filter { $0.value > 1 }.keys)
+                servicePlanFrozen = true
+            }
+            return Set(all).subtracting(jobs.filter { requiredServices.contains($0.key) }.values).isEmpty
+        }
+        return AppControl(
             isRunning: { isRunning(installedPath) },
-            quit: { quit(installedPath, shell: shell) },
-            launch: { _ = try? shell.run("/usr/bin/open", arguments: [installedPath], timeout: 30) },
+            quit: { quit(installedPath, shell: shell, wait: quitWait, gone: { appGone() }) },
+            launch: {
+                let jobs = serviceProcesses(installedPath, shell: shell, agents: agents)
+                for label in requiredServices.sorted() where jobs[label] == 0 {
+                    // Start only the already-loaded job we stopped; never force or change its settings.
+                    _ = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(label)"], timeout: 15)
+                }
+                _ = try? shell.run("/usr/bin/open", arguments: [installedPath], timeout: 30)
+            },
+            stopService: {
+                guard let all = processes(inBundle: installedPath) else { return false }
+                let jobs = serviceProcesses(installedPath, shell: shell, agents: agents).filter { requiredServices.contains($0.key) || $0.value == 0 }
+                let services = Set(jobs.values)
+                guard Set(all).isSubset(of: services) else { return false }
+                for pid in all {
+                    // Recheck ownership immediately before signalling; never use an old job PID.
+                    if !serviceProcesses(installedPath, shell: shell, agents: agents).values.contains(pid) {
+                        if kill(pid, 0) != 0 && errno == ESRCH { continue }
+                        return false
+                    }
+                    guard kill(pid, SIGTERM) == 0 || errno == ESRCH else { return false }
+                }
+                let deadline = Mono.now() + quitWait
+                while Mono.now() < deadline {
+                    if isRunning(installedPath) == false && servicesStopped(Set(jobs.keys), shell: shell) { return true }
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+                return isRunning(installedPath) == false && servicesStopped(Set(jobs.keys), shell: shell)
+            },
             healthy: { expected in
                 (try? BundleInfo.read(installedPath).version) == expected && isRunning(installedPath) == true
+                    && (requiredServices.isEmpty || requiredServices.isSubset(of: Set(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)))
             },
-            healthTimeout: 60)
+            healthTimeout: 60,
+            serviceLabels: { Array(requiredServices.union(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)).sorted() },
+            restoreServices: { requiredServices = Set($0.filter(BundleInfo.isBundleID)); servicePlanFrozen = true })
     }
 
     /// The pids owning the *listening* socket on `port`, asked of `lsof` by port (absolute path,
@@ -775,6 +879,9 @@ public enum LiveControl {
             return all.allSatisfy { $0 == service }
         }
         var control = appDmg(installedPath, shell: shell)
+        // Gateway retains its separate health-PID/listening-port lifecycle.
+        control.serviceLabels = { [] }
+        control.restoreServices = { _ in }
         control.quit = { quit(installedPath, shell: shell, wait: quitWait, gone: { appGone() }) }
         control.stopService = {
             let answer = probe()
