@@ -2,3 +2,5 @@ build/
 _trash/
 .DS_Store
 .build/
+dist/
+.release-dist.lock
