@@ -68,6 +68,16 @@ Publishing commits the signed current and previous installer references before r
 
 Those version numbers are examples: use the app’s new version and exact installer path. A version not newer than the feed's is refused (`--allow-same` exists, but never use it to replace an accepted installer with different application bytes).
 
+After the normal release is installed, launched and verified on its intended Mac, retain its accepted installers with the shared portfolio helper. Before this step, check that no active job or dependency uses an installer that would leave the retained pair. Write the helper's trusted schema-1 pins with two separate app entries, `Update Studio KH` and `Studio Launcher KH`, each naming the canonical project directory and its latest plus previous accepted DMG, exact version, absolute source, SHA-256, byte count and installed-acceptance evidence. One version is allowed only when the app has shipped once. The shared contract is documented in `Shared Tools/portfolio/README.md` → Release dist retention.
+
+```bash
+sh packaging/retain-release.sh /absolute/path/to/accepted-installer-pins.json
+```
+
+This post-acceptance hook delegates to `~/Developer/Shared Tools/portfolio/tools/release-dist.py`; `KHU_RELEASE_DIST_TOOL` can select the same shared helper at another location. It does not build, sign, publish, install or infer acceptance. The helper copies exact pins into canonical `dist/<App Name>-<version>.dmg` and records provenance in `dist/.release-dist.json`; only unchanged obsolete files it previously managed can retire to project `_trash/dist/`. Both apps keep their own pair (four DMGs total). Preserve previous working installers until the replacement is verified. A failed or pending candidate must not enter the pins.
+
+Launcher feed entries of kind `updater` are helper binaries, not Launcher DMGs: select its verified packaging DMG independently. Publishing continues to name an explicit `--artifact` and `--version`, so retained sibling DMGs do not affect selection. Never choose a newest glob or modification time. Builders still produce candidates under `build/`; they must not call this hook before installed acceptance. The focused caller proof is `python3 -I Tests/test_release_dist_hook.py` with `TMPDIR` set to an existing directory in the local task folder.
+
 There is no Add App form in Update Studio. **Apps & updates** lists published versions, sizes and What's New and can request updates on connected Macs. To add a normal app DMG, publish it with a stable `--app` ID, its version, `--artifact` and a `--changelog` whose top entry matches. The publisher checks the DMG’s version and reads its bundle identity and icon, stores the installer by SHA-256 and signs the release with the existing publisher key. A new installation mechanism needs a supported recipe; a catalog record alone does not implement one.
 
 Use `--name` for its shown name, `--description` for the Launcher details description, and optional `--tagline` / `--feature` for other app words. Description is separate from What's New. Keep the same description in each SSD’s `apps.json` app record; indexing preserves those words. Metadata changes do not require rebuilding an unchanged app. Publishing or distributing still follows the release approval and gate.
