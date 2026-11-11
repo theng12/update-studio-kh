@@ -235,6 +235,11 @@ if [[ -n "$LAUNCHCTL" ]] && "$LAUNCHCTL" print "$JOB" >/dev/null 2>&1; then
         fail "KH Updater's helper was running and could not be stopped; nothing was changed."
     fi
     STOPPED_JOB=true
+else
+    PRINT_EXIT=$?
+    if [[ "$SAVED" == true && "$PRINT_EXIT" != 113 ]]; then
+        fail "macOS could not confirm the helper's startup status (print exit $PRINT_EXIT); nothing was changed."
+    fi
 fi
 # Promote: what is replaced moves into this install's own trash first, so it can be put back.
 mkdir -p "$K/bin" "$K/base/versions" "$K/state"

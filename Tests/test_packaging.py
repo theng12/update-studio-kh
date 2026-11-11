@@ -23,7 +23,7 @@ fake_bin.mkdir()
 (fake_bin / "launchctl").write_text("""#!/bin/bash
 printf '%s\\t' "$@" >> "$FAKE_LAUNCHCTL_CALLS"; printf '\\n' >> "$FAKE_LAUNCHCTL_CALLS"
 case "$1" in
-  print) [[ -f "$FAKE_LAUNCHCTL_LOADED" ]] && exit 0; exit 1 ;;
+  print) [[ -f "$FAKE_LAUNCHCTL_LOADED" ]] && exit 0; exit "${FAKE_LAUNCHCTL_PRINT_EXIT:-1}" ;;
   bootstrap)
     if [[ -n "${FAKE_LAUNCHCTL_FAIL:-}" ]]; then
       echo 'Bootstrap failed: 5: Input/output error' >&2; exit 1
@@ -328,6 +328,23 @@ try:
     check(recorded() == [["print", label], ["bootout", label], ["bootstrap", domain, str(p)]],
           "saved repair stops the loaded job and starts exactly one replacement")
     check((k / "base/config.json").stat().st_mode & 0o777 == 0o600, "saved repair keeps the connection private")
+
+    reset_launchd("repair-saved-absent")
+    h, k, p, saved_bytes = saved_repair_home("repair-saved-absent")
+    result = run(installer, k / "base/config.json", h, "--repair-saved",
+                 env={**fake_env, "FAKE_LAUNCHCTL_PRINT_EXIT": "113"})
+    check(result.returncode == 0 and recorded() == [["print", label], ["bootstrap", domain, str(p)]]
+          and (k / "base/config.json").read_bytes() == saved_bytes,
+          "saved repair starts an explicitly absent job once and preserves its connection")
+
+    reset_launchd("repair-saved-unknown")
+    h, k, p, saved_bytes = saved_repair_home("repair-saved-unknown")
+    old_current = os.readlink(k / "base/current")
+    result = run(installer, k / "base/config.json", h, "--repair-saved")
+    check(result.returncode != 0 and "startup status" in result.stderr and recorded() == [["print", label]]
+          and os.readlink(k / "base/current") == old_current
+          and (k / "base/config.json").read_bytes() == saved_bytes,
+          "saved repair refuses unknown startup status before stopping or replacing anything")
 
     reset_launchd("repair-saved-other")
     h, k, p, saved_bytes = saved_repair_home("repair-saved-other")
