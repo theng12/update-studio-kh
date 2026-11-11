@@ -2,7 +2,7 @@
   "schema": 1,
   "note": "Shared KH layout numbers. Values match Hub native/Design.swift and Gateway menubar/PageKit.swift (2026-11-08). Colours and fonts stay per app on purpose.",
   "space": { "xs": 4, "tight": 6, "s": 8, "m": 12, "l": 16, "xl": 24, "page": 28 },
-  "sidebar": { "width": 220 },
+  "sidebar": { "width": 248, "minWidth": 240 },
   "radius": { "control": 6, "card": 8, "sheet": 12 },
   "type": {
     "pageTitle":     { "size": 26, "weight": "semibold" },

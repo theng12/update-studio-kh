@@ -1,13 +1,15 @@
-# KH app UI conventions (v1, owner-approved 2026-11-08)
+# KH app UI conventions (v2, owner-approved 2026-11-08; bottom-left group, sidebar, appearance and support added 2026-11-12)
 
 One look and behaviour across the KH apps. Each app builds these in its own toolkit; there is no shared code package. Brand colours, fonts and app icons stay per app (owner 2026-11-08: no icon changes for now). Adopt in each app's next normal release, no separate release. Full audit with file paths: `_orchestra/developer-handoff/shared-ui-audit-20261108.md`.
 
 Numbers (spacing, radii, text sizes, status names, toast limits): `design-tokens.json`. Use them as CSS variables or Swift constants; don't invent new values.
 
-## Version
-- Read from the app's own bundle/package, never typed by hand.
-- Shown at the bottom of the sidebar (or Settings → About where there is no sidebar), as `v1.4.388`, plus `· built 2026-11-08` where a build stamp exists.
-- Clicking the version opens What's New.
+## Version + What's New pill
+- Read the version from the app's own bundle/package, never typed by hand.
+- One pill in the bottom-left — sidebar footer, menu-bar apps at the bottom of the dropdown, no sidebar: Settings → About — showing the app name and installed version, e.g. `Studio Launcher KH 0.1.20`.
+- The whole pill opens What's New. No separate version text or What's New link remains anywhere.
+- Immediately to its right: a Check for Updates icon button (tooltip and accessible name "Check for updates"). When the signed feed offers a newer version, a tiny update button appears beside it and starts that update.
+- That band holds only Support this app, the pill and those two buttons, plus at most one compact status line. Machine names, counts, badges and build details belong in the page (Overview or Settings), never in the footer.
 
 ## What's New
 - Data: `whats-new.json` made at release by `whats-new.py` from `CHANGELOG.md` (`## x.y.z — date`, then `- ` bullets, plain words).
@@ -15,9 +17,11 @@ Numbers (spacing, radii, text sizes, status names, toast limits): `design-tokens
 - Modal or page are both fine. Show it once after an upgrade, never on a first-ever run.
 
 ## Sidebar
-- 220 wide, group headers, one line icon per row, active row tinted with the app's accent.
-- Version + What's New at the bottom. Collapses on narrow windows.
-- Apps without a sidebar (Update Studio launcher, menu-bar only views) put version + What's New in Settings/About.
+- 248 wide (never under 240 — the footer group needs the room), background = panel, one right border. Collapses on narrow windows.
+- One navigation list with few group headers, one order, no destination repeated elsewhere. Every navigation and footer entry has a leading 16 px icon from one consistent set, its text label and an accessible name — no text-only lists.
+- Primary task destinations first; Connect/Add actions at the top of the same list; Settings last. Active row tinted with the app's accent or panel highlight.
+- Footer holds Support this app (heart) just above the version + What's New pill, then Check for Updates and the conditional tiny update button. Nothing else.
+- Apps without a sidebar put the same group at the bottom of the menu-bar dropdown, or Settings → About for utilities with neither.
 
 ## Modals and dialogs
 - Use the toolkit's own dialog (sheet, `<dialog>`, NSAlert, Modal component).
@@ -36,8 +40,20 @@ Numbers (spacing, radii, text sizes, status names, toast limits): `design-tokens
 - Enter confirms unless "Keep" has focus. Type-to-confirm for the most serious actions.
 - Prefer moving to trash/retired over deleting for good.
 
+## Appearance
+- Settings → Appearance (menu-bar apps: the app's Settings/preferences), never in the footer group.
+- Four choices: **System** (default), Light, Dark, Default. Default means the app's designed look.
+- Every app starts on System; a saved explicit choice is kept. An app that shipped only its old default migrates that default to System once.
+- Apply live across the app and keep text and controls legible in every mode.
+
+## Support this app
+- Sidebar footer entry with a heart icon, just above the version pill; opens the app's Support page.
+- The app is free with every feature unlocked. Offer a one-time donation through the shared public page `https://nowpayments.io/donation/studiokh`, opened in the user's browser through the app's allow-listed external opener.
+- Optional and non-blocking: never required, never nagging, no repeat reminders.
+- Every app gains Check for Updates and the conditional tiny update button on the same shared feed contract, including apps that never had an in-app updater. Never add a second updater.
+
 ## Settings
-- Sidebar row → Settings page. Sections as cards: this app / this Mac first, About last (version + What's New).
+- Sidebar row → Settings page. Sections as cards: this app / this Mac first, Appearance and About after (About carries version + What's New where there is no pill).
 - Searchable when there are many settings.
 
 ## Empty, loading and error
