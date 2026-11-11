@@ -64,8 +64,8 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         let destination = destinationField
         switch mode {
         case .firstRun(let kit, _):
-            intro = Self.wrap("Studio Launcher KH sets up this Mac from the kit inside this app. "
-                + "Type the pairing code shown in Update Studio KH on the controller Mac, under Connect a Mac.")
+            intro = Self.wrap("Choose the owned Mac running Update Studio KH. Studio Launcher sets up its helper from inside this app. "
+                + "Type that Mac’s address and the pairing code from Connect a Mac. The app’s pinned key still verifies the connection.")
             // An edited address changes the route, never the kit's pinned publisher key.
             destination.stringValue = (try? Connect.publisher(kit: kit))?.feedURL ?? "unknown"
             destination.setAccessibilityLabel("Update Studio address")
@@ -289,7 +289,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
                 connectButton.title = "Connect"
                 show("Not connected: \(failure ?? "the connection was refused")", color: .systemRed, spinning: false)
             }
-            window.initialFirstResponder = codeField
+            window.makeFirstResponder(codeField)
         }
     }
 

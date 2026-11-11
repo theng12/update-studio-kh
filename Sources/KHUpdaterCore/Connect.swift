@@ -206,14 +206,46 @@ public enum Connect {
 
     /// Retry a completed setup whose LaunchAgent could not start; never start a second copy.
     public static func startInstalledAgent(home: URL, shell: Shell = SystemShell()) throws {
-        let domain = "gui/\(getuid())"
-        let loaded = try shell.run("/bin/launchctl", arguments: ["print", "\(domain)/com.khupdater.agent"], timeout: 15)
-        if loaded.exitCode == 0 { return }
-        let plist = home.appendingPathComponent("Library/LaunchAgents/com.khupdater.agent.plist")
-        let result = try shell.run("/bin/launchctl", arguments: ["bootstrap", domain, plist.path], timeout: 30)
-        guard result.exitCode == 0 else {
-            throw khuFail("Studio Launcher could not start. Your saved data is kept. Restart this Mac, then open Studio Launcher again.")
+        let domain = "gui/\(getuid())", label = "com.khupdater.agent"
+        let kept = "Your saved connection and settings are kept."
+        func query(_ arguments: [String], timeout: TimeInterval = 15) throws -> ShellResult {
+            do { return try shell.run("/bin/launchctl", arguments: arguments, timeout: timeout) }
+            catch { throw khuFail("macOS startup could not be confirmed (\(arguments[0])). \(kept) Share this startup reason for repair.") }
         }
+        let loaded = try query(["print", "\(domain)/\(label)"])
+        if loaded.exitCode == 0 { return }
+        guard loaded.exitCode == 113 else {
+            throw khuFail("macOS could not read the helper's startup status (print exit \(loaded.exitCode)). No startup was attempted. \(kept) Share this startup reason for repair.")
+        }
+        let disabled = try query(["print-disabled", domain])
+        let text = disabled.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard disabled.exitCode == 0, disabled.stderr.isEmpty,
+              text.hasPrefix("disabled services = {"), text.hasSuffix("}") else {
+            throw khuFail("macOS could not confirm whether the helper is disabled (print-disabled exit \(disabled.exitCode)). No startup was attempted. \(kept) Share this startup reason for repair.")
+        }
+        let entries = text.components(separatedBy: "\n").filter { $0.contains("\"\(label)\"") }
+        let pattern = "^\\s*\"" + NSRegularExpression.escapedPattern(for: label) + "\"\\s*=>\\s*(true|false)\\s*;?\\s*$"
+        guard entries.count <= 1, entries.allSatisfy({ $0.range(of: pattern, options: .regularExpression) != nil }) else {
+            throw khuFail("The helper's disabled state could not be read safely. No startup was attempted. \(kept) Share this startup reason for repair.")
+        }
+        if entries.first?.range(of: "=>\\s*true", options: .regularExpression) != nil {
+            throw khuFail("The helper is disabled in macOS. If you want it running, review System Settings > General > Login Items & Extensions. Nothing was enabled automatically. \(kept)")
+        }
+        let plist = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        guard let data = try? Data(contentsOf: plist) else {
+            throw khuFail("The saved helper start file is missing or unreadable. \(kept) The existing installation needs its start file repaired; connecting again will not repair it.")
+        }
+        guard let job = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+              job["Label"] as? String == label,
+              let program = (job["Program"] as? String) ?? (job["ProgramArguments"] as? [String])?.first,
+              program.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: program) else {
+            throw khuFail("The saved helper start file or its executable is incomplete. \(kept) The existing installation needs its helper files repaired; connecting again will not repair it.")
+        }
+        let result = try query(["bootstrap", domain, plist.path], timeout: 30)
+        if result.exitCode == 0 { return }
+        // Another normal launcher can win registration between the first print and bootstrap.
+        if let again = try? query(["print", "\(domain)/\(label)"]), again.exitCode == 0 { return }
+        throw khuFail("macOS refused to register the saved helper (bootstrap exit \(result.exitCode)). \(kept) Share this startup reason for repair; restarting alone does not identify the cause.")
     }
 
     // MARK: staying connected (the settings page), never a second enrolment

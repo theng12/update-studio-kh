@@ -43,6 +43,22 @@ The feed (schema 1):
 
 Versions are dotted numbers only (`1.4.355`); anything else is refused, never compared as zero.
 
+Unreleased incremental delivery: an optional `delta` on a signed app entry names `file`, `sha256`,
+`bytes`, `baseSHA256` and `baseBytes`. The publisher builds a bounded copy/literal `KHUD1` patch
+from the exact displaced full installer and publishes it only when it is smaller than the target.
+A successful SSD install keeps its verified installer in the normal download cache for the next
+server update. Cache failure reports that the next update may need a full download and does not
+misreport an already successful installation as failed. The client uses only an exact
+hash-and-size-verified cached installer as its base, verifies the
+patch, reconstructs privately and verifies the full target hash and size before installation.
+Missing, modified or unusable bases/patches use the full signed installer; cancellation stops
+instead of starting another transfer. Invalid optional descriptor values are ignored while full
+installer, signature, schema and freshness validation still apply. Mirrors retain verified patches
+when available; a missing optional patch cannot block the full installer. Older clients ignore
+`delta` and use the full installer. Compressed DMGs may have no reusable blocks: the measured
+Launcher 0.1.12→0.1.14 patch is 4,658,823 bytes versus 4,658,788 full bytes, so it is omitted.
+Transfer progress labels patch versus full fallback and uses the current transfer's actual bytes.
+
 `khu keygen <dir>` creates `private.key` with mode 0600 (never wider, even for an instant) via a
 temp file published by `link(2)`, which is atomic and fails with `EEXIST`: two `keygen`s running
 at once can leave only one key stored, and it is the one whose public key was printed. It refuses
@@ -296,6 +312,26 @@ transport failure and mirror settings are already known, explicit local install 
 continue from a verified mirror. Remote orders and Automatic wait; HTTP refusals and invalid
 signed replies remain errors. Artifact transfers can retry other configured sources, checking
 the same signed size and hash on every attempt.
+
+Unreleased standalone Launcher installs eligible feed apps without a hard-coded app registry.
+The existing verified embedded kit and chosen owned-Mac address supply setup; the bundled helper
+is internal. First-install app paths and bundle identities are saved in `state/launcher-apps.json`
+before staging so recovery can find an interrupted first install. Existing configured apps take
+precedence; conflicting saved registrations are skipped with a note. Ambiguous copies, different
+bundle identities and unwritable app folders produce per-app refusals without aborting other apps.
+The normal action selects the newest eligible SSD/server offer and prefers matching current SSD
+bytes. An explicit older-SSD first-install choice is available only while the app is absent; the
+newer server remains available afterwards, and existing Automatic settings are preserved. No
+install or forced repair downgrades. SSD bytes are copied into private staging, checked against
+the index's hash and declared size, and the staged app's signature is verified before replacement.
+A transport-only feed outage permits explicit SSD installs and local rollback, records results in
+the durable outbox and marks server versions unknown; Automatic and remote orders wait. An offline
+rollback remembers its displaced version and reconciles it against the next signed feed before
+Automatic runs, preventing immediate reinstallation. Successful status posts and recovery notes
+survive a later feed outage. HTTP refusals, TLS/cancellation errors and invalid signed feeds never
+grant offline permission. Uninstall turns that app's Automatic setting off. Installed, server and SSD versions remain separate
+facts; the installed executable hash is not the installer hash. Existing status-only and main-Mac
+policies remain in force. Native Edit shortcuts and text-input focus use normal responder behavior.
 
 An order runs once (by id; a redelivered one is re-reported, not re-run). Done records are not
 trimmed before fetching orders, and IDs in the latest reply are protected from trimming. An order for the

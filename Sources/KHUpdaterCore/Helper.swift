@@ -78,6 +78,9 @@ public struct HelperApp: Sendable, Equatable {
     public var bytes: Int64?
     /// The SSD the install would copy from, when it is not the feed.
     public var fromSSD: String?
+    public var serverVersion: String?
+    public var ssdVersion: String?
+    public var initialSSD: String?
     public var canRollBack = false
     /// The bundle's own `CFBundleVersion`: nil when it carries none, so a row can never claim an
     /// exact build its bundle does not state (a marketing version is shown beside it, not as it).

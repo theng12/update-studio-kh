@@ -182,15 +182,21 @@ func connectionFlowTests() {
         let loaded = CaptureShell()
         expect((try? Connect.startInstalledAgent(home: home, shell: loaded)) != nil && loaded.calls.count == 1,
                "CF18 a loaded helper is never started twice")
-        let absent = FakeShell(responses: [
-            "/bin/launchctl print": ShellResult(exitCode: 1, stdout: "", stderr: ""),
-            "/bin/launchctl bootstrap \(domain)": ShellResult(exitCode: 0, stdout: "", stderr: ""),
-        ])
-        expect((try? Connect.startInstalledAgent(home: home, shell: absent)) != nil,
-               "CF18 reopening retries the saved LaunchAgent after a start failure")
-        let refused = CaptureShell(); refused.exitCode = 1
-        expectThrows("CF18 a start failure gives a plain recovery step", contains: "Restart this Mac") {
-            try Connect.startInstalledAgent(home: home, shell: refused)
+        let plist = home.appendingPathComponent("Library/LaunchAgents/com.khupdater.agent.plist")
+        try! fm.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let job: [String: Any] = ["Label": "com.khupdater.agent", "ProgramArguments": ["/usr/bin/true"]]
+        try! PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
+        let missing = ShellResult(exitCode: 113, stdout: "", stderr: "Could not find service \"com.khupdater.agent\" in domain for user gui: 501")
+        var replies = [
+            "/bin/launchctl print \(domain)/com.khupdater.agent": missing,
+            "/bin/launchctl print-disabled \(domain)": ShellResult(exitCode: 0, stdout: "disabled services = {\n}\n", stderr: ""),
+            "/bin/launchctl bootstrap \(domain) \(plist.path)": ShellResult(exitCode: 0, stdout: "", stderr: ""),
+        ]
+        expect((try? Connect.startInstalledAgent(home: home, shell: FakeShell(responses: replies))) != nil,
+               "CF18 reopening starts the saved valid LaunchAgent when it is absent and enabled")
+        replies["/bin/launchctl bootstrap \(domain) \(plist.path)"] = ShellResult(exitCode: 5, stdout: "", stderr: "private diagnostic")
+        expectThrows("CF18 a refusal reports its phase/code without repeated restart advice", contains: "bootstrap exit 5") {
+            try Connect.startInstalledAgent(home: home, shell: FakeShell(responses: replies))
         }
     }
 

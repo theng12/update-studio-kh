@@ -21,6 +21,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var item: NSStatusItem!
     var itemIfReady: NSStatusItem? { item }
     var lastRun: Date?
+    var serverKnown = false
     var window: LauncherWindow?
     var ssdSources: [SSDSource] { lock.lock(); defer { lock.unlock() }; return ssd }
     var ssd: [SSDSource] = []
@@ -35,6 +36,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     func start() {
         NSApplication.shared.setActivationPolicy(.accessory)
+        LauncherMenus.install()
         // KHU_MENU_SHOW=light|dark opens the menu after the first run, for screenshots; nobody sets it in real use.
         if let look = ProcessInfo.processInfo.environment["KHU_MENU_SHOW"] {
             NSApp.appearance = NSAppearance(named: look == "dark" ? .darkAqua : .aqua)
@@ -86,7 +88,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     func finished(_ result: AgentRunResult?, error: String?) {
         lock.lock()
         if let result { apps = result.apps }
-        lastError = error
+        lastError = error ?? result?.feedError
+        serverKnown = result != nil && result?.feedError == nil
         lastRun = Date()
         let ready = apps.filter { $0.managed && !$0.statusOnly && $0.status == HelperApp.updateAvailable }
         installingApp = nil

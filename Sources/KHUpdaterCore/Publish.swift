@@ -138,8 +138,15 @@ public enum FeedPublisher {
             }
             if let old, VersionCompare.isNewer(version, than: old.version) {
                 var previous = feed.previous ?? [:]
-                previous[app] = old
+                // The displaced version's own patch is meaningless now: the bytes it was built
+                // from are no longer kept, so only the current version carries one.
+                var displaced = old
+                displaced.delta = nil
+                previous[app] = displaced
                 feed.previous = previous
+                // The patch from the displaced version's exact bytes to this one, when it saves
+                // bytes: a Mac that already has the older artifact then fetches the patch alone.
+                entry.delta = try delta(from: displaced, to: dest, artifactsDir: artifactsDir, feedDir: feedDir)
             }
             feed.apps[app] = entry
             // Strictly later than the last release, so an agent's high-water mark always moves forward.
@@ -153,6 +160,7 @@ public enum FeedPublisher {
             for entry in Array(signed.apps.values) + Array((signed.previous ?? [:]).values) {
                 keep.insert(entry.file)
                 if let icon = entry.icon { keep.insert(icon) }
+                if let delta = entry.delta { keep.insert(delta.file) }
             }
             keep.formUnion(try ledgerNames(in: feedDir))
             try saveFeed(signed, to: feedDir, key: key)
@@ -169,6 +177,37 @@ public enum FeedPublisher {
                 }
             }
         }
+    }
+
+    /// The patch that turns the displaced version's exact bytes into this one, when it is smaller
+    /// than the whole artifact: a Mac that already has the older artifact then fetches the patch
+    /// alone. A patch that saves nothing is not published — that Mac downloads the whole signed
+    /// artifact as before, and nothing promises it a saving.
+    private static func delta(from old: FeedApp, to target: URL, artifactsDir: URL, feedDir: URL) throws -> ArtifactDelta? {
+        let fm = FileManager.default
+        let base = artifactsDir.appendingPathComponent(old.file)
+        guard fm.fileExists(atPath: base.path) else { return nil }
+        // The patch is only ever built for the exact bytes the signed feed names.
+        let measured = try Signing.sha256Hex(fileAt: base)
+        guard measured.hex == old.sha256, measured.bytes == old.bytes else { return nil }
+        let staging = artifactsDir.appendingPathComponent(".delta-\(UUID().uuidString).khu-tmp")
+        defer { _ = try? Trash.move(staging, into: Trash.root(in: feedDir)) }
+        try ArtifactDeltaPatch.build(base: base, target: target, to: staging)
+        let patch = try Signing.sha256Hex(fileAt: staging)
+        let targetSize = try ArtifactDeltaPatch.size(of: target)
+        guard patch.bytes > 0, patch.bytes < targetSize else { return nil }
+        let name = "\(patch.hex.prefix(12))-delta"
+        let destination = artifactsDir.appendingPathComponent(name)
+        if fm.fileExists(atPath: destination.path) {
+            let existing = try Signing.sha256Hex(fileAt: destination)
+            guard existing.hex == patch.hex else {
+                throw khuFail("\(destination.path) exists with different bytes; move it to _trash and publish again")
+            }
+        } else {
+            try fm.moveItem(at: staging, to: destination)
+        }
+        return ArtifactDelta(file: name, sha256: patch.hex, bytes: patch.bytes,
+                             baseSHA256: old.sha256, baseBytes: old.bytes)
     }
 
     /// The names the retention ledger pins: recovery copies that can outlive a signed feed's own

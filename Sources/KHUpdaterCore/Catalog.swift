@@ -113,8 +113,14 @@ public struct CatalogEntry: Sendable, Equatable {
     public var bundleName: String?
     public var updatesItself: Bool
     public var feedVersion: String?
-    /// The SSD copy, when it is the one to install (newer than the feed, or the same version).
+    /// The SSD copy, when it is the one to install (newer than the feed's, or the same version
+    /// and the same bytes as the feed's).
     public var ssd: Local?
+    /// The newest usable copy on an SSD, kept even when the server offers a newer one: an
+    /// explicit first install for a Mac that has no copy yet, before the server's newer version.
+    public var initialSSD: Local?
+    /// Why the copy on the SSD was not the offer, in plain words.
+    public var ssdNote: String?
     public var setupFolder: String?
     public var icon: String?
     public var notes: String?
@@ -130,6 +136,11 @@ public struct CatalogEntry: Sendable, Equatable {
         public var file: String
         public var sha256: String
         public var version: String
+        /// The size of the copy on the drive, when it is known.
+        public var bytes: Int64? = nil
+        public init(volume: String, file: String, sha256: String, version: String, bytes: Int64? = nil) {
+            self.volume = volume; self.file = file; self.sha256 = sha256; self.version = version; self.bytes = bytes
+        }
     }
 
     /// The newest version on offer and where it comes from.
@@ -140,6 +151,64 @@ public struct CatalogEntry: Sendable, Equatable {
 public enum Catalog {
     /// Feed plus SSDs, matched by bundle ID (or app id). The SSD copy is chosen when it is at least
     /// as new as the feed's: the same version installs faster with no download.
+    /// What one SSD's copy of an app may be used for.
+    public enum SSDCopy {
+        /// The copy may be installed now.
+        case offer(CatalogEntry.Local)
+        /// The copy is older than the server's: an explicit first install only, never the offer.
+        case initialOnly(CatalogEntry.Local)
+        /// The copy may not be used, and this says why in plain words.
+        case refused(String)
+    }
+
+    /// One SSD's copy of an app, checked against the drive it sits on and against what the server
+    /// signs for the same app. The bytes themselves are checked where they are installed, not here.
+    public static func ssdCopy(_ app: SSDApp, file: String, sha: String, source: SSDSource, server: FeedApp?) -> SSDCopy {
+        guard VersionCompare.isValid(app.version) else { return .refused("The copy on \(source.volume) names a version that cannot be compared.") }
+        guard BundleInfo.isBundleID(app.bundleID) else { return .refused("The copy on \(source.volume) names no bundle that can be recognised.") }
+        if let id = server?.bundleID, id != app.bundleID { return .refused("The copy on \(source.volume) is not the app the server names.") }
+        let checksum = sha.lowercased()
+        guard checksum.count == 64, checksum.allSatisfy({ $0.isHexDigit }) else {
+            return .refused("The copy on \(source.volume) does not name its checksum the way a checksum is named.")
+        }
+        guard !file.isEmpty, !file.hasPrefix("/"), !file.split(separator: "/").contains("..") else {
+            return .refused("The copy on \(source.volume) points outside the drive.")
+        }
+        let url = source.root.appendingPathComponent(file)
+        let path = url.path
+        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true else {
+            return .refused("The installer on \(source.volume) is missing or is not a regular file.")
+        }
+        do {
+            let root = RealPath.of(source.root.path)
+            guard RealPath.of(path).hasPrefix(root + "/") else { return .refused("The copy on \(source.volume) is a link out of the drive.") }
+            let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
+            guard values?.isSymbolicLink != true else { return .refused("The copy on \(source.volume) is a link, not a file on the drive.") }
+            if let declared = app.bytes {
+                let actual = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber
+                guard declared > 0, actual.map({ $0.int64Value == declared }) ?? false else {
+                    return .refused("The copy on \(source.volume) is not the size the index names.")
+                }
+            }
+        }
+        let local = CatalogEntry.Local(volume: source.volume, file: path, sha256: checksum, version: app.version, bytes: app.bytes)
+        guard let server else { return .offer(local) }   // the drive is the only source
+        guard let order = VersionCompare.compare(app.version, server.version) else {
+            return .refused("The copy on \(source.volume) cannot be compared with the server's version.")
+        }
+        switch order {
+        case 1: return .offer(local)                     // newer than the server's
+        case 0:
+            // The same version: only the bytes the server signed count as that version.
+            guard server.sha256.lowercased() == checksum else {
+                return .refused("The copy on \(source.volume) is not the bytes the server signed for \(app.version).")
+            }
+            return .offer(local)
+        default: return .initialOnly(local)              // older: an explicit first install only
+        }
+    }
+
     public static func build(feed: Feed?, ssd: [SSDSource], seen: [SSDApp] = [], icons: URL? = nil) -> [CatalogEntry] {
         var entries: [String: CatalogEntry] = [:]
         // What an SSD said before it was unplugged: names, "updates itself" and icons (cached
@@ -179,12 +248,25 @@ public enum Catalog {
                 if let setup = app.setup { entry.setupFolder = source.root.appendingPathComponent(setup).path }
                 if let icon = app.icon, entry.icon == nil { entry.icon = source.root.appendingPathComponent(icon).path }
                 if let file = app.file, let sha = app.sha256, !app.updatesItself {
-                    let best = [entry.ssd?.version, entry.feedVersion].compactMap { $0 }
-                    if best.allSatisfy({ !VersionCompare.isNewer($0, than: app.version) }) {
-                        entry.ssd = .init(volume: source.volume, file: source.root.appendingPathComponent(file).path, sha256: sha, version: app.version)
-                        entry.released = app.released ?? entry.released; entry.bytes = app.bytes ?? entry.bytes
-                        // What's New belongs to the version on offer: the SSD's own notes when it is not the feed's version.
-                        if app.version != entry.feedVersion { entry.notes = app.notes }
+                    // The server's own copy of this app, when the feed names one.
+                    let server = feed?.apps.values.first { $0.bundleID != nil && $0.bundleID == app.bundleID } ?? feed?.apps[app.id]
+                    switch Catalog.ssdCopy(app, file: file, sha: sha, source: source, server: server) {
+                    case .offer(let local):
+                        // The offer: this copy is newer than the server's, or it is the same version
+                        // and the same bytes the server signed.
+                        if entry.ssd == nil || VersionCompare.isNewer(local.version, than: entry.ssd!.version) {
+                            entry.ssd = local
+                            entry.released = app.released ?? entry.released; entry.bytes = app.bytes ?? entry.bytes
+                            // What's New belongs to the version on offer: the SSD's own notes when it is not the feed's version.
+                            if app.version != entry.feedVersion { entry.notes = app.notes }
+                        }
+                        // The newest sound copy on any drive, kept even when the server has a newer
+                        // one: an explicit first install for a Mac that has no copy yet.
+                        if entry.initialSSD == nil || VersionCompare.isNewer(local.version, than: entry.initialSSD!.version) { entry.initialSSD = local }
+                    case .initialOnly(let local):
+                        if entry.initialSSD == nil || VersionCompare.isNewer(local.version, than: entry.initialSSD!.version) { entry.initialSSD = local }
+                    case .refused(let why):
+                        if entry.ssdNote == nil { entry.ssdNote = why }
                     }
                 }
                 if app.updatesItself, entry.selfVersion.map({ VersionCompare.isNewer(app.version, than: $0) }) ?? true {

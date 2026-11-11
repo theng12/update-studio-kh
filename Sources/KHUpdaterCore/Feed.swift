@@ -24,6 +24,10 @@ public struct FeedApp: Codable, Sendable, Equatable {
     public var released: String?
     /// Shown in the Launcher only on a Mac that already has it.
     public var mainMacOnly: Bool?
+    /// The optional incremental delivery for this artifact: the patch that turns the previous
+    /// version's exact bytes into this one. A Mac that does not know it downloads the whole
+    /// signed artifact, exactly as before.
+    public var delta: ArtifactDelta?
 
     public init(version: String, file: String, sha256: String, bytes: Int64, kind: String, notes: String? = nil) {
         self.version = version; self.file = file; self.sha256 = sha256
@@ -71,21 +75,31 @@ public struct Feed: Codable, Sendable, Equatable {
         guard schema == Feed.supportedSchema else { throw khuFail("feed schema \(schema) is not supported") }
         guard publishedAt != nil else { throw khuFail("feed published_at is not a date: \(published_at)") }
         _ = try network?.validated()
-        func validate(_ app: String, _ entry: FeedApp) throws {
+        var result = self
+        func validate(_ app: String, _ entry: inout FeedApp) throws {
             _ = try SafeName.component(app, what: "app id")
             _ = try SafeName.component(entry.file, what: "artifact name")
             guard VersionCompare.isValid(entry.version) else { throw khuFail("\(app) has an invalid version \(entry.version)") }
             guard entry.sha256.count == 64, entry.bytes > 0 else { throw khuFail("\(app) has no usable sha256/size") }
+            // Optional delivery must never block the independently signed full installer.
+            if let delta = entry.delta,
+               (try? delta.validated()) == nil || delta.file == entry.file || delta.bytes >= entry.bytes {
+                entry.delta = nil
+            }
         }
-        for (app, entry) in apps { try validate(app, entry) }
-        for (app, entry) in previous ?? [:] {
-            try validate(app, entry)
+        for (app, var entry) in apps {
+            try validate(app, &entry)
+            result.apps[app] = entry
+        }
+        for (app, var entry) in previous ?? [:] {
+            try validate(app, &entry)
             guard let current = apps[app], VersionCompare.isNewer(current.version, than: entry.version),
                   current.file != entry.file else {
                 throw khuFail("\(app) previous installer must be older than its current version")
             }
+            result.previous?[app] = entry
         }
-        return self
+        return result
     }
 }
 

@@ -36,6 +36,9 @@ public enum FeedMirror {
                 }
             }
             let wanted = try items(in: incoming)
+            let entries = Array(incoming.apps.values) + Array((incoming.previous ?? [:]).values)
+            let required = Set(entries.flatMap { [$0.file] + ($0.icon.map { [$0] } ?? []) })
+            let optional = Set(entries.compactMap { $0.delta?.file }).subtracting(required)
             let oldItems = try (old ?? prior).map(items(in:)) ?? [:]
             // Published names are content-addressed; never change bytes an existing release names.
             for (name, item) in wanted {
@@ -50,13 +53,19 @@ public enum FeedMirror {
                 for (name, item) in wanted.sorted(by: { $0.key < $1.key }) {
                     let destination = artifacts.appendingPathComponent(name)
                     try noSymlink(destination)
-                    if try matches(destination, item: item) { continue }
                     let partial = stage.appendingPathComponent(name)
-                    let code = try http.download(sourceBase.appendingPathComponent("artifacts").appendingPathComponent(name),
-                                                 headers: [:], to: partial, limit: item.limit)
-                    guard code == 200 else { throw khuFail("mirror artifact download answered \(code)") }
-                    try noSymlink(partial)
-                    guard try matches(partial, item: item) else { throw khuFail("mirror artifact hash or size mismatch: \(name)") }
+                    do {
+                        if try matches(destination, item: item) { continue }
+                        let code = try http.download(sourceBase.appendingPathComponent("artifacts").appendingPathComponent(name),
+                                                     headers: [:], to: partial, limit: item.limit)
+                        guard code == 200 else { throw khuFail("mirror artifact download answered \(code)") }
+                        try noSymlink(partial)
+                        guard try matches(partial, item: item) else { throw khuFail("mirror artifact hash or size mismatch: \(name)") }
+                    } catch {
+                        guard optional.contains(name), !DownloadControl.cancelled else { throw error }
+                        // Clients can fetch the full signed installer if this optional patch is unavailable.
+                        try Trash.move(partial, into: trash)
+                    }
                 }
                 for file in try fm.contentsOfDirectory(at: stage, includingPropertiesForKeys: nil) {
                     let destination = artifacts.appendingPathComponent(file.lastPathComponent)
@@ -118,6 +127,11 @@ public enum FeedMirror {
                 try add(icon, sha: sha, bytes: nil)
             } else if entry.icon != nil || entry.iconSha256 != nil {
                 throw khuFail("mirror icon needs its signed hash and filename")
+            }
+            // The patch is an auxiliary artifact of the entry it belongs to: a Mac at the mirror
+            // fetches it instead of the whole installer, so the mirror has to serve it too.
+            if let delta = entry.delta {
+                try add(delta.file, sha: delta.sha256, bytes: delta.bytes)
             }
         }
         return result

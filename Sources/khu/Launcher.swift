@@ -93,6 +93,7 @@ enum LauncherBundle {
 enum FrontDoor {
     static func run() -> Never {
         NSApplication.shared.setActivationPolicy(.accessory)
+        LauncherMenus.install()
         let env = ProcessInfo.processInfo.environment
         let isolated = env["KHU_CONNECT_HOME"] != nil
         let home = env["KHU_CONNECT_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser
@@ -104,7 +105,7 @@ enum FrontDoor {
                 do { try Connect.startInstalledAgent(home: home) }
                 catch { say("Studio Launcher could not start", "\(error)"); exit(1) }
                 if !askHelper(seconds: 30) {
-                    say("Studio Launcher KH did not answer", "Your connection is saved. Restart this Mac, then open Studio Launcher again.")
+                    say("Studio Launcher KH did not answer", "The helper is registered with macOS, but its window did not answer within 30 seconds. Your saved connection and settings are kept. Share this startup reason for repair.")
                 }
             }
             exit(0)

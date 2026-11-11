@@ -1,10 +1,21 @@
 import Foundation
 
+struct FeedUnavailable: Error, CustomStringConvertible {
+    var description: String { "Update Studio is unreachable. Server versions are unknown; verified SSD installers remain available." }
+}
+
 extension Agent {
     struct SelectedFeed {
         let feed: Feed
         let release: Data
         let base: URL
+    }
+
+    static func transportUnavailable(_ error: Error) -> Bool {
+        guard let error = error as? URLError else { return false }
+        return [.timedOut, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+                .networkConnectionLost, .notConnectedToInternet, .internationalRoamingOff,
+                .callIsActive, .dataNotAllowed].contains(error.code)
     }
 
     static func feedSources(config: AgentConfig, memory: AgentMemory, serverBase: URL) throws -> [URL] {
@@ -19,16 +30,23 @@ extension Agent {
 
     static func selectFeed(http: HTTPClient, serverBase: URL, config: AgentConfig,
                            memory: inout AgentMemory, now: Date) throws -> SelectedFeed {
-        var lastError: Error = khuFail("no update feed could be reached")
+        var lastError: Error = FeedUnavailable()
+        var refusal: Error?
         for source in try feedSources(config: config, memory: memory, serverBase: serverBase) {
+            let release: Data
+            do { release = try get(http, source) }
+            catch {
+                if transportUnavailable(error) { lastError = FeedUnavailable() }
+                else { refusal = error }
+                continue
+            }
             do {
-                let release = try get(http, source)
                 var candidate = memory
                 let feed = try checkedFeed(release, config: config, memory: &candidate, now: now)
                 memory = candidate
                 return SelectedFeed(feed: feed, release: release, base: source.deletingLastPathComponent())
-            } catch { lastError = error }
+            } catch { refusal = error }
         }
-        throw lastError
+        throw refusal ?? lastError
     }
 }

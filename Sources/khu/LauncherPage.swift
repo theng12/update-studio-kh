@@ -25,7 +25,7 @@ header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;
 .seg button[aria-pressed=true]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}.seg svg{width:14px;height:14px}
 select,input[type=search]{height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 9px}input[type=search]{width:190px}
 .set input[type=text]{flex:1;min-width:0;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 9px;font:12px/1.4 ui-monospace,Menlo,monospace}
-input::placeholder{color:var(--sub)}
+input::placeholder{color:var(--sub)}input,textarea{cursor:text;-webkit-user-select:text;caret-color:var(--accent)}
 main{flex:1;padding:18px 22px 8px}
 h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-child{margin-top:4px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
@@ -102,7 +102,7 @@ function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k i
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
  for(const c of kids.flat()){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)))}return e}
 const day=iso=>{if(!iso)return null;const d=new Date(iso);return isNaN(d)?null:d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})};
-const mb=b=>b==null?null:(b>=1e9?(b/1e9).toFixed(1)+' GB':b>=1e6?Math.round(b/1e6)+' MB':Math.max(1,Math.round(b/1e3))+' KB');
+const mb=b=>b==null?null:(b>=1e9?(b/1e9).toFixed(1)+' GB':b>=1e6?Math.round(b/1e6)+' MB':b>=1e3?Math.round(b/1e3)+' KB':b+' B');
 function ago(iso){if(!iso)return 'Not checked yet';const s=(Date.now()-new Date(iso))/1000;if(s<60)return 'Checked just now';if(s<3600)return 'Checked '+Math.round(s/60)+' min ago';return 'Checked '+Math.round(s/3600)+' h ago'}
 // A failure in plain words; the Mac's own text stays in Copy error report.
 function plain(r){if(!r)return '';const t=r.toLowerCase();
@@ -132,11 +132,13 @@ function progress(a){const p=a.progress||{},box=el('div',{class:'prog','data-pro
  return ctl}
 /// What the counters mean, in one place: the line a person reads and the bar's filled per cent.
 function phase(p){if(p.cancelled)return ['Stopping…',null];
+ const label=p.phase=='delta-downloading'?'Downloading changed data ':p.phase=='full-fallback'?'Downloading full installer ':'Downloading ';
  if(p.done!=null&&p.total>0){const pct=Math.min(100,Math.round(p.done/p.total*100));
-  return [(p.paused?'Paused · ':'Downloading ')+mb(p.done)+' of '+mb(p.total)+' · '+pct+'%',pct]}
- if(p.done!=null)return [(p.paused?'Paused · ':'Downloading ')+mb(p.done),null];
+  return [(p.paused?'Paused · ':label)+mb(p.done)+' of '+mb(p.total)+' · '+pct+'%',pct]}
+ if(p.done!=null)return [(p.paused?'Paused · ':label)+mb(p.done),null];
  if(p.copying)return ['Copying from '+p.copying,null];
- return [p.phase=='installing'?'Installing…':p.phase=='checking'?'Checking download…':'Preparing installation…',null]}
+ const labels={'installing':'Installing…','checking':'Checking download…','checking-base':'Checking saved installer…','reconstructing':'Rebuilding and verifying installer…','full-fallback':'Changed data unavailable · using full installer…'};
+ return [labels[p.phase]||'Preparing installation…',null]}
 /// Counters only: the line's words, the loose or filled bar and its width. Never a new element, so
 /// an open dialog keeps its focus and an indeterminate bar keeps running instead of restarting.
 function paint(box,p){const t=phase(p),line=box.firstChild,bar=box.lastChild,i=bar.firstChild,w=t[1]==null?'':t[1]+'%';
@@ -152,7 +154,7 @@ function buttons(a,big){const out=[],m=mainAction(a);
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
 function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);
- const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter')openDetail(a.id)}},
+ const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget)openDetail(a.id)}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
   a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
@@ -178,14 +180,14 @@ const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,s
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  $('whatsNew').textContent=(S.version?'v'+S.version+' · ':'')+'What’s New';
- $('checked').textContent=ago(S.lastRun)+' · Feed'+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');
+ $('checked').textContent=ago(S.lastRun)+' · '+(S.serverKnown?'Server':'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');
  $('err').textContent=S.error?'Last check failed: '+S.error:'';
  const s=signature();
  if(s==sig){move();return}
  sig=s;draw()}
 /// The counters moved and nothing else did: write them in, touch no other node.
 function move(){document.querySelectorAll('[data-prog]').forEach(n=>{const a=S.apps.find(x=>x.id==n.getAttribute('data-prog'));paint(n,(a&&a.progress)||{})})}
-function draw(){const fk=(document.activeElement||{}).id;
+function draw(){const active=document.activeElement||{},fk=active.id,selection=[active.selectionStart,active.selectionEnd];
  const [list,hidden]=visible(),mine=list.filter(installed),others=list.filter(a=>!installed(a));
  const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.status=='Update available').length;
  $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
@@ -200,10 +202,11 @@ function draw(){const fk=(document.activeElement||{}).id;
  if(detail)drawDetail();if(settingsOpen)drawSettings();
  // shortcut: focus comes back only where the control has an id (search, sort, the address field);
  // cards carry none, so a redraw cannot hand focus back to the card the person was on.
- if(fk&&$(fk))$(fk).focus()}
+ if(fk&&$(fk)){$(fk).focus();if(selection[0]!=null)$(fk).setSelectionRange?.(...selection)}}
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
+ if(a.initialSSD&&!a.installed&&!a.statusOnly)add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
  if(a.notes&&a.notes.length)add('Release notes',()=>openDetail(a.id,true));
  if(a.open&&!a.helper){add('Open',()=>post({action:'open',app:a.id}));add('Show in Finder',()=>post({action:'finder',app:a.id}))}
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
@@ -221,7 +224,7 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
  const again=!!document.querySelector('.scrim.d');
  document.querySelectorAll('.scrim.d').forEach(x=>x.remove());
  const step=d=>{const n=list[(i+d+list.length)%list.length];if(n){detail={id:n.id};drawDetail()}};
- const facts=[['Version',a.available||a.installed],['Released',day(a.released)],['Size',mb(a.bytes)],['From',a.fromSSD||(a.source||null)]].filter(f=>f[1]);
+ const facts=[['Installed',a.installed||'Not installed'],['Server',a.serverVersion||'Unknown'],['SSD',a.ssdVersion||'Not available'],['Selected',a.available||'Not available'],['Size',mb(a.bytes)||'Unknown'],['From',a.fromSSD||(a.source||'Unknown')],['Released',day(a.released)]].filter(f=>f[1]);
  const notes=a.notes||[],limit=showAll[a.id]?notes.length:5;
  const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':true,'aria-label':a.name,style:(a.accent?'--app:'+a.accent+';':'')+(again?'animation:none':''),onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},icon(a),el('div',{class:'t'},el('h3',{},a.name),a.tagline?el('div',{class:'sub'},a.tagline):null,
@@ -235,6 +238,7 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
    el('div',{},a.description?el('p',{class:'desc'},a.description):el('p',{class:'desc sub'},a.statusOnly?(a.source=='Official vendor'?(a.setup?'The verified official installer is waiting in its setup folder.':'This app is installed from its official vendor’s installer.'):'This app updates itself from its own installer. Its setup folder on the SSD has the steps.'):'No description yet.'),
     a.features&&a.features.length?[el('h4',{},'Features'),el('ol',{class:'feat'},a.features.map(f=>el('li',{},el('b',{},f.title),f.text?el('span',{},f.text):null)))]:null),
    el('div',{},facts.length?[el('h4',{},'Latest release'),el('dl',{class:'facts'},facts.map(f=>el('div',{},el('dt',{},f[0]),el('dd',{class:'num'},f[1]))))]:null,
+    a.initialSSD?el('p',{class:'sub'},'The SSD can install '+a.initialSSD+' first from the More menu. Then Update offers the newer server version. Your Automatic setting is kept.'):null,
     el('h4',{id:'changes'},'What’s changed'),notes.length?el('ul',{class:'changes'},notes.slice(0,limit).map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.'),
     notes.length>5?el('button',{class:'more',onclick:()=>{showAll[a.id]=!showAll[a.id];drawDetail()}},showAll[a.id]?'Show fewer':'Show '+(notes.length-5)+' more'):null)));
  const scrim=el('div',{class:'scrim d',onclick:()=>{detail=null;closeLayers()}},sheet);document.body.append(scrim);
@@ -286,10 +290,11 @@ $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q
 $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove())});
 document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;closeLayers()}}
- if(detail&&!settingsOpen&&(e.key=='ArrowRight'||e.key=='ArrowLeft')){const l=visible()[0],i=l.findIndex(a=>a.id==detail.id),n=l[(i+(e.key=='ArrowRight'?1:-1)+l.length)%l.length];if(n){detail={id:n.id};drawDetail()}}
+ const editing=['INPUT','TEXTAREA','SELECT'].includes((e.target?.tagName||'').toUpperCase())||e.target?.isContentEditable;
+ if(detail&&!settingsOpen&&!editing&&(e.key=='ArrowRight'||e.key=='ArrowLeft')){const l=visible()[0],i=l.findIndex(a=>a.id==detail.id),n=l[(i+(e.key=='ArrowRight'?1:-1)+l.length)%l.length];if(n){detail={id:n.id};drawDetail()}}
  if(e.metaKey&&e.key==','){e.preventDefault();settingsOpen=true;drawSettings()}
  if(e.metaKey&&(e.key=='f'||e.key=='k')){e.preventDefault();$('q').focus()}});
-setInterval(()=>{if(S.lastRun)$('checked').textContent=ago(S.lastRun)+' · Feed'+(S.sources.length?' + '+S.sources.join(', '):'')},30000);
+setInterval(()=>{if(S.lastRun)$('checked').textContent=ago(S.lastRun)+' · '+(S.serverKnown?'Server':'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')},30000);
 </script></body></html>
 """#.replacingOccurrences(of: "</style>", with: Changelog.layoutCSS + "</style>")
 }

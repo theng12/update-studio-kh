@@ -243,4 +243,30 @@ document.getElementById('q').focus();
 render(state([row({ status: 'Update available', installed: '1.0.0', available: '1.2.0' })], { error: null }));
 assert.equal(document.activeElement, document.getElementById('q'), 'R7 the search box keeps focus across a real change');
 
-console.log('PASS: launcher render keeps the page, its dialogs, focus, typed text and stopped/failed states honest');
+// Source choice is explicit, with honest unknowns and no claim that full fallback saves bytes.
+run('settingsOpen=false;detail=null;closeLayers()');
+render(state([row({ id:'new-app', managed:false, installed:null, status:'Not installed', available:'2.0', serverVersion:'2.0', ssdVersion:'1.0', initialSSD:'Test SSD · 1.0' })]));
+run("openDetail('new-app')");
+assert.match(document.querySelector('.facts').textContent, /Server2.0SSD1.0/, 'source comparison shows each version separately');
+assert.match(document.querySelector('.sheet').textContent, /Then Update offers the newer server version/, 'older SSD first install explains the next step');
+run("openMenu(S.apps[0],document.querySelector('.card'))");
+const older = document.querySelectorAll('.menu button').find(b=>b.textContent.startsWith('Install from Test SSD'));
+assert(older, 'older SSD first install remains available');
+posts.length=0; older.fire('click');
+assert.equal(posts[0].action,'installSSD');
+assert.equal(posts[0].app,'new-app');
+render(state([row({ status:'Updating…', progress:{phase:'delta-downloading',done:100000,total:200000} })]));
+assert.equal(line(),'Downloading changed data 100 KB of 200 KB · 50%','delta uses transferred bytes, not full artifact size');
+render(state([row({ status:'Updating…', progress:{phase:'full-fallback',done:100000,total:1000000} })]));
+assert.equal(line(),'Downloading full installer 100 KB of 1 MB · 10%','full fallback makes no savings claim');
+render(state([row({ status:'Updating…', progress:{phase:'reconstructing'} })]));
+assert.equal(line(),'Rebuilding and verifying installer…');
+render(state([row({ status:'Not installed',managed:false,installed:null,serverVersion:null,ssdVersion:'1.0' })],{error:'Update Studio is unreachable. Server versions are unknown.'}));
+run("openDetail('story')");
+assert.match(document.querySelector('.facts').textContent,/ServerUnknown/,'offline never claims a current server version');
+assert.match(document.getElementById('err').textContent,/unreachable/);
+// A focused text field owns its arrow keys; details navigation must not consume them.
+const beforeDetail=run('detail.id');
+for(const handler of document.handlers.keydown||[]) handler({key:'ArrowRight',target:{tagName:'INPUT'}});
+assert.equal(run('detail.id'),beforeDetail);
+console.log('PASS: Launcher rendering, source choices, offline state, delta/fallback bytes and editing focus');

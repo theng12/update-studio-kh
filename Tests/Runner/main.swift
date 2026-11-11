@@ -1975,7 +1975,14 @@ func launcherTests() {
         e.bundleID = bundle; e.name = bundle.map { "Name of " + $0 }; return e
     }
     let root = tmpDir("ssd-root")
-    func ssd(_ apps: [SSDApp]) -> SSDSource { SSDSource(volume: "KH-TEST", root: root, index: SSDIndex(apps: apps)) }
+    func ssd(_ apps: [SSDApp]) -> SSDSource {
+        for app in apps {
+            if let file = app.file, !fm.fileExists(atPath: root.appendingPathComponent(file).path) {
+                try! Data("x".utf8).write(to: root.appendingPathComponent(file))
+            }
+        }
+        return SSDSource(volume: "KH-TEST", root: root, index: SSDIndex(apps: apps))
+    }
 
     // L0. The display registry maps every app id to its approved visible name; an unknown id shows as itself.
     do {
@@ -1995,10 +2002,10 @@ func launcherTests() {
     do {
         let feed = feedWith(["media": entry("0.1.102", bundle: "com.t.media"), "printer": entry("1.0.3", bundle: "com.t.printer")])
         let list = Catalog.build(feed: feed, ssd: [ssd([
-            SSDApp(id: "media-ssd", name: "Media", version: "0.1.102", bundleID: "com.t.media", file: "m.dmg", sha256: "b"),
-            SSDApp(id: "printer", name: "Printer", version: "1.0.2", bundleID: "com.t.printer", file: "p.dmg", sha256: "c"),
+            SSDApp(id: "media-ssd", name: "Media", version: "0.1.102", bundleID: "com.t.media", file: "m.dmg", sha256: String(repeating: "a", count: 64)),
+            SSDApp(id: "printer", name: "Printer", version: "1.0.2", bundleID: "com.t.printer", file: "p.dmg", sha256: String(repeating: "c", count: 64)),
             SSDApp(id: "hub", name: "Hub Studio KH", version: "0.6.213", bundleID: "com.t.hub", updatesItself: true, setup: "1 Install Apps/Studio Hub"),
-            SSDApp(id: "newapp", name: "New App", version: "2.0", bundleID: "com.t.new", file: "n.dmg", sha256: "d", icon: ".apps-icons/com.t.new.png"),
+            SSDApp(id: "newapp", name: "New App", version: "2.0", bundleID: "com.t.new", file: "n.dmg", sha256: String(repeating: "d", count: 64), icon: ".apps-icons/com.t.new.png"),
         ])])
         let media = list.first { $0.id == "media" }, printer = list.first { $0.id == "printer" }
         let hub = list.first { $0.id == "hub" }, new = list.first { $0.id == "newapp" }
@@ -2045,7 +2052,7 @@ func launcherTests() {
         let cfg = agentConfig(rig, token: token, apps: ["demo": AppConfig(bundlePath: app.path, recipe: "fake-for-tests", bundleID: "com.t.demo")])
         func source(_ sha: String) -> SSDSource {
             SSDSource(volume: "KH-TEST", root: dmg.deletingLastPathComponent(),
-                      index: SSDIndex(apps: [SSDApp(id: "demo", name: "Demo", version: "2.0.0", bundleID: "com.t.demo", file: "demo.dmg", sha256: sha)]))
+                      index: SSDIndex(apps: [SSDApp(id: "demo", name: "Demo", version: "2.0.1", bundleID: "com.t.demo", file: "demo.dmg", sha256: sha)]))
         }
         let client = InProcessClient(server: rig.server)
         _ = try? Agent.runOnce(config: cfg, http: client, requested: ["demo"], ssd: [source(String(repeating: "0", count: 64))], appFolders: [])
@@ -2063,7 +2070,7 @@ func launcherTests() {
         let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
         let cfg = agentConfig(rig, token: token, apps: [:])
         let r = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server),
-                                   ssd: [ssd([SSDApp(id: "media", name: "Media Studio KH", version: "0.1.102", bundleID: "com.t.media", bundleName: "Media Studio KH.app", file: "m.dmg", sha256: "e")])],
+                                   ssd: [ssd([SSDApp(id: "media", name: "Media Studio KH", version: "0.1.102", bundleID: "com.t.media", bundleName: "Media Studio KH.app", file: "m.dmg", sha256: String(repeating: "e", count: 64))])],
                                    appFolders: [])
         let media = r?.apps.first { $0.app == "media" }
         expect(media?.managed == false && media?.installed == nil && media?.available == "0.1.102" && media?.source == "KH-TEST" && media?.name == "Media Studio KH",
@@ -2165,8 +2172,8 @@ func launcherTests() {
     do {
         var feedApp = FeedApp(version: "1.0.2", file: "p.dmg", sha256: String(repeating: "a", count: 64), bytes: 1, kind: "app-dmg", notes: "- feed notes for 1.0.2")
         feedApp.bundleID = "com.t.p"
-        var newer = SSDApp(id: "printer", name: "P", version: "1.0.3", bundleID: "com.t.p", file: "p3.dmg", sha256: "b"); newer.notes = "- ssd notes for 1.0.3"
-        var same = SSDApp(id: "printer", name: "P", version: "1.0.2", bundleID: "com.t.p", file: "p2.dmg", sha256: "c"); same.notes = nil
+        var newer = SSDApp(id: "printer", name: "P", version: "1.0.3", bundleID: "com.t.p", file: "p3.dmg", sha256: String(repeating: "b", count: 64)); newer.notes = "- ssd notes for 1.0.3"
+        var same = SSDApp(id: "printer", name: "P", version: "1.0.2", bundleID: "com.t.p", file: "p2.dmg", sha256: String(repeating: "a", count: 64)); same.notes = nil
         let feed = Feed(published_at: ISO.string(Date()), apps: ["printer": feedApp])
         expect(Catalog.build(feed: feed, ssd: [ssd([newer])]).first?.notes == "- ssd notes for 1.0.3", "L9 a newer SSD copy shows its own What's New")
         expect(Catalog.build(feed: feed, ssd: [ssd([same])]).first?.notes == "- feed notes for 1.0.2", "L9 the same version from an SSD keeps the feed's What's New")
@@ -2177,7 +2184,7 @@ func launcherTests() {
         let rig = Rig("main-only")
         try? rig.publish("other", "1.0.0", rig.artifact("o.zip", "o"))
         let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
-        var control = SSDApp(id: "kh-updater-app", name: "Update Studio KH", version: "1.0.4", bundleID: "com.t.ctl", bundleName: "U.app", file: "u.dmg", sha256: "d")
+        var control = SSDApp(id: "kh-updater-app", name: "Update Studio KH", version: "1.0.4", bundleID: "com.t.ctl", bundleName: "U.app", file: "u.dmg", sha256: String(repeating: "d", count: 64))
         control.mainMacOnly = true
         let apps = rig.root.appendingPathComponent("Applications")
         let r1 = try? Agent.runOnce(config: agentConfig(rig, token: token, apps: [:]), http: InProcessClient(server: rig.server), ssd: [ssd([control])], appFolders: [apps])
@@ -3450,6 +3457,25 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["STANDALONE_ONLY"] == "1" {
+            standaloneLauncherTests()
+            catalogSelectionTests()
+            connectionFlowTests()
+            setupSourceTests()
+            downloadProgressTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["AGENT_CORE_ONLY"] == "1" {
+            agentAndServerTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["DELTA_ONLY"] == "1" {
+            artifactDeltaTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         dmgAttachmentTests()
         if ProcessInfo.processInfo.environment["DMG_ATTACH_ONLY"] == "1" {
             print("TESTS: \(passed) passed, \(failed) failed")
@@ -3504,6 +3530,8 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        standaloneLauncherTests()
+        catalogSelectionTests()
         feedNetworkTests()
         controllerHandoffTests()
         feedMirrorTests()
@@ -3542,6 +3570,7 @@ r41HealthMustHold()
         connectionFlowTests()
         setupSourceTests()
         downloadProgressTests()
+        artifactDeltaTests()
         installedIdentityTests()
         publisherRetentionTests()
         connectionReloadTests()

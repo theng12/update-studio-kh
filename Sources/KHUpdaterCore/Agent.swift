@@ -8,6 +8,8 @@ public struct AgentRunResult: Sendable, Equatable {
     public var updates: Int
     public var restartRequested = false
     public var notes: [String] = []
+    /// No fresh verified server feed was available; SSD offers do not claim server currency.
+    public var feedError: String?
     /// Each app as the menu-bar icon shows it, from what is on disk after the run.
     public var apps: [HelperApp] = []
     public init(statusPosted: Bool = false, commandsRun: Int = 0, updates: Int = 0) {
@@ -20,6 +22,17 @@ public protocol HTTPClient: Sendable {
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int)
     /// Stream a GET into `file`, refusing more than `limit` bytes. Returns the HTTP status.
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int
+    /// The same download under a named phase, so the Launcher can say what is happening:
+    /// "delta-downloading" for a patch, "downloading" for a whole artifact.
+    func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64, phase: String) throws -> Int
+}
+
+extension HTTPClient {
+    /// A client that does not name phases still downloads: the phase is set around the transfer.
+    public func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64, phase: String) throws -> Int {
+        DownloadControl.updateProgress(phase)
+        return try download(url, headers: headers, to: file, limit: limit)
+    }
 }
 
 struct ArtifactFailure: Error, CustomStringConvertible {
@@ -67,17 +80,21 @@ public struct URLSessionHTTPClient: HTTPClient {
     }
 
     public func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
+        try download(url, headers: headers, to: file, limit: limit, phase: "downloading")
+    }
+
+    public func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64, phase: String) throws -> Int {
         guard FileManager.default.createFile(atPath: file.path, contents: nil),
               let handle = try? FileHandle(forWritingTo: file) else { throw khuFail("cannot write \(file.path)") }
         defer { try? handle.close() }
-        DownloadControl.updateProgress("downloading", received: 0)
-        let status = try transfer("GET", url, headers: headers, body: nil, handle: handle, limit: limit).status
+        DownloadControl.updateProgress(phase, received: 0)
+        let status = try transfer("GET", url, headers: headers, body: nil, handle: handle, limit: limit, phase: phase).status
         DownloadControl.updateProgress("checking")
         return status
     }
 
     private func transfer(_ method: String, _ url: URL, headers: [String: String], body: Data?,
-                          handle: FileHandle?, limit: Int64) throws -> StreamSink {
+                          handle: FileHandle?, limit: Int64, phase: String = "downloading") throws -> StreamSink {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = method
         request.httpBody = body
@@ -85,14 +102,15 @@ public struct URLSessionHTTPClient: HTTPClient {
         if let officialHosts, !Self.officialURL(url, hosts: officialHosts) {
             throw khuFail("download refused: URL is outside the vendor's official HTTPS hosts")
         }
-        let sink = StreamSink(handle: handle, limit: limit, officialHosts: officialHosts)
+        let sink = StreamSink(handle: handle, limit: limit, officialHosts: officialHosts, phase: phase)
         let session = URLSession(configuration: .ephemeral, delegate: sink, delegateQueue: nil)
         let task = session.dataTask(with: request)
         task.resume()
         // The deadline is ours to keep, not the peer's to reset. A download the person paused from
         // the Launcher is held where it is and its paused time does not count; Cancel stops it.
+        // The cancel state belongs to the operation, not to this transfer: it is reset once before
+        // an install starts, so a Cancel is never erased by the next source a fallback tries.
         var finished = false, spent: TimeInterval = 0, suspended = false, cancelled = false
-        if handle != nil { DownloadControl.reset() }
         while spent < totalTimeout {
             if sink.done.wait(timeout: .now() + 0.5) == .success { finished = true; break }
             if handle != nil {
@@ -146,8 +164,10 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
     var error: Error?
 
     let officialHosts: [String]?
-    init(handle: FileHandle?, limit: Int64, officialHosts: [String]?) {
-        self.handle = handle; self.limit = limit; self.officialHosts = officialHosts
+    /// What the Launcher is told is happening while these bytes arrive.
+    let phase: String
+    init(handle: FileHandle?, limit: Int64, officialHosts: [String]?, phase: String = "downloading") {
+        self.handle = handle; self.limit = limit; self.officialHosts = officialHosts; self.phase = phase
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -164,7 +184,7 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         status = (response as? HTTPURLResponse)?.statusCode ?? 0
         expected = response.expectedContentLength > 0 ? response.expectedContentLength : nil
-        if handle != nil { DownloadControl.updateProgress("downloading", received: 0, total: expected) }
+        if handle != nil { DownloadControl.updateProgress(phase, received: 0, total: expected) }
         if response.expectedContentLength > limit {
             error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
             completionHandler(.cancel)
@@ -186,7 +206,7 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
         while DownloadControl.paused && !DownloadControl.cancelled { usleep(100_000) }
         do {
             try handle.write(contentsOf: data)
-            DownloadControl.updateProgress("downloading", received: received, total: expected)
+            DownloadControl.updateProgress(phase, received: received, total: expected)
         } catch { self.error = error; dataTask.cancel() }
     }
 
@@ -211,6 +231,8 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     /// app → sha256 of an artifact that failed or was rolled back here; Automatic skips it until
     /// the artifact changes or the owner asks for it explicitly.
     public var rejected: [String: String] = [:]
+    /// Displaced versions from local offline rollbacks, reconciled when a signed feed returns.
+    public var offlineRollbacks: [String: String]?
     public struct Mismatch: Codable, Sendable, Equatable { public var sha256: String; public var count: Int }
     /// app → consecutive downloads of the same signed artifact whose bytes did not match it.
     public var deliveryMismatches: [String: Mismatch]?
@@ -304,7 +326,7 @@ public enum Agent {
         return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"), wait: false) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
-                          requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile)
+                          requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile, appFolders: appFolders)
         }
     }
 
@@ -315,15 +337,26 @@ public enum Agent {
     static func runLocked(config: AgentConfig, stateDir: URL, http: HTTPClient, shell: Shell,
                           control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
                           requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = [],
-                          connectionFile: URL? = nil) throws -> AgentRunResult {
+                          connectionFile: URL? = nil, appFolders: [URL] = Catalog.applicationFolders) throws -> AgentRunResult {
+        DownloadControl.reset()
         var config = config
+        let registrations = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("launcher-apps.json")) ?? [:]
+        try validate(config)
+        var registrationNotes: [String] = []
+        for (app, registration) in registrations.sorted(by: { $0.key < $1.key }) where config.apps[app] == nil {
+            var candidate = config
+            candidate.apps[app] = registration
+            do { try validate(candidate); config = candidate }
+            catch { registrationNotes.append("\(app): saved Launcher registration was skipped: \(error)") }
+        }
         let vendors = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("vendor-apps.json")) ?? [:]
         config.apps.merge(vendors) { configured, _ in configured }
         // From the Launcher: "<app>" installs or updates, "reinstall:<app>" installs the same
         // version again, "rollback:<app>" puts back the version this Mac kept.
         let reinstall = Set(asked.filter { $0.hasPrefix("reinstall:") }.map { String($0.dropFirst("reinstall:".count)) })
         let rollbacks = Set(asked.filter { $0.hasPrefix("rollback:") }.map { String($0.dropFirst("rollback:".count)) })
-        let requested = Set(asked.filter { !$0.contains(":") }).union(reinstall)
+        let initialSSD = Set(asked.filter { $0.hasPrefix("ssd:") }.map { String($0.dropFirst("ssd:".count)) })
+        let requested = Set(asked.filter { !$0.contains(":") }).union(reinstall).union(initialSSD)
         guard let feedURL = URL(string: config.feedURL) else { throw khuFail("feedURL is not a URL") }
         let serverBase = feedURL.deletingLastPathComponent()
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
@@ -335,6 +368,7 @@ public enum Agent {
             try AtomicFile.writeJSON(memory, to: memoryFile)
         }
         var result = AgentRunResult()
+        result.notes = registrationNotes
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
@@ -429,13 +463,12 @@ public enum Agent {
             report["inventory"] = inventory
         }
         let statusBody = try JSONSerialization.data(withJSONObject: report)
-        let network = memory.feedNetwork ?? config.network
         let statusCode: Int?
         do { statusCode = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody).1 }
         catch {
-            guard network?.feedURLs.isEmpty == false else { throw error }
+            guard transportUnavailable(error) else { throw error }
             statusCode = nil; publisherAvailable = false
-            result.notes.append("publisher unavailable; local installs may use the signed mirror, remote orders and Automatic wait")
+            result.notes.append("publisher unavailable; local requests may use a verified source, remote orders and Automatic wait")
         }
         if let statusCode {
             guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }
@@ -456,8 +489,18 @@ public enum Agent {
         }
 
         // 4. The feed: signed, understood, and not older than one already seen.
-        let selected = try selectFeed(http: http, serverBase: serverBase, config: config, memory: &memory, now: now)
+        let selected: SelectedFeed
+        do { selected = try selectFeed(http: http, serverBase: serverBase, config: config, memory: &memory, now: now) }
+        catch is FeedUnavailable {
+            return try offlineSSD(config: config, requested: requested, installed: installed, memory: &memory,
+                                  stateDir: stateDir, ssd: ssd, http: http, shell: shell, control: control,
+                                  executable: executable, serverBase: serverBase, now: now, installing: installing, appFolders: appFolders, reinstall: reinstall, rollbacks: rollbacks, initialSSD: initialSSD, previousResult: result)
+        }
         let feed = selected.feed
+        for (app, version) in memory.offlineRollbacks ?? [:] {
+            if let entry = feed.apps[app], entry.version == version { memory.rejected[app] = entry.sha256 }
+            memory.offlineRollbacks?[app] = nil
+        }
         let artifactBase = selected.base
         memory.feedNetwork = feed.network ?? config.network
         let artifactFallbacks = try feedSources(config: config, memory: memory, serverBase: serverBase)
@@ -482,11 +525,7 @@ public enum Agent {
         }
         Catalog.remember(ssd, feed: feed, in: stateDir)
         let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))
-        // Install from the Launcher's list: an app this Mac does not have yet goes to /Applications.
-        for app in requested where config.apps[app] == nil {
-            guard let entry = catalog.first(where: { $0.id == app }), !entry.updatesItself, let bundle = entry.bundleName else { continue }
-            config.apps[app] = AppConfig(bundlePath: "/Applications/" + bundle, recipe: "app-dmg", automatic: true, bundleID: entry.bundleID)
-        }
+        let registrationErrors = try registerLauncherApps(requested, catalog: catalog, config: &config, stateDir: stateDir, folders: appFolders)
         // A self-update the stub rolled back is a failure this Mac has already seen: those bytes
         // must not be installed again on every run. A new artifact (a different SHA-256) or an
         // explicit order clears it, exactly as for any other version that failed here.
@@ -571,7 +610,7 @@ public enum Agent {
             }
         }
         // "Update now" from the menu-bar icon is this Mac's own order: it runs even while paused.
-        for app in requested.sorted() where config.apps[app] != nil && !todo.contains(where: { $0.app == app }) {
+        for app in requested.sorted() where (config.apps[app] != nil || registrationErrors[app] != nil) && !todo.contains(where: { $0.app == app }) {
             todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.update, true))
         }
         for app in rollbacks.sorted() where config.apps[app] != nil && !todo.contains(where: { $0.app == app }) {
@@ -602,15 +641,30 @@ public enum Agent {
                 memory.updaterArtifacts = (memory.updaterArtifacts ?? [:]).merging([entry.version: entry.sha256]) { _, new in new }
                 try remember()
             }
+            DownloadControl.reset()
             DownloadControl.updateProgress("preparing")
             installing(item.app)
             defer { installing(nil) }
             do {
                 switch item.action {
                 case ServerCommand.update:
-                    // A click in the Launcher installs the SSD copy when it is at least as new as the feed's.
-                    let local = requested.contains(item.app) ? catalog.first { $0.id == item.app }?.ssd : nil
-                    res = try install(app: item.app, feed: feed, installed: installed[item.app], config: config,
+                    if let failure = registrationErrors[item.app] {
+                        res = RecipeResult(status: "refused", reason: failure)
+                        break
+                    }
+                    // An older SSD is an explicit first-install choice; ordinary installs select the newest offer.
+                    let entry = catalog.first { $0.id == item.app }
+                    let current = installed[item.app] ?? config.apps[item.app].flatMap { try? BundleInfo.read($0.bundlePath).version }
+                    if initialSSD.contains(item.app), current != nil {
+                        res = RecipeResult(status: "refused", reason: "The older SSD choice is for a first install only. The installed app was kept.")
+                        break
+                    }
+                    let local = initialSSD.contains(item.app) ? entry?.initialSSD : (requested.contains(item.app) ? entry?.ssd : nil)
+                    if initialSSD.contains(item.app), local == nil {
+                        res = RecipeResult(status: "refused", reason: "That SSD installer is no longer available. Nothing was installed.")
+                        break
+                    }
+                    res = try install(app: item.app, feed: feed, installed: current, config: config,
                                       serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
                                       force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks)
                 case ServerCommand.vendorInstall:
@@ -716,6 +770,12 @@ public enum Agent {
             row.released = entry?.released ?? feed.apps[app]?.released
             row.bytes = entry?.ssd == nil ? feed.apps[app]?.bytes : entry?.bytes
             row.fromSSD = entry?.ssd?.volume
+            row.serverVersion = feed.apps[app]?.version
+            row.ssdVersion = entry?.ssd?.version ?? entry?.initialSSD?.version
+            if installed == nil, let local = entry?.initialSSD, let server = feed.apps[app],
+               VersionCompare.isNewer(server.version, than: local.version), !only {
+                row.initialSSD = "\(local.volume) · \(local.version)"
+            }
             if let cfg, installed != nil, cfg.recipe != "updater" {
                 row.installedAt = ((try? FileManager.default.attributesOfItem(atPath: cfg.bundlePath))?[.modificationDate] as? Date).map(ISO.string)
                 row.canRollBack = FileManager.default.fileExists(atPath: Recipe.Paths(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app).rollback.path)
@@ -810,15 +870,15 @@ public enum Agent {
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = []) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         if statusOnly.contains(cfg.recipe) { return RecipeResult(status: "status_only", reason: "updated by its own updater") }
-        if let local {
-            DownloadControl.updateProgress("copying")
-            return try installLocal(local, app: app, installed: force ? nil : installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control)
-        }
         // An install this Mac could not finish or undo is not a settled app: an order for it must
         // not be answered "current" while a rollback is still owed. The next run picks it up.
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
             return RecipeResult(status: "unresolved", reason: "an earlier install of \(app) could not be finished or undone; "
                                + "\(Recipe.journalURL(stateDir: stateDir.path, app: app).path) is kept and the next run tries it again")
+        }
+        if let local {
+            DownloadControl.updateProgress("copying")
+            return try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control, force: force)
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
         if let installed {
@@ -859,54 +919,172 @@ public enum Agent {
     /// anything is touched, then it takes the same journaled app-dmg path, with rollback, as a
     /// download does.
     static func installLocal(_ local: CatalogEntry.Local, app: String, installed: String?, cfg: AppConfig, stateDir: URL,
-                             shell: Shell, control: (String, AppConfig) -> AppControl) throws -> RecipeResult {
-        if let installed, !VersionCompare.isNewer(local.version, than: installed) {
-            return RecipeResult(status: "current", reason: "\(installed) is already installed; \(local.volume) has \(local.version)")
+                             shell: Shell, control: (String, AppConfig) -> AppControl, force: Bool = false) throws -> RecipeResult {
+        if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
+            return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept.")
         }
-        guard let sha = try? Signing.sha256Hex(fileAt: URL(fileURLWithPath: local.file)).hex else {
-            return RecipeResult(status: "refused", reason: "the copy on \(local.volume) could not be read; nothing was changed")
+        if let installed {
+            guard let order = VersionCompare.compare(local.version, installed) else {
+                return RecipeResult(status: "refused", reason: "The installed and SSD versions cannot be compared. Nothing was changed.")
+            }
+            if order < 0 || (order == 0 && !force) {
+                return RecipeResult(status: "current", reason: "\(installed) is already installed; \(local.volume) has \(local.version). No downgrade.")
+            }
         }
-        guard sha == local.sha256 else {
+        let source = URL(fileURLWithPath: local.file)
+        let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            return RecipeResult(status: "refused", reason: "The SSD installer is not a regular file. Nothing was changed.")
+        }
+        let staging = stateDir.appendingPathComponent("ssd-staging/\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defer { _ = try? Trash.move(staging, into: Trash.root(in: stateDir)) }
+        let artifact = staging.appendingPathComponent("installer.dmg")
+        DownloadControl.updateProgress("copying")
+        try FileManager.default.copyItem(at: source, to: artifact)
+        let digest = try Signing.sha256Hex(fileAt: artifact)
+        guard digest.hex == local.sha256, local.bytes.map({ $0 == digest.bytes }) ?? true else {
             return RecipeResult(status: "refused", reason: "the copy on \(local.volume) does not match its checksum; nothing was changed")
         }
+        guard !DownloadControl.cancelled else { throw khuFail("cancelled on this Mac; nothing was changed") }
+        DownloadControl.updateProgress("installing")
+        var result: RecipeResult
         switch cfg.recipe {
         case "app-dmg", "gateway":
-            return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: local.file, feedVersion: local.version,
-                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg))
+            result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
+                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg), verifyStaged: { path in
+                guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
+            })
         case "fake-for-tests":
-            return RecipeResult(status: "updated", reason: "from \(local.volume)")
+            result = RecipeResult(status: "updated", reason: "from \(local.volume)")
         default:
             return RecipeResult(status: "refused", reason: "the \(cfg.recipe) recipe does not install from an SSD")
         }
+        // Keep the verified SSD installer in the normal cache so the next server patch can use it.
+        if result.status == "updated" {
+            do {
+                let cache = stateDir.appendingPathComponent("downloads").appendingPathComponent(try SafeName.component(app, what: "app id"))
+                try Trash.move(cache, into: Trash.root(in: stateDir))
+                try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: artifact, to: cache.appendingPathComponent(local.sha256 + ".dmg"))
+            } catch {
+                result.reason = (result.reason ?? "Installed.") + " The installer cache could not be kept; the next update may need a full download."
+            }
+        }
+        return result
     }
 
     /// Stream the artifact to `downloads/<app>/`, checked against the signed size and SHA-256
     /// before any recipe sees it. The previous download for the app goes to `_trash`.
+    ///
+    /// A signed patch is tried first, but only against the exact full artifact this Mac already
+    /// has cached — never against the installed app, whose bytes are not the signed artifact. The
+    /// base is verified again immediately before it is used, and the rebuilt artifact against the
+    /// signed size and hash afterwards. Anything that does not add up falls back to the whole
+    /// signed artifact; a cancelled download stops instead of fetching anything else.
     static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient, fallbacks: [URL] = []) throws -> URL {
         let name = try SafeName.component(entry.file, what: "artifact name")
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         let fm = FileManager.default
-        if fm.fileExists(atPath: dir.path) { try Trash.move(dir, into: Trash.root(in: stateDir)) }
+        let trash = Trash.root(in: stateDir)
+        // The only base a patch may use: the exact full artifact this Mac already downloaded.
+        let base = takeCachedBase(for: entry.delta, in: dir, app: app)
+        if fm.fileExists(atPath: dir.path) { try Trash.move(dir, into: trash) }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let part = dir.appendingPathComponent(name + ".part")
+        let triedPatch = entry.delta != nil && base != nil
+        if let delta = entry.delta, let base {
+            do {
+                let artifact = try deliverPatch(delta, entry: entry, base: base, dir: dir, part: part,
+                                                serverBase: serverBase, http: http, trash: trash)
+                _ = try? Trash.move(base, into: trash)
+                return artifact
+            } catch {
+                _ = try? Trash.move(base, into: trash)
+                _ = try? Trash.move(part, into: trash)
+                if DownloadControl.cancelled { throw error }
+                // The patch did not add up, so the whole signed artifact is fetched instead. That
+                // fetch is the whole file: nothing is saved and nothing is promised.
+                DownloadControl.updateProgress("full-fallback")
+            }
+        }
         do {
             let code = try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
-                                         headers: [:], to: part, limit: entry.bytes)
+                                         headers: [:], to: part, limit: entry.bytes,
+                                         phase: triedPatch ? "full-fallback" : "downloading")
             guard code == 200 else { throw khuFail("artifact download answered \(code); nothing was changed") }
             let (sha, bytes) = try Signing.sha256Hex(fileAt: part)
             guard bytes == entry.bytes else { throw DeliveryMismatch(description: "artifact size mismatch; nothing was changed") }
             guard sha == entry.sha256 else { throw DeliveryMismatch(description: "artifact sha256 mismatch; nothing was changed") }
+            guard !DownloadControl.cancelled else { throw khuFail("cancelled on this Mac; nothing was changed") }
             let artifact = dir.appendingPathComponent(name)
             try fm.moveItem(at: part, to: artifact)
             return artifact
         } catch {
-            do { try Trash.move(part, into: Trash.root(in: stateDir)) }
+            do { try Trash.move(part, into: trash) }
             catch { throw khuFail("download failed and its partial file could not be moved to _trash: \(error)") }
+            if DownloadControl.cancelled { throw error }
             if let next = fallbacks.first {
                 return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http, fallbacks: Array(fallbacks.dropFirst()))
             }
             throw error
         }
+    }
+
+    /// The exact full artifact this Mac already downloaded, when it is the one a patch was built
+    /// for. It is held outside the download folder, because that folder goes to `_trash` when the
+    /// new download starts.
+    private static func takeCachedBase(for delta: ArtifactDelta?, in dir: URL, app: String) -> URL? {
+        guard let delta else { return nil }
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(atPath: dir.path) else { return nil }
+        for item in items {
+            let candidate = dir.appendingPathComponent(item)
+            guard let measured = try? Signing.sha256Hex(fileAt: candidate),
+                  measured.hex == delta.baseSHA256, measured.bytes == delta.baseBytes else { continue }
+            let held = dir.deletingLastPathComponent()
+                .appendingPathComponent(".khu-patch-base-\(app)-\(delta.baseSHA256.prefix(12))")
+            _ = try? Trash.move(held, into: Trash.root(in: dir.deletingLastPathComponent()))
+            do { try fm.moveItem(at: candidate, to: held) } catch { return nil }
+            return held
+        }
+        return nil
+    }
+
+    /// The patch, applied to the exact base it was built for. The rebuilt artifact is checked
+    /// against the signed size and hash before it is moved into place, so a recipe never sees
+    /// anything but a verified file.
+    private static func deliverPatch(_ delta: ArtifactDelta, entry: FeedApp, base: URL, dir: URL, part: URL,
+                                     serverBase: URL, http: HTTPClient, trash: URL) throws -> URL {
+        let name = try SafeName.component(delta.file, what: "delta name")
+        let patch = dir.appendingPathComponent(name + ".part")
+        let code = try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
+                                     headers: [:], to: patch, limit: delta.bytes, phase: "delta-downloading")
+        guard code == 200 else { throw khuFail("delta download answered \(code); nothing was changed") }
+        let (sha, bytes) = try Signing.sha256Hex(fileAt: patch)
+        guard bytes == delta.bytes, sha == delta.sha256 else {
+            throw khuFail("the delta patch does not match its signed size or hash; nothing was changed")
+        }
+        // The base is verified again immediately before it is used: a patch is only ever applied to
+        // the exact full artifact it was built for.
+        DownloadControl.updateProgress("checking-base")
+        let measured = try Signing.sha256Hex(fileAt: base)
+        guard measured.hex == delta.baseSHA256, measured.bytes == delta.baseBytes else {
+            throw khuFail("the cached artifact is not the base this patch was built for; nothing was changed")
+        }
+        DownloadControl.updateProgress("reconstructing")
+        try ArtifactDeltaPatch.apply(base: base, patch: patch, to: part,
+                                     baseBytes: delta.baseBytes, targetBytes: entry.bytes)
+        DownloadControl.updateProgress("checking")
+        let (out, outBytes) = try Signing.sha256Hex(fileAt: part)
+        guard outBytes == entry.bytes, out == entry.sha256 else {
+            throw khuFail("the rebuilt artifact does not match the signed size or hash; nothing was changed")
+        }
+        guard !DownloadControl.cancelled else { throw khuFail("cancelled on this Mac; nothing was changed") }
+        let artifact = dir.appendingPathComponent(try SafeName.component(entry.file, what: "artifact name"))
+        try FileManager.default.moveItem(at: part, to: artifact)
+        _ = try? Trash.move(patch, into: trash)
+        return artifact
     }
 
     /// Self-update: the verified binary becomes `versions/<v>/khu` (never overwritten once there),

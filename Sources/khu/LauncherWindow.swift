@@ -64,7 +64,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     func reload() {
         guard loaded else { return }
         helper.lock.lock()
-        let apps = helper.apps, busy = helper.installingApp, ssd = helper.ssd, error = helper.lastError, last = helper.lastRun
+        let apps = helper.apps, busy = helper.installingApp, ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, serverKnown = helper.serverKnown
         helper.lock.unlock()
         let settings = HelperSettings.load(from: helper.stateDir)
         let cleanup = try? HelperRetirementSettings.load(from: helper.stateDir)
@@ -78,6 +78,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             ]
             row["installed"] = app.installed; row["available"] = app.available; row["reason"] = app.reason
             row["source"] = app.source; row["fromSSD"] = app.fromSSD; row["released"] = app.released; row["installedAt"] = app.installedAt
+            row["serverVersion"] = serverKnown ? app.serverVersion : nil; row["ssdVersion"] = app.ssdVersion; row["initialSSD"] = app.initialSSD
             row["bytes"] = app.bytes.map { NSNumber(value: $0) }
             row["tagline"] = app.words.tagline; row["description"] = app.words.description; row["accent"] = app.words.accent
             row["features"] = app.words.features?.map { ["title": $0.title, "text": $0.text ?? ""] }
@@ -92,7 +93,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             rows.append(row)
         }
         let state: [String: Any] = [
-            "apps": rows, "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any,
+            "apps": rows, "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any, "serverKnown": serverKnown,
             "version": helper.version ?? "", "whatsNew": helper.version.map(WhatsNew.lines(for:)) ?? [],
             "paused": settings.paused(at: Date()),
             "settings": ["checkManually": settings.checkManually ?? false, "autoInstall": settings.autoInstall ?? true,
@@ -144,7 +145,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         let current = DownloadControl.progress
         var p: [String: Any] = ["paused": DownloadControl.paused, "phase": current.phase, "cancelled": DownloadControl.cancelled]
         if let received = current.received { p["done"] = NSNumber(value: received) }
-        if let total = app.bytes ?? current.total { p["total"] = NSNumber(value: total) }
+        if let total = current.total { p["total"] = NSNumber(value: total) }
         if current.phase == "copying", let ssd = app.fromSSD { p["copying"] = ssd }
         return p
     }
@@ -199,6 +200,9 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         helper.lock.lock(); let app = helper.apps.first { $0.app == id }, all = helper.apps; helper.lock.unlock()
         switch action {
         case "install", "update": helper.request(id)
+        case "installSSD":
+            guard app?.installed == nil, app?.initialSSD != nil, app?.statusOnly == false else { break }
+            helper.request("ssd:" + id)
         case "reinstall": helper.request("reinstall:" + id)
         case "rollback":
             if confirm("Roll back \(app?.name ?? id)?", "It goes back to the version this Mac kept before the last update.", "Roll Back") { helper.request("rollback:" + id) }
@@ -210,7 +214,13 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         case "uninstall":
             guard let p = app?.bundlePath, confirm("Move \(app?.name ?? id) to the Trash?",
                                                    "It stops running and is no longer updated here. You can put it back from the Trash.", "Move to Trash") else { break }
-            do { try FileManager.default.trashItem(at: URL(fileURLWithPath: p), resultingItemURL: nil); helper.wake.signal() }
+            do {
+                var settings = HelperSettings.load(from: helper.stateDir)
+                settings.automatic[id] = .init(on: false, at: ISO.string(Date()))
+                try settings.save(to: helper.stateDir)
+                try FileManager.default.trashItem(at: URL(fileURLWithPath: p), resultingItemURL: nil)
+                helper.wake.signal()
+            }
             catch { helper.alert("\(app?.name ?? id) was not moved to the Trash", "\(error)") }
         case "hide", "unhide":
             var s = HelperSettings.load(from: helper.stateDir)
