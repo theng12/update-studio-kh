@@ -4,9 +4,9 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 0.1.16 — 2026-11-11
 - On a Mac that only has the publisher connection, you can now install or update Story, Hub and other apps that normally update themselves by choosing them in Launcher. A running app is kept as it is: nothing is quit, stopped or replaced.
-- These hand installs get the same checks as any other: signed installer, exact checksum and size, app identity and a health check afterwards. Automatic updates and remote orders still leave these apps alone.
+- These hand installs get the same signed-installer checks as any other: signature, exact checksum, size and app identity. A first install is opened and health-checked; an existing app that was stopped stays stopped, without a live health check. Automatic updates and remote orders still leave these apps alone.
 - Launcher still prefers an installer on a connected SSD when it is the signed offer. An older SSD copy is offered for a first install only, never as an update.
-- A smaller update uses only the exact full installer this Mac downloaded before. That file is now kept when another download source fails, and a missing or changed copy means the normal full installer is used.
+- A smaller update uses only an exact verified full installer already saved on this Mac, including one taken from the installer SSD. That file is kept when another download source fails; a missing or changed copy means the normal full installer is used. No download size saving is promised.
 - Reopening a saved Launcher starts its helper only when macOS reports no job already loaded. A disabled, unclear or refused answer never starts one, and saved connections and app choices are kept.
 
 ## 0.1.15 — 2026-11-09

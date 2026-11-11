@@ -4,7 +4,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 1.0.19 — 2026-11-11
 - Includes Studio Launcher KH 0.1.16, which can install or update apps that normally update themselves when you choose them by hand, and keeps a running app untouched.
-- Smaller updates reuse the exact previously downloaded installer; a missing or changed copy falls back to the full installer. No size saving is promised.
+- Smaller updates reuse an exact verified installer already saved on this Mac, including one taken from the installer SSD; a missing or changed copy falls back to the full installer. No size saving is promised.
 - A connected installer SSD is preferred only when its copy matches the signed offer, and an older copy stays a first-install choice.
 
 ## 1.0.18 — 2026-11-10
