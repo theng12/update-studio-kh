@@ -1,9 +1,15 @@
 {
   "schema": 1,
-  "note": "Shared KH layout numbers. Values match Hub native/Design.swift and Gateway menubar/PageKit.swift (2026-11-08). Colours and fonts stay per app on purpose.",
+  "note": "Shared KH layout numbers. Values match Hub native/Design.swift and Gateway menubar/PageKit.swift (2026-11-08); the footer group matches Update Studio KH 1.0.22. Colours and fonts stay per app on purpose.",
   "space": { "xs": 4, "tight": 6, "s": 8, "m": 12, "l": 16, "xl": 24, "page": 28 },
   "sidebar": { "width": 248, "minWidth": 240 },
   "radius": { "control": 6, "card": 8, "sheet": 12 },
+  "footer": {
+    "pill":       { "height": 26, "paddingX": 7, "gap": 4, "radius": 999, "nameSize": 11, "versionSize": 10, "strokeWidth": 1.5 },
+    "iconButton": { "size": 26, "radius": 7, "glyphSize": 16 },
+    "group":      { "gap": 6, "aboveRule": 9, "fromContent": 8 },
+    "status":     { "size": 11, "gapAbove": 6 }
+  },
   "type": {
     "pageTitle":     { "size": 26, "weight": "semibold" },
     "figure":        { "size": 22, "weight": "semibold", "digits": "tabular" },

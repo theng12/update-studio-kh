@@ -19,6 +19,7 @@ Numbers (spacing, radii, text sizes, status names, toast limits): `design-tokens
 ## Sidebar
 - 248 wide (never under 240 — the footer group needs the room), background = panel, one right border. Collapses on narrow windows.
 - One navigation list with few group headers, one order, no destination repeated elsewhere. Every navigation and footer entry has a leading 16 px icon from one consistent set, its text label and an accessible name — no text-only lists.
+- The set itself: `glyphs.json` beside this file (plus, macs, apps, settings, heart, check, update), and the footer's exact numbers in `design-tokens.json` → `footer`.
 - Primary task destinations first; Connect/Add actions at the top of the same list; Settings last. Active row tinted with the app's accent or panel highlight.
 - Footer holds Support this app (heart) just above the version + What's New pill, then Check for Updates and the conditional tiny update button. Nothing else.
 - Apps without a sidebar put the same group at the bottom of the menu-bar dropdown, or Settings → About for utilities with neither.
