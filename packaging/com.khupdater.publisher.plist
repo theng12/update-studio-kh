@@ -6,7 +6,7 @@
   <!-- Loopback for the owner's status page, the Tailscale address for the Macs. -->
   <key>ProgramArguments</key>
   <array>
-    <string>__HOME__/Library/KHUpdater/bin/khu</string>
+    <string>__HOME__/Library/KHUpdater/Update Studio KH Publisher.app/Contents/MacOS/Update Studio KH Publisher</string>
     <string>serve</string>
     <string>--feed</string><string>__HOME__/Library/KHUpdater/feed</string>
     <string>--state</string><string>__HOME__/Library/KHUpdater/state</string>

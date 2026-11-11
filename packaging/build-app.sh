@@ -18,14 +18,8 @@ for arch in arm64 x86_64; do
 done
 lipo -create "$TMP/KHUpdater-arm64" "$TMP/KHUpdater-x86_64" -output "$APP/Contents/MacOS/KHUpdater"
 
-swiftc -o "$TMP/icon" App/icon.swift -framework AppKit
-"$TMP/icon" "$TMP/icon.png"
-mkdir "$TMP/AppIcon.iconset"
-for s in 16 32 128 256 512; do
-  sips -z $s $s "$TMP/icon.png" --out "$TMP/AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
-  sips -z $((s*2)) $((s*2)) "$TMP/icon.png" --out "$TMP/AppIcon.iconset/icon_${s}x${s}@2x.png" >/dev/null
-done
-iconutil -c icns "$TMP/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
+packaging/build-icon.sh >/dev/null
+cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

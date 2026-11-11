@@ -248,6 +248,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             s.hidden = h.sorted(); helper.save(s)
         case "automatic": helper.setAutomatic(id, body["on"] as? Bool ?? false)
         case "check": helper.rescanSSDs()
+        // The page's one outside link: a free, optional donation, opened in the browser.
+        case "support": if let url = URL(string: "https://nowpayments.io/donation/studiokh") { NSWorkspace.shared.open(url) }
         case "copyReport":
             guard let app else { break }
             let report = ["Studio Launcher KH error report", "Mac: \(helper.machine)", "App: \(app.name) (\(app.app))",

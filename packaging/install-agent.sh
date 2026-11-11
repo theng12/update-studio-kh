@@ -40,6 +40,21 @@ DOMAIN="gui/$(id -u)"
 JOB="$DOMAIN/com.khupdater.agent"
 STAGE=""
 PROMOTED=false
+
+# The launchd job runs from a named bundle so process lists show the product, not a bare
+# khu-stub. The icon is optional: a kit built before the app still installs.
+helper_bundle() {
+    local out="$1" source="$2"
+    if [[ -f "$KIT/AppIcon.icns" ]]; then
+        "$KIT/bin/khu" helper-bundle --out "$out" --name "Update Studio KH Helper" \
+            --id com.khupdater.agent --exec "$source" --executable "Update Studio KH Helper" \
+            --version "$VERSION" --icon "$KIT/AppIcon.icns" >/dev/null
+    else
+        "$KIT/bin/khu" helper-bundle --out "$out" --name "Update Studio KH Helper" \
+            --id com.khupdater.agent --exec "$source" --executable "Update Studio KH Helper" \
+            --version "$VERSION" >/dev/null
+    fi
+}
 COMMITTED=false
 STOPPED_JOB=false
 REPAIR_TRASH=""
@@ -127,6 +142,9 @@ if [[ "$REPAIR" == false ]]; then
     cp "$KIT/bin/khu-stub" "$STAGE/KHUpdater/bin/"
     cp "$KIT/bin/khu" "$STAGE/KHUpdater/base/versions/$VERSION/"
     chmod 755 "$STAGE/KHUpdater/bin/khu-stub" "$STAGE/KHUpdater/base/versions/$VERSION/khu"
+    # The launchd job runs from a named helper bundle, so process lists show the product instead
+    # of a bare khu-stub. The binary inside is a link to the same file as bin/khu-stub.
+    helper_bundle "$STAGE/KHUpdater/Update Studio KH Helper.app" "$STAGE/KHUpdater/bin/khu-stub"
     ln -s "versions/$VERSION/khu" "$STAGE/KHUpdater/base/current"
     /usr/bin/plutil -convert json -o "$STAGE/KHUpdater/base/config.json" "$CONFIG"
     /usr/bin/plutil -replace stateDir -string "$K/state" "$STAGE/KHUpdater/base/config.json"
@@ -136,7 +154,7 @@ if [[ "$REPAIR" == false ]]; then
     cp "$KIT/com.khupdater.agent.plist" "$PLIST_STAGE"
     /usr/bin/plutil -remove ProgramArguments "$PLIST_STAGE"
     /usr/bin/plutil -insert ProgramArguments -array "$PLIST_STAGE"
-    /usr/bin/plutil -insert ProgramArguments.0 -string "$K/bin/khu-stub" "$PLIST_STAGE"
+    /usr/bin/plutil -insert ProgramArguments.0 -string "$K/Update Studio KH Helper.app/Contents/MacOS/Update Studio KH Helper" "$PLIST_STAGE"
     /usr/bin/plutil -insert ProgramArguments.1 -string '--base' "$PLIST_STAGE"
     /usr/bin/plutil -insert ProgramArguments.2 -string "$K/base" "$PLIST_STAGE"
     /usr/bin/plutil -replace StandardOutPath -string "$DEST_HOME/Library/Logs/khupdater-agent.log" "$PLIST_STAGE"
@@ -222,7 +240,7 @@ fi
 cp "$KIT/com.khupdater.agent.plist" "$STAGE/agent.plist"
 /usr/bin/plutil -remove ProgramArguments "$STAGE/agent.plist"
 /usr/bin/plutil -insert ProgramArguments -array "$STAGE/agent.plist"
-/usr/bin/plutil -insert ProgramArguments.0 -string "$K/bin/khu-stub" "$STAGE/agent.plist"
+/usr/bin/plutil -insert ProgramArguments.0 -string "$K/Update Studio KH Helper.app/Contents/MacOS/Update Studio KH Helper" "$STAGE/agent.plist"
 /usr/bin/plutil -insert ProgramArguments.1 -string '--base' "$STAGE/agent.plist"
 /usr/bin/plutil -insert ProgramArguments.2 -string "$K/base" "$STAGE/agent.plist"
 /usr/bin/plutil -replace StandardOutPath -string "$DEST_HOME/Library/Logs/khupdater-agent.log" "$STAGE/agent.plist"
@@ -247,6 +265,9 @@ archive "$K/bin/khu-stub" "bin-khu-stub"
 created "$K/bin/khu-stub"
 cp "$STAGE/KHUpdater/bin/khu-stub" "$K/bin/khu-stub"
 chmod 755 "$K/bin/khu-stub"
+archive "$K/Update Studio KH Helper.app" "helper-app"
+created "$K/Update Studio KH Helper.app"
+helper_bundle "$K/Update Studio KH Helper.app" "$K/bin/khu-stub"
 archive "$K/base/versions/$VERSION/khu" "versions-$VERSION-khu"
 mkdir -p "$K/base/versions/$VERSION"
 created "$K/base/versions/$VERSION/khu"

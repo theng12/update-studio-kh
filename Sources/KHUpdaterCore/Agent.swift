@@ -297,8 +297,9 @@ public enum Agent {
         if let base = config.stubBase, let executable {
             let real = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
             let versions = URL(fileURLWithPath: base).appendingPathComponent("versions").resolvingSymlinksInPath().path + "/"
-            if real.path.hasPrefix(versions), real.lastPathComponent == "khu" {
-                let version = real.deletingLastPathComponent().lastPathComponent
+            if real.path.hasPrefix(versions) {
+                // Runs from versions/<v>/khu or the named helper bundle inside that folder.
+                let version = StubLayout.version(of: real)
                 if VersionCompare.isValid(version) { return version }
             }
         }

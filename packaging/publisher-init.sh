@@ -58,6 +58,11 @@ fi
 cp "$ROOT/build/khu" "$K/bin/khu.tmp"
 chmod 755 "$K/bin/khu.tmp"
 mv "$K/bin/khu.tmp" "$K/bin/khu"
+# The publisher runs from a named bundle so Activity Monitor shows the product, not a bare khu.
+"$ROOT/build/khu" helper-bundle --out "$K/Update Studio KH Publisher.app" \
+  --name "Update Studio KH Publisher" --id com.khupdater.publisher \
+  --exec "$K/bin/khu" --executable "Update Studio KH Publisher" \
+  --icon "$ROOT/build/AppIcon.icns" >/dev/null
 
 PUBLIC=$("$K/bin/khu" keygen "$K/keys" | sed -n 's/^public key: //p')
 [[ -n "$PUBLIC" && -f "$KEY" ]] || fail "khu keygen did not produce a key"

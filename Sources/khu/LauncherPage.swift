@@ -48,8 +48,12 @@ table{width:100%;border-collapse:collapse;background:var(--panel);border:1px sol
 th{font-size:11.5px;font-weight:600;color:var(--sub);text-align:left;padding:9px 14px;border-bottom:1px solid var(--line)}
 td{padding:9px 14px;border-bottom:1px solid var(--line2);vertical-align:middle}tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--line2)}
 td .head img,td .ph{width:32px;height:32px;border-radius:8px}td .name{font-size:13.5px}td.act{width:1%;white-space:nowrap;text-align:right}td.act .btn+.btn{margin-left:6px}
-footer{position:sticky;bottom:0;display:flex;gap:14px;align-items:center;padding:9px 22px;font-size:12px;color:var(--sub);background:var(--bg);border-top:1px solid var(--line)}
-footer .link{background:none;border:0;color:var(--accent);padding:0;cursor:pointer}footer .err{color:var(--bad)}
+footer{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 18px;font-size:12px;color:var(--sub);background:var(--bg);border-top:1px solid var(--line)}
+footer .link{background:none;border:0;color:var(--accent);padding:0;cursor:pointer;white-space:nowrap}footer .stat{font-size:12px;color:var(--sub);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}footer .stat.err{color:var(--bad);font-weight:550}
+footer .btn.icon{width:26px;height:26px;min-height:26px}footer .btn.icon.upd{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.pill{display:inline-flex;align-items:center;gap:5px;height:26px;min-height:26px;min-width:0;padding:0 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:11px;font-weight:550;cursor:pointer;white-space:nowrap;flex:none}
+.pill:hover{border-color:var(--field)}.pill .v{font:10px/1 ui-monospace,Menlo,monospace;color:var(--sub);font-variant-numeric:tabular-nums}
+header .link{background:none;border:0;color:var(--accent);padding:0 4px;cursor:pointer;font-size:12px;white-space:nowrap}
 .empty{padding:40px 0;text-align:center;color:var(--sub)}
 .scrim{position:fixed;inset:0;background:rgba(10,18,15,.32);z-index:10;display:flex;justify-content:center;align-items:flex-start;padding:34px 24px;overflow:auto}
 @media (prefers-color-scheme:dark){.scrim{background:rgba(0,0,0,.5)}}
@@ -88,11 +92,10 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <label class=sr for=sort>Sort</label><select id=sort aria-label="Sort"><option value=name>Name</option><option value=recent>Recently updated</option></select>
  <input type=search id=q placeholder="Search apps" aria-label="Search apps">
  <div class=seg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
- <button class="btn icon" id=check title="Check for updates now" aria-label="Check for updates now"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button>
- <button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
+ <span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
 </header>
 <main id=main></main>
-<footer><span id=checked></span><span id=hiddenNote></span><span id=err class=err role=status aria-live=polite></span><button class=link id=whatsNew style="margin-left:auto">What’s New</button></footer>
+<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon" id=check title="Check for updates" aria-label="Check for updates"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=link id=support style="margin-left:auto" aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
@@ -190,9 +193,10 @@ const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,w
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
- $('whatsNew').textContent=(S.version?'v'+S.version+' · ':'')+'What’s New';
- $('checked').textContent=ago(S.lastRun)+' · '+(S.serverKnown?'Server':'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');
- $('err').textContent=S.error?'Last check failed: '+S.error+(S.lastAttempt?' · '+new Date(S.lastAttempt).toLocaleString():''):'';
+ $('wnver').textContent=S.version?'v'+S.version:'';
+ const u=S.apps.find(a=>a.id=='updater'&&a.status=='Update available'&&a.available&&!a.statusOnly);
+ $('update').hidden=!u;if(u){$('update').title='Update Studio Launcher KH '+u.available;$('update').setAttribute('aria-label','Update Studio Launcher KH to '+u.available)}
+ paintStatus();
  const s=signature();
  if(s==sig){move();return}
  sig=s;draw()}
@@ -214,6 +218,10 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  // shortcut: focus comes back only where the control has an id (search, sort, the address field);
  // cards carry none, so a redraw cannot hand focus back to the card the person was on.
  if(fk&&$(fk)){$(fk).focus();if(selection[0]!=null)$(fk).setSelectionRange?.(...selection)}}
+/// One compact status line: a failure replaces the freshness line rather than sitting beside it.
+function paintStatus(){const e=$('err'),c=$('checked'),err=S.error?'Last check failed: '+S.error+(S.lastAttempt?' · '+new Date(S.lastAttempt).toLocaleString():''):'';
+ e.textContent=err;e.hidden=!err;
+ c.textContent=ago(S.lastRun)+' · '+(S.serverKnown?'Server':'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');c.hidden=!!err}
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
@@ -324,22 +332,24 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
     el('p',{class:'note',style:'margin-left:0'},'Update Studio is told this Mac’s name, which apps are installed here and at which versions and builds, whether each one started, the Automatic switches set on this Mac and any pause, and a read-only snapshot of the hardware, network addresses and app list. Results of installs go back to the same address.'),
     el('p',{class:'note',style:'margin-left:0'},'What is downloaded or copied from a connected drive stays on this Mac, as do these settings, the copy kept for Roll back and the icons this Mac has seen — under '+(S.stateDir||'this Mac’s own updater folder')+'. A file that is replaced moves to the restorable _trash folder there instead of being deleted.'),
     el('p',{class:'note',style:'margin-left:0'},'The sign-in is sent only to the saved controller; this page never shows it, and a download mirror the signed feed names does not receive it. What arrives is bounded the way the updater already bounds it: '+(S.replyLimitBytes?'a reply bigger than '+mb(S.replyLimitBytes)+' is refused rather than buffered, and ':'')+'an installer is refused once it passes the size its signature names. One app installs at a time, so Pause and Cancel act on the transfer you can see. There is no separate storage budget to set here.')),
-   el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','Match system'],['dark','Dark'],['light','Light']],s.appearance)),
+   el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','System'],['light','Light'],['dark','Dark'],['default','Default']],s.appearance),
+    el('p',{class:'note',style:'margin-left:0'},'System matches this Mac. Light and Dark force that look. Default uses the look Studio Launcher KH was designed with.')),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),
-   el('section',{},el('h4',{},'About'),el('button',{class:'btn',onclick:showWhatsNew},'v'+S.version+' · What’s New'))),
+   el('section',{},el('h4',{},'About'),el('p',{class:'ver'},'Studio Launcher KH v'+(S.version||'unknown')))),
   el('div',{class:'bottom'},el('button',{class:'btn primary',onclick:()=>{settingsOpen=false;closeLayers()}},'Done')));
  document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet));sig=signature()}
 $('vgrid').onclick=()=>{view='grid';store.set('view',view);render()};$('vlist').onclick=()=>{view='list';store.set('view',view);render()};
 $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q').oninput=e=>{q=e.target.value.trim().toLowerCase();render()};
 $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};$('whatsNew').onclick=showWhatsNew;
+$('update').onclick=()=>post({action:'update',app:'updater'});$('support').onclick=()=>post({action:'support'});
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove())});
 document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(whatsNewOpen){whatsNewOpen=false;closeLayers()}else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;closeLayers()}}
  const editing=['INPUT','TEXTAREA','SELECT'].includes((e.target?.tagName||'').toUpperCase())||e.target?.isContentEditable;
  if(detail&&!settingsOpen&&!editing&&(e.key=='ArrowRight'||e.key=='ArrowLeft')){const l=visible()[0],i=l.findIndex(a=>a.id==detail.id),n=l[(i+(e.key=='ArrowRight'?1:-1)+l.length)%l.length];if(n){detail={id:n.id};drawDetail()}}
  if(e.metaKey&&e.key==','){e.preventDefault();settingsOpen=true;drawSettings()}
  if(e.metaKey&&(e.key=='f'||e.key=='k')){e.preventDefault();$('q').focus()}});
-setInterval(()=>{if(S.lastRun)$('checked').textContent=ago(S.lastRun)+' · '+(S.serverKnown?'Server':'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')},30000);
+setInterval(()=>{if(S.lastRun)paintStatus()},30000);
 </script></body></html>
 """#.replacingOccurrences(of: "</style>", with: Changelog.layoutCSS + "</style>")
 }

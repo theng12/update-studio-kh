@@ -185,6 +185,12 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         menu.addItem(.separator())
         note("Studio Launcher KH \(version ?? "")")
         _ = action("What's New…", #selector(whatsNew))
+        _ = action("Support This App…", #selector(supportApp))
+    }
+
+    /// The same free, optional donation the page offers, opened in the browser.
+    @objc private func supportApp() {
+        if let url = URL(string: "https://nowpayments.io/donation/studiokh") { NSWorkspace.shared.open(url) }
     }
 
     @objc private func checkNow() { wake.signal() }

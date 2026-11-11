@@ -4,3 +4,4 @@ _trash/
 .build/
 dist/
 .release-dist.lock
+__pycache__/

@@ -792,6 +792,10 @@ func agentAndServerTests() {
         var c = AgentConfig(feedURL: "", publicKey: "", stateDir: "", machine: "m", token: "")
         c.stubBase = base.path; c.updaterVersion = "1.0.0"
         expect(Agent.selfVersion(config: c, executable: exe.path) == "1.4.2", "R7 the running binary's version, not the static config")
+        let bundled = base.appendingPathComponent("versions/1.4.3/Update Studio KH Helper.app/Contents/MacOS/Update Studio KH Helper")
+        try! fm.createDirectory(at: bundled.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! "#!/bin/sh\n".write(to: bundled, atomically: true, encoding: .utf8)
+        expect(Agent.selfVersion(config: c, executable: bundled.path) == "1.4.3", "R7b the named helper bundle reports its own version, not the static config")
     }
 
     // Server: R14 cross-process lock (six concurrent enrolments), R15 save failures, R27 corrupt state.
@@ -843,9 +847,12 @@ func agentAndServerTests() {
         _ = s.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(tok)"],
                                         body: Data(#"{"machine":"mac2","installed":{"demo":"0.9.0"},"automatic_default":{"demo":true}}"#.utf8)), remote: "100.64.0.9")
         let publisherNotes = WhatsNew.publisher.first!
-        expect(s.statusHTML().contains("v\(publisherNotes.version) · built \(Changelog.buildDate) · What's new</span>")
-               && s.statusHTML().contains("<h2>What's new in v\(publisherNotes.version)</h2><ul><li>")
-               && s.statusHTML().contains(publisherNotes.items.first!), "the page shows the top CHANGELOG entry")
+        let firstItem = publisherNotes.items.first!.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+        expect(s.statusHTML().contains("id=whats-new-pill title=\"What's New in Update Studio KH \(publisherNotes.version)\">")
+               && s.statusHTML().contains("<dialog id=whats-new aria-labelledby=whats-new-title>")
+               && s.statusHTML().contains(firstItem), "the pill opens What's New with the top CHANGELOG entry")
         expect(s.statusHTML().contains("Automatic: on"), "R32 a Mac whose own config is Automatic shows Automatic: on")
         // 1.0.2 page: one state per app, Update N Macs, history, failure details, notes, offline.
         expect(s.statusHTML().contains("Update available") && s.statusHTML().contains("Update 1 Mac"),

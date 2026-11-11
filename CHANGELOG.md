@@ -2,6 +2,14 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.22 — 2026-11-12
+- Update Studio KH has a left sidebar: Connect a Mac, Macs, Apps & updates, Settings and Support this app, each with an icon.
+- The version pill opens What's New, the round-arrow button checks for updates, and a small down-arrow appears only when an update is ready.
+- Settings → Appearance offers System, Light, Dark and Default; System is the starting choice, and a saved choice is kept.
+- Support this app explains the free one-time donation; nothing is locked behind it.
+- The helper and publisher run from named bundles, "Update Studio KH Helper.app" and "Update Studio KH Publisher.app", so process lists show their names instead of a bare command.
+- The named helper keeps reporting this Mac's apps and knows its own version, exactly as the bare command did.
+
 ## 1.0.21 — 2026-11-11
 - Includes Studio Launcher KH 0.1.18 with orderly helper shutdown during saved-setup repair and responsive release notes.
 - Keeps existing saved connections, app choices and pauses through the update.

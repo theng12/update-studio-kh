@@ -100,6 +100,7 @@ try:
     universal_blob = "arm64 x86_64\n"
     (fake_root / "build/khu-stub").write_text(universal_blob)
     (fake_root / "build/khu-stub").chmod(0o755)
+    (fake_root / "build/AppIcon.icns").write_text("fixture icon")
     thin = fake_root / "build/khu"
     thin.write_text("arm64\n")
     thin.chmod(0o755)
@@ -178,9 +179,18 @@ try:
           and os.access(base / "current", os.X_OK) and os.access(home / "Library/KHUpdater/bin/khu-stub", os.X_OK),
           "stub and current binary are executable and versioned")
     job = plistlib.loads(plist.read_bytes())
-    check(job["ProgramArguments"] == [str(home / "Library/KHUpdater/bin/khu-stub"), "--base", str(base)]
+    helper = home / "Library/KHUpdater/Update Studio KH Helper.app"
+    helper_info = plistlib.loads((helper / "Contents/Info.plist").read_bytes())
+    check(job["ProgramArguments"] == [str(helper / "Contents/MacOS/Update Studio KH Helper"), "--base", str(base)]
           and str(home) in job["StandardOutPath"] and "__HOME__" not in str(job),
           "plist safely encodes paths with spaces and XML characters")
+    check(helper_info.get("LSUIElement") is True
+          and helper_info.get("CFBundleDisplayName") == "Update Studio KH Helper"
+          and helper_info.get("CFBundleIdentifier") == "com.khupdater.agent"
+          and os.access(helper / "Contents/MacOS/Update Studio KH Helper", os.X_OK),
+          "the launchd job runs from a named, icon-carrying helper bundle instead of a bare binary")
+    check((helper / "Contents/MacOS/Update Studio KH Helper").read_bytes() == (home / "Library/KHUpdater/bin/khu-stub").read_bytes(),
+          "the helper bundle wraps the supervisor stub, not the agent binary")
     before = installed_config.read_bytes(), plist.read_bytes()
     calls.unlink()
     loaded.unlink()

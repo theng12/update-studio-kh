@@ -26,6 +26,23 @@ public struct StubLayout: Sendable {
             .appendingPathComponent("khu")
     }
 
+    /// The helper bundle that wraps this version's binary. It exists only to give the process a
+    /// product name; the binary in `versions/<v>/khu` stays the one the tree switches between.
+    public func helperBundle(for version: String) throws -> URL {
+        let safe = try SafeName.component(version, what: "version")
+        return versionsDirectory.appendingPathComponent(safe, isDirectory: true)
+            .appendingPathComponent("Update Studio KH Helper.app", isDirectory: true)
+    }
+
+    /// What to launch for a version: its helper bundle's executable when that exists, else the
+    /// plain binary. Never invents a path that is not executable.
+    public func runnable(for binary: URL, fileManager: FileManager = .default) -> URL {
+        let version = Self.version(of: binary)
+        guard let bundle = try? helperBundle(for: version) else { return binary }
+        let executable = bundle.appendingPathComponent("Contents/MacOS/\(HelperBundle.helperExecutable)")
+        return fileManager.isExecutableFile(atPath: executable.path) ? executable : binary
+    }
+
     /// The executable `current` points at, or nil when the link is missing, dangling or not executable.
     public func currentBinary(fileManager: FileManager = .default) -> URL? {
         resolve(link: currentLink, fileManager: fileManager)
@@ -35,9 +52,12 @@ public struct StubLayout: Sendable {
         resolve(link: previousLink, fileManager: fileManager)
     }
 
-    /// The version directory a binary lives in (`versions/<v>/khu` → `<v>`).
+    /// The version directory a binary lives in (`versions/<v>/khu` → `<v>`), including when it runs
+    /// from the helper bundle inside that folder.
     public static func version(of binary: URL) -> String {
-        binary.deletingLastPathComponent().lastPathComponent
+        let parts = binary.pathComponents
+        if let index = parts.lastIndex(of: "versions"), index + 1 < parts.count { return parts[index + 1] }
+        return binary.deletingLastPathComponent().lastPathComponent
     }
 
     private func resolve(link: URL, fileManager: FileManager) -> URL? {

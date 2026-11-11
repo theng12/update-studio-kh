@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.20 — 2026-11-12
+- The footer now holds a version pill that opens What's New, an icon-only Check for Updates, and a small update button that appears only when a newer Launcher is ready.
+- Support this app sits in the footer and in the menu bar's menu; it explains the free one-time donation.
+- Settings → Appearance offers System, Light, Dark and Default, with System as the starting choice.
+- The status line stays on one line; a failed check replaces it, so the footer never stacks messages.
+
 ## 0.1.19 — 2026-11-11
 - What's New is a simple pop-up inside Launcher instead of a separate system window: the title, this version and the notes, with one Done button. Esc or a click outside closes it.
 - Opening What's New from the menu bar shows the same pop-up in the Launcher window.

@@ -139,12 +139,13 @@ public final class StubRunner: @unchecked Sendable {
                 save(supervisor)
             }
 
+            let runnable = namedBinary(binary)
             let nonce = UUID().uuidString
             // Only a beat carrying THIS child's nonce counts, and one the child before it wrote
             // must not be left standing to vouch for this one.
             if supervisor.state.heartbeat_at != nil { supervisor.clearHeartbeat(); save(supervisor) }
-            log("starting \(binary.path) \(childArguments.joined(separator: " "))")
-            guard let child = spawn(binary, nonce: nonce) else {
+            log("starting \(runnable.path) \(childArguments.joined(separator: " "))")
+            guard let child = spawn(runnable, nonce: nonce) else {
                 // Cannot even launch: counted as a crash, so three of them roll back like any other.
                 supervisor.recordExit(code: 127, at: now())
                 save(supervisor)
@@ -243,6 +244,22 @@ public final class StubRunner: @unchecked Sendable {
         while child.isRunning && Mono.now() < deadline { Thread.sleep(forTimeInterval: 0.1) }
         if child.isRunning { kill(child.processIdentifier, SIGKILL) }
         child.waitUntilExit()
+    }
+
+    /// Wraps a version binary in its helper bundle so the process has a product name. Naming is a
+    /// convenience: when it cannot be done, the version still runs from its plain path.
+    private func namedBinary(_ binary: URL) -> URL {
+        let version = StubLayout.version(of: binary)
+        let icon = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/AppIcon.icns")
+        do {
+            let spec = HelperBundle.Spec(name: "Update Studio KH Helper", bundleID: "com.khupdater.agent",
+                                         executableName: HelperBundle.helperExecutable, version: version,
+                                         icon: FileManager.default.fileExists(atPath: icon.path) ? icon : nil)
+            return try HelperBundle.ensure(spec, source: binary, out: layout.helperBundle(for: version))
+        } catch {
+            log("could not name \(version) in a helper bundle: \(error); running it by path")
+            return binary
+        }
     }
 
     private func spawn(_ binary: URL, nonce: String) -> Process? {

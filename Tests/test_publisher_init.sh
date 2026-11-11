@@ -38,7 +38,9 @@ P="$HOME_T/Library/LaunchAgents/com.khupdater.publisher.plist"
 check "plist lints" '/usr/bin/plutil -lint "$P" >/dev/null'
 check "plist has no placeholders" '! grep -q __ "$P"'
 check "plist serves on 8790 for loopback and Tailscale" '[[ "$(/usr/bin/plutil -extract ProgramArguments json -o - "$P")" == *"\"--bind\",\"127.0.0.1\",\"--bind\",\"100.64.0.1\",\"--port\",\"8790\""* ]]'
-check "plist runs the installed binary" '[[ "$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$P")" == "$K/bin/khu" ]]'
+check "plist runs the named publisher bundle" '[[ "$(/usr/bin/plutil -extract ProgramArguments.0 raw -o - "$P")" == "$K/Update Studio KH Publisher.app/Contents/MacOS/Update Studio KH Publisher" ]]'
+check "publisher bundle names the product" 'I="$K/Update Studio KH Publisher.app/Contents/Info.plist"; [[ "$(/usr/bin/plutil -extract CFBundleDisplayName raw -o - "$I")" == "Update Studio KH Publisher" && "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$I")" == com.khupdater.publisher && "$(/usr/bin/plutil -extract LSUIElement raw -o - "$I")" == true ]]'
+check "publisher bundle allows the tailnet HTTP feed" 'I="$K/Update Studio KH Publisher.app/Contents/Info.plist"; /usr/bin/plutil -p "$I" | grep -q "NSExceptionAllowsInsecureHTTPLoads"'
 check "installed khu can load the key" 'printf "## 1.0.0 — 2026-11-02\n- x\n" > "$WORK/log.md" && "$K/bin/khu" publish --feed "$WORK/feed" --key "$K/keys/private.key" --app x --version 1.0.0 --kind fake-for-tests --changelog "$WORK/log.md" --artifact "$ROOT/build/khu-stub" >/dev/null'
 
 KEYSUM=$(shasum "$K/keys/private.key")

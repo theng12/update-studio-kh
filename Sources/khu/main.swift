@@ -20,6 +20,7 @@ struct KHUMain {
               ssd-update --volume <path>   (update or repair installed apps from an SSD)
               ssd-index --volume <path> [--feed <dir>] [--changelog <id>=<repo or CHANGELOG.md>]...   (writes <path>/apps.json)
               connect --kit <dir> --machine <id> --code <pairing code>
+              helper-bundle --out <app> --name <shown> --id <bundle id> --exec <binary> --executable <name> --version <v> [--icon <icns>]
             """.utf8))
             exit(64)
         }
@@ -60,6 +61,31 @@ struct KHUMain {
                 try Signing.savePrivateKey(key.privateKey, to: keyFile)
                 print("public key: \(key.publicKeyBase64)")
                 print("private key: \(keyFile.path)")
+            } catch { fail("\(error)") }
+        case "helper-bundle":
+            var out: String?, shown: String?, bundleID: String?, source: String?
+            var executableName: String?, bundleVersion: String?, icon: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--out": out = value("--out", &i)
+                case "--name": shown = value("--name", &i)
+                case "--id": bundleID = value("--id", &i)
+                case "--exec": source = value("--exec", &i)
+                case "--executable": executableName = value("--executable", &i)
+                case "--version": bundleVersion = value("--version", &i)
+                case "--icon": icon = value("--icon", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let out, let shown, let bundleID, let source, let executableName else { usage() }
+            do {
+                let executable = try HelperBundle.ensure(
+                    .init(name: shown, bundleID: bundleID, executableName: executableName, version: bundleVersion,
+                          icon: icon.map { URL(fileURLWithPath: $0) }),
+                    source: URL(fileURLWithPath: source), out: URL(fileURLWithPath: out))
+                print(executable.path)
             } catch { fail("\(error)") }
         case "publish":
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, allowSame = false

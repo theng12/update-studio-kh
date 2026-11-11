@@ -752,7 +752,7 @@ public final class FeedServer: @unchecked Sendable {
                 // The page's countdown is the one script it runs, allowed by this nonce alone: the
                 // CSP stays `default-src 'none'` with no 'unsafe-inline' for scripts.
                 let nonce = Enrolment.randomBase64(bytes: 16)
-                var page = HTTPResponse(200, "text/html; charset=utf-8", statusHTML(nonce: nonce))
+                var page = HTTPResponse(200, "text/html; charset=utf-8", statusHTML(nonce: nonce, appVersion: req.query["app"]))
                 page.headers = ["Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-\(nonce)'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'",
                                 "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"]
                 return page
@@ -879,7 +879,7 @@ public final class FeedServer: @unchecked Sendable {
 
     /// The owner's page. `nonce` allows the one script that ticks the enrolment countdown; without
     /// one (a caller that only wants the markup) the server-rendered minutes stand on their own.
-    public func statusHTML(nonce: String = "") -> String {
+    public func statusHTML(nonce: String = "", appVersion: String? = nil) -> String {
         func h(_ s: String) -> String {
             s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
@@ -914,6 +914,7 @@ public final class FeedServer: @unchecked Sendable {
             return stamp(iso)
         }
         func name(_ app: String) -> String { AppNames.display(app) }
+        func icon(_ name: String) -> String { Self.sideIcons[name] ?? "" }
         func words(_ status: String) -> String { let s = status.replacingOccurrences(of: "_", with: " "); return s.prefix(1).uppercased() + s.dropFirst() }
 
         // The enrolment window: its state, its countdown, and how much of its allowance is used.
@@ -1106,7 +1107,9 @@ public final class FeedServer: @unchecked Sendable {
         let settings = "<section data-view=settings><div class=pagehead><div><h2>Settings</h2><p class=sub>Connection details and update choices.</p></div></div><div class=settingslist>"
             + "<div class=setting><div><h3>Publisher address</h3><p class=sub>Other Macs reach this Update Studio through Tailscale. Launcher carries this address and the trusted key.</p></div><div>\(destination)<p class=sub>Listener addresses are set in this Mac’s publisher configuration. Changing this display would not change the listener.</p></div></div>"
             + "<div class=setting><div><h3>Pairing protection</h3><p class=sub>The code is protected against repeated wrong attempts.</p></div><div>\(lockStatus)<a href=#connect>View code and connect a Mac</a><p class=sub>Already connected Macs keep their connection and Automatic choices.</p></div></div>"
-            + "<div class=setting><div><h3>Automatic updates</h3><p class=sub>Every Mac keeps its own choices.</p></div><div><p>New Launcher connections start with Launcher automatic updates on. Other apps follow that Mac’s saved settings.</p><p class=sub>Use the Automatic control beside an app in a Mac’s details to change its effective setting. Existing choices are never reset by connecting.</p><a href=#macs>Manage choices in Macs</a></div></div></div></section>"
+            + "<div class=setting><div><h3>Automatic updates</h3><p class=sub>Every Mac keeps its own choices.</p></div><div><p>New Launcher connections start with Launcher automatic updates on. Other apps follow that Mac’s saved settings.</p><p class=sub>Use the Automatic control beside an app in a Mac’s details to change its effective setting. Existing choices are never reset by connecting.</p><a href=#macs>Manage choices in Macs</a></div></div>"
+            + "<div class=setting><div><h3>Appearance</h3><p class=sub>System matches this Mac. Light and Dark force that look. Default uses the look Update Studio KH was designed with.</p></div>"
+            + "<div><div class=themes role=group aria-label=Appearance><button type=button data-appearance=system aria-pressed=true>System</button><button type=button data-appearance=light aria-pressed=false>Light</button><button type=button data-appearance=dark aria-pressed=false>Dark</button><button type=button data-appearance=default aria-pressed=false>Default</button></div></div></div></div></section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
         let sizes = ByteCountFormatter()
@@ -1144,42 +1147,83 @@ public final class FeedServer: @unchecked Sendable {
         let latest = WhatsNew.publisher.first
         let news = (latest?.items ?? []).map { "<li>\(h($0))</li>" }.joined()
         let currentVersion = latest?.version ?? "unknown"
-        let version = "<details class=news><summary><span class=link>v\(h(currentVersion)) · built \(h(Changelog.buildDate)) · What's new</span></summary><div class=newsbody><h2>What's new in v\(h(currentVersion))</h2><ul>\(news)</ul></div></details>"
+        // The Launcher names the version it is running; a browser without one sees the published one.
+        let shownVersion = appVersion.flatMap { $0.range(of: #"^[0-9][0-9.]*$"#, options: .regularExpression) == nil ? nil : $0 } ?? currentVersion
+        let ownEntry = feed?.apps["kh-updater-app"]
+        // Only an offer some Mac is actually behind is shown: the same rule the feed table uses.
+        let ownBehind = state.machines.filter { Self.updateAvailable($0.value, app: "kh-updater-app", feed: feed, now: now) }.count
+        let offered = ownBehind > 0 ? ownEntry.flatMap { VersionCompare.isNewer($0.version, than: shownVersion) ? $0 : nil } : nil
+        // The footer group: version + What's New pill, an icon-only Check, and a tiny update only
+        // when the feed offers one this page is not running yet.
+        let pill = "<button type=button class=pill id=whats-new-pill title=\"What's New in Update Studio KH \(h(shownVersion))\"><span class=nm>Update Studio KH</span><span class=v>v\(h(shownVersion))</span></button>"
+        let updateLink = offered.map {
+            "<form method=post action=/api/update-all class=updform data-confirm=\"Update Update Studio KH to \(h($0.version)) on \(ownBehind) Mac\(ownBehind == 1 ? "" : "s")?\"><input type=hidden name=app value=kh-updater-app><button type=submit class=\"iconbtn update\" id=update title=\"Update Studio KH \(h($0.version)) is available\" aria-label=\"Update Studio KH to \(h($0.version))\">\(icon("update"))</button></form>"
+        } ?? ""
+        let support = "<section data-view=support><div class=pagehead><div><h2>Support this app</h2><p class=sub>Update Studio KH is free, and every feature is unlocked.</p></div></div>"
+            + "<div class=settingslist><div class=setting><div><h3>A one-time donation</h3><p class=sub>Optional, and it never unlocks or blocks anything. It supports the work behind this app.</p></div>"
+            + "<div><a class=donate href=\"https://nowpayments.io/donation/studiokh\">Donate once</a><p class=sub>Opens in your browser at nowpayments.io.</p></div></div></div></section>"
         // Filters and search (kept across the refresh), open rows kept open, confirm, copy, countdown.
         let script = nonce.isEmpty ? "" : "<script nonce=\"\(h(nonce))\">" + PublisherFleet.script + #"""
         setInterval(function(){document.querySelectorAll('[data-until]').forEach(function(e){var s=Math.round(Number(e.getAttribute('data-until'))-Date.now()/1000);e.textContent=s<=0?'closing now':Math.floor(s/60)+' min '+(s%60)+' s'})},1000);
-        var S=sessionStorage,mode=S.getItem('khu-mode')||'all',refreshing=false;
-        function show(){var v=location.hash.slice(1)||S.getItem('khu-view')||'macs';if(['macs','apps','connect','settings'].indexOf(v)<0)v='macs';var was=S.getItem('khu-view');S.setItem('khu-view',v);
+        var S=sessionStorage,L=localStorage,mode=S.getItem('khu-mode')||'all',refreshing=false;
+        function show(){var v=location.hash.slice(1)||S.getItem('khu-view')||'macs';if(['macs','apps','connect','settings','support'].indexOf(v)<0)v='macs';var was=S.getItem('khu-view');S.setItem('khu-view',v);
         document.querySelectorAll('[data-view]').forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});if(was&&was!=v)window.scrollTo(0,0)}
-        function bind(){document.querySelector('.tabs').hidden=false;show();
+        function applyAppearance(v){if(['system','light','dark','default'].indexOf(v)<0)v='system';if(v=='light'||v=='dark')document.documentElement.setAttribute('data-theme',v);else document.documentElement.removeAttribute('data-theme');document.querySelectorAll('[data-appearance]').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-appearance')==v))})}
+        applyAppearance(L.getItem('khu-appearance')||'system');
+        function bind(){show();
+        // In main, which a refresh replaces: bound again with each fresh copy.
+        document.querySelectorAll('[data-appearance]').forEach(function(b){b.addEventListener('click',function(){var v=b.getAttribute('data-appearance');L.setItem('khu-appearance',v);applyAppearance(v)})});
         bindFleet();
         document.querySelectorAll('form[data-confirm]').forEach(function(x){x.addEventListener('submit',function(e){if(!confirm(x.getAttribute('data-confirm')))e.preventDefault()})});
         document.querySelectorAll('button[data-copy]').forEach(function(b){var label=b.textContent;b.addEventListener('click',function(){var t=b.getAttribute('data-copy'),done=function(){b.textContent='Copied';(document.querySelector('dialog[open] .copystatus')||document.getElementById('copy-status')).textContent=label+' copied.';setTimeout(function(){b.textContent=label},2000)};
         if(navigator.clipboard){navigator.clipboard.writeText(t).then(done,fallback)}else fallback();function fallback(){var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();var copied=false;try{copied=document.execCommand('copy')}catch(e){}a.remove();b.focus();if(copied)done();else (document.querySelector('dialog[open] .copystatus')||document.getElementById('copy-status')).textContent='Copy was unavailable. Select the text and copy it manually.'}})});
         document.getElementById('refresh').addEventListener('click',refresh);
         var save=document.getElementById('save-launcher');if(save){save.hidden=!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.saveLauncher);save.addEventListener('click',function(){window.webkit.messageHandlers.saveLauncher.postMessage('save')})}}
-        window.addEventListener('hashchange',show);bind();
-        function closeNews(){document.querySelector('details.news').open=false}
-        document.addEventListener('keydown',function(e){if(e.key=='Escape'&&!document.querySelector('dialog[open]'))closeNews();if(e.metaKey&&e.key==','){e.preventDefault();location.hash='settings';show()}if(e.metaKey&&e.key=='k'){e.preventDefault();location.hash='macs';show();document.getElementById('filter').focus()}});document.addEventListener('click',function(e){var news=document.querySelector('details.news');if(news.open&&!news.contains(e.target))closeNews()});
+        window.addEventListener('hashchange',show);bind();bindSide();
+        document.addEventListener('keydown',function(e){if(e.metaKey&&e.key==','){e.preventDefault();location.hash='settings';show()}if(e.metaKey&&e.key=='k'){e.preventDefault();location.hash='macs';show();document.getElementById('filter').focus()}});
+        // The sidebar stays across a refresh, so it is bound once here and never re-bound.
+        function bindSide(){
+        var pill=document.getElementById('whats-new-pill'),news=document.getElementById('whats-new');
+        if(pill&&news)pill.addEventListener('click',function(){news.showModal()});
+        var close=document.getElementById('whats-new-close');if(close)close.addEventListener('click',function(){document.getElementById('whats-new').close()});
+        document.querySelectorAll('.side form[data-confirm]').forEach(function(x){x.addEventListener('submit',function(e){if(!confirm(x.getAttribute('data-confirm')))e.preventDefault()})});
+        var check=document.getElementById('check');if(check)check.addEventListener('click',checkUpdates)}
+        var checking=false;
+        async function checkUpdates(){if(checking)return;checking=true;var b=document.getElementById('check'),status=document.getElementById('check-status');b.disabled=true;if(status)status.textContent='Checking...';
+        try{var r=await fetch(location.pathname+location.search,{cache:'no-store'});if(!r.ok)throw Error('Publisher returned '+r.status);
+        var doc=new DOMParser().parseFromString(await r.text(),'text/html'),fresh=doc.getElementById('check'),next=fresh&&fresh.getAttribute('data-offered'),main=doc.querySelector('main');
+        if(main&&!document.querySelector('dialog[open]')){document.querySelector('main').replaceWith(main);bind()}
+        if(status)status.textContent=next?'Checked just now · '+next+' is available':'Checked just now · up to date';
+        }catch(e){if(status)status.textContent='Check failed: '+(e.message||'publisher did not answer')+'. Try again.'}
+        finally{checking=false;b.disabled=false}}
         async function refresh(){if(refreshing||document.querySelector('dialog[open]'))return;refreshing=true;var button=document.getElementById('refresh'),controller=new AbortController(),timeout=setTimeout(function(){controller.abort()},15000);
         button.disabled=true;button.textContent='Refreshing…';document.getElementById('refresh-status').textContent='Fetching the latest fleet and app reports…';
         var focused=document.activeElement,id=focused&&focused.id,start=focused&&focused.selectionStart,end=focused&&focused.selectionEnd,y=window.scrollY;
-        try{var response=await fetch(location.pathname,{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('Publisher returned '+response.status);
+        try{var response=await fetch(location.pathname+location.search,{cache:'no-store',signal:controller.signal});if(!response.ok)throw Error('Publisher returned '+response.status);
         var doc=new DOMParser().parseFromString(await response.text(),'text/html'),main=doc.querySelector('main');if(!main||!main.querySelector('#refresh'))throw Error('Publisher state could not be read');
         if(document.querySelector('dialog[open]')){document.getElementById('refresh-status').textContent='Refresh resumes after closing Mac details.';return}
         document.querySelector('main').replaceWith(main);bind();window.scrollTo(0,y);var active=id&&document.getElementById(id);if(active){active.focus({preventScroll:true});if(start!=null&&active.setSelectionRange)active.setSelectionRange(start,end)}
         document.getElementById('refresh-status').textContent='Latest reports fetched at '+new Date().toLocaleTimeString()+'. Last seen shows when each Mac reported.';
         }catch(error){document.getElementById('refresh-status').textContent='Refresh failed: '+(error.name=='AbortError'?'publisher did not respond within 15 seconds':error.message)+'. Showing the previous reports. Try Refresh again.';
         }finally{clearTimeout(timeout);refreshing=false;button=document.getElementById('refresh');button.disabled=false;button.textContent='Refresh'}}
-        function tick(){var a=document.activeElement;if(!document.querySelector('dialog[open]')&&!document.querySelector('details.news').open&&!document.querySelector('details.notes[open]')&&!(a&&(a.tagName=='INPUT'||a.tagName=='TEXTAREA')))refresh();setTimeout(tick,REFRESH*1000)}
+        function tick(){var a=document.activeElement;if(!document.querySelector('dialog[open]')&&!document.querySelector('details.notes[open]')&&!(a&&(a.tagName=='INPUT'||a.tagName=='TEXTAREA')))refresh();setTimeout(tick,REFRESH*1000)}
         setTimeout(tick,REFRESH*1000);
         """#.replacingOccurrences(of: "REFRESH", with: isOpen ? "10" : "30") + "</script>"
         return """
         <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=color-scheme content="light dark"><noscript><meta http-equiv=refresh content=\(isOpen ? 10 : 30)></noscript><title>Update Studio KH</title>
         <style>\(Self.pageStyle)\(PublisherFleet.style)</style></head>
-        <body><header class=top><div class=brand>\(Self.mark)<div><h1>Update Studio KH</h1><p class=sub>Apps across your Macs</p></div></div>
-        <nav class=tabs aria-label="Views" hidden><a href=#macs data-tab=macs>Macs</a><a href=#apps data-tab=apps>Apps &amp; updates</a><a href=#settings data-tab=settings>Settings</a></nav>
-        <div class=headright>\(version)<a class=connectbtn href=#connect data-tab=connect>+ Connect a Mac</a></div></header>
+        <body><aside class=side aria-label="Update Studio KH">
+        <div class=brand>\(Self.mark)<div><h1>Update Studio KH</h1><p class=sub>Apps across your Macs</p></div></div>
+        <nav aria-label="Views">
+        <a class=connectrow href=#connect data-tab=connect>\(icon("plus"))<span>Connect a Mac</span></a><div class=sep></div>
+        <a href=#macs data-tab=macs>\(icon("macs"))<span>Macs</span></a>
+        <a href=#apps data-tab=apps>\(icon("apps"))<span>Apps &amp; updates</span></a>
+        <a href=#settings data-tab=settings>\(icon("settings"))<span>Settings</span></a>
+        </nav><div class=grow></div>
+        <a class=supportbtn href=#support data-tab=support>\(icon("heart"))<span>Support this app</span></a>
+        <div class=sidefoot>\(pill)<button type=button class=iconbtn id=check title="Check for updates" aria-label="Check for updates" data-offered="\(h(offered?.version ?? ""))">\(icon("check"))</button>\(updateLink)</div>
+        <span id=check-status class=statusline role=status aria-live=polite></span>
+        </aside>
         <main>
         <div data-view=macs><div class=pagehead><div><h2>Your Macs</h2><p class=sub>See what needs attention. Open a Mac for its apps and update choices.</p></div></div><section>\(summary)\(banner)</section>
         <section><h2>Macs</h2><div class=tools hidden><div class=filters role=group aria-label="Show Macs">\(filters)</div><input id=filter type=search placeholder="Find a Mac" aria-label="Find a Mac"><button type=button id=refresh>Refresh</button><span id=count class=sub></span></div><p id=refresh-status class=sub role=status aria-live=polite>Latest saved reports. Last seen shows when each Mac reported.</p>\(macs)
@@ -1187,8 +1231,9 @@ public final class FeedServer: @unchecked Sendable {
         \(state.removed.isEmpty ? "" : "<section><details class=removed><summary><h2>Macs removed (\(state.removed.count))</h2></summary>\(removed)</details></section>")</div>
         \(connect)
         \(settings)
+        \(support)
         <section data-view=apps><div class=pagehead><div><h2>Apps &amp; updates</h2><p class=sub>Published versions, release notes and updates for your connected Macs.</p></div></div><p class=sub>Update N Macs updates every connected Mac that is behind. Each Mac reports its result here.</p>\(feedSection)\(vendorHTML(state))</section>
-        <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main>\(script)</body></html>
+        <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main><dialog id=whats-new aria-labelledby=whats-new-title><div class=modalbar><h2 id=whats-new-title>What's New</h2><button type=button id=whats-new-close aria-label="Close What's New">Close</button></div><div class=body><p class=sub>Update Studio KH v\(h(shownVersion)) · built \(h(Changelog.buildDate))</p><ul class=newslist>\(news.isEmpty ? "<li>Release notes are not available for this version.</li>" : news)</ul></div></dialog>\(script)</body></html>
         """
     }
 
@@ -1224,16 +1269,50 @@ public final class FeedServer: @unchecked Sendable {
     /// The page's mark: a down arrow into a tray, drawn the same way as the app icon.
     static let mark = "<svg class=mark viewBox=\"0 0 32 32\" aria-hidden=true><rect width=32 height=32 rx=8 fill=\"var(--accent)\"/><path d=\"M16 7v12m-5-5 5 5 5-5M9 21v3h14v-3\" fill=none stroke=\"#fff\" stroke-width=2.4 stroke-linecap=round stroke-linejoin=round/></svg>"
 
+    /// 16 px stroke icons for the sidebar; the shared UI spec asks for one on every navigation entry.
+    static let sideIcons: [String: String] = [
+        "plus": "<svg viewBox=\"0 0 16 16\" aria-hidden=true><circle cx=8 cy=8 r=6.2 /><path d=\"M8 5.4v5.2M5.4 8h5.2\" /></svg>",
+        "macs": "<svg viewBox=\"0 0 16 16\" aria-hidden=true><rect x=1.8 y=2.4 width=12.4 height=8.4 rx=1.4 /><path d=\"M5.2 13.6h5.6\" /></svg>",
+        "apps": "<svg viewBox=\"0 0 16 16\" aria-hidden=true><rect x=2 y=2 width=5 height=5 rx=1.2 /><rect x=9 y=2 width=5 height=5 rx=1.2 /><rect x=2 y=9 width=5 height=5 rx=1.2 /><rect x=9 y=9 width=5 height=5 rx=1.2 /></svg>",
+        "settings": "<svg viewBox=\"0 0 16 16\" aria-hidden=true><path d=\"M2 4.6h2.9M8.4 4.6h5.6M2 11.4h5.6M11 11.4h3\" /><circle cx=6.7 cy=4.6 r=1.5 /><circle cx=9.3 cy=11.4 r=1.5 /></svg>",
+        "heart": "<svg viewBox=\"0 0 16 16\" aria-hidden=true class=heart><path d=\"M8 13.1S2.4 9.9 2.4 6a2.9 2.9 0 0 1 5.1-1.9L8 4.6l.5-.5A2.9 2.9 0 0 1 13.6 6c0 3.9-5.6 7.1-5.6 7.1Z\" /></svg>",
+        "check": "<svg viewBox=\"0 0 16 16\" aria-hidden=true><path d=\"M13.2 8a5.2 5.2 0 1 1-1.6-3.8\" /><path d=\"M13.4 2.4v2.9h-2.9\" /></svg>",
+        "update": "<svg viewBox=\"0 0 16 16\" aria-hidden=true><path d=\"M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6\" /></svg>"
+    ]
+
     static let pageStyle = """
     :root{--bg:#f5f6f5;--panel:#fff;--line:#e2e5e3;--line2:#eef0ef;--text:#16201c;--sub:#5b6762;--accent:#1d6b51;--accent-ink:#fff;--ok:#1a7448;--ok-bg:#e2f3e9;--warn:#875800;--warn-bg:#fcefd2;--bad:#b42318;--bad-bg:#fde8e6;--info:#1d5fa8;--info-bg:#e5eefb;--muted-bg:#eef0ef;--focus:#2e8b6a;--field:#9aa6a0;--shadow:0 10px 30px rgba(15,30,25,.14)}
     @media (prefers-color-scheme:dark){:root{--bg:#101513;--panel:#171e1b;--line:#29332f;--line2:#202926;--text:#e6ece9;--sub:#a9b5af;--accent:#3fa37f;--accent-ink:#06120d;--ok:#62d19a;--ok-bg:#15301f;--warn:#f0b450;--warn-bg:#33270f;--bad:#ff8a7e;--bad-bg:#3a1714;--info:#8ab8f2;--info-bg:#15263c;--muted-bg:#212a26;--focus:#62d19a;--field:#5f6e67;--shadow:0 12px 32px rgba(0,0,0,.5)}}
+    html[data-theme=light]{--bg:#f5f6f5;--panel:#fff;--line:#e2e5e3;--line2:#eef0ef;--text:#16201c;--sub:#5b6762;--accent:#1d6b51;--accent-ink:#fff;--ok:#1a7448;--ok-bg:#e2f3e9;--warn:#875800;--warn-bg:#fcefd2;--bad:#b42318;--bad-bg:#fde8e6;--info:#1d5fa8;--info-bg:#e5eefb;--muted-bg:#eef0ef;--focus:#2e8b6a;--field:#9aa6a0;--shadow:0 10px 30px rgba(15,30,25,.14)}
+    html[data-theme=dark]{--bg:#101513;--panel:#171e1b;--line:#29332f;--line2:#202926;--text:#e6ece9;--sub:#a9b5af;--accent:#3fa37f;--accent-ink:#06120d;--ok:#62d19a;--ok-bg:#15301f;--warn:#f0b450;--warn-bg:#33270f;--bad:#ff8a7e;--bad-bg:#3a1714;--info:#8ab8f2;--info-bg:#15263c;--muted-bg:#212a26;--focus:#62d19a;--field:#5f6e67;--shadow:0 12px 32px rgba(0,0,0,.5);color-scheme:dark}
     *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:13.5px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
-    body{margin:0}::selection{background:var(--accent);color:var(--accent-ink)}a{color:var(--accent)}
+    body{margin:0;display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh}::selection{background:var(--accent);color:var(--accent-ink)}a{color:var(--accent)}
     h1{font-size:16px;letter-spacing:-.02em;margin:0}h2{font-size:15px;margin:0 0 10px;letter-spacing:-.01em}h3{font-size:12px;font-weight:600;color:var(--sub);letter-spacing:0;margin:16px 0 6px}p{margin:0 0 8px}
     .sub{color:var(--sub);font-size:12.5px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}.num{font-variant-numeric:tabular-nums}
-    .top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:4}
-    .top{align-items:center}.brand{display:flex;gap:10px;align-items:center}.headright{display:flex;align-items:center;gap:14px}.connectbtn{background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:600;padding:6px 12px;border-radius:8px;white-space:nowrap}.connectbtn:hover{filter:brightness(1.08)}.connectbtn[aria-current=page]{background:var(--panel);color:var(--accent);box-shadow:inset 0 0 0 1.5px var(--accent)}#count{min-width:5.5em;text-align:right}.tabs{display:flex;gap:2px;padding:2px;background:var(--muted-bg);border-radius:9px}.tabs[hidden]{display:none}.tabs a{padding:5px 14px;border-radius:7px;color:var(--sub);text-decoration:none;font-weight:550}.tabs a[aria-current=page]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}[data-view][hidden]{display:none}.mark{width:34px;height:34px;flex:none}.brand .sub{margin:0}
-    main{width:100%;padding:28px 24px 48px;max-width:1480px;margin:0 auto}section{margin-bottom:28px}
+    .side{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line);padding:14px 10px 10px;min-width:0}
+    .side .brand{padding:0 8px 12px}.brand{display:flex;gap:10px;align-items:center}.brand>.mark{width:30px;height:30px;flex:none}.brand .sub{margin:0;font-size:12px}
+    .side nav{display:flex;flex-direction:column;gap:2px}
+    .side nav a{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:7px;color:var(--sub);text-decoration:none;font-size:13px;font-weight:550}
+    .side nav a svg,.supportbtn svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+    .side nav a:hover{background:var(--line2);color:var(--text)}
+    .side nav a[aria-current=page]{background:var(--muted-bg);color:var(--text);font-weight:600}
+    .side nav a.connectrow{color:var(--accent);font-weight:600}.side .sep{height:1px;background:var(--line2);margin:6px 4px}.side .grow{flex:1}
+    .supportbtn{display:flex;align-items:center;gap:9px;width:100%;min-height:26px;padding:6px 9px;border:0;background:none;border-radius:7px;color:var(--sub);font:inherit;font-size:13px;font-weight:550;cursor:pointer;text-align:left}
+    .supportbtn .heart{color:var(--bad);stroke:currentColor}
+    .supportbtn:hover{background:var(--line2);color:var(--text)}.supportbtn[aria-current=page]{background:var(--muted-bg);color:var(--text)}
+    .sidefoot{border-top:1px solid var(--line2);margin-top:8px;padding-top:9px;display:flex;align-items:center;gap:6px}.sidefoot .pill{flex:1}
+    .pill{display:inline-flex;align-items:center;gap:4px;height:26px;min-height:26px;min-width:0;padding:0 7px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:11px;font-weight:550;cursor:pointer;white-space:nowrap;overflow:hidden}
+    .pill:hover{border-color:var(--field)}.pill .nm{overflow:hidden;text-overflow:ellipsis}.pill .v{font:10px/1 ui-monospace,Menlo,monospace;color:var(--sub);font-variant-numeric:tabular-nums}
+    .iconbtn{width:26px;height:26px;min-height:26px;flex:none;display:inline-grid;place-items:center;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--sub);cursor:pointer;padding:0}
+    .iconbtn:hover{color:var(--text);border-color:var(--field)}.iconbtn svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+    .iconbtn.update{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.iconbtn.update:hover{filter:brightness(1.07)}.updform{display:contents}
+    .statusline{display:block;color:var(--sub);font-size:11px;margin-top:6px;padding:0 2px}
+    .themes{display:inline-flex;padding:2px;background:var(--muted-bg);border-radius:8px;gap:2px}
+    .themes button{border:0;background:none;padding:4px 11px;border-radius:6px;color:var(--sub);min-height:26px}
+    .themes button[aria-pressed=true]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+    #whats-new{width:min(460px,calc(100vw - 32px))}#whats-new .body{padding:14px 24px 4px}#whats-new .newslist{margin:0;padding-left:18px}#whats-new .newslist li{margin-bottom:6px}
+    [data-view][hidden]{display:none}.mark{width:34px;height:34px;flex:none}
+    main{width:100%;padding:22px 28px 44px;max-width:1240px;min-width:0}section{margin-bottom:28px}
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
     .stat{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--panel)}
     .stat .n{font-size:26px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap}.stat .n small{font-size:13px;color:var(--sub);font-weight:500}
@@ -1282,13 +1361,14 @@ public final class FeedServer: @unchecked Sendable {
     .joined{margin-top:6px;padding-top:10px;border-top:1px solid var(--line2)}.joined ul{margin:0;padding-left:18px}
     .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:2px 6px}
     details.notes summary{cursor:pointer;color:var(--accent)}details.notes ul{margin:6px 0 0;padding-left:16px}details.notes li{margin-bottom:2px}
-    details.news{text-align:right;font-size:12.5px}details.news summary{list-style:none;cursor:pointer}details.news summary::-webkit-details-marker{display:none}details.news summary p{margin:0}
-    .link{color:var(--accent);font-size:12.5px}.newsbody{position:absolute;right:24px;margin-top:8px;width:min(440px,calc(100vw - 48px));text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}
-    .newsbody h2{font-size:13px}.newsbody ul{margin:0;padding-left:18px}
+    .donate{display:inline-block;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:600;padding:6px 13px;border-radius:8px}.donate:hover{filter:brightness(1.08)}
     details.removed summary{cursor:pointer;color:var(--sub)}details.removed summary h2{display:inline;font-size:13px}details.removed[open] summary{margin-bottom:10px}
     .empty{background:var(--panel);border:1px dashed var(--line);border-radius:12px;padding:18px;color:var(--sub)}.foot{margin-top:10px;max-width:90ch}
     code{font:12px ui-monospace,Menlo,monospace;background:var(--muted-bg);padding:1px 5px;border-radius:5px;word-break:break-all}
-    @media (max-width:820px){.top{padding:10px 14px;flex-wrap:wrap;gap:8px}.tabs{order:3;width:100%}.tabs a{flex:1;text-align:center}.headright{gap:8px}.connectbtn{padding:5px 10px}.state{justify-content:flex-start;flex-wrap:wrap}.top{padding:12px 16px}main{padding:14px}.brand .sub{display:none}.mark{width:28px;height:28px}h1{font-size:18px}details.news summary p{font-size:12px}
+    @media (max-width:860px){body{grid-template-columns:minmax(0,1fr)}
+    .side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;border-right:0;border-bottom:1px solid var(--line);overflow-x:auto}.side .brand{padding:0 2px 0 0;flex:none}.side nav{flex-direction:row;gap:2px}.side .sep,.side .grow{display:none}.supportbtn{width:auto;flex:none}.sidefoot{margin-left:auto}.statusline{flex-basis:100%;text-align:right;margin:0 2px}
+    }
+    @media (max-width:820px){.state{justify-content:flex-start;flex-wrap:wrap}main{padding:14px 12px 36px}.brand .sub{display:none}.mark{width:26px;height:26px}h1{font-size:15px}
     .stats{grid-template-columns:1fr 1fr}.stat{padding:12px}.stat .n{font-size:21px}
     details.mac>summary{grid-template-columns:1fr;gap:6px;padding:10px 14px}.state{order:1}.apps{order:2}.seen{order:3;text-align:left}
     .apptable thead,.hist thead,.feed thead{display:none}.apptable tr,.feed tr{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:8px 0}.apptable td,.feed td{padding:0;border:0!important}.apptable tbody tr+tr,.feed tbody tr+tr{border-top:1px solid var(--line2)}
@@ -1297,7 +1377,7 @@ public final class FeedServer: @unchecked Sendable {
 
     [hidden]{display:none!important}a{text-underline-offset:3px}input{caret-color:var(--accent)}
     ::-webkit-scrollbar{width:11px;height:11px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:3px solid var(--bg)}
-    .brand p{font-size:12px;margin:1px 0 0}.top{padding:14px 22px}.mark{width:30px;height:30px}
+    .brand p{font-size:12px;margin:1px 0 0}.mark{width:30px;height:30px}
     .pagehead{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}.pagehead h2{font-size:26px;letter-spacing:-.025em;font-weight:650;margin:0 0 4px}.pagehead p{margin:0;font-size:13.5px}.textlink{white-space:nowrap}
     button{min-height:30px;font-weight:550}button.primary{color:var(--accent-ink)}
     .connectlayout{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(340px,.85fr);gap:40px;align-items:start}
@@ -1313,8 +1393,8 @@ public final class FeedServer: @unchecked Sendable {
     .macpick{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0}.macpick+.macpick{border-top:1px solid var(--line2)}
     .vendors{margin-top:28px}input[type=checkbox]{accent-color:var(--accent)}
     .tablewrap{padding:0 8px;overflow-x:auto}.feed td{padding:18px 12px}.feed th{padding:12px}.feed .name{font-weight:600;min-width:160px}.feed .num{font-size:12.5px}.stat{padding:16px}.detail{overflow-x:auto}
-    @media(min-width:821px) and (max-width:1100px){.brand p{display:none}.top{gap:10px}.tabs a{padding:5px 9px}.headright{gap:10px}.stats{grid-template-columns:1fr 1fr}.connectlayout{gap:24px}.pairpanel{padding:24px}details.mac>summary{grid-template-columns:minmax(130px,1fr) minmax(0,1fr) auto 14px}.seen{grid-column:1/4;text-align:left}.chev{grid-column:4;grid-row:1}}
-    @media(max-width:820px){.pagehead{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px}.pagehead h2{font-size:23px}.connectlayout{grid-template-columns:minmax(0,1fr);gap:24px}.pairpanel{order:-1;padding:24px}.paircode{font-size:48px}.pair{margin:20px 0}.connectfoot{flex-direction:column;gap:8px}.setting{grid-template-columns:1fr;gap:12px}.settingslist{padding:0 18px}.headright{margin-left:auto}.brand{min-width:0}.top h1{font-size:15px}.tabs{overflow-x:auto}.tabs a{padding:5px 10px;white-space:nowrap}.feed td{min-width:0}.feed .name{min-width:0}.feed .actions{white-space:normal}.feed .num{overflow-wrap:anywhere}}
+    @media(min-width:821px) and (max-width:1100px){.brand p{display:none}.stats{grid-template-columns:1fr 1fr}.connectlayout{gap:24px}.pairpanel{padding:24px}details.mac>summary{grid-template-columns:minmax(130px,1fr) minmax(0,1fr) auto 14px}.seen{grid-column:1/4;text-align:left}.chev{grid-column:4;grid-row:1}}
+    @media(max-width:820px){.pagehead{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px}.pagehead h2{font-size:23px}.connectlayout{grid-template-columns:minmax(0,1fr);gap:24px}.pairpanel{order:-1;padding:24px}.paircode{font-size:48px}.pair{margin:20px 0}.connectfoot{flex-direction:column;gap:8px}.setting{grid-template-columns:1fr;gap:12px}.settingslist{padding:0 18px}.brand{min-width:0}.feed td{min-width:0}.feed .name{min-width:0}.feed .actions{white-space:normal}.feed .num{overflow-wrap:anywhere}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
     """ + Changelog.layoutCSS
 

@@ -56,9 +56,16 @@ class SharedUITests(unittest.TestCase):
         script += handler + "keydown({key:'Escape'});assert.equal(settingsOpen,false);assert.equal(detail.id,'app');assert.equal(closed,0);assert.equal(removed,1);keydown({key:',',metaKey:true,preventDefault(){}});assert.equal(settingsOpen,true);assert.equal(drawn,1);keydown({key:'k',metaKey:true,preventDefault(){}});assert.equal(focused,1);whatsNewOpen=true;keydown({key:'Escape'});assert.equal(whatsNewOpen,false);assert.equal(settingsOpen,true);"
         subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
         server = (ROOT / 'Sources/KHUpdaterCore/Server.swift').read_text()
-        body = server.split("document.addEventListener('keydown',function(e){", 1)[1].split("});document.addEventListener('click'", 1)[0]
-        script = "const assert=require('node:assert/strict');let dialog=true,closed=0,focused=0;const location={hash:''},show=()=>{},closeNews=()=>closed++,document={querySelector:()=>dialog,getElementById:()=>({focus:()=>focused++})};const keydown=function(e){" + body + "};keydown({key:'Escape'});assert.equal(closed,0);dialog=false;keydown({key:'Escape'});assert.equal(closed,1);keydown({key:',',metaKey:true,preventDefault(){}});assert.equal(location.hash,'settings');keydown({key:'k',metaKey:true,preventDefault(){}});assert.equal(location.hash,'macs');assert.equal(focused,1);"
+        body = server.split("document.addEventListener('keydown',function(e){", 1)[1].split("}});", 1)[0]
+        script = "const assert=require('node:assert/strict');let focused=0;const location={hash:''},show=()=>{},document={getElementById:()=>({focus:()=>focused++})};const keydown=function(e){" + body + "}};keydown({key:',',metaKey:true,preventDefault(){}});assert.equal(location.hash,'settings');keydown({key:'k',metaKey:true,preventDefault(){}});assert.equal(location.hash,'macs');assert.equal(focused,1);"
         subprocess.run(['node', '-e', script], check=True, capture_output=True, text=True)
+
+    def test_every_page_fetch_keeps_the_app_version_query(self):
+        server = (ROOT / 'Sources/KHUpdaterCore/Server.swift').read_text()
+        fetches = [line for line in server.splitlines() if 'fetch(location.pathname' in line]
+        self.assertTrue(fetches)
+        for line in fetches:
+            self.assertIn('fetch(location.pathname+location.search', line)
 
     def test_source_interpolation_delimiter_is_refused(self):
         (self.root / 'CHANGELOG.md').write_text('## 1.2.3 — 2026-11-09\n- \\#(unexpectedCode())\n')

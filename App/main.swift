@@ -4,7 +4,7 @@ import WebKit
 import CryptoKit
 import UniformTypeIdentifiers
 
-final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMessageHandler {
+final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     var window: NSWindow!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -22,7 +22,11 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
         configuration.userContentController.add(self, name: "saveLauncher")
         let web = WKWebView(frame: .zero, configuration: configuration)
         web.uiDelegate = self
-        web.load(URLRequest(url: URL(string: "http://127.0.0.1:8790/")!))
+        web.navigationDelegate = self
+        // The page shows its own version (footer pill), so the running app names it.
+        var page = URLComponents(string: "http://127.0.0.1:8790/")!
+        page.queryItems = [URLQueryItem(name: "app", value: version)]
+        web.load(URLRequest(url: page.url ?? URL(string: "http://127.0.0.1:8790/")!))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Update Studio KH"
@@ -135,7 +139,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
                   let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let files = manifest["files"] as? [String: [String: Any]] else { continue }
             let expected: Set<String> = ["VERSION", "agent-config.example.json", "bin/khu", "bin/khu-stub", "com.khupdater.agent.plist", "install-agent.sh", "publisher.json"]
-            guard Set(files.keys) == expected else { continue }
+            guard Set(files.keys) == expected || Set(files.keys) == expected.union(["AppIcon.icns"]) else { continue }
             var valid = true
             for (name, pin) in files {
                 let file = kit.appendingPathComponent(name).resolvingSymlinksInPath()
@@ -151,6 +155,18 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
             if verify.terminationStatus == 0 { return app }
         }
         throw copyError("Install the signed Studio Launcher KH package with its connection kit first, then try again. You can also use the Launcher installer on an install SSD. The helper-only copy on this Mac cannot connect a new Mac.")
+    }
+
+    // The page is this Mac's publisher; a donation link opens in the browser and nothing else may
+    // navigate the window away. The address is the one this app loaded.
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = navigationAction.request.url else { return decisionHandler(.cancel) }
+        if url.scheme == "http", url.host == "127.0.0.1", url.port == 8790 { return decisionHandler(.allow) }
+        if url.scheme == "https", url.host == "nowpayments.io" || url.host == "www.nowpayments.io" {
+            NSWorkspace.shared.open(url)
+        }
+        decisionHandler(.cancel)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

@@ -409,4 +409,17 @@ assert(!document.querySelector('.scrim.w') && !run('whatsNewOpen'), 'R9 Done clo
 render(state([row({ status: 'Up to date' })], { version: '0.1.19', whatsNew: [] }));
 run('showWhatsNew()');
 assert.match(document.querySelector('.scrim.w .sheet').textContent, /No notes for this version\./, 'R9 an empty changelog is said plainly');
-console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback and the page’s own What’s New pop-up');
+// R10 the footer group: the version pill, an icon-only check, and an update button only when a
+// newer Launcher is really offered; Support posts its own action.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
+render(state([row({ id: 'updater', name: 'Studio Launcher KH', status: 'Update available', available: '0.1.21', installed: '0.1.20' })], { version: '0.1.20' }));
+assert.match(document.getElementById('wnver').textContent, /v0\.1\.20/, 'R10 the pill carries this version');
+assert.equal(document.getElementById('update').hidden, false, 'R10 a real offer shows the small update button');
+assert.match(document.getElementById('update').getAttribute('aria-label'), /0\.1\.21/, 'R10 the button names the offered version');
+render(state([row({ id: 'updater', status: 'Up to date', available: '0.1.20', installed: '0.1.20' })], { version: '0.1.20' }));
+assert.equal(document.getElementById('update').hidden, true, 'R10 no offer, no button');
+posts.length = 0;
+document.getElementById('support').fire('click');
+assert.equal(posts.length, 1, 'R10 Support posts one message');
+assert.equal(posts[0] && posts[0].action, 'support', 'R10 Support asks the app to open the donation page, nothing else');
+console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up and the footer group');
