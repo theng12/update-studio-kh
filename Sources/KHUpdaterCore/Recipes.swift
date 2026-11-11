@@ -146,8 +146,12 @@ public enum Recipe {
     ///    stop, the previous bundle cannot be put back, or there is no previous bundle at all —
     ///    leaves the journal in place, so the next run retries instead of reporting an app that is
     ///    merely the new version as settled.
+    /// `refuseIfRunning` is the hand route's second look: an app that updates itself proves no quiet
+    /// point, so one that came up while its installer was prepared is kept running and nothing is
+    /// stopped or replaced. Every other install keeps its own quit-and-promote contract.
     public static func appDmg(shell: Shell, installedPath: String, artifactPath: String, feedVersion: String,
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
+                              refuseIfRunning: Bool = false,
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
@@ -181,6 +185,16 @@ public enum Recipe {
         }
         mounted = false
         let detachNote = detach(shell, device)  // the staged copy is all that is needed from here
+
+        // The person at this Mac may have started the app while its installer was being fetched and
+        // staged. Stopping it now is the one thing this route promised not to do, so the second look
+        // happens here — before the journal exists and before anything is quit: the staged copy goes
+        // back to `_trash`, the installed bundle is untouched and nothing is stopped or started.
+        if refuseIfRunning, control.isRunning() != false {
+            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            return RecipeResult(status: "refused", reason: "\(app) is running now, so nothing was changed. "
+                                + "Quit it when its work is finished, then try again. No quiet point was proved.")
+        }
 
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote])

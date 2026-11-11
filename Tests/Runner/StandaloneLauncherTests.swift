@@ -5,6 +5,9 @@ private final class StandaloneShell: Shell, @unchecked Sendable {
     let root: URL
     var mount: URL
     var refused = false
+    /// How many staging copies `stage()` has actually run, so a fixture can let the app come up half
+    /// way through an install the way a person does.
+    var dittoRuns = 0
     init(root: URL, mount: URL) { self.root = root; self.mount = mount }
     func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
         if executable == "/usr/bin/hdiutil", arguments.first == "attach" {
@@ -18,6 +21,7 @@ private final class StandaloneShell: Shell, @unchecked Sendable {
         }
         if executable == "/usr/bin/ditto" {
             guard arguments.allSatisfy({ $0.hasPrefix(root.path + "/") }) else { throw khuFail("fixture ditto escaped its root") }
+            dittoRuns += 1
             return try SystemShell().run(executable, arguments: arguments, timeout: timeout)
         }
         return ShellResult(exitCode: 0, stdout: "", stderr: "")
@@ -47,6 +51,11 @@ private final class StandaloneHTTP: HTTPClient, @unchecked Sendable {
         guard let server else { throw URLError(.cannotConnectToHost) }
         return try InProcessClient(server: server).download(url, headers: headers, to: file, limit: limit)
     }
+}
+
+/// Counts what a hand install of a running Production app is never allowed to do.
+private final class HandActions: @unchecked Sendable {
+    var quits = 0, stops = 0, launches = 0
 }
 
 func standaloneLauncherTests() {
@@ -217,16 +226,18 @@ func standaloneLauncherTests() {
     // may install or update it by choosing it, and nothing else may.
     do {
         let appID = "story", storyBundle = "com.fixture.story", storyName = "Story Studio KH.app"
-        func storySetup(_ tag: String, version: String = "2.0") -> (Rig, AgentConfig, URL, StandaloneShell, StandaloneHTTP) {
+        func storySetup(_ tag: String, version: String = "2.0", app: String = appID, bundle: String = storyBundle,
+                        name: String = storyName, label: String = "Story Studio KH", kind: String = "app-dmg",
+                        bytes: String = "story installer bytes") -> (Rig, AgentConfig, URL, StandaloneShell, StandaloneHTTP) {
             let rig = Rig("standalone-" + tag)
             let folder = rig.root.appendingPathComponent("Applications")
             try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
             let mount = rig.root.appendingPathComponent("mount")
-            _ = makeApp(mount.appendingPathComponent(storyName), version: version, id: storyBundle)
-            let artifact = rig.artifact("Story Studio KH.dmg", "story installer bytes")
-            try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: appID, version: version, artifact: artifact,
-                                       kind: "app-dmg", allowSame: false, meta: { _ in
-                AppMeta(name: "Story Studio KH", bundleID: storyBundle, bundleName: storyName, version: version, iconPNG: nil)
+            _ = makeApp(mount.appendingPathComponent(name), version: version, id: bundle)
+            let artifact = rig.artifact("\(label).dmg", bytes)
+            try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: app, version: version, artifact: artifact,
+                                       kind: kind, allowSame: false, meta: { _ in
+                AppMeta(name: label, bundleID: bundle, bundleName: name, version: version, iconPNG: nil)
             })
             let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
             let cfg = agentConfig(rig, token: token, apps: [:])
@@ -234,15 +245,16 @@ func standaloneLauncherTests() {
             try! settings.save(to: URL(fileURLWithPath: cfg.stateDir))
             return (rig, cfg, folder, StandaloneShell(root: rig.root, mount: mount), StandaloneHTTP(rig.server))
         }
-        func storySSD(_ rig: Rig, _ bytes: Data, version: String, mainOnly: Bool = false) -> SSDSource {
+        func storySSD(_ rig: Rig, _ bytes: Data, version: String, mainOnly: Bool = false, app: String = appID,
+                      bundle: String = storyBundle, name: String = storyName) -> SSDSource {
             let ssd = rig.root.appendingPathComponent("SSD-" + UUID().uuidString.prefix(4))
             try! fm.createDirectory(at: ssd, withIntermediateDirectories: true)
-            let file = ssd.appendingPathComponent("Story.dmg")
+            let file = ssd.appendingPathComponent("\(name).dmg")
             try! bytes.write(to: file)
-            var app = SSDApp(id: appID, name: "Story Studio KH", version: version, bundleID: storyBundle, bundleName: storyName,
-                             file: file.lastPathComponent, sha256: Signing.sha256Hex(bytes), updatesItself: true)
-            app.bytes = Int64(bytes.count); app.mainMacOnly = mainOnly
-            return SSDSource(volume: "Fixture SSD", root: ssd, index: SSDIndex(apps: [app]))
+            var entry = SSDApp(id: app, name: name, version: version, bundleID: bundle, bundleName: name,
+                               file: file.lastPathComponent, sha256: Signing.sha256Hex(bytes), updatesItself: true)
+            entry.bytes = Int64(bytes.count); entry.mainMacOnly = mainOnly
+            return SSDSource(volume: "Fixture SSD", root: ssd, index: SSDIndex(apps: [entry]))
         }
         let control = AppControl(isRunning: { false }, quit: { true }, launch: {}, healthy: { _ in true }, healthSettle: 0)
         // A fresh Mac with only the remote Updater: the app is offered, and installed by hand.
@@ -361,6 +373,84 @@ func standaloneLauncherTests() {
                    && !fm.fileExists(atPath: Recipe.journalURL(stateDir: cfg.stateDir, app: appID).path),
                    "SL17 an interrupted install of an app that updates itself is undone, and its journal is settled")
             _ = rig
+        }
+        // A Mac configured by an earlier kit carries the app's own recipe name (`story`, `hub`).
+        // The hand route takes the same journaled path, and recovery reads it too.
+        for own in [(app: "story", bundle: storyBundle, name: storyName, label: "Story Studio KH", feedKind: "app-dmg"),
+                    (app: "hub", bundle: "com.fixture.hub", name: "Studio Hub.app", label: "Studio Hub", feedKind: "hub")] {
+            let (rig, base, folder, shell, http) = storySetup("own-recipe-\(own.app)", app: own.app, bundle: own.bundle,
+                                                              name: own.name, label: own.label, kind: own.feedKind,
+                                                              bytes: "\(own.app) installer bytes")
+            let target = makeApp(folder.appendingPathComponent(own.name), version: "1.0", id: own.bundle)
+            var cfg = base
+            cfg.apps[own.app] = AppConfig(bundlePath: target.path, recipe: own.app, automatic: true, bundleID: own.bundle)
+            let automatic = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(automatic?.commandsRun == 0 && http.downloads == 0 && marker(target) == "1.0",
+                   "SL19 Automatic never installs an existing \(own.app)-recipe config")
+            let journal = InstallJournal(phase: "staged", installed: target.path, staged: target.path + ".staged",
+                                         rollback: URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("rollback-\(own.app)/\(own.name)").path,
+                                         previousVersion: "1.0", wasRunning: false, version: "2.0")
+            try! AtomicFile.writeJSON(journal, to: Recipe.journalURL(stateDir: cfg.stateDir, app: own.app))
+            let recovered = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(recovered?.notes.contains(where: { $0.contains(own.app) && $0.contains("interrupted install was undone") }) == true
+                   && !Recipe.isUnresolved(stateDir: cfg.stateDir, app: own.app) && marker(target) == "1.0",
+                   "SL19 a killed \(own.app)-recipe install is undone by the same recovery loop")
+            let hand = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control },
+                                          requested: [own.app], appFolders: [folder])
+            expect(hand?.apps.first { $0.app == own.app }?.installed == "2.0" && marker(target) == "2.0" && http.downloads == 1,
+                   "SL19 the explicit choice installs through its own \(own.app) recipe, not an unknown-recipe refusal")
+            _ = rig
+        }
+        // The app coming up half way through the install is caught before anything is stopped:
+        // the guard at the door only proved it was quiet before the download started.
+        do {
+            let (_, cfg, folder, shell, http) = storySetup("story-late-start")
+            let target = makeApp(folder.appendingPathComponent(storyName), version: "1.0", id: storyBundle)
+            let done = HandActions()
+            let late = AppControl(isRunning: { shell.dittoRuns > 0 },
+                                  quit: { done.quits += 1; return true },
+                                  launch: { done.launches += 1 },
+                                  stopService: { done.stops += 1; return true },
+                                  healthy: { _ in true }, healthSettle: 0)
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in late },
+                                            requested: [appID], appFolders: [folder])
+            let row = result?.apps.first { $0.app == appID }
+            expect(shell.dittoRuns > 0 && row?.status == HelperApp.failed && row?.reason?.contains("is running now") == true,
+                   "SL20 an app that started while its installer was staged is refused, visibly")
+            expect(done.quits == 0 && done.stops == 0 && done.launches == 0 && marker(target) == "1.0",
+                   "SL20 the late refusal quits nothing, stops no service and leaves the installed app alone")
+            expect(!Recipe.isUnresolved(stateDir: cfg.stateDir, app: appID)
+                   && !fm.fileExists(atPath: folder.appendingPathComponent(".\(storyName).khu-staging").path),
+                   "SL20 nothing is left half done: no journal, and the staged copy went to _trash")
+        }
+        // An app an SSD marks as updating itself keeps that policy even under an older config that
+        // still says `app-dmg`, whatever it was — a remote order cannot talk it into an install.
+        do {
+            let (rig, base, folder, shell, http) = storySetup("ssd-flag-app-dmg", app: "notes", bundle: "com.fixture.notes",
+                                                              name: "Notes KH.app", label: "Notes KH", bytes: "notes installer bytes")
+            let target = makeApp(folder.appendingPathComponent("Notes KH.app"), version: "1.0", id: "com.fixture.notes")
+            var cfg = base
+            cfg.apps["notes"] = AppConfig(bundlePath: target.path, recipe: "app-dmg", automatic: true, bundleID: "com.fixture.notes")
+            let signed = try! FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey)
+            let bytes = try! Data(contentsOf: rig.feed.appendingPathComponent("artifacts/\(signed!.apps["notes"]!.file)"))
+            let ssd = storySSD(rig, bytes, version: "2.0", app: "notes", bundle: "com.fixture.notes", name: "Notes KH.app")
+            let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+            _ = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                     body: Data(#"{"machine":"mac1","app":"notes"}"#.utf8)), remote: "127.0.0.1")
+            let ordered = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, ssd: [ssd], appFolders: [folder])
+            let row = ordered?.apps.first { $0.app == "notes" }
+            let answer = try? AtomicFile.readJSON(AgentMemory.self, from: URL(fileURLWithPath: cfg.stateDir)
+                                                    .appendingPathComponent("agent-memory.json"))
+            expect(http.downloads == 0 && marker(target) == "1.0" && row?.statusOnly == true && row?.manuallyInstallable == true
+                   && answer?.done.values.first { $0.app == "notes" }?.status == "status_only",
+                   "SL21 a remote order never installs an app its SSD marks as updating itself, whatever its config recipe")
+            let automatic = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, ssd: [ssd], appFolders: [folder])
+            expect(automatic?.commandsRun == 0 && http.downloads == 0 && marker(target) == "1.0",
+                   "SL21 Automatic honours the live SSD policy for an existing app-dmg config too")
+            let hand = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control },
+                                          requested: ["notes"], ssd: [ssd], appFolders: [folder])
+            expect(hand?.apps.first { $0.app == "notes" }?.installed == "2.0" && marker(target) == "2.0" && http.downloads == 0,
+                   "SL21 the person at this Mac still installs it by hand, from the SSD copy")
         }
     }
 }

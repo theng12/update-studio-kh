@@ -285,4 +285,50 @@ assert.equal(posts[0].action,'update');
 render(state([row({ id:'story', statusOnly:true, manuallyInstallable:false, managed:false, installed:null, available:null, status:'Updates itself', setup:true })]));
 assert(!document.querySelectorAll('.card button').find(b=>b.textContent=='Install'),'a self-updating app with no installer offers no Install');
 assert(document.querySelectorAll('.card button').find(b=>b.textContent=='Open Setup Folder'),'its setup folder stays the way in');
-console.log('PASS: Launcher rendering, source choices, offline state, delta/fallback bytes and editing focus');
+// The hand route follows the agent's comparison, never the raw version strings.
+render(state([row({ id:'story', statusOnly:true, manuallyInstallable:true, managed:true, installed:'2.0', available:'1.0', status:'Updates itself' })]));
+assert(!document.querySelectorAll('.card button').find(b=>b.textContent=='Update'),'a newer installed self-updating app offers no Update');
+assert.equal(run('mainAction(S.apps[0])[1]'),'open','the newer install is left to its own updater');
+render(state([row({ id:'story', statusOnly:true, manuallyInstallable:true, managed:true, installed:'1.0.0-beta', available:'2.0', status:'Updates itself' })]));
+assert.equal(run('mainAction(S.apps[0])')?.[1],'open','an incomparable installed version is never offered an Update');
+// An app with no hand route keeps its own updater or its SSD setup, and says which.
+for (const id of ['story','hub']) {
+  run('settingsOpen=false;detail=null;closeLayers()');
+  const own = row({id,name:id,status:'Not installed',managed:false,statusOnly:true,automatic:false,installed:null,open:false,setup:true});
+  render(state([own]));
+  posts.length=0;
+  const setup = document.querySelectorAll('.card button').find(b=>b.textContent=='Open Setup Folder');
+  assert(setup, id+' offers its existing manual SSD setup route');
+  setup.fire('click');
+  assert.equal(posts[0].action,'setup');
+  assert.equal(posts[0].app,id);
+  render(state([Object.assign({},own,{setup:false})]));
+  run('openDetail('+JSON.stringify(id)+')');
+  assert.match(document.querySelector('.sheet').textContent,/Remote installation through Launcher is not available/);
+  assert.equal(run('mainAction(S.apps[0])'),null,id+' does not invent an install action without its setup');
+  render(state([Object.assign({},own,{setup:false,managed:true,installed:'1.0',open:true})]));
+  assert.equal(run('mainAction(S.apps[0])[1]'),'open',id+' opens the installed app for its own updater');
+  run('openMenu(S.apps[0],document.querySelector(".card"))');
+  assert(!document.querySelector('.menu').textContent.includes('Update automatically'));
+}
+// A failed check keeps the last successful freshness value and a separate failure time.
+const checked='2026-11-11T00:00:00Z', attempted='2026-11-11T01:00:00Z';
+render(state([row({status:'Up to date'})],{lastRun:checked,lastAttempt:attempted,error:'Offline',serverKnown:false}));
+assert.equal(run('S.lastRun'),checked,'a failed check does not rewrite when the server last answered');
+assert.match(document.getElementById('err').textContent,/Offline · /);
+assert.match(document.getElementById('checked').textContent,/Server versions unknown/);
+// Ordinary settings report their save; an address remains an explicit consequential action.
+run('detail=null;settingsOpen=true;closeLayers();drawSettings()');
+render(state([row()],{settingsNote:'Saved.'}));
+assert.match(document.querySelector('.scrim.s .sheet').textContent,/Saved\./);
+posts.length=0;
+let draft=document.getElementById('addr');
+draft.value='http://100.64.0.9:8790/release.json'; draft.fire('input');
+assert.equal(posts.length,0,'typing an address never connects, enrolls or installs');
+document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='Use this address').fire('click');
+assert.equal(posts[0].action,'changeServer');
+const failedConnection=Object.assign({},state([]).connection,{serverOk:false,serverNote:'Address refused'});
+render(state([row()],{settingsNote:'Could not save that change. Your previous settings are kept.',connection:failedConnection}));
+assert.match(document.querySelector('.scrim.s .sheet').textContent,/Could not save that change/);
+assert.equal(document.getElementById('addr').value,'http://100.64.0.9:8790/release.json','failed address check retains the editable draft');
+console.log('PASS: Launcher rendering, source choices, offline state, delta/fallback bytes, editing focus, Story/Hub routes and save feedback');

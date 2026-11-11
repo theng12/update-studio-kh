@@ -222,6 +222,18 @@ remnants but no `base/config.json` selects the installer's explicit `--repair` m
 the signed pairing reply. Saved state and earlier versions are kept. A complete installation still
 uses the confirmed Pair again flow, preserving its saved trust and app choices. Reopening Launcher
 starts its saved LaunchAgent only when launchd does not already have that job loaded.
+Only `print` exit 113 permits the absent-job path. The helper remains disabled when macOS
+reports it disabled; unknown, malformed, ambiguous or refused disabled-state queries never
+authorize startup. A valid saved plist and executable are required before one bootstrap.
+A refused bootstrap permits one read-only `print` for a registration race, not another start.
+Static refusal messages identify the failed phase/exit or missing file class without relaying
+arbitrary subprocess output, addresses or credentials. Saved configuration, pairing, trust,
+Automatic choices and helper files are preserved; reopening never resets or re-enrols them.
+An already configured installation can use this reopening path without Connect or auto-enable.
+The 18 actual-method mock scenarios run from the existing `build.sh test` entry and retain
+parse, compile and test logs. Runner CF18 additionally checks exact executable, complete argv,
+current GUI UID, saved plist path, timeouts and absence of extra calls. These fixtures do not
+verify the unidentified powered-off affected Mac or replace full-module/native release checks.
 
 **Removing a Mac is what makes re-enrolment possible.** `POST /api/remove-machine` (`Remove Mac` on
 the page) or `khu remove --state <dir> --machine <id>` drops the live record — its token hash and its
@@ -335,6 +347,13 @@ policies remain in force, with one addition: an app that updates itself may be i
 by hand when the person at this Mac chooses it in the Launcher, and only then — Automatic and a
 remote order leave it alone, and a running one is kept until its work is finished. Native Edit
 shortcuts and text-input focus use normal responder behavior.
+Signed `story`, `hub` and `status` feed kinds keep that policy even on a fresh Mac with no SSD
+history; discovery records them as status-only, with Automatic off, and an installed copy can
+always be opened for its own updater. The freshness timestamp advances only after a successful
+server check; a failed attempt keeps it and reports its own attempt time beside the error.
+Ordinary settings save synchronously with visible saved/failed feedback, and a failed write keeps
+the Automatic and appearance choice shown before it. An address draft survives a refused check;
+typing never pairs, changes the controller or installs.
 
 An order runs once (by id; a redelivered one is re-reported, not re-run). Done records are not
 trimmed before fetching orders, and IDs in the latest reply are protected from trimming. An order for the
@@ -463,6 +482,16 @@ otherwise, checked with the same containment, checksum, size, bundle-identity, s
 health rules as any other install. An older SSD copy is an explicit first-install choice only, as
 elsewhere. A running app is kept — this route proves no Production quiet point — and the refusal says
 so plainly; nothing is downloaded and nothing is touched.
+
+Two details decide this route, and both read live data rather than one flag. The policy comes from the
+catalog as well as the recipe: a Mac configured by an earlier kit may carry the app's own recipe name
+(`story`, `hub`) or an `app-dmg` entry for an app its SSD marks as updating itself, and either way it stays
+hand-only — the same journaled path installs it, and the same recovery loop finishes or undoes a killed run
+for it. The running check is made twice: at the door, before anything is downloaded, and again after the
+bundle is staged, just before anything would be stopped. An app that came up in between keeps running: its
+staged copy goes to `_trash`, nothing is quit, stopped, started or replaced, and no journal is left behind.
+The page offers Install or Update only on the agent's own comparison, so a newer or incomparable installed
+build stays *Updates itself* instead of carrying a button that could only be refused.
 
 The explicit SSD `ssd-update --volume` action updates or repairs installed KH bundles, including equal versions, and installs only Launcher when absent. It keeps newer versions, checks the SSD index identities and SHA-256, copies each installer privately and verifies those bytes again before mounting, and verifies the staged app signature through the existing journal/rollback recipe. A local pause holds this action. Running Hub, Story or Gateway is kept because this action has no Production quiet-point proof. The selected SSD index/checksum is the offline authority; it is not an authenticated online feed. The staged signature check accepts the exact exit-1 “code has no resources but signature indicates they must be present” verdict of accepted normal unsealed KH releases (Story 1.4.381); any other diagnostic or additional error still refuses. This does not change vendor signature/notarization checks or owner-rollback verification. Per-app refusals are shown and make the final result nonzero. Saved connections, grants and pauses are never rewritten.
 

@@ -39,14 +39,22 @@ struct SystemShell: Shell {
 enum Connect {
 '''+setup+method+r'''
 }
+struct Call: Equatable {
+    var executable: String
+    var arguments: [String]
+    var timeout: TimeInterval
+}
 final class Script: Shell, @unchecked Sendable {
-    var calls: [[String]] = []
+    var calls: [Call] = []
     var replies: [ShellResult?]
+    var unexpectedCall = false
     init(_ replies: [ShellResult?]) { self.replies = replies }
     func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
-        guard executable == "/bin/launchctl" else { fatalError("Unexpected executable") }
-        calls.append(arguments)
-        guard !replies.isEmpty else { throw khuFail("Unexpected mock call") }
+        calls.append(Call(executable: executable, arguments: arguments, timeout: timeout))
+        guard !replies.isEmpty else {
+            unexpectedCall = true
+            throw khuFail("Unexpected mock call")
+        }
         guard let next = replies.removeFirst() else { throw khuFail("TOKEN-SENTINEL https://private.invalid/private") }
         return next
     }
@@ -92,8 +100,20 @@ func check(_ name: String, _ replies: [ShellResult?], _ phases: [String], contai
     catch let e { error = (e as NSError).localizedDescription }
     let expected = contains.map { error?.contains($0) == true } ?? (error == nil)
     let safe = !(error ?? "").contains("TOKEN-SENTINEL") && !(error ?? "").contains("private.invalid") && !(error ?? "").contains("/Users/private")
-    let ok = expected && safe && shell.calls.map { $0[0] } == phases && snapshot(home) == before && Connect.isSetUp(home: home)
-    if ok { passed += 1 } else { failed += 1; print("FAIL \(name): phases=\(shell.calls.map { $0[0] }), expected=\(expected), sanitized=\(safe)") }
+    let domain = "gui/\(getuid())"
+    let calls = phases.map { phase -> Call in
+        let arguments: [String]
+        switch phase {
+        case "print": arguments = ["print", "\(domain)/com.khupdater.agent"]
+        case "print-disabled": arguments = ["print-disabled", domain]
+        case "bootstrap": arguments = ["bootstrap", domain, plist.path]
+        default: fatalError("Unknown expected phase")
+        }
+        return Call(executable: "/bin/launchctl", arguments: arguments, timeout: phase == "bootstrap" ? 30 : 15)
+    }
+    let contract = shell.calls == calls && shell.replies.isEmpty && !shell.unexpectedCall
+    let ok = expected && safe && contract && snapshot(home) == before && Connect.isSetUp(home: home)
+    if ok { passed += 1 } else { failed += 1; print("FAIL \(name): fullCallContract=\(contract), expected=\(expected), sanitized=\(safe)") }
 }
 check("loaded", [result(0)], ["print"])
 check("legacy005-registration", [absent, enabled, result(0)], ["print", "print-disabled", "bootstrap"])
@@ -118,11 +138,17 @@ exit(failed == 0 ? 0 : 1)
 '''
 swift = args.output / 'main.swift'
 swift.write_text(harness)
-compile_run = subprocess.run(['swiftc', str(swift), '-o', str(args.output / 'startup-tests')], capture_output=True, text=True, timeout=90)
+parse_command = ['swiftc', '-frontend', '-parse', str(source)]
+parse_run = subprocess.run(parse_command, capture_output=True, text=True, timeout=30)
+(args.output / 'parse.log').write_text(parse_run.stdout + parse_run.stderr)
+compile_command = ['swiftc', str(swift), '-o', str(args.output / 'startup-tests')]
+compile_run = subprocess.run(compile_command, capture_output=True, text=True, timeout=90)
+(args.output / 'compile.log').write_text(compile_run.stdout + compile_run.stderr)
 run = None
 if compile_run.returncode == 0:
     run = subprocess.run([str(args.output / 'startup-tests'), str(args.output / 'homes')], capture_output=True, text=True, timeout=30)
-receipt = {'sourceFile': str(source), 'sourceSHA256': hashlib.sha256(source.read_bytes()).hexdigest(), 'extractedStartupSHA256': hashlib.sha256(method.encode()).hexdigest(), 'shellInterfaceSHA256': hashlib.sha256(interfaces.encode()).hexdigest(), 'harnessSHA256': hashlib.sha256(swift.read_bytes()).hexdigest(), 'compileExit': compile_run.returncode, 'compileOutput': compile_run.stdout + compile_run.stderr, 'testExit': run.returncode if run else None, 'testOutput': run.stdout + run.stderr if run else None, 'liveShellOrNetwork': False, 'scope': 'Actual startup method + isSetUp + Shell interfaces; full Connect/module/app build not tested'}
+(args.output / 'tests.log').write_text(run.stdout + run.stderr if run else 'not run: compilation failed\n')
+receipt = {'parseCommand': parse_command, 'parseExit': parse_run.returncode, 'parseLog': str(args.output / 'parse.log'), 'compileCommand': compile_command, 'sourceFile': str(source), 'sourceSHA256': hashlib.sha256(source.read_bytes()).hexdigest(), 'extractedStartupSHA256': hashlib.sha256(method.encode()).hexdigest(), 'shellInterfaceSHA256': hashlib.sha256(interfaces.encode()).hexdigest(), 'harnessSHA256': hashlib.sha256(swift.read_bytes()).hexdigest(), 'compileExit': compile_run.returncode, 'compileOutput': compile_run.stdout + compile_run.stderr, 'testExit': run.returncode if run else None, 'testOutput': run.stdout + run.stderr if run else None, 'liveShellOrNetwork': False, 'scope': 'Actual startup method + isSetUp + Shell interfaces; full Connect/module/app build not tested'}
 (args.output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
 print(json.dumps(receipt, indent=2))
-raise SystemExit(compile_run.returncode or (run.returncode if run else 1))
+raise SystemExit(parse_run.returncode or compile_run.returncode or (run.returncode if run else 1))

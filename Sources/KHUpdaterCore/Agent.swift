@@ -270,9 +270,12 @@ public enum Agent {
     }
     /// A Production app that updates itself is not replaced while it runs: this route proves no
     /// quiet point, so the person is asked to finish the work first — the same rule the explicit
-    /// SSD action keeps. Nothing is touched and nothing is downloaded.
-    static func refusesWhileRunning(app: String, cfg: AppConfig, control: (String, AppConfig) -> AppControl) -> String? {
-        guard updatesItself(app: app, recipe: cfg.recipe) else { return nil }
+    /// SSD action keeps. Nothing is touched and nothing is downloaded. The live catalog decides,
+    /// not this Mac's recipe alone: an older config that still says `app-dmg` is a self-updating app
+    /// when its SSD entry says so.
+    static func refusesWhileRunning(app: String, cfg: AppConfig, control: (String, AppConfig) -> AppControl,
+                                    entry: CatalogEntry? = nil) -> String? {
+        guard updatesItself(app: app, recipe: cfg.recipe, entry: entry) else { return nil }
         guard control(app, cfg).isRunning() ?? true else { return nil }
         return "Quit this app when its work is finished, then try again. No quiet point was proved."
     }
@@ -389,7 +392,10 @@ public enum Agent {
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
-        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key }) where ["app-dmg", "gateway", "status"].contains(cfg.recipe) {
+        // A hand install of a `story`/`hub` recipe is journaled like any other, so recovery reads
+        // every recipe that can put a bundle in place.
+        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
+        where ["app-dmg", "gateway"].contains(cfg.recipe) || statusOnly.contains(cfg.recipe) {
             let before = try? AtomicFile.readJSON(InstallJournal.self, from: Recipe.journalURL(stateDir: stateDir.path, app: app))
             let note = try Recipe.recover(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app,
                                           control: control(app, cfg), controlForPath: { path in
@@ -686,7 +692,8 @@ public enum Agent {
                     }
                     res = try install(app: item.app, feed: feed, installed: current, config: config,
                                       serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
-                                      force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual)
+                                      force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual,
+                                      catalogEntry: entry)
                 case ServerCommand.vendorInstall:
                     guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
                         throw khuFail("vendor install requires an explicit signed order for this Mac")
@@ -896,15 +903,18 @@ public enum Agent {
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = [],
-                        manual: Bool = false) throws -> RecipeResult {
+                        manual: Bool = false, catalogEntry: CatalogEntry? = nil) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         // An app that updates itself is never installed by KH Updater on its own: Automatic and a
         // remote order leave it alone. Only a choice made here, at this Mac, may install it.
-        if updatesItself(app: app, recipe: cfg.recipe), !manual {
+        // The live catalog carries the policy as well as this Mac's recipe, so an existing `app-dmg`
+        // config for an app its SSD marks as self-updating cannot be driven by a remote order.
+        let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
+        if itself, !manual {
             return RecipeResult(status: "status_only", reason: "updated by its own updater")
         }
         // A running Production app is kept: this route proves no quiet point.
-        if let refusal = refusesWhileRunning(app: app, cfg: cfg, control: control) {
+        if let refusal = refusesWhileRunning(app: app, cfg: cfg, control: control, entry: catalogEntry) {
             return RecipeResult(status: "refused", reason: refusal)
         }
         // An install this Mac could not finish or undo is not a settled app: an order for it must
@@ -915,7 +925,8 @@ public enum Agent {
         }
         if let local {
             DownloadControl.updateProgress("copying")
-            return try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control, force: force)
+            return try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
+                                    force: force, catalogEntry: catalogEntry)
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
         if let installed {
@@ -939,16 +950,21 @@ public enum Agent {
             return RecipeResult(status: "download_failed", reason: "\(error)")
         }
         DownloadControl.updateProgress("installing")
+        // One journaled app-dmg path for every recipe that installs a bundle: the plain ones and the
+        // supported status-only names (`story`, `hub`, `status`), which get here only when the person
+        // at this Mac chose it. A self-updating app is checked again before anything is stopped.
         switch cfg.recipe {
-        case "app-dmg", "gateway", "status":
-            return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
-                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg))
         case "updater":
             return try installUpdater(entry, artifact: artifact, config: config)
         case "fake-for-tests":
             return RecipeResult(status: "updated")
         default:
-            throw khuFail("unknown recipe \(cfg.recipe)")
+            guard cfg.recipe == "app-dmg" || cfg.recipe == "gateway" || statusOnly.contains(cfg.recipe) else {
+                throw khuFail("unknown recipe \(cfg.recipe)")
+            }
+            return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
+                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
+                                     refuseIfRunning: itself)
         }
     }
 
@@ -956,7 +972,9 @@ public enum Agent {
     /// anything is touched, then it takes the same journaled app-dmg path, with rollback, as a
     /// download does.
     static func installLocal(_ local: CatalogEntry.Local, app: String, installed: String?, cfg: AppConfig, stateDir: URL,
-                             shell: Shell, control: (String, AppConfig) -> AppControl, force: Bool = false) throws -> RecipeResult {
+                             shell: Shell, control: (String, AppConfig) -> AppControl, force: Bool = false,
+                             catalogEntry: CatalogEntry? = nil) throws -> RecipeResult {
+        let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
             return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept.")
         }
@@ -987,15 +1005,18 @@ public enum Agent {
         DownloadControl.updateProgress("installing")
         var result: RecipeResult
         switch cfg.recipe {
-        case "app-dmg", "gateway", "status":
-            result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
-                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg), verifyStaged: { path in
-                guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
-            })
         case "fake-for-tests":
             result = RecipeResult(status: "updated", reason: "from \(local.volume)")
         default:
-            return RecipeResult(status: "refused", reason: "the \(cfg.recipe) recipe does not install from an SSD")
+            // The same journaled app-dmg path for the plain recipes and the status-only names.
+            guard cfg.recipe == "app-dmg" || cfg.recipe == "gateway" || statusOnly.contains(cfg.recipe) else {
+                return RecipeResult(status: "refused", reason: "the \(cfg.recipe) recipe does not install from an SSD")
+            }
+            result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
+                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
+                                     refuseIfRunning: itself, verifyStaged: { path in
+                guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
+            })
         }
         // Keep the verified SSD installer in the normal cache so the next server patch can use it.
         if result.status == "updated" {

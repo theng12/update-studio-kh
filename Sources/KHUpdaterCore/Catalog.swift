@@ -227,7 +227,8 @@ public enum Catalog {
             let key = entries.first { $0.value.bundleID != nil && $0.value.bundleID == app.bundleID }?.key ?? id
             let before = entries.removeValue(forKey: key)
             entries[id] = CatalogEntry(id: id, name: app.name ?? before?.name ?? AppNames.display(id), bundleID: app.bundleID ?? before?.bundleID,
-                                       bundleName: app.bundleName ?? before?.bundleName, updatesItself: before?.updatesItself ?? false,
+                                       bundleName: app.bundleName ?? before?.bundleName,
+                                       updatesItself: (before?.updatesItself ?? false) || Agent.statusOnly.contains(app.kind),
                                        feedVersion: app.version, icon: before?.icon, notes: app.notes)
             let w = AppWords(tagline: app.tagline, description: app.description, features: app.features, accent: app.accent)
             entries[id]?.words = w.isEmpty ? (before?.words ?? w) : w
@@ -283,7 +284,9 @@ public enum Catalog {
     public static func knownBundles(feed: Feed?, ssd: [SSDApp]) -> [String: (id: String, updatesItself: Bool)] {
         var known: [String: (String, Bool)] = [:]
         for app in ssd { known[app.bundleID] = (app.id, app.updatesItself) }
-        for (id, app) in feed?.apps ?? [:] { if let b = app.bundleID { known[b] = (id, known[b]?.1 ?? false) } }
+        for (id, app) in feed?.apps ?? [:] {
+            if let b = app.bundleID { known[b] = (id, (known[b]?.1 ?? false) || Agent.statusOnly.contains(app.kind)) }
+        }
         return known
     }
 
@@ -327,7 +330,9 @@ public enum Catalog {
         var seen = (try? AtomicFile.readJSON([String: SSDApp].self, from: seenFile(in: stateDir))) ?? [:]
         let before = seen
         for (id, app) in feed?.apps ?? [:] where app.kind != "updater" {
-            if let b = app.bundleID, seen[b] == nil { seen[b] = SSDApp(id: id, name: app.name ?? id, version: app.version, bundleID: b) }
+            if let b = app.bundleID {
+                if seen[b] == nil { seen[b] = SSDApp(id: id, name: app.name ?? id, version: app.version, bundleID: b) }
+            }
         }
         let icons = stateDir.appendingPathComponent("icons")
         for source in ssd {
@@ -340,6 +345,9 @@ public enum Catalog {
                     try? data.write(to: cached, options: .atomic)
                 }
             }
+        }
+        for (_, app) in feed?.apps ?? [:] where Agent.statusOnly.contains(app.kind) {
+            if let b = app.bundleID { seen[b]?.updatesItself = true }
         }
         guard seen != before else { return }
         try? AtomicFile.writeJSON(seen, to: seenFile(in: stateDir))

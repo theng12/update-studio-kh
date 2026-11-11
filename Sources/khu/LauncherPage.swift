@@ -90,7 +90,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
 </header>
 <main id=main></main>
-<footer><span id=checked></span><span id=hiddenNote></span><span id=err class=err></span><button class=link id=whatsNew style="margin-left:auto" onclick="post({action:'whatsNew'})">What's New</button></footer>
+<footer><span id=checked></span><span id=hiddenNote></span><span id=err class=err role=status aria-live=polite></span><button class=link id=whatsNew style="margin-left:auto" onclick="post({action:'whatsNew'})">What's New</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
@@ -124,7 +124,9 @@ function mainAction(a){if(a.status=='Updating…')return null;
   // An app that updates itself is never installed by KH Updater on its own, but the person at
   // this Mac may install or update it here, by choosing it.
   if(a.manuallyInstallable&&a.available&&!a.installed)return ['Install','install','primary'];
-  if(a.manuallyInstallable&&a.available&&a.installed&&a.installed!=a.available)return ['Update','update','primary'];
+  // The agent already compared the versions: only a real offer becomes a button, so a newer or
+  // incomparable installed build keeps "Updates itself" instead of a dead Update.
+  if(a.manuallyInstallable&&a.available&&(a.status=='Update available'||a.status=='Failed'))return ['Update','update','primary'];
   return a.setup?['Open Setup Folder','setup','']:(a.open?['Open','open','']:null);
  }
  if(!a.managed||a.installed==null)return a.available?['Install','install','primary']:null;
@@ -185,9 +187,10 @@ const tickOnly=(k,v)=>k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,
 const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,showAll,S],tickOnly);
 let sig='';
 function render(state){if(state)Object.assign(S,state);
+ if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
  $('whatsNew').textContent=(S.version?'v'+S.version+' · ':'')+'What’s New';
  $('checked').textContent=ago(S.lastRun)+' · '+(S.serverKnown?'Server':'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');
- $('err').textContent=S.error?'Last check failed: '+S.error:'';
+ $('err').textContent=S.error?'Last check failed: '+S.error+(S.lastAttempt?' · '+new Date(S.lastAttempt).toLocaleString():''):'';
  const s=signature();
  if(s==sig){move();return}
  sig=s;draw()}
@@ -241,7 +244,10 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     el('button',{class:'btn icon',title:'Next app','aria-label':'Next app',onclick:()=>step(1)},svg('M6 3l5 5-5 5')),
     el('button',{class:'btn icon',title:'Close','aria-label':'Close',onclick:()=>{detail=null;closeLayers()}},svg('M4 4l8 8M12 4l-8 8')))),
   el('div',{class:'cols'},
-   el('div',{},a.description?el('p',{class:'desc'},a.description):el('p',{class:'desc sub'},a.statusOnly?(a.manuallyInstallable?'This app updates itself from its own installer. You can still install or update it here whenever you choose.':(a.source=='Official vendor'?(a.setup?'The verified official installer is waiting in its setup folder.':'This app is installed from its official vendor’s installer.'):'This app updates itself from its own installer. Its setup folder on the SSD has the steps.')):'No description yet.'),
+   el('div',{},a.description?el('p',{class:'desc'},a.description):el('p',{class:'desc sub'},a.statusOnly?(a.manuallyInstallable?'This app updates itself from its own installer. You can still install or update it here whenever you choose.':(a.source=='Official vendor'?(a.setup?'The verified official installer is waiting in its setup folder.':'This app is installed from its official vendor’s installer.'):'This app uses its own installer and updater.')):'No description yet.'),
+    // The hand route needs an installer offer this Mac can check and the app's own identity; with
+    // neither, the app's own updater or its SSD setup folder is the way in, and the page says so.
+    a.statusOnly&&a.source!='Official vendor'&&!a.manuallyInstallable?el('p',{class:'sub'},a.setup?'Use Open Setup Folder to install. Open the installed app for its own updates.':a.open?'Open this app to use its own updater.':'No setup folder is connected. Connect the installer SSD to use this app’s setup. Remote installation through Launcher is not available for this app yet.'):null,
     a.features&&a.features.length?[el('h4',{},'Features'),el('ol',{class:'feat'},a.features.map(f=>el('li',{},el('b',{},f.title),f.text?el('span',{},f.text):null)))]:null),
    el('div',{},facts.length?[el('h4',{},'Latest release'),el('dl',{class:'facts'},facts.map(f=>el('div',{},el('dt',{},f[0]),el('dd',{class:'num'},f[1]))))]:null,
     a.initialSSD?el('p',{class:'sub'},'The SSD can install '+a.initialSSD+' first from the More menu. Then Update offers the newer server version. Your Automatic setting is kept.'):null,
@@ -271,13 +277,14 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
   // Offered only after a check the publisher refused with 401/403 (pairAvailable); the
   // confirmation and the pairing code are collected by the native window that follows.
   c.pairAvailable?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'pairAgain'})},'Pair again now')):null,
-  el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>{addrDraft=null;post({action:'changeServer',value:chInput.value})}},'Use this address')),
+  el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:chInput.value})},'Use this address')),
   el('p',{class:'note',style:'margin-left:0'},'This Mac only accepts an address where Update Studio serves the updates its own key already signed. A different Update Studio needs its setup kit, not an address.'),
   c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null);
  const updater=S.apps.find(a=>a.id=='updater');
  const sheet=el('div',{class:'sheet set',role:'dialog','aria-modal':true,'aria-label':'Settings',style:again?'animation:none':'',onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},el('div',{class:'t'},el('h3',{},'Settings'),el('div',{class:'sub'},'Studio Launcher KH '+S.version))),
   el('div',{class:'body'},
+   S.settingsNote?el('p',{class:'note',role:'status','aria-live':'polite'},S.settingsNote):null,
    el('section',{},el('h4',{},'Updates'),el('div',{class:'row'},el('span',{},'Check for updates'),seg('checkManually',[[false,'Automatically'],[true,'Manually']],s.checkManually)),
     check('autoInstall','Install updates automatically',s.autoInstall&&!s.checkManually,s.checkManually?'Off while checking manually. Use Check for updates now, then Update.':'Each app’s own switch is in its … menu.',s.checkManually),
     check('notify','Notify me when an update is ready',s.notify,null),

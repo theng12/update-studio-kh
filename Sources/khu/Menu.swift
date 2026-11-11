@@ -21,6 +21,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var item: NSStatusItem!
     var itemIfReady: NSStatusItem? { item }
     var lastRun: Date?
+    var lastAttempt: Date?
+    var settingsNote: String?
     var serverKnown = false
     var window: LauncherWindow?
     var ssdSources: [SSDSource] { lock.lock(); defer { lock.unlock() }; return ssd }
@@ -89,8 +91,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         lock.lock()
         if let result { apps = result.apps }
         lastError = error ?? result?.feedError
-        serverKnown = result != nil && result?.feedError == nil
-        lastRun = Date()
+        serverKnown = result != nil && result?.feedError == nil && error == nil
+        lastAttempt = Date()
+        if serverKnown { lastRun = lastAttempt }
         let ready = apps.filter { $0.managed && !$0.statusOnly && $0.status == HelperApp.updateAvailable }
         installingApp = nil
         lock.unlock()
@@ -203,8 +206,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     func setAutomatic(_ app: String, _ on: Bool) {
         var settings = HelperSettings.load(from: stateDir)
         settings.automatic[app] = .init(on: on, at: ISO.string(Date()))
+        guard save(settings) else { return }
         lock.lock(); if let i = apps.firstIndex(where: { $0.app == app }) { apps[i].automatic = on }; lock.unlock()
-        save(settings)
     }
 
     @objc private func togglePause() {
@@ -214,9 +217,17 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     /// A change is saved, then the agent runs at once so the page hears of it in one report.
-    private func save(_ settings: HelperSettings) {
-        do { try settings.save(to: stateDir); wake.signal() }
-        catch { alert("That change could not be saved", "\(error)") }
+    @discardableResult func save(_ settings: HelperSettings) -> Bool {
+        do {
+            try settings.save(to: stateDir)
+            settingsNote = "Saved."
+            wake.signal()
+            return true
+        } catch {
+            settingsNote = "Could not save that change. Your previous settings are kept."
+            alert("That change could not be saved", "\(error)")
+            return false
+        }
     }
 
     @objc func whatsNew() {

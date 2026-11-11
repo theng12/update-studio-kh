@@ -30,6 +30,7 @@ case "${1:-build}" in
     echo "built build/khu build/khu-stub (universal: $(lipo -archs build/khu))"
     ;;
   test)
+    python3 -B -I Tests/test_startup_refusal.py --output "build/startup-refusal-$(uuidgen)"
     universal build/khu "${CORE[@]}" Sources/khu/*.swift
     swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -o build/khu-tests "${CORE[@]}" Tests/Runner/*.swift
     ./build/khu-tests

@@ -63,9 +63,12 @@ extension Agent {
         for app in requested.union(rollbacks).sorted() {
             let outcome: RecipeResult
             let id = "auto-\(app)-local-\(UUID().uuidString)"
+            // The live catalog, not just this Mac's recipe: an app its SSD marks as updating itself
+            // stays a hand-only install even under an older config that still says `app-dmg`.
+            let policy = catalog.first(where: { $0.id == app })
             if let failure = failures[app] {
                 outcome = RecipeResult(status: "refused", reason: failure)
-            } else if let cfg = config.apps[app], !Agent.updatesItself(app: app, recipe: cfg.recipe) || requested.contains(app) {
+            } else if let cfg = config.apps[app], !Agent.updatesItself(app: app, recipe: cfg.recipe, entry: policy) || requested.contains(app) {
                 DownloadControl.reset()
                 installing(app)
                 defer { installing(nil) }
@@ -78,11 +81,12 @@ extension Agent {
                         if outcome.status == "rolled_back_by_owner", let displaced = outcome.version {
                             memory.offlineRollbacks = (memory.offlineRollbacks ?? [:]).merging([app: displaced]) { _, new in new }
                         }
-                    } else if let refusal = Agent.refusesWhileRunning(app: app, cfg: cfg, control: control) {
+                    } else if let refusal = Agent.refusesWhileRunning(app: app, cfg: cfg, control: control, entry: policy) {
                         outcome = RecipeResult(status: "refused", reason: refusal)
-                    } else if let local = catalog.first(where: { $0.id == app })?.ssd {
+                    } else if let local = policy?.ssd {
                         outcome = try installLocal(local, app: app, installed: current, cfg: cfg,
-                                                   stateDir: stateDir, shell: shell, control: control, force: reinstall.contains(app))
+                                                   stateDir: stateDir, shell: shell, control: control, force: reinstall.contains(app),
+                                                   catalogEntry: policy)
                     } else {
                         outcome = RecipeResult(status: "refused", reason: "Update Studio is unreachable and no eligible SSD installer is available. Nothing was installed.")
                     }

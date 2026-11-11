@@ -175,29 +175,50 @@ func connectionFlowTests() {
         expect(!fm.fileExists(atPath: claim.path), "CF17 completed connection retires its pending claim")
     }
 
-    // CF18. Reopening a completed install starts a missing job and leaves a loaded one alone.
+    // CF18. Reopening uses only the exact saved job and bounded launchctl calls.
     do {
+        struct Call: Equatable {
+            var executable: String = "/bin/launchctl"
+            var arguments: [String]
+            var timeout: TimeInterval = 15
+        }
+        final class StartupShell: Shell, @unchecked Sendable {
+            var calls: [Call] = []
+            var replies: [ShellResult]
+            init(_ replies: [ShellResult]) { self.replies = replies }
+            func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+                calls.append(Call(executable: executable, arguments: arguments, timeout: timeout))
+                guard !replies.isEmpty else { throw khuFail("Unexpected startup fixture call") }
+                return replies.removeFirst()
+            }
+        }
         let home = tmpDir("cf18")
         let domain = "gui/\(getuid())"
-        let loaded = CaptureShell()
-        expect((try? Connect.startInstalledAgent(home: home, shell: loaded)) != nil && loaded.calls.count == 1,
-               "CF18 a loaded helper is never started twice")
+        let probe = Call(arguments: ["print", "\(domain)/com.khupdater.agent"])
+        let success = ShellResult(exitCode: 0, stdout: "", stderr: "")
+        let loaded = StartupShell([success])
+        expect((try? Connect.startInstalledAgent(home: home, shell: loaded)) != nil
+               && loaded.calls == [probe] && loaded.replies.isEmpty,
+               "CF18 a loaded helper receives only the exact bounded print call")
         let plist = home.appendingPathComponent("Library/LaunchAgents/com.khupdater.agent.plist")
         try! fm.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
         let job: [String: Any] = ["Label": "com.khupdater.agent", "ProgramArguments": ["/usr/bin/true"]]
         try! PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
-        let missing = ShellResult(exitCode: 113, stdout: "", stderr: "Could not find service \"com.khupdater.agent\" in domain for user gui: 501")
-        var replies = [
-            "/bin/launchctl print \(domain)/com.khupdater.agent": missing,
-            "/bin/launchctl print-disabled \(domain)": ShellResult(exitCode: 0, stdout: "disabled services = {\n}\n", stderr: ""),
-            "/bin/launchctl bootstrap \(domain) \(plist.path)": ShellResult(exitCode: 0, stdout: "", stderr: ""),
-        ]
-        expect((try? Connect.startInstalledAgent(home: home, shell: FakeShell(responses: replies))) != nil,
-               "CF18 reopening starts the saved valid LaunchAgent when it is absent and enabled")
-        replies["/bin/launchctl bootstrap \(domain) \(plist.path)"] = ShellResult(exitCode: 5, stdout: "", stderr: "private diagnostic")
+        let missing = ShellResult(exitCode: 113, stdout: "", stderr: "Could not find service")
+        let enabled = ShellResult(exitCode: 0, stdout: "disabled services = {\n}\n", stderr: "")
+        let calls = [probe, Call(arguments: ["print-disabled", domain]),
+                     Call(arguments: ["bootstrap", domain, plist.path], timeout: 30)]
+        let absent = StartupShell([missing, enabled, success])
+        expect((try? Connect.startInstalledAgent(home: home, shell: absent)) != nil
+               && absent.calls == calls && absent.replies.isEmpty,
+               "CF18 an absent enabled helper uses the current UID, exact plist and bounded calls only")
+        let refused = StartupShell([missing, enabled,
+            ShellResult(exitCode: 5, stdout: "", stderr: "private diagnostic"), missing])
         expectThrows("CF18 a refusal reports its phase/code without repeated restart advice", contains: "bootstrap exit 5") {
-            try Connect.startInstalledAgent(home: home, shell: FakeShell(responses: replies))
+            try Connect.startInstalledAgent(home: home, shell: refused)
         }
+        expect(refused.calls == calls + [probe] && refused.replies.isEmpty,
+               "CF18 refused bootstrap permits one exact read-only race check and no extra calls")
     }
 
     // CF5. The settings connection check: this Mac's own credentials answer, and each refusal is

@@ -64,7 +64,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     func reload() {
         guard loaded else { return }
         helper.lock.lock()
-        let apps = helper.apps, busy = helper.installingApp, ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, serverKnown = helper.serverKnown
+        let apps = helper.apps, busy = helper.installingApp, ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, attempt = helper.lastAttempt, serverKnown = helper.serverKnown
         helper.lock.unlock()
         let settings = HelperSettings.load(from: helper.stateDir)
         let cleanup = try? HelperRetirementSettings.load(from: helper.stateDir)
@@ -94,7 +94,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             rows.append(row)
         }
         let state: [String: Any] = [
-            "apps": rows, "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any, "serverKnown": serverKnown,
+            "apps": rows, "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any,
+            "lastAttempt": attempt.map(ISO.string) as Any, "serverKnown": serverKnown, "settingsNote": helper.settingsNote as Any,
             "version": helper.version ?? "", "whatsNew": helper.version.map(WhatsNew.lines(for:)) ?? [],
             "paused": settings.paused(at: Date()),
             "settings": ["checkManually": settings.checkManually ?? false, "autoInstall": settings.autoInstall ?? true,
@@ -228,7 +229,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         case "hide", "unhide":
             var s = HelperSettings.load(from: helper.stateDir)
             var h = Set(s.hidden ?? []); if action == "hide" { h.insert(id) } else { h.remove(id) }
-            s.hidden = h.sorted(); try? s.save(to: helper.stateDir)
+            s.hidden = h.sorted(); helper.save(s)
         case "automatic": helper.setAutomatic(id, body["on"] as? Bool ?? false)
         case "check": helper.rescanSSDs()
         case "whatsNew": helper.whatsNew()
@@ -303,7 +304,11 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                     guard let enabled = body["value"] as? Bool else { break }
                     cleanup.enabled = enabled
                     try cleanup.save(to: helper.stateDir)
-                } catch { helper.alert("Helper cleanup could not be changed", "\(error)") }
+                    helper.settingsNote = "Saved."
+                } catch {
+                    helper.settingsNote = "Could not save helper cleanup. Your previous settings are kept."
+                    helper.alert("Helper cleanup could not be changed", "\(error)")
+                }
                 reload()
                 return
             }
@@ -314,10 +319,10 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             case "autoInstall": s.autoInstall = v as? Bool
             case "notify": s.notify = v as? Bool
             case "menuBarWhenClosed": s.menuBarWhenClosed = v as? Bool
-            case "appearance": s.appearance = v as? String; helper.applyAppearance(s.appearance)
+            case "appearance": s.appearance = v as? String
             default: break
             }
-            try? s.save(to: helper.stateDir)
+            if helper.save(s), body["key"] as? String == "appearance" { helper.applyAppearance(s.appearance) }
         default: break
         }
         reload()
