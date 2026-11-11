@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.17 — 2026-11-11
+- Choose whether to pair a new Mac with a code or repair this Mac's saved setup. Repair keeps the existing connection, app choices and pauses instead of enrolling the Mac again.
+- Install or update available apps by hand using the current signed app list, the installed versions and checked copies on your installer SSD.
+- See which installer source is selected and why an SSD copy could not be used.
+- Each Automatic switch says whether its current choice came from this Mac, Update Studio or this Mac's default. A reported copy of this Mac's own choice keeps the correct label.
+- Settings explains what this Mac reports, where its files stay and the actual download limits.
+
 ## 0.1.16 — 2026-11-11
 - On a Mac that only has the publisher connection, you can now install or update Story, Hub and other apps that normally update themselves by choosing them in Launcher. A running app is kept as it is: nothing is quit, stopped or replaced.
 - These hand installs get the same signed-installer checks as any other: signature, exact checksum, size and app identity. A first install is opened and health-checked; an existing app that was stopped stays stopped, without a live health check. Automatic updates and remote orders still leave these apps alone.
