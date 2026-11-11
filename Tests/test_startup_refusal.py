@@ -18,9 +18,11 @@ root = Path(__file__).resolve().parent.parent
 source = args.source_file or root / 'Sources/KHUpdaterCore/Connect.swift'
 text = source.read_text()
 start = text.index('    public static func startInstalledAgent(')
-end = text.index('    // MARK: staying connected', start)
+end = text.index('    /// Repair an existing, saved setup', start)
 method = text[start:end]
 assert method.count('public static func startInstalledAgent(') == 1
+assert method.count('static func disabledState(') == 1
+assert 'public static func repairSetup(' not in method
 setup_start = text.index('    public static func isSetUp(')
 setup_end = text.index('    /// The name this Mac proposes', setup_start)
 setup = text[setup_start:setup_end]
@@ -124,8 +126,8 @@ check("unknown-print", [result(1, poison, poison)], ["print"], contains: "print 
 check("print-throws", [nil], ["print"], contains: "could not be confirmed (print)")
 check("disabled-query-refused", [absent, result(5, poison, poison)], ["print", "print-disabled"], contains: "print-disabled exit 5")
 check("disabled-query-malformed", [absent, result(0, "unknown output")], ["print", "print-disabled"], contains: "could not confirm")
-check("disabled-entry-ambiguous", [absent, result(0, "disabled services = {\n \"com.khupdater.agent\" => true\n \"com.khupdater.agent\" => false\n}\n")], ["print", "print-disabled"], contains: "could not be read safely")
-check("disabled-entry-unknown", [absent, result(0, "disabled services = {\n \"com.khupdater.agent\" => unknown\n}\n")], ["print", "print-disabled"], contains: "could not be read safely")
+check("disabled-entry-ambiguous", [absent, result(0, "disabled services = {\n \"com.khupdater.agent\" => true\n \"com.khupdater.agent\" => false\n}\n")], ["print", "print-disabled"], contains: "could not confirm")
+check("disabled-entry-unknown", [absent, result(0, "disabled services = {\n \"com.khupdater.agent\" => unknown\n}\n")], ["print", "print-disabled"], contains: "could not confirm")
 check("missing-plist", [absent, enabled], ["print", "print-disabled"], contains: "missing or unreadable", layout: "missing-plist")
 check("malformed-plist", [absent, enabled], ["print", "print-disabled"], contains: "incomplete", layout: "malformed-plist")
 check("wrong-label", [absent, enabled], ["print", "print-disabled"], contains: "incomplete", layout: "wrong-label")
