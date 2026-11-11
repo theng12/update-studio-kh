@@ -16,6 +16,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     /// news — and one click can ask for three pushes in the same turn.
     private var pushed = ""
     private var pushQueued = false
+    /// A What's New asked for before the page finished loading; shown once it holds the state.
+    private var whatsNewWanted = false
     /// What the connection section of Settings last learned, in memory only: a check that is not
     /// run reads as "Not checked yet", never as passed.
     private struct ConnectionUI {
@@ -53,11 +55,21 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pushed = ""; loaded = true; reload()
+        if whatsNewWanted { whatsNewWanted = false; askWhatsNew() }
         runConnectionCheck()
         // KHU_PAGE_SCRIPT runs once on the page, for screenshots; nobody sets it in real use.
         if let script = ProcessInfo.processInfo.environment["KHU_PAGE_SCRIPT"], !script.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { webView.evaluateJavaScript(script) }
         }
+    }
+
+    /// The menu bar's What's New: the page's own pop-up, so both routes show one design.
+    func showWhatsNew() {
+        if loaded { askWhatsNew() } else { whatsNewWanted = true }
+    }
+    private func askWhatsNew() {
+        // Queued behind the render a reload() just queued, so the page already holds this version's notes.
+        DispatchQueue.main.async { [weak self] in self?.web.evaluateJavaScript("showWhatsNew()") }
     }
 
     /// Sends the page the current state. Cheap: the page redraws from it.
@@ -236,7 +248,6 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             s.hidden = h.sorted(); helper.save(s)
         case "automatic": helper.setAutomatic(id, body["on"] as? Bool ?? false)
         case "check": helper.rescanSSDs()
-        case "whatsNew": helper.whatsNew()
         case "copyReport":
             guard let app else { break }
             let report = ["Studio Launcher KH error report", "Mac: \(helper.machine)", "App: \(app.name) (\(app.app))",

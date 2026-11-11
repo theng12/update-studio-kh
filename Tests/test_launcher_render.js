@@ -119,6 +119,8 @@ class El {
   fire(type, event) {
     const e = Object.assign({ target: this, currentTarget: this, stopPropagation() {} }, event);
     (this.handlers[type] || []).forEach(fn => fn(e));
+    // A browser runs an element's `onclick` property on click too, not only addEventListener.
+    if (type == 'click' && typeof this.onclick == 'function') this.onclick(e);
   }
 }
 const document = {
@@ -385,4 +387,26 @@ render(state([row()],{stateDir:null,replyLimitBytes:null}));
 const unsaid=document.querySelector('.scrim.s .sheet').textContent;
 assert.doesNotMatch(unsaid,/is refused rather than buffered/,'a limit the helper did not send is not stated as a number');
 assert.match(unsaid,/this Mac’s own updater folder/,'the folder is still named in plain words');
-console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits and save feedback');
+// R9 What's New is the page's own pop-up, not a native alert: it shows the notes already in the
+// state, sends nothing, and closes with one Done or Esc.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
+const versionNotes = ['Opens What’s New in one simple pop-up.', 'Keeps your settings.'];
+render(state([row({ status: 'Up to date' })], { version: '0.1.19', whatsNew: versionNotes }));
+posts.length = 0;
+document.getElementById('whatsNew').fire('click');
+const wnSheet = document.querySelector('.scrim.w .sheet');
+assert(wnSheet && wnSheet.getAttribute('aria-modal') == 'true', 'R9 What’s New opens as the page’s own modal dialog');
+assert.match(wnSheet.textContent, /What’s New/, 'R9 the dialog is titled What’s New');
+assert.match(wnSheet.textContent, /0\.1\.19/, 'R9 the current version sits beside the title');
+assert.match(wnSheet.textContent, /one simple pop-up/, 'R9 the version’s own notes are shown');
+assert.equal(document.querySelectorAll('.scrim.w .bottom button').length, 1, 'R9 there is exactly one Done button');
+assert.equal(posts.length, 0, 'R9 opening it asks the helper for nothing');
+for (const handler of document.handlers.keydown || []) handler({ key: 'Escape', target: { tagName: 'BODY' } });
+assert(!document.querySelector('.scrim.w') && !run('whatsNewOpen'), 'R9 Esc closes it');
+run('showWhatsNew()');
+document.querySelector('.scrim.w .bottom button').fire('click');
+assert(!document.querySelector('.scrim.w') && !run('whatsNewOpen'), 'R9 Done closes it');
+render(state([row({ status: 'Up to date' })], { version: '0.1.19', whatsNew: [] }));
+run('showWhatsNew()');
+assert.match(document.querySelector('.scrim.w .sheet').textContent, /No notes for this version\./, 'R9 an empty changelog is said plainly');
+console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback and the page’s own What’s New pop-up');

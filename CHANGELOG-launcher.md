@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.19 — 2026-11-11
+- What's New is a simple pop-up inside Launcher instead of a separate system window: the title, this version and the notes, with one Done button. Esc or a click outside closes it.
+- Opening What's New from the menu bar shows the same pop-up in the Launcher window.
+
 ## 0.1.18 — 2026-11-11
 - Stopping the helper's supervisor also stops the helper it started, so a saved-setup repair does not leave the previous helper running.
 - What's New opens as a sheet in Launcher, keeping the helper responsive when Launcher is opened during an upgrade.

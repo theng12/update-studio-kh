@@ -233,13 +233,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     @objc func whatsNew() {
         showWindow()
-        guard let host = window?.window, host.attachedSheet == nil else { return }
-        let lines = version.map(WhatsNew.lines(for:)) ?? []
-        let notes = NSAlert()
-        notes.messageText = "What's New · Studio Launcher KH \(version ?? "") (current)"
-        notes.informativeText = lines.isEmpty ? "No notes for this version." : lines.map { "• " + $0 }.joined(separator: "\n")
-        // Keep the helper's normal event loop available to acknowledge Launcher opens.
-        notes.beginSheetModal(for: host)
+        // One design for both routes: the menu asks the page for its own pop-up.
+        window?.showWhatsNew()
     }
 
     func alert(_ title: String, _ text: String) {

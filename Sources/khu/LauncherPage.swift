@@ -78,6 +78,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 .row label{display:flex;gap:9px;align-items:flex-start}.row input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;margin:1px 0 0}
 .note{font-size:12px;color:var(--sub);margin:2px 0 0 24px}.dis{opacity:.5}
 .bottom{display:flex;justify-content:flex-end;padding:14px 24px;border-top:1px solid var(--line)}
+.wn{width:min(460px,100%)}.wn .body{padding:16px 24px 4px}.wn .body .sub{margin:0}
 @media (max-width:820px){input[type=search]{width:130px}.cols{grid-template-columns:1fr}.brand p{display:none}}
 </style></head><body>
 <header>
@@ -91,13 +92,13 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
 </header>
 <main id=main></main>
-<footer><span id=checked></span><span id=hiddenNote></span><span id=err class=err role=status aria-live=polite></span><button class=link id=whatsNew style="margin-left:auto" onclick="post({action:'whatsNew'})">What's New</button></footer>
+<footer><span id=checked></span><span id=hiddenNote></span><span id=err class=err role=status aria-live=polite></span><button class=link id=whatsNew style="margin-left:auto">What’s New</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,showHidden=false,showAll={},addrDraft=null;
+let view=store.get('view')||'grid',sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null;
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -185,7 +186,7 @@ function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filte
 const tickOnly=(k,v)=>k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
 // What the page would look like if it were drawn from the state it holds right now — transfer
 // counters excepted, since those are written in rather than redrawn.
-const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,showAll,S],tickOnly);
+const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,S],tickOnly);
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
@@ -209,7 +210,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
   m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
  $('hiddenNote').replaceChildren(hidden.length?el('button',{class:'link',onclick:()=>{showHidden=!showHidden;render()}},showHidden?'Hide hidden apps':hidden.length+' hidden · Show'):'');
  document.documentElement.style.colorScheme=S.settings.appearance=='dark'?'dark':S.settings.appearance=='light'?'light':'light dark';
- if(detail)drawDetail();if(settingsOpen)drawSettings();
+ if(detail)drawDetail();if(settingsOpen)drawSettings();if(whatsNewOpen)drawWhatsNew();
  // shortcut: focus comes back only where the control has an id (search, sort, the address field);
  // cards carry none, so a redraw cannot hand focus back to the card the person was on.
  if(fk&&$(fk)){$(fk).focus();if(selection[0]!=null)$(fk).setSelectionRange?.(...selection)}}
@@ -269,6 +270,16 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
  // The dialog now shows exactly what the state holds, so a following tick writes counters into it
  // instead of rebuilding it under the person's hands.
  sig=signature()}
+// What's New is the page's own pop-up: the notes for this version already arrive in the state, so
+// opening it asks the helper for nothing. One Done; Esc or the backdrop closes it.
+function showWhatsNew(){settingsOpen=false;detail=null;whatsNewOpen=true;closeLayers();drawWhatsNew()}
+function drawWhatsNew(){const again=!!document.querySelector('.scrim.w');document.querySelectorAll('.scrim.w').forEach(x=>x.remove());
+ const notes=S.whatsNew||[],close=()=>{whatsNewOpen=false;closeLayers()};
+ const sheet=el('div',{class:'sheet wn',role:'dialog','aria-modal':true,'aria-label':'What’s New',style:again?'animation:none':'',onclick:e=>e.stopPropagation()},
+  el('div',{class:'top'},el('div',{class:'t'},el('h3',{},'What’s New'),el('div',{class:'sub'},'Studio Launcher KH '+(S.version||'')))),
+  el('div',{class:'body'},notes.length?el('ul',{class:'changes'},notes.map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.')),
+  el('div',{class:'bottom'},el('button',{class:'btn primary',onclick:close},'Done')));
+ document.body.append(el('div',{class:'scrim w',onclick:close},sheet));sig=signature()}
 function drawSettings(){const again=!!document.querySelector('.scrim.s');document.querySelectorAll('.scrim.s').forEach(x=>x.remove());const s=S.settings,c=S.connection||{destination:'',machine:''};
  const set=(key,value)=>post({action:'setting',key,value});
  const check=(key,label,on,note,disabled)=>el('div',{},el('div',{class:'row'+(disabled?' dis':'')},el('label',{},el('input',{type:'checkbox',checked:on,disabled,onchange:e=>set(key,e.target.checked)}),label)),note?el('p',{class:'note'},note):null);
@@ -316,14 +327,14 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
    el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','Match system'],['dark','Dark'],['light','Light']],s.appearance)),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),
-   el('section',{},el('h4',{},'About'),el('button',{class:'btn',onclick:()=>post({action:'whatsNew'})},'v'+S.version+' · What’s New'))),
+   el('section',{},el('h4',{},'About'),el('button',{class:'btn',onclick:showWhatsNew},'v'+S.version+' · What’s New'))),
   el('div',{class:'bottom'},el('button',{class:'btn primary',onclick:()=>{settingsOpen=false;closeLayers()}},'Done')));
  document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet));sig=signature()}
 $('vgrid').onclick=()=>{view='grid';store.set('view',view);render()};$('vlist').onclick=()=>{view='list';store.set('view',view);render()};
 $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q').oninput=e=>{q=e.target.value.trim().toLowerCase();render()};
-$('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};
+$('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};$('whatsNew').onclick=showWhatsNew;
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove())});
-document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;closeLayers()}}
+document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(whatsNewOpen){whatsNewOpen=false;closeLayers()}else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;closeLayers()}}
  const editing=['INPUT','TEXTAREA','SELECT'].includes((e.target?.tagName||'').toUpperCase())||e.target?.isContentEditable;
  if(detail&&!settingsOpen&&!editing&&(e.key=='ArrowRight'||e.key=='ArrowLeft')){const l=visible()[0],i=l.findIndex(a=>a.id==detail.id),n=l[(i+(e.key=='ArrowRight'?1:-1)+l.length)%l.length];if(n){detail={id:n.id};drawDetail()}}
  if(e.metaKey&&e.key==','){e.preventDefault();settingsOpen=true;drawSettings()}
