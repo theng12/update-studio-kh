@@ -35,13 +35,19 @@ BUNDLE_ID = "com.example.demoapp"
 FIXTURE_C = r'''
 #include <stdio.h>
 #include <unistd.h>
+#include <signal.h>
 
 int main(int argc, char **argv) {
     pid_t child = fork();
-    if (child != 0) return child < 0 ? 1 : 0;
-    if (argc > 1) {
-        FILE *f = fopen(argv[1], "w");
-        if (f) { fprintf(f, "%d\n", getpid()); fclose(f); }
+    if (child < 0) return 1;
+    if (child > 0) {
+        // Publish before the launcher exits, so both fixture callers can read the PID immediately.
+        FILE *f = argc > 1 ? fopen(argv[1], "w") : NULL;
+        if (!f) { kill(child, SIGTERM); return 1; }
+        int written = fprintf(f, "%d\n", child);
+        int closed = fclose(f);
+        if (written < 0 || closed != 0) { kill(child, SIGTERM); return 1; }
+        return 0;
     }
     for (;;) pause();
     return 0;
