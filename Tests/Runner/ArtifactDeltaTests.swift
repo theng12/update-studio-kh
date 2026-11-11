@@ -14,16 +14,21 @@ private final class ArtifactClient: HTTPClient, @unchecked Sendable {
     var servedBytes = 0
     var cancelNext = false
     var cancelAfterWrite = false
+    /// Hosts that serve nothing, so one source of an operation can be given no patch at all.
+    var failingHosts: Set<String> = []
+    /// Every URL asked for, with the source it was asked of.
+    var requestURLs: [String] = []
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { throw khuFail("unexpected GET \(url.path)") }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) { throw khuFail("unexpected POST \(url.path)") }
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
         requests.append(url.lastPathComponent)
+        requestURLs.append(url.absoluteString)
         if cancelNext {
             cancelNext = false
             DownloadControl.cancel()
             throw khuFail("cancelled on this Mac; nothing was changed")
         }
-        guard let data = files[url.lastPathComponent] else { throw URLError(.cannotConnectToHost) }
+        guard let data = files[url.lastPathComponent], !failingHosts.contains(url.host ?? "") else { throw URLError(.cannotConnectToHost) }
         guard data.count <= limit else { throw DeliveryMismatch(description: "larger than expected") }
         try data.write(to: file)
         servedBytes += data.count
@@ -100,6 +105,15 @@ func artifactDeltaTests() {
             let url = try Agent.download(entry, app: "fixture", serverBase: serverBase, stateDir: state, http: client)
             return (url, client.servedBytes - before, client.requests)
         }
+        /// One operation with a named first source and the sources it may fall back to.
+        func deliverFrom(_ state: URL, _ entry: FeedApp, _ first: URL, _ fallbacks: [URL]) throws -> (URL, Int, [String]) {
+            let before = client.servedBytes
+            client.requests.removeAll()
+            client.phases.removeAll()
+            client.requestURLs.removeAll()
+            let url = try Agent.download(entry, app: "fixture", serverBase: first, stateDir: state, http: client, fallbacks: fallbacks)
+            return (url, client.servedBytes - before, client.requestURLs)
+        }
 
         // The first installer: nothing to patch from, so it is fetched whole.
         let firstState = try freshState("full")
@@ -152,6 +166,8 @@ func artifactDeltaTests() {
         expect((try? Signing.sha256Hex(fileAt: afterCorrupt).hex) == current.sha256,
                "AD7 the fallback still delivers the signed artifact")
         expect(client.phases == ["delta-downloading", "full-fallback"], "AD7 full fallback keeps its transfer label")
+        let refused = (try? fm.contentsOfDirectory(atPath: corruptState.appendingPathComponent("downloads/fixture").path)) ?? []
+        expect(!refused.contains { $0.hasSuffix(".part") }, "AD16 a refused patch leaves no partial file behind")
         client.files[delta.file] = try Data(contentsOf: patchFile)
 
         // A patch the server does not have at all.
@@ -164,6 +180,58 @@ func artifactDeltaTests() {
         expect((try? Signing.sha256Hex(fileAt: afterMissing).hex) == current.sha256,
                "AD8 the fallback still delivers the signed artifact")
         client.files[delta.file] = try Data(contentsOf: patchFile)
+
+        // A source with no patch must not take the exact base away from the next source.
+        let retryState = try freshState("source-retry")
+        _ = try deliver(retryState, old)
+        let first = URL(string: "http://a.invalid")!
+        let second = URL(string: "http://b.invalid")!
+        client.failingHosts = ["a.invalid"]
+        let (fromSecond, retryBytes, retryURLs) = try deliverFrom(retryState, current, first, [second])
+        expect(retryURLs.contains("http://b.invalid/artifacts/\(delta.file)"),
+               "AD14 the next source is offered the patch, not only the whole artifact")
+        expect(retryBytes == delta.bytes, "AD14 the next source's patch is used, not the whole artifact")
+        expect((try? Signing.sha256Hex(fileAt: fromSecond).hex) == current.sha256,
+               "AD14 the second source still delivers the signed artifact")
+
+        // Both sources failing keeps the exact base, so a later run still patches.
+        let keptState = try freshState("kept-base")
+        _ = try deliver(keptState, old)
+        client.failingHosts = ["a.invalid", "c.invalid"]
+        var bothFailed = false
+        do { _ = try deliverFrom(keptState, current, first, [URL(string: "http://c.invalid")!]) } catch { bothFailed = true }
+        expect(bothFailed, "AD15 both sources failing is reported, not swallowed")
+        client.failingHosts = []
+        let (keptFile, keptBytes, _) = try deliverFrom(keptState, current, second, [])
+        expect(keptBytes == delta.bytes, "AD15 the exact base survived the failed sources, so only the patch is fetched")
+        expect((try? Signing.sha256Hex(fileAt: keptFile).hex) == current.sha256,
+               "AD15 the surviving base still builds the signed artifact")
+
+        // A base left over from another patch is retired, not used and not stranded.
+        let changeState = try freshState("base-change")
+        _ = try deliver(changeState, old)
+        let slot = changeState.appendingPathComponent("downloads/.khu-patch-base-fixture")
+        try Data(repeating: 0x5A, count: 1024).write(to: slot)
+        let (changedFile, changedBytes, _) = try deliver(changeState, current)
+        expect(changedBytes == delta.bytes, "AD17 a base for another patch is retired, not used")
+        expect((try? Signing.sha256Hex(fileAt: changedFile).hex) == current.sha256,
+               "AD17 the signed artifact is still built from the signed base")
+        expect(!fm.fileExists(atPath: slot.path), "AD17 the one slot per app holds no base after the replacement")
+
+        // A release with no patch retires the kept base once the new artifact is in place.
+        let retireState = try freshState("retire-slot")
+        _ = try deliver(retireState, old)
+        client.failingHosts = ["a.invalid"]
+        var slotFailed = false
+        do { _ = try deliverFrom(retireState, current, first, []) } catch { slotFailed = true }
+        expect(slotFailed, "AD18 the failing operation is reported")
+        client.failingHosts = []
+        let retireSlot = retireState.appendingPathComponent("downloads/.khu-patch-base-fixture")
+        expect((try? Signing.sha256Hex(fileAt: retireSlot).hex) == old.sha256,
+               "AD18 a failed operation keeps the exact base in its slot")
+        _ = try deliver(retireState, old)
+        expect(!fm.fileExists(atPath: retireSlot.path),
+               "AD18 a successful full replacement retires the kept base")
 
         // A cancel stops the delivery: it does not start a second, whole download.
         let cancelState = try freshState("cancel")

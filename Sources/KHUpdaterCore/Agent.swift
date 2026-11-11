@@ -1019,25 +1019,41 @@ public enum Agent {
     /// base is verified again immediately before it is used, and the rebuilt artifact against the
     /// signed size and hash afterwards. Anything that does not add up falls back to the whole
     /// signed artifact; a cancelled download stops instead of fetching anything else.
+    ///
+    /// The exact base is taken out of the cache once and kept for every source this one operation
+    /// tries. It is retired only when the new artifact replaces it: an operation that ends in
+    /// failure or cancellation leaves the base where it is, so the next source, and the next run,
+    /// still have the exact bytes a patch was built for.
     static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient, fallbacks: [URL] = []) throws -> URL {
+        let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
+        // The only base a patch may use: the exact full artifact this Mac already downloaded.
+        let base = takeCachedBase(for: entry.delta, in: dir, app: app)
+        let artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http,
+                                    fallbacks: fallbacks, base: base)
+        // The new artifact is this Mac's base from now on: the slot is retired, whatever it held.
+        _ = try? Trash.move(heldBase(in: dir, app: app), into: Trash.root(in: stateDir))
+        return artifact
+    }
+
+    /// One download operation: every source it is given is offered the same exact base to patch
+    /// from, so a source that does not have the patch cannot cost the next one its chance.
+    private static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient,
+                                 fallbacks: [URL], base: URL?) throws -> URL {
         let name = try SafeName.component(entry.file, what: "artifact name")
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         let fm = FileManager.default
         let trash = Trash.root(in: stateDir)
-        // The only base a patch may use: the exact full artifact this Mac already downloaded.
-        let base = takeCachedBase(for: entry.delta, in: dir, app: app)
         if fm.fileExists(atPath: dir.path) { try Trash.move(dir, into: trash) }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let part = dir.appendingPathComponent(name + ".part")
         let triedPatch = entry.delta != nil && base != nil
         if let delta = entry.delta, let base {
             do {
-                let artifact = try deliverPatch(delta, entry: entry, base: base, dir: dir, part: part,
-                                                serverBase: serverBase, http: http, trash: trash)
-                _ = try? Trash.move(base, into: trash)
-                return artifact
+                return try deliverPatch(delta, entry: entry, base: base, dir: dir, part: part,
+                                        serverBase: serverBase, http: http, trash: trash)
             } catch {
-                _ = try? Trash.move(base, into: trash)
+                // The base is kept: the next source, and the next run, still have the exact bytes
+                // this patch was built for.
                 _ = try? Trash.move(part, into: trash)
                 if DownloadControl.cancelled { throw error }
                 // The patch did not add up, so the whole signed artifact is fetched instead. That
@@ -1062,7 +1078,8 @@ public enum Agent {
             catch { throw khuFail("download failed and its partial file could not be moved to _trash: \(error)") }
             if DownloadControl.cancelled { throw error }
             if let next = fallbacks.first {
-                return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http, fallbacks: Array(fallbacks.dropFirst()))
+                return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http,
+                                    fallbacks: Array(fallbacks.dropFirst()), base: base)
             }
             throw error
         }
@@ -1070,22 +1087,35 @@ public enum Agent {
 
     /// The exact full artifact this Mac already downloaded, when it is the one a patch was built
     /// for. It is held outside the download folder, because that folder goes to `_trash` when the
-    /// new download starts.
+    /// new download starts, and it rests there until a new artifact replaces it: a source that
+    /// fails does not take the base away from the next source, or from the next run.
     private static func takeCachedBase(for delta: ArtifactDelta?, in dir: URL, app: String) -> URL? {
-        guard let delta else { return nil }
         let fm = FileManager.default
+        let held = heldBase(in: dir, app: app)
+        if fm.fileExists(atPath: held.path) {
+            // A base is kept for one patch only: one that names another base is of no use here.
+            if let delta, let measured = try? Signing.sha256Hex(fileAt: held),
+               measured.hex == delta.baseSHA256, measured.bytes == delta.baseBytes { return held }
+            if delta != nil {
+                _ = try? Trash.move(held, into: Trash.root(in: dir.deletingLastPathComponent()))
+            }
+        }
+        guard let delta else { return nil }
         guard let items = try? fm.contentsOfDirectory(atPath: dir.path) else { return nil }
         for item in items {
             let candidate = dir.appendingPathComponent(item)
             guard let measured = try? Signing.sha256Hex(fileAt: candidate),
                   measured.hex == delta.baseSHA256, measured.bytes == delta.baseBytes else { continue }
-            let held = dir.deletingLastPathComponent()
-                .appendingPathComponent(".khu-patch-base-\(app)-\(delta.baseSHA256.prefix(12))")
-            _ = try? Trash.move(held, into: Trash.root(in: dir.deletingLastPathComponent()))
             do { try fm.moveItem(at: candidate, to: held) } catch { return nil }
             return held
         }
         return nil
+    }
+
+    /// Where a patch base rests while it is not the file the download folder holds: one slot per
+    /// app, so a base is never stranded under a name nothing looks for again.
+    private static func heldBase(in dir: URL, app: String) -> URL {
+        dir.deletingLastPathComponent().appendingPathComponent(".khu-patch-base-\(app)")
     }
 
     /// The patch, applied to the exact base it was built for. The rebuilt artifact is checked
@@ -1095,6 +1125,8 @@ public enum Agent {
                                      serverBase: URL, http: HTTPClient, trash: URL) throws -> URL {
         let name = try SafeName.component(delta.file, what: "delta name")
         let patch = dir.appendingPathComponent(name + ".part")
+        // The patch's bytes never stay in the cache: a refused or half-written patch is retired.
+        defer { _ = try? Trash.move(patch, into: trash) }
         let code = try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
                                      headers: [:], to: patch, limit: delta.bytes, phase: "delta-downloading")
         guard code == 200 else { throw khuFail("delta download answered \(code); nothing was changed") }
@@ -1120,7 +1152,6 @@ public enum Agent {
         guard !DownloadControl.cancelled else { throw khuFail("cancelled on this Mac; nothing was changed") }
         let artifact = dir.appendingPathComponent(try SafeName.component(entry.file, what: "artifact name"))
         try FileManager.default.moveItem(at: part, to: artifact)
-        _ = try? Trash.move(patch, into: trash)
         return artifact
     }
 
