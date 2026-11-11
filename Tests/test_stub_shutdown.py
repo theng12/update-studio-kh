@@ -4,8 +4,14 @@
 Compiles the actual stub sources twice — once from the reviewed base commit, once from the
 working tree — in the task-owned --output folder. It never runs launchctl, never touches an
 installed stub/helper/publisher, and uses only fixture processes it started itself. The base run
-reproduces the orphan being fixed; the fixed run proves the child is stopped, no replacement is
-started, and a child that ignores TERM is reported rather than escalated to SIGKILL.
+reproduces the orphan being fixed; the fixed run proves the child is stopped and this supervisor
+starts no replacement, and a child that ignores one TERM is reported rather than escalated to.
+Everything here is TERM-only: cleanup sends SIGTERM, waits a bounded time, and fails loudly if a
+fixture process survives. No SIGKILL appears in this lane.
+
+A fixed refusal exits 143 while its child lives; that only proves this supervisor stops itself
+and starts nothing new. It does not prove launchd's KeepAlive cannot start a second supervisor
+after that exit — launchd behavior is outside this isolated fixture.
 """
 import argparse
 import hashlib
@@ -13,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -23,13 +30,14 @@ SHUTDOWN_GRACE = 5
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--output", required=True, type=Path)
+parser.add_argument("--reuse-builds", type=Path,
+                    help="prior output whose compiled stubs are reused when the source hash matches")
 args = parser.parse_args()
 root = Path(__file__).resolve().parent.parent
 out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=False)
 
 results = []
-details = {}
 receipt = {
     "baseCommit": BASE_COMMIT,
     "fixedSource": "Sources/KHUStub/StubRunner.swift",
@@ -38,7 +46,15 @@ receipt = {
     "compiles": {},
     "cases": {},
     "liveLaunchctl": False,
-    "scope": "actual stub sources only; fixture /bin/sh child; SIGTERM sent to the supervisor pid alone",
+    "cleanup": "SIGTERM only, bounded wait, loud failure; no SIGKILL anywhere in this lane",
+    "correction": {
+        "rejected": "the r1 fixture cleanup sent SIGKILL via os.killpg, outside the SIGTERM-only brief",
+        "originalReceiptRetained": str(args.reuse_builds.resolve() / "receipt.json") if args.reuse_builds else None,
+        "now": "the refusal child resets TERM to default after the first one; cleanup sends TERM only",
+    },
+    "scope": ("actual stub sources only; fixture /bin/sh child; SIGTERM sent to the supervisor pid alone. "
+              "starts == 1 proves this supervisor spawned no replacement; it does NOT prove launchd "
+              "KeepAlive cannot start a second supervisor after a refusal exit 143"),
 }
 
 
@@ -52,17 +68,30 @@ def check(name, ok, **proof):
 def compile_stub(label, runner_source):
     directory = out / label
     directory.mkdir()
-    sources = sorted((root / "Sources/KHUStub").glob("*.swift")) + [root / "Sources/khu-stub/StubMain.swift"]
-    sources = [directory / "StubRunner.swift" if s.name == "StubRunner.swift" else s for s in sources]
-    (directory / "StubRunner.swift").write_text(runner_source)
     binary = directory / "khu-stub"
-    command = ["swiftc", "-parse-as-library", "-o", str(binary)] + [str(s) for s in sources]
-    run = subprocess.run(command, capture_output=True, text=True, timeout=180)
-    receipt["compiles"][label] = {"command": command, "exit": run.returncode,
-                                  "output": (run.stdout + run.stderr)[-4000:]}
-    if run.returncode != 0:
-        print((run.stdout + run.stderr)[-4000:])
-        sys.exit(1)
+    digest = hashlib.sha256(runner_source.encode()).hexdigest()
+    reused_from = None
+    if args.reuse_builds:
+        prior = args.reuse_builds.resolve()
+        prior_receipt = json.loads((prior / "receipt.json").read_text())
+        key = "baseSourceSHA256" if label == "base" else "fixedSourceSHA256"
+        prior_binary = prior / label / "khu-stub"
+        if prior_receipt.get(key) == digest and prior_binary.is_file():
+            shutil.copy2(prior_binary, binary)
+            reused_from = str(prior_binary)
+    if reused_from is None:
+        sources = sorted((root / "Sources/KHUStub").glob("*.swift")) + [root / "Sources/khu-stub/StubMain.swift"]
+        sources = [directory / "StubRunner.swift" if s.name == "StubRunner.swift" else s for s in sources]
+        (directory / "StubRunner.swift").write_text(runner_source)
+        command = ["swiftc", "-parse-as-library", "-o", str(binary)] + [str(s) for s in sources]
+        run = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        receipt["compiles"][label] = {"command": command, "exit": run.returncode,
+                                      "output": (run.stdout + run.stderr)[-4000:]}
+        if run.returncode != 0:
+            print((run.stdout + run.stderr)[-4000:])
+            sys.exit(1)
+    else:
+        receipt["compiles"][label] = {"reusedFrom": reused_from, "sourceSHA256": digest}
     return binary
 
 
@@ -117,22 +146,37 @@ def wait_gone(pid, timeout=5):
     return False
 
 
+def group_members(pgid):
+    # `killpg(..., 0)` is not a usable probe here: macOS returns EPERM for some dead group ids.
+    probe = subprocess.run(["ps", "-o", "pid=", "-g", str(pgid)], capture_output=True, text=True)
+    return [int(word) for word in probe.stdout.split()]
+
+
 def cleanup_group(process, child):
-    for pgid in {process.pid, child}:
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    time.sleep(0.2)
-    for pgid in {process.pid, child}:
-        try:
-            os.killpg(pgid, signal.SIGKILL)  # fixture cleanup only, never the supervisor's behavior
-        except ProcessLookupError:
-            pass
+    """TERM-only cleanup of the fixture processes this test started, bounded and loud.
+
+    The refusal child resets TERM to default after the stub's first TERM, so this second TERM
+    cleans it. If anything survives the bound the fixture fails loudly rather than escalating.
+    """
+    pgids = {process.pid, child}
+    for pgid in pgids:
+        if group_members(pgid):
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError) as error:
+                print(f"CLEANUP: SIGTERM to fixture group {pgid} failed: {error}")
+    deadline = time.time() + SHUTDOWN_GRACE
+    while time.time() < deadline:
+        if not any(group_members(pgid) for pgid in pgids):
+            return
+        time.sleep(0.05)
+    leftovers = {pgid: group_members(pgid) for pgid in pgids}
+    print(f"CLEANUP FAILED: fixture groups still alive {SHUTDOWN_GRACE}s after SIGTERM: {leftovers}")
+    raise AssertionError("fixture cleanup did not finish with SIGTERM; no escalation attempted")
 
 
 TERMABLE = 'echo $$ >> {starts}; exec /bin/sleep 600'
-IGNORES_TERM = "trap '' TERM; echo $$ >> {starts}; while :; do sleep 1; done"
+IGNORES_FIRST_TERM = "trap 'trap - TERM' TERM; echo $$ >> {starts}; while :; do sleep 1; done"
 
 base_source = subprocess.run(["git", "-C", str(root), "show", f"{BASE_COMMIT}:Sources/KHUStub/StubRunner.swift"],
                              capture_output=True, text=True, timeout=30)
@@ -174,8 +218,9 @@ check("fixed-sigterm-stops-own-child",
       logLines=[line for line in log.splitlines() if "shutdown" in line])
 cleanup_group(process, pid)
 
-# 3. Fixed: a child that ignores TERM is waited for a bounded time and reported, never killed.
-base, starts = make_base("fixed-ignores", IGNORES_TERM)
+# 3. Fixed: a child that ignores one TERM is waited for a bounded time and reported, never killed.
+#    The child resets TERM to default after that first one, so the fixture stays cleanable by TERM.
+base, starts = make_base("fixed-ignores", IGNORES_FIRST_TERM)
 process = start_stub(fixed_stub, base, "fixed-ignores")
 pid = child_pid(starts)
 began = time.time()
