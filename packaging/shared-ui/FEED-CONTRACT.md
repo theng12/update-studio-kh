@@ -26,6 +26,10 @@ and symbol are named so a reviewer can check the claim instead of trusting it.
    Missing or unreadable file = this Mac is not connected. That is
    **"Not checked" with the reason**, never "Up to date".
 
+   Only the publisher host keeps a copy of the feed on disk
+   (`~/Library/KHUpdater/feed/release.json`); every other Mac has no such file, so
+   read `publisher.json` and fetch `feedURL` — that works on both.
+
 2. **`GET <feedURL>`** — a JSON object with two base64 strings
    (`Sources/KHUpdaterCore/Feed.swift`, `Release`):
 
@@ -96,6 +100,11 @@ Rules:
   stay inside that updater, exactly as today (`Sources/khu/LauncherWindow.swift`,
   the update order path). Selecting your row from the button is **not wired
   yet**; opening the updater is the contract, deep-linking is a later addition.
+- Concretely, from any process: `open -b com.khupdater.launcher`
+  (Studio Launcher KH, `/Applications/Studio Launcher KH.app`). Its own app asks
+  its helper to show the window by posting the distributed notification
+  `com.khupdater.launcher.open` (`Sources/khu/Launcher.swift`, `FrontDoor.askHelper`);
+  posting that is the lighter alternative when AppKit is already at hand.
 - Never a second updater, never an app-owned download, never a silent install.
 
 ## Two platform facts this session paid for
