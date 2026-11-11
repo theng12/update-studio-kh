@@ -207,6 +207,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     /// saved connection is never rewritten; a kit for another publisher is refused before the
     /// window opens, and Cancel repairs nothing.
     static func runSetupRepair(kit: URL, home: URL, reason: String) -> Outcome {
+        NSApp.activate(ignoringOtherApps: true)
         let configFile = Connect.configFile(stateDir: home.appendingPathComponent("Library/KHUpdater/state"))
         let plan: Connect.RepairPlan
         do {

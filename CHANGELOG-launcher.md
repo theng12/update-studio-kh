@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.18 — 2026-11-11
+- Stopping the helper's supervisor also stops the helper it started, so a saved-setup repair does not leave the previous helper running.
+- What's New opens as a sheet in Launcher, keeping the helper responsive when Launcher is opened during an upgrade.
+- Saved-setup repair brings its confirmation forward before asking you to continue.
+
 ## 0.1.17 — 2026-11-11
 - Choose whether to pair a new Mac with a code or repair this Mac's saved setup. Repair keeps the existing connection, app choices and pauses instead of enrolling the Mac again.
 - Install or update available apps by hand using the current signed app list, the installed versions and checked copies on your installer SSD.

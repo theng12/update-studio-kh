@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.21 — 2026-11-11
+- Includes Studio Launcher KH 0.1.18 with orderly helper shutdown during saved-setup repair and responsive release notes.
+- Keeps existing saved connections, app choices and pauses through the update.
+
 ## 1.0.20 — 2026-11-11
 - Includes Studio Launcher KH 0.1.17 with separate new-Mac pairing and saved-setup repair.
 - Launcher shows the current app and installer choices, why an SSD copy was refused and where each Automatic choice came from.
