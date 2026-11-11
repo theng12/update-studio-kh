@@ -2,16 +2,22 @@
 # A fresh per-user install, then the LaunchAgent is loaded here (owner, 2026-10-26) — the same
 # activation Studio Hub's khu_agent performs. Nothing is started if the install is refused or fails.
 #
-# With a third --repair argument this finishes an incomplete install on this Mac: every file that
-# is already there is kept, the missing pieces are added, and an existing config is never touched.
+# With a third --repair argument this finishes an incomplete install on this Mac that has no
+# config yet: every file that is already there is kept, the missing pieces are added, and an
+# existing config is never touched. --repair-saved does the same for a Mac whose connection was
+# already saved but whose helper files or LaunchAgent are incomplete: the saved config is read
+# and verified, and it is never rewritten.
 set -euo pipefail
 umask 077
 KIT="$(cd "$(dirname "$0")" && pwd)"
 REPAIR=false
+SAVED=false
 if [[ $# == 3 && "$3" == "--repair" ]]; then
     REPAIR=true
+elif [[ $# == 3 && "$3" == "--repair-saved" ]]; then
+    REPAIR=true; SAVED=true
 elif [[ $# != 2 ]]; then
-    echo "usage: $0 <filled-agent-config.json> <destination-home> [--repair]" >&2; exit 2
+    echo "usage: $0 <filled-agent-config.json> <destination-home> [--repair|--repair-saved]" >&2; exit 2
 fi
 CONFIG="$1"
 DEST_HOME="$2"
@@ -166,9 +172,17 @@ fi
 
 # ----------------------------------------------------------------------- repair install
 # An incomplete install on this Mac: some of the KHUpdater folder or the LaunchAgent plist is
-# there, but there is no config yet. Everything already on this Mac is kept.
-[[ ! -e "$CONFIG_PATH" && ! -L "$CONFIG_PATH" ]] \
-    || fail "KH Updater is already set up on this Mac; nothing was changed."
+# there. Everything already on this Mac is kept. A fresh --repair has no config yet; a saved
+# setup repairs from its own existing config, which is never rewritten.
+if [[ "$SAVED" == true ]]; then
+    [[ -f "$CONFIG_PATH" && ! -L "$CONFIG_PATH" ]] \
+        || fail "This Mac has no saved connection to repair; nothing was changed."
+    [[ "$CONFIG" -ef "$CONFIG_PATH" ]] \
+        || fail "A saved setup is repaired from its own base/config.json; nothing was changed."
+else
+    [[ ! -e "$CONFIG_PATH" && ! -L "$CONFIG_PATH" ]] \
+        || fail "KH Updater is already set up on this Mac; nothing was changed."
+fi
 # A link where a real folder belongs is refused: the repair would otherwise write through it.
 for path in "$K" "$K/base" "$K/bin" "$K/state" "$K/base/versions" "$K/base/versions/$VERSION" \
             "$K/base/versions/$VERSION/khu" "$K/bin/khu-stub" "$PLIST"; do
@@ -198,11 +212,13 @@ mkdir -p "$STAGE/KHUpdater/bin" "$STAGE/KHUpdater/base/versions/$VERSION"
 cp "$KIT/bin/khu-stub" "$STAGE/KHUpdater/bin/"
 cp "$KIT/bin/khu" "$STAGE/KHUpdater/base/versions/$VERSION/"
 chmod 755 "$STAGE/KHUpdater/bin/khu-stub" "$STAGE/KHUpdater/base/versions/$VERSION/khu"
-/usr/bin/plutil -convert json -o "$STAGE/KHUpdater/base/config.json" "$CONFIG"
-/usr/bin/plutil -replace stateDir -string "$K/state" "$STAGE/KHUpdater/base/config.json"
-/usr/bin/plutil -replace stubBase -string "$K/base" "$STAGE/KHUpdater/base/config.json"
-/usr/bin/plutil -replace once -bool NO "$STAGE/KHUpdater/base/config.json"
-chmod 600 "$STAGE/KHUpdater/base/config.json"
+if [[ "$SAVED" == false ]]; then
+    /usr/bin/plutil -convert json -o "$STAGE/KHUpdater/base/config.json" "$CONFIG"
+    /usr/bin/plutil -replace stateDir -string "$K/state" "$STAGE/KHUpdater/base/config.json"
+    /usr/bin/plutil -replace stubBase -string "$K/base" "$STAGE/KHUpdater/base/config.json"
+    /usr/bin/plutil -replace once -bool NO "$STAGE/KHUpdater/base/config.json"
+    chmod 600 "$STAGE/KHUpdater/base/config.json"
+fi
 cp "$KIT/com.khupdater.agent.plist" "$STAGE/agent.plist"
 /usr/bin/plutil -remove ProgramArguments "$STAGE/agent.plist"
 /usr/bin/plutil -insert ProgramArguments -array "$STAGE/agent.plist"
@@ -247,10 +263,13 @@ fi
 archive "$K/base/current" "current"
 created "$K/base/current"
 ln -s "versions/$VERSION/khu" "$K/base/current"
-# The config was refused above when it existed, so this only ever writes a missing one.
-created "$CONFIG_PATH"
-cp "$STAGE/KHUpdater/base/config.json" "$CONFIG_PATH"
-chmod 600 "$CONFIG_PATH"
+# The config was refused above when it existed (and is never touched in a saved repair), so
+# this only ever writes a missing one.
+if [[ "$SAVED" == false ]]; then
+    created "$CONFIG_PATH"
+    cp "$STAGE/KHUpdater/base/config.json" "$CONFIG_PATH"
+    chmod 600 "$CONFIG_PATH"
+fi
 archive "$PLIST" "agent.plist"
 created "$PLIST"
 cp "$STAGE/agent.plist" "$PLIST"

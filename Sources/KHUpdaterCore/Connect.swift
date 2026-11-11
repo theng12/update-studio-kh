@@ -248,6 +248,49 @@ public enum Connect {
         throw khuFail("macOS refused to register the saved helper (bootstrap exit \(result.exitCode)). \(kept) Share this startup reason for repair; restarting alone does not identify the cause.")
     }
 
+    /// Repair an existing, saved setup without a pairing code: keep every saved byte and rebuild
+    /// the incomplete helper files and start file from this Launcher's verified kit. The saved
+    /// trust, controller, name, apps, settings and pauses are never rewritten, and nobody is
+    /// enrolled. A paused Mac is left paused; a kit for another publisher is refused.
+    public static func repairSetup(kit: URL, home: URL, shell: Shell = SystemShell(),
+                                   now: Date = Date()) throws -> RecipeResult {
+        let base = home.appendingPathComponent("Library/KHUpdater/base")
+        let file = base.appendingPathComponent("config.json")
+        let state = home.appendingPathComponent("Library/KHUpdater/state")
+        guard let saved = try? Data(contentsOf: file) else {
+            throw khuFail("This Mac has no saved connection to repair. Pair it with a code first.")
+        }
+        let config = try JSON.decode(AgentConfig.self, from: saved)
+        guard URL(fileURLWithPath: config.stateDir).standardizedFileURL == state.standardizedFileURL,
+              config.stubBase.map({ URL(fileURLWithPath: $0).standardizedFileURL }) == base.standardizedFileURL else {
+            throw khuFail("This Mac uses a different helper layout; its saved settings were left unchanged.")
+        }
+        guard try publisher(kit: kit).publicKey == config.publicKey else {
+            throw khuFail("This Launcher's setup kit belongs to a different Update Studio; this Mac's saved trust was kept. "
+                + "Open the Studio Launcher KH copy this Mac was set up with.")
+        }
+        if HelperSettings.load(from: state).paused(at: now) {
+            return RecipeResult(status: "paused", reason: "Helper updates are paused on this Mac. Its pause was kept.")
+        }
+        return try FileLock.withExclusive(home.appendingPathComponent("Library/.khu-connect.lock"), wait: false) {
+            guard (try? Data(contentsOf: file)) == saved else {
+                throw khuFail("This Mac's saved settings changed while repairing; try again.")
+            }
+            let script = kit.appendingPathComponent("install-agent.sh")
+            let result = try shell.run("/bin/bash", arguments: [script.path, file.path, home.path, "--repair-saved"],
+                                       timeout: 120)
+            guard result.exitCode == 0 else {
+                let reason = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                throw khuFail(reason.isEmpty ? "The saved helper could not be repaired. Your settings and data are kept." : reason)
+            }
+            guard (try? Data(contentsOf: file)) == saved else {
+                throw khuFail("This Mac's saved settings were changed during repair; nothing else was touched.")
+            }
+            return RecipeResult(status: "repaired",
+                                reason: "The helper files and start file were rebuilt from this Launcher's verified kit; the saved connection was kept.")
+        }
+    }
+
     // MARK: staying connected (the settings page), never a second enrolment
 
     /// Carries the setup kit out of the Launcher bundle being replaced into its regenerated copy —

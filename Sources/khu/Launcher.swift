@@ -102,10 +102,35 @@ enum FrontDoor {
         if Connect.isSetUp(home: home) {
             // An isolated home never starts this Mac's real helper.
             if !isolated {
+                var failure: String?
                 do { try Connect.startInstalledAgent(home: home) }
-                catch { say("Studio Launcher could not start", "\(error)"); exit(1) }
-                if !askHelper(seconds: 30) {
-                    say("Studio Launcher KH did not answer", "The helper is registered with macOS, but its window did not answer within 30 seconds. Your saved connection and settings are kept. Share this startup reason for repair.")
+                catch { failure = "\(error)" }
+                if failure == nil && !askHelper(seconds: 30) {
+                    failure = "The helper is registered with macOS, but its window did not answer within 30 seconds. "
+                        + "Your saved connection and settings are kept."
+                }
+                if let failure {
+                    // A saved setup that cannot start is repaired here — deliberately, without a
+                    // code. A copy with no verified kit cannot repair and says so plainly.
+                    let kit = env["KHU_CONNECT_KIT"].map { URL(fileURLWithPath: $0) }
+                        ?? Bundle.main.resourceURL?.appendingPathComponent("khu-agent")
+                    if let kit, FileManager.default.fileExists(atPath: kit.appendingPathComponent("MANIFEST.json").path),
+                       (try? Connect.publisher(kit: kit)) != nil {
+                        switch ConnectionWindow.runSetupRepair(kit: kit, home: home, reason: failure) {
+                        case .connected:
+                            if !askHelper(seconds: 30) {
+                                say("Studio Launcher KH did not answer",
+                                    "The saved setup was repaired, but its window did not answer. Close this window and open Studio Launcher again.")
+                            }
+                            exit(0)
+                        case .cancelled:
+                            exit(0)
+                        }
+                    }
+                    say("Studio Launcher could not start",
+                        failure + "\n\nThis copy has no setup kit inside it, so it cannot repair the helper. Open Studio Launcher KH "
+                        + "from the SSD's “1 Install Apps/0 - Start here - Studio Launcher KH” folder.")
+                    exit(1)
                 }
             }
             exit(0)

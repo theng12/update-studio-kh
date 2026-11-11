@@ -514,4 +514,139 @@ func connectionFlowTests() {
         expect(!Connect.carryKit(from: bare, into: staging3),
                "CF8 a bundle with no kit simply has nothing to carry")
     }
+
+    // CF19. A saved setup is repaired without a code: the kit's own installer rebuilds the helper
+    // files and start file in its saved-setup mode, and the saved connection is never rewritten.
+    // A missing saved setup, another studio's kit, a different layout, a paused Mac and a second
+    // repair already running each refuse before anything runs.
+    do {
+        func saved(_ tag: String) -> (EnrolRig, URL, URL, URL, Data) {
+            let r = EnrolRig("cf19-" + tag)
+            let k = kit(for: r)
+            let home = r.rig.root.appendingPathComponent("home")
+            let file = home.appendingPathComponent("Library/KHUpdater/base/config.json")
+            let config: [String: Any] = [
+                "feedURL": "http://\(r.bind):\(r.port)/release.json",
+                "publicKey": r.rig.pair.publicKeyBase64,
+                "stateDir": home.appendingPathComponent("Library/KHUpdater/state").path,
+                "stubBase": home.appendingPathComponent("Library/KHUpdater/base").path,
+                "machine": "saved-mac", "token": "saved-fixture-token", "intervalMinutes": 60,
+                "once": false, "apps": ["updater": ["bundlePath": "", "recipe": "updater", "automatic": true]],
+            ]
+            let bytes = try! JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            try! fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try! bytes.write(to: file)
+            return (r, k, home, file, bytes)
+        }
+
+        // Missing: a Mac with nothing saved has nothing to repair and runs no installer.
+        do {
+            let r = EnrolRig("cf19-none")
+            let home = r.rig.root.appendingPathComponent("home")
+            let shell = CaptureShell()
+            expectThrows("CF19 a Mac with no saved connection is refused before anything runs", contains: "no saved connection") {
+                _ = try Connect.repairSetup(kit: kit(for: r), home: home, shell: shell)
+            }
+            expect(shell.calls.isEmpty, "CF19 repair with nothing saved runs no installer")
+        }
+
+        // Mismatched trust: another Update Studio's kit cannot repair this Mac.
+        do {
+            let (r, _, home, file, bytes) = saved("pin")
+            let k = kit(for: r)
+            var pub = try! JSONSerialization.jsonObject(with: Data(contentsOf: k.appendingPathComponent("publisher.json"))) as! [String: Any]
+            pub["publicKey"] = Signing.generateKeyPair().publicKeyBase64
+            let pubBytes = try! JSONSerialization.data(withJSONObject: pub)
+            try! pubBytes.write(to: k.appendingPathComponent("publisher.json"))
+            var manifest = try! JSONSerialization.jsonObject(with: Data(contentsOf: k.appendingPathComponent("MANIFEST.json"))) as! [String: Any]
+            var files = manifest["files"] as! [String: Any]
+            files["publisher.json"] = ["bytes": pubBytes.count, "sha256": Signing.sha256Hex(pubBytes)]
+            manifest["files"] = files
+            try! JSONSerialization.data(withJSONObject: manifest).write(to: k.appendingPathComponent("MANIFEST.json"))
+            let shell = CaptureShell()
+            expectThrows("CF19 a kit for another Update Studio cannot repair this Mac", contains: "different Update Studio") {
+                _ = try Connect.repairSetup(kit: k, home: home, shell: shell)
+            }
+            expect(shell.calls.isEmpty && (try! Data(contentsOf: file)) == bytes,
+                   "CF19 a mismatched kit runs nothing and keeps the saved trust byte for byte")
+        }
+
+        // Paused: the person's pause is honoured, not repaired around.
+        do {
+            let (_, k, home, file, bytes) = saved("paused")
+            let state = home.appendingPathComponent("Library/KHUpdater/state")
+            try! fm.createDirectory(at: state, withIntermediateDirectories: true)
+            try! HelperSettings(pausedUntil: ISO.string(Date().addingTimeInterval(3600))).save(to: state)
+            let shell = CaptureShell()
+            let out = try? Connect.repairSetup(kit: k, home: home, shell: shell)
+            expect(out?.status == "paused" && shell.calls.isEmpty && (try! Data(contentsOf: file)) == bytes,
+                   "CF19 a paused Mac reports its pause, runs nothing and keeps its settings")
+        }
+
+        // Different layout: the saved paths are this Mac's, so no other layout is written into.
+        do {
+            let (r, k, home, file, _) = saved("layout")
+            var config = try! JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+            config["stateDir"] = r.rig.root.appendingPathComponent("elsewhere").path
+            let bytes = try! JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+            try! bytes.write(to: file)
+            let shell = CaptureShell()
+            expectThrows("CF19 a saved setup under a different layout is refused", contains: "different helper layout") {
+                _ = try Connect.repairSetup(kit: k, home: home, shell: shell)
+            }
+            expect(shell.calls.isEmpty && (try! Data(contentsOf: file)) == bytes,
+                   "CF19 a layout mismatch runs nothing and writes nothing")
+        }
+
+        // Valid: only the kit's own installer, in its saved-setup mode, with the exact paths.
+        do {
+            let (_, k, home, file, bytes) = saved("ok")
+            let shell = CaptureShell()
+            let out = try? Connect.repairSetup(kit: k, home: home, shell: shell)
+            expect(out?.status == "repaired", "CF19 a saved setup is repaired without a code")
+            expect(shell.calls == [["/bin/bash", k.appendingPathComponent("install-agent.sh").path, file.path, home.path,
+                                    "--repair-saved"]],
+                   "CF19 repair runs only the kit's own installer in its saved-setup mode")
+            expect((try! Data(contentsOf: file)) == bytes, "CF19 the saved connection is byte for byte unchanged")
+        }
+
+        // Failed installer: its own reason is shown and the saved settings stay as they were.
+        do {
+            let (_, k, home, file, bytes) = saved("fail")
+            let shell = CaptureShell(); shell.exitCode = 1
+            expectThrows("CF19 a failed repair says the installer's reason", contains: "launchctl said no") {
+                _ = try Connect.repairSetup(kit: k, home: home, shell: shell)
+            }
+            expect((try! Data(contentsOf: file)) == bytes, "CF19 a failed repair never rewrites the saved settings")
+        }
+
+        // Settings replaced while the installer runs: the newer connection is kept, never accepted.
+        do {
+            final class ChangingShell: Shell, @unchecked Sendable {
+                let file: URL
+                init(_ file: URL) { self.file = file }
+                func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+                    try Data("{\"machine\":\"replaced\"}".utf8).write(to: file, options: .atomic)
+                    return ShellResult(exitCode: 0, stdout: "", stderr: "")
+                }
+            }
+            let (_, k, home, file, _) = saved("changed")
+            expectThrows("CF19 a connection replaced during repair is never accepted", contains: "changed during repair") {
+                _ = try Connect.repairSetup(kit: k, home: home, shell: ChangingShell(file))
+            }
+        }
+
+        // Busy: one repair at a time; a second attempt leaves the saved setup untouched.
+        do {
+            let (_, k, home, file, bytes) = saved("busy")
+            let shell = CaptureShell()
+            expectThrows("CF19 a second repair while one is running is refused", contains: "another KH Updater process") {
+                _ = try FileLock.withExclusive(home.appendingPathComponent("Library/.khu-connect.lock"), wait: false) {
+                    _ = try Connect.repairSetup(kit: k, home: home, shell: shell)
+                }
+            }
+            expect(shell.calls.isEmpty && (try! Data(contentsOf: file)) == bytes,
+                   "CF19 a busy Mac runs nothing and keeps its settings")
+        }
+    }
 }
