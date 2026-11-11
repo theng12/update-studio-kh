@@ -130,6 +130,10 @@ public struct InstallJournal: Codable, Sendable, Equatable {
 }
 
 public enum Recipe {
+    /// Both looks the hand route takes at the running app answer with the same plain reason: the app
+    /// is kept as it is, because nothing here proved a quiet point.
+    static let handKeepsRunningApp = "This app is running now, so nothing was changed. "
+        + "Quit it when its work is finished, then try again. No quiet point was proved."
     /// Install a DMG's app over `installedPath`. The order is the safety contract:
     ///
     /// 1. finish or undo any install a killed run left behind (`recover`);
@@ -192,12 +196,12 @@ public enum Recipe {
         // back to `_trash`, the installed bundle is untouched and nothing is stopped or started.
         if refuseIfRunning, control.isRunning() != false {
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
-            return RecipeResult(status: "refused", reason: "\(app) is running now, so nothing was changed. "
-                                + "Quit it when its work is finished, then try again. No quiet point was proved.")
+            return RecipeResult(status: "refused", reason: handKeepsRunningApp)
         }
 
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
-                                    order: nil, control: control, fileManager: fm, notes: [recovered, detachNote])
+                                    order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
+                                    refuseIfRunning: refuseIfRunning)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -308,9 +312,16 @@ public enum Recipe {
     /// this path, so its swap and its fallback are the install's own.
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
-                                 notes: [String]) throws -> RecipeResult {
+                                 notes: [String], refuseIfRunning: Bool = false) throws -> RecipeResult {
         let installedPath = paths.installedPath
         let wasRunning = control.isRunning() ?? true
+        // The last read before anything would be stopped is the one that decides. An app that
+        // updates itself came up between the staging look and here: this route proves no quiet
+        // point, so it is kept exactly as it is — no journal, no quit, no service stop, no relaunch.
+        if refuseIfRunning, wasRunning {
+            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            return RecipeResult(status: "refused", reason: Recipe.handKeepsRunningApp)
+        }
         var journal = InstallJournal(phase: "staged", installed: installedPath, staged: paths.staged.path,
                                      rollback: paths.rollback.path,
                                      // Nothing installed: a rollback bundle kept from before is the previous version.

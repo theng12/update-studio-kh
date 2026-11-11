@@ -487,9 +487,10 @@ Two details decide this route, and both read live data rather than one flag. The
 catalog as well as the recipe: a Mac configured by an earlier kit may carry the app's own recipe name
 (`story`, `hub`) or an `app-dmg` entry for an app its SSD marks as updating itself, and either way it stays
 hand-only — the same journaled path installs it, and the same recovery loop finishes or undoes a killed run
-for it. The running check is made twice: at the door, before anything is downloaded, and again after the
-bundle is staged, just before anything would be stopped. An app that came up in between keeps running: its
-staged copy goes to `_trash`, nothing is quit, stopped, started or replaced, and no journal is left behind.
+for it. The running check is made at the door, before anything is downloaded, and once more at the shared
+promotion point, where the swap would stop the app: the read taken there is the one that decides, so an
+app that came up in between is kept too. Its staged copy goes to `_trash`, nothing is quit, stopped,
+started or replaced, and no journal is left for recovery to find.
 The page offers Install or Update only on the agent's own comparison, so a newer or incomparable installed
 build stays *Updates itself* instead of carrying a button that could only be refused.
 

@@ -58,6 +58,21 @@ private final class HandActions: @unchecked Sendable {
     var quits = 0, stops = 0, launches = 0
 }
 
+/// The hand route's early looks get a quiet answer; the third read is promotion's own, taken where
+/// the app would be stopped, and it finds the app running.
+private final class PromotionRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var log: [Bool] = []
+    var quits = 0, stops = 0, launches = 0
+    func running() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let answer = log.count >= 2      // the third read is promotion's own
+        log.append(answer)
+        return answer
+    }
+    var answers: [Bool] { lock.lock(); defer { lock.unlock() }; return log }
+}
+
 func standaloneLauncherTests() {
     let id = "new-kh-app", bundleID = "com.fixture.new-kh-app"
     func setup(_ tag: String) -> (Rig, AgentConfig, URL, URL, StandaloneShell, StandaloneHTTP) {
@@ -451,6 +466,29 @@ func standaloneLauncherTests() {
                                           requested: ["notes"], ssd: [ssd], appFolders: [folder])
             expect(hand?.apps.first { $0.app == "notes" }?.installed == "2.0" && marker(target) == "2.0" && http.downloads == 0,
                    "SL21 the person at this Mac still installs it by hand, from the SSD copy")
+        }
+        // Both early looks answer quietly and promotion's own read then finds the app running: the
+        // decision that matters is the one taken where the app would actually be stopped.
+        do {
+            let (_, cfg, folder, shell, http) = storySetup("story-promotion-race")
+            let target = makeApp(folder.appendingPathComponent(storyName), version: "1.0", id: storyBundle)
+            let race = PromotionRace()
+            let racing = AppControl(isRunning: { race.running() },
+                                    quit: { race.quits += 1; return true },
+                                    launch: { race.launches += 1 },
+                                    stopService: { race.stops += 1; return true },
+                                    healthy: { _ in true }, healthSettle: 0)
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in racing },
+                                            requested: [appID], appFolders: [folder])
+            let row = result?.apps.first { $0.app == appID }
+            expect(race.answers == [false, false, true] && shell.dittoRuns > 0
+                   && row?.status == HelperApp.failed && row?.reason?.contains("is running now") == true,
+                   "SL22 the promotion read is the one that sees the app running and refuses the swap")
+            expect(race.quits == 0 && race.stops == 0 && race.launches == 0 && marker(target) == "1.0",
+                   "SL22 a newly started app is never quit, stopped, replaced or relaunched at promotion")
+            expect(!Recipe.isUnresolved(stateDir: cfg.stateDir, app: appID)
+                   && !fm.fileExists(atPath: folder.appendingPathComponent(".\(storyName).khu-staging").path),
+                   "SL22 the refusal leaves no journal for recovery and retires the staged copy recoverably")
         }
     }
 }
