@@ -301,7 +301,10 @@ public enum Catalog {
             for name in ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).sorted() where name.hasSuffix(".app") {
                 let path = folder.appendingPathComponent(name).path
                 guard let info = try? BundleInfo.read(path), let hit = known[info.identifier],
-                      config.apps[hit.id] == nil, found[hit.id] == nil, !taken.contains(LiveControl.realPath(path)) else { continue }
+                      found[hit.id] == nil, !taken.contains(LiveControl.realPath(path)) else { continue }
+                // An app already in the config is left alone unless its configured bundle is gone:
+                // a renamed app (Studio Hub → Hub Studio KH) is found again by its bundle id.
+                if let existing = config.apps[hit.id], FileManager.default.fileExists(atPath: existing.bundlePath) { continue }
                 // An app that keeps its own updater is never managed here: it is reported, and only
                 // the person at this Mac may install or update it.
                 let itself = hit.updatesItself || Agent.updatesItself(app: hit.id)
@@ -310,6 +313,20 @@ public enum Catalog {
             }
         }
         return found
+    }
+
+    /// The config with the apps `discover` found: a configured app whose bundle is gone takes the
+    /// path its bundle id now lives at, keeping the owner's recipe and Automatic choice.
+    public static func adopting(_ apps: [String: AppConfig], discovered: [String: AppConfig]) -> [String: AppConfig] {
+        var merged = apps
+        for (id, found) in discovered {
+            guard var existing = merged[id] else { merged[id] = found; continue }
+            if !FileManager.default.fileExists(atPath: existing.bundlePath) {
+                existing.bundlePath = found.bundlePath
+                merged[id] = existing
+            }
+        }
+        return merged
     }
 
     public static var applicationFolders: [URL] {

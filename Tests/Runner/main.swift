@@ -2047,6 +2047,18 @@ func launcherTests() {
         let both = Catalog.discover(config: agentConfig(rig, token: token, apps: ["printer": AppConfig(bundlePath: apps.appendingPathComponent("Printer.app").path)]),
                                     known: Catalog.known(in: URL(fileURLWithPath: cfg.stateDir), ssd: []), folders: [apps])
         expect(both["printer"] == nil, "L2 an app already in the config is not added twice")
+        // A renamed app (Studio Hub → Hub Studio KH) keeps its key and the owner's choices: only
+        // the path follows the bundle id.
+        let renamed = rig.root.appendingPathComponent("RenamedApps")
+        _ = makeApp(renamed.appendingPathComponent("Hub Studio KH.app"), version: "0.6.228", id: "com.t.hub")
+        let oldHub = AppConfig(bundlePath: apps.appendingPathComponent("Studio Hub.app").path, recipe: "status",
+                               automatic: false, bundleID: "com.t.hub")
+        let moved = Catalog.adopting(["hub": oldHub], discovered: Catalog.discover(
+            config: agentConfig(rig, token: token, apps: [:]), known: Catalog.known(in: URL(fileURLWithPath: cfg.stateDir), ssd: [source]),
+            folders: [renamed]))
+        expect(moved["hub"]?.bundlePath == renamed.appendingPathComponent("Hub Studio KH.app").path
+               && moved["hub"]?.automatic == false && moved["hub"]?.recipe == "status" && moved["hub"]?.bundleID == "com.t.hub",
+               "L2b a renamed app is followed by its bundle id, keeping its key, recipe and Automatic choice")
     }
     // L3. An SSD install checks the copy's SHA-256 first: a mismatch is refused and changes nothing.
     do {

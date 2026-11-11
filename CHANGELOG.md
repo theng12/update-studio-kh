@@ -9,6 +9,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> â€
 - Support this app explains the free one-time donation; nothing is locked behind it.
 - The helper and publisher run from named bundles, "Update Studio KH Helper.app" and "Update Studio KH Publisher.app", so process lists show their names instead of a bare command.
 - The named helper keeps reporting this Mac's apps and knows its own version, exactly as the bare command did.
+- An app that renames its bundle (Hub Studio KH is next) is still found, updated and reported where it now lives, with your update choices kept.
 
 ## 1.0.21 â€” 2026-11-11
 - Includes Studio Launcher KH 0.1.18 with orderly helper shutdown during saved-setup repair and responsive release notes.

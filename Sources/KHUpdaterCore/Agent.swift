@@ -339,7 +339,8 @@ public enum Agent {
         // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
         let stateURL = URL(fileURLWithPath: config.stateDir)
         var config = config
-        config.apps.merge(Catalog.discover(config: config, known: Catalog.known(in: stateURL, ssd: ssd), folders: appFolders)) { a, _ in a }
+        config.apps = Catalog.adopting(config.apps,
+                                       discovered: Catalog.discover(config: config, known: Catalog.known(in: stateURL, ssd: ssd), folders: appFolders))
         try validate(config)
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
