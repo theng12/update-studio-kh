@@ -3537,6 +3537,12 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["STUB_ONLY"] == "1" {
+            supportTests()
+            stubTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         dmgAttachmentTests()
         if ProcessInfo.processInfo.environment["DMG_ATTACH_ONLY"] == "1" {
             print("TESTS: \(passed) passed, \(failed) failed")
