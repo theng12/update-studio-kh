@@ -305,6 +305,38 @@ try:
           and (k / "state/downloads/keep").read_text() == "saved-app-data" and recorded() == [],
           "invalid repair staging leaves data and the running job untouched")
 
+    # A saved connection repairs its own helper files and start file, with no code: the config is
+    # read from that Mac's own base and never rewritten.
+    def saved_repair_home(tag):
+        h, k, p = incomplete(tag)
+        (k / "base").mkdir(parents=True, exist_ok=True)
+        saved = json.loads(installed_config.read_text())
+        saved["stateDir"] = str(k / "state")
+        saved["stubBase"] = str(k / "base")
+        bytes_ = json.dumps(saved).encode()
+        (k / "base/config.json").write_bytes(bytes_)
+        (k / "base/config.json").chmod(0o600)
+        return h, k, p, bytes_
+
+    reset_launchd("repair-saved", running=True)
+    h, k, p, saved_bytes = saved_repair_home("repair-saved")
+    result = run(installer, k / "base/config.json", h, "--repair-saved")
+    check(result.returncode == 0 and (k / "base/config.json").read_bytes() == saved_bytes
+          and (k / "base/versions/1.0.0/khu").is_file() and (k / "bin/khu-stub").is_file()
+          and (k / "state/downloads/keep").read_text() == "saved-app-data",
+          "saved repair finishes the helper files and keeps the saved connection and data byte for byte")
+    check(recorded() == [["print", label], ["bootout", label], ["bootstrap", domain, str(p)]],
+          "saved repair stops the loaded job and starts exactly one replacement")
+    check((k / "base/config.json").stat().st_mode & 0o777 == 0o600, "saved repair keeps the connection private")
+
+    reset_launchd("repair-saved-other")
+    h, k, p, saved_bytes = saved_repair_home("repair-saved-other")
+    other = work / "other-config.json"
+    other.write_bytes(saved_bytes)
+    result = run(installer, other, h, "--repair-saved")
+    check(result.returncode != 0 and recorded() == [] and (k / "base/config.json").read_bytes() == saved_bytes,
+          "saved repair refuses a config that is not this Mac's own")
+
     reset_launchd("repair-copy-failed")
     h, k, p = incomplete("repair-copy-failed")
     old_current = os.readlink(k / "base/current")

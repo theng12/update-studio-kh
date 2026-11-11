@@ -103,9 +103,41 @@ enum FrontDoor {
             // An isolated home never starts this Mac's real helper.
             if !isolated {
                 do { try Connect.startInstalledAgent(home: home) }
-                catch { say("Studio Launcher could not start", "\(error)"); exit(1) }
+                catch {
+                    var failure = "\(error)"
+                    // Repair is offered only for the saved helper files or start file being
+                    // missing (startup's print said the job is absent, and it is not disabled).
+                    // A disabled, unreadable or refused startup is left exactly as macOS has it.
+                    let incomplete = failure.contains("needs its start file repaired")
+                        || failure.contains("needs its helper files repaired")
+                    let kit = env["KHU_CONNECT_KIT"].map { URL(fileURLWithPath: $0) }
+                        ?? Bundle.main.resourceURL?.appendingPathComponent("khu-agent")
+                    if incomplete, let kit, FileManager.default.fileExists(atPath: kit.appendingPathComponent("MANIFEST.json").path),
+                       (try? Connect.publisher(kit: kit)) != nil {
+                        switch ConnectionWindow.runSetupRepair(kit: kit, home: home, reason: failure) {
+                        case .connected:
+                            if !askHelper(seconds: 30) {
+                                say("Studio Launcher KH did not answer",
+                                    "The saved setup was repaired, but its window did not answer. Close this window and open Studio Launcher again.")
+                            }
+                            exit(0)
+                        case .cancelled:
+                            exit(0)
+                        }
+                    }
+                    if incomplete {
+                        failure += "\n\nThis copy has no setup kit inside it, so it cannot repair the helper. Open Studio Launcher KH "
+                            + "from the SSD's “1 Install Apps/0 - Start here - Studio Launcher KH” folder."
+                    } else {
+                        failure += "\n\nNothing was changed: this copy repairs only a saved helper whose files or start file are missing."
+                    }
+                    say("Studio Launcher could not start", failure)
+                    exit(1)
+                }
                 if !askHelper(seconds: 30) {
-                    say("Studio Launcher KH did not answer", "The helper is registered with macOS, but its window did not answer within 30 seconds. Your saved connection and settings are kept. Share this startup reason for repair.")
+                    say("Studio Launcher KH did not answer",
+                        "The helper is registered with macOS, but its window did not answer within 30 seconds. "
+                        + "Your saved connection and settings are kept. Close this window and open Studio Launcher again.")
                 }
             }
             exit(0)

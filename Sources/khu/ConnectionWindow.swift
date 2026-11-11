@@ -13,6 +13,8 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     private enum Mode {
         case firstRun(kit: URL, home: URL)
         case repair(configFile: URL, plan: Connect.RepairPlan)
+        /// A saved setup whose helper files or start file are incomplete: no code, no enrolment.
+        case setupRepair(kit: URL, home: URL, plan: Connect.RepairPlan, reason: String)
     }
 
     private enum State { case idle, working, refused, done }
@@ -41,6 +43,12 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         return nil
     }
 
+    /// Where typing starts: the code, or the only button a repair has.
+    private var initialField: NSView {
+        if case .setupRepair = mode { return connectButton }
+        return codeField
+    }
+
     private init(mode: Mode) {
         self.mode = mode
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 380),
@@ -48,12 +56,14 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         super.init()
 
         let repair: Bool
+        let setupRepair: Bool
         switch mode {
-        case .firstRun: repair = false
-        case .repair: repair = true
+        case .firstRun: repair = false; setupRepair = false
+        case .repair: repair = true; setupRepair = false
+        case .setupRepair: repair = false; setupRepair = true
         }
-        window.title = repair ? "Pair again with Update Studio" : "Connect to Update Studio"
-        connectButton.title = repair ? "Pair again" : "Connect"
+        window.title = setupRepair ? "Repair this Mac's setup" : repair ? "Pair again with Update Studio" : "Connect to Update Studio"
+        connectButton.title = setupRepair ? "Repair" : repair ? "Pair again" : "Connect"
         window.isReleasedWhenClosed = false
         window.delegate = self
 
@@ -80,6 +90,16 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             destination.drawsBackground = false
             nameField.stringValue = plan.machine
             nameField.isEnabled = false
+        case .setupRepair(_, _, let plan, let reason):
+            intro = Self.wrap("The saved connection is kept exactly as it is: this Mac's name, address, pinned key, apps, "
+                + "settings and pauses. The incomplete helper files and start file are rebuilt from this app's verified "
+                + "setup kit. This does not pair again or enrol this Mac.\n\nStartup said: \(reason)")
+            destination.stringValue = plan.feedURL
+            destination.isEditable = false
+            destination.isBezeled = false
+            destination.drawsBackground = false
+            nameField.stringValue = plan.machine
+            nameField.isEnabled = false
         }
         destination.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         destination.isSelectable = true
@@ -88,7 +108,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         codeField.placeholderString = "123-456"
         codeField.setAccessibilityLabel("Pairing code")
 
-        let nameHint = Self.wrap(repair
+        let nameHint = Self.wrap(setupRepair || repair
             ? "This Mac keeps the name it is already enrolled under; it cannot be changed here."
             : "This Mac appears in Update Studio under this name.")
         nameHint.textColor = .secondaryLabelColor
@@ -110,11 +130,9 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         cancelButton.action = #selector(cancelPressed)
         cancelButton.keyEquivalent = "\u{1b}"
 
-        let rows = NSStackView(views: [
-            Self.row("Update Studio", destination),
-            Self.row("Name for this Mac", nameField),
-            Self.row("Pairing code", codeField),
-        ])
+        var rowViews = [Self.row("Update Studio", destination), Self.row("Name for this Mac", nameField)]
+        if !setupRepair { rowViews.append(Self.row("Pairing code", codeField)) }
+        let rows = NSStackView(views: rowViews)
         rows.orientation = .vertical
         rows.alignment = .leading
         rows.spacing = 10
@@ -152,7 +170,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         ])
         content.layoutSubtreeIfNeeded()
         window.setContentSize(content.fittingSize)
-        window.initialFirstResponder = codeField
+        window.initialFirstResponder = initialField
     }
 
     /// First run: the kit's window, to completion — connected (the setup finished) or cancelled
@@ -185,6 +203,36 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         return present(ConnectionWindow(mode: .repair(configFile: configFile, plan: plan)))
     }
 
+    /// Repair this Mac's saved setup, without a code: only after the plain confirmation. The
+    /// saved connection is never rewritten; a kit for another publisher is refused before the
+    /// window opens, and Cancel repairs nothing.
+    static func runSetupRepair(kit: URL, home: URL, reason: String) -> Outcome {
+        let configFile = Connect.configFile(stateDir: home.appendingPathComponent("Library/KHUpdater/state"))
+        let plan: Connect.RepairPlan
+        do {
+            plan = try Connect.repairPlan(configFile: configFile)
+            guard try Connect.publisher(kit: kit).publicKey == plan.publicKey else {
+                throw khuFail("This Launcher's setup kit belongs to a different Update Studio. "
+                    + "Open the Studio Launcher KH copy this Mac was set up with; its saved trust was kept.")
+            }
+        } catch {
+            let a = NSAlert()
+            a.messageText = "This Mac's setup cannot be repaired from this copy"
+            a.informativeText = "\(error)"
+            a.runModal()
+            return .cancelled
+        }
+        let confirm = NSAlert()
+        confirm.messageText = "Repair this Mac's setup?"
+        confirm.informativeText = "The saved connection is kept exactly as it is: this Mac's name, address, pinned key, "
+            + "apps, settings and pauses. The incomplete helper files and start file are rebuilt from this app's "
+            + "verified setup kit. This does not pair again or enrol this Mac.\n\nStartup said: \(reason)"
+        confirm.addButton(withTitle: "Repair")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else { return .cancelled }
+        return present(ConnectionWindow(mode: .setupRepair(kit: kit, home: home, plan: plan, reason: reason)))
+    }
+
     private static func present(_ controller: ConnectionWindow) -> Outcome {
         NSApp.activate(ignoringOtherApps: true)
         controller.window.level = .normal
@@ -194,7 +242,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
                                                      y: frame.midY - controller.window.frame.height / 2))
         }
         controller.window.makeKeyAndOrderFront(nil)
-        controller.window.initialFirstResponder = controller.codeField
+        controller.window.initialFirstResponder = controller.initialField
         // Keep all windows usable while the existing synchronous caller waits for this result.
         while !controller.ended {
             if let event = NSApp.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.1),
@@ -220,14 +268,19 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     @objc private func connectPressed() {
         if state == .done { finish(.connected); return }
         guard state != .working else { return }
-        let code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !code.isEmpty else { show("Type the pairing code from Update Studio.", color: .systemRed, spinning: false); return }
         let machine: String
+        var code = ""
         switch mode {
+        case .setupRepair(_, _, let plan, _):
+            machine = plan.machine
         case .firstRun:
+            code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !code.isEmpty else { show("Type the pairing code from Update Studio.", color: .systemRed, spinning: false); return }
             machine = nameField.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
             guard !machine.isEmpty else { show("Type the name for this Mac.", color: .systemRed, spinning: false); return }
         case .repair(_, let plan):
+            code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !code.isEmpty else { show("Type the pairing code from Update Studio.", color: .systemRed, spinning: false); return }
             machine = plan.machine
         }
         let destination = destinationField.stringValue
@@ -243,7 +296,11 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         connectButton.isEnabled = false
         cancelButton.isEnabled = true
         cancelButton.title = "Cancel"
-        show("Connecting to Update Studio…", color: nil, spinning: true)
+        if case .setupRepair = mode {
+            show("Repairing this Mac's saved setup…", color: nil, spinning: true)
+        } else {
+            show("Connecting to Update Studio…", color: nil, spinning: true)
+        }
         let mode = self.mode
         DispatchQueue.global(qos: .userInitiated).async {
             var failure: String?
@@ -255,6 +312,11 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
                     // Confirmed only here because Pair again's confirmation was already accepted
                     // before this window could open (runRepair); Cancel sends nothing at all.
                     _ = try Connect.repair(configFile: file, code: code, confirmed: true)
+                case .setupRepair(let kit, let home, _, _):
+                    // Paused, already newer or any other status is not a repair; its own reason is
+                    // shown honestly rather than as a green success.
+                    let repaired = try Connect.repairSetup(kit: kit, home: home)
+                    guard repaired.status == "repaired" else { throw khuFail(repaired.reason) }
                 }
             }
             catch { failure = "\(error)" }
@@ -276,6 +338,8 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             if case .repair = mode {
                 show("Paired. This Mac's sign-in is renewed — the next update check uses it.",
                      color: .systemGreen, spinning: false)
+            } else if case .setupRepair = mode {
+                show("Repaired. The saved connection was kept and its helper was rebuilt.", color: .systemGreen, spinning: false)
             } else {
                 show("Connected. Studio Launcher KH is set up on this Mac.", color: .systemGreen, spinning: false)
             }
@@ -285,11 +349,14 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             if case .repair = mode {
                 connectButton.title = "Pair again"
                 show("Not paired: \(failure ?? "the pairing was refused")", color: .systemRed, spinning: false)
+            } else if case .setupRepair = mode {
+                connectButton.title = "Repair"
+                show("Not repaired: \(failure ?? "the saved setup could not be repaired")", color: .systemRed, spinning: false)
             } else {
                 connectButton.title = "Connect"
                 show("Not connected: \(failure ?? "the connection was refused")", color: .systemRed, spinning: false)
             }
-            window.makeFirstResponder(codeField)
+            window.makeFirstResponder(initialField)
         }
     }
 

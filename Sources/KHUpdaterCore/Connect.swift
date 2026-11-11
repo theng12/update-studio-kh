@@ -218,17 +218,10 @@ public enum Connect {
             throw khuFail("macOS could not read the helper's startup status (print exit \(loaded.exitCode)). No startup was attempted. \(kept) Share this startup reason for repair.")
         }
         let disabled = try query(["print-disabled", domain])
-        let text = disabled.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard disabled.exitCode == 0, disabled.stderr.isEmpty,
-              text.hasPrefix("disabled services = {"), text.hasSuffix("}") else {
+        guard let isDisabled = Self.disabledState(disabled) else {
             throw khuFail("macOS could not confirm whether the helper is disabled (print-disabled exit \(disabled.exitCode)). No startup was attempted. \(kept) Share this startup reason for repair.")
         }
-        let entries = text.components(separatedBy: "\n").filter { $0.contains("\"\(label)\"") }
-        let pattern = "^\\s*\"" + NSRegularExpression.escapedPattern(for: label) + "\"\\s*=>\\s*(true|false)\\s*;?\\s*$"
-        guard entries.count <= 1, entries.allSatisfy({ $0.range(of: pattern, options: .regularExpression) != nil }) else {
-            throw khuFail("The helper's disabled state could not be read safely. No startup was attempted. \(kept) Share this startup reason for repair.")
-        }
-        if entries.first?.range(of: "=>\\s*true", options: .regularExpression) != nil {
+        if isDisabled {
             throw khuFail("The helper is disabled in macOS. If you want it running, review System Settings > General > Login Items & Extensions. Nothing was enabled automatically. \(kept)")
         }
         let plist = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
@@ -246,6 +239,91 @@ public enum Connect {
         // Another normal launcher can win registration between the first print and bootstrap.
         if let again = try? query(["print", "\(domain)/\(label)"]), again.exitCode == 0 { return }
         throw khuFail("macOS refused to register the saved helper (bootstrap exit \(result.exitCode)). \(kept) Share this startup reason for repair; restarting alone does not identify the cause.")
+    }
+
+    /// Reads `launchctl print-disabled` strictly: true when this helper is disabled, false when
+    /// it is not, nil when the answer cannot be read safely — nothing is enabled on a guess.
+    static func disabledState(_ result: ShellResult) -> Bool? {
+        let label = "com.khupdater.agent"
+        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, result.stderr.isEmpty,
+              text.hasPrefix("disabled services = {"), text.hasSuffix("}") else { return nil }
+        let entries = text.components(separatedBy: "\n").filter { $0.contains("\"\(label)\"") }
+        let pattern = "^\\s*\"" + NSRegularExpression.escapedPattern(for: label) + "\"\\s*=>\\s*(true|false)\\s*;?\\s*$"
+        guard entries.count <= 1, entries.allSatisfy({ $0.range(of: pattern, options: .regularExpression) != nil }) else {
+            return nil
+        }
+        return entries.first?.range(of: "=>\\s*true", options: .regularExpression) != nil
+    }
+
+    /// Repair an existing, saved setup without a pairing code: keep every saved byte and rebuild
+    /// the incomplete helper files and start file from this Launcher's verified kit. The saved
+    /// trust, controller, name, apps, settings and pauses are never rewritten, and nobody is
+    /// enrolled. A paused, busy or disabled Mac is refused before anything runs; a kit for another
+    /// publisher, or one older than the helper already on this Mac, is refused too.
+    public static func repairSetup(kit: URL, home: URL, shell: Shell = SystemShell(),
+                                   now: Date = Date()) throws -> RecipeResult {
+        let base = home.appendingPathComponent("Library/KHUpdater/base")
+        let file = base.appendingPathComponent("config.json")
+        let state = home.appendingPathComponent("Library/KHUpdater/state")
+        guard let saved = try? Data(contentsOf: file) else {
+            throw khuFail("This Mac has no saved connection to repair. Pair it with a code first.")
+        }
+        let config = try JSON.decode(AgentConfig.self, from: saved)
+        guard URL(fileURLWithPath: config.stateDir).standardizedFileURL == state.standardizedFileURL,
+              config.stubBase.map({ URL(fileURLWithPath: $0).standardizedFileURL }) == base.standardizedFileURL else {
+            throw khuFail("This Mac uses a different helper layout; its saved settings were left unchanged.")
+        }
+        guard try publisher(kit: kit).publicKey == config.publicKey else {
+            throw khuFail("This Launcher's setup kit belongs to a different Update Studio; this Mac's saved trust was kept. "
+                + "Open the Studio Launcher KH copy this Mac was set up with.")
+        }
+        // The connect lock keeps a second enrolment out; the agent lock keeps a helper that is
+        // mid-run (its own agent.lock) from being stopped under it. Both are taken before any
+        // launchctl or installer call.
+        return try FileLock.withExclusive(home.appendingPathComponent("Library/.khu-connect.lock"), wait: false) {
+            try FileLock.withExclusive(state.appendingPathComponent("agent.lock"), wait: false) {
+                guard (try? Data(contentsOf: file)) == saved else {
+                    throw khuFail("This Mac's saved settings changed while repairing; try again.")
+                }
+                if HelperSettings.load(from: state).paused(at: now) {
+                    return RecipeResult(status: "paused", reason: "Helper updates are paused on this Mac. Its pause was kept.")
+                }
+                if let current = StubLayout(base: base).currentBinary() {
+                    let installed = StubLayout.version(of: current)
+                    let raw = (try? String(contentsOf: kit.appendingPathComponent("VERSION"), encoding: .utf8))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let version = raw, let order = VersionCompare.compare(version, installed) else {
+                        throw khuFail("The helper version could not be compared; the saved setup was left unchanged.")
+                    }
+                    if order < 0 {
+                        return RecipeResult(status: "current",
+                                            reason: "This Mac already has a newer helper (\(installed)); the saved setup was left unchanged.")
+                    }
+                }
+                // The installer starts the job whenever launchctl says it is not loaded, so the
+                // disabled state must be read here and honoured; nothing is enabled automatically.
+                let disabled = try shell.run("/bin/launchctl", arguments: ["print-disabled", "gui/\(getuid())"], timeout: 15)
+                guard let isDisabled = Self.disabledState(disabled) else {
+                    throw khuFail("macOS could not confirm whether the helper is disabled (print-disabled exit \(disabled.exitCode)). Nothing was changed.")
+                }
+                if isDisabled {
+                    throw khuFail("The helper is disabled in macOS, so it was not repaired. If you want it running, review System Settings > General > Login Items & Extensions. Nothing was enabled automatically. Your saved connection and settings are kept.")
+                }
+                let script = kit.appendingPathComponent("install-agent.sh")
+                let result = try shell.run("/bin/bash", arguments: [script.path, file.path, home.path, "--repair-saved"],
+                                           timeout: 120)
+                guard result.exitCode == 0 else {
+                    let reason = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    throw khuFail(reason.isEmpty ? "The saved helper could not be repaired. Your settings and data are kept." : reason)
+                }
+                guard (try? Data(contentsOf: file)) == saved else {
+                    throw khuFail("This Mac's saved settings were changed during repair; nothing else was touched.")
+                }
+                return RecipeResult(status: "repaired",
+                                    reason: "The helper files and start file were rebuilt from this Launcher's verified kit; the saved connection was kept.")
+            }
+        }
     }
 
     // MARK: staying connected (the settings page), never a second enrolment
