@@ -316,7 +316,9 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
                     // Paused, already newer or any other status is not a repair; its own reason is
                     // shown honestly rather than as a green success.
                     let repaired = try Connect.repairSetup(kit: kit, home: home)
-                    guard repaired.status == "repaired" else { throw khuFail(repaired.reason) }
+                    guard repaired.status == "repaired" else {
+                        throw khuFail(repaired.reason ?? "The helper was not repaired (\(repaired.status)). Your saved connection and settings are kept.")
+                    }
                 }
             }
             catch { failure = "\(error)" }
