@@ -313,7 +313,10 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
                     // before this window could open (runRepair); Cancel sends nothing at all.
                     _ = try Connect.repair(configFile: file, code: code, confirmed: true)
                 case .setupRepair(let kit, let home, _, _):
-                    _ = try Connect.repairSetup(kit: kit, home: home)
+                    // Paused, already newer or any other status is not a repair; its own reason is
+                    // shown honestly rather than as a green success.
+                    let repaired = try Connect.repairSetup(kit: kit, home: home)
+                    guard repaired.status == "repaired" else { throw khuFail(repaired.reason) }
                 }
             }
             catch { failure = "\(error)" }
