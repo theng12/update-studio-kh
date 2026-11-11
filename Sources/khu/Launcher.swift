@@ -135,9 +135,23 @@ enum FrontDoor {
                     exit(1)
                 }
                 if !askHelper(seconds: 30) {
-                    say("Studio Launcher KH did not answer",
-                        "The helper is registered with macOS, but its window did not answer within 30 seconds. "
-                        + "Your saved connection and settings are kept. Close this window and open Studio Launcher again.")
+                    let reason = "The helper is registered with macOS, but its window did not answer within 30 seconds. "
+                        + "Your saved connection and settings are kept."
+                    let kit = env["KHU_CONNECT_KIT"].map { URL(fileURLWithPath: $0) }
+                        ?? Bundle.main.resourceURL?.appendingPathComponent("khu-agent")
+                    // A registered stub can still have missing runtime files. The deliberate repair
+                    // rechecks the agent lock, pause, version and disabled state before replacement.
+                    if let kit, (try? Connect.publisher(kit: kit)) != nil {
+                        switch ConnectionWindow.runSetupRepair(kit: kit, home: home, reason: reason) {
+                        case .connected:
+                            if !askHelper(seconds: 30) {
+                                say("Studio Launcher KH did not answer", "The saved setup was repaired, but its window did not answer. Your saved connection and settings are kept.")
+                            }
+                        case .cancelled: break
+                        }
+                    } else {
+                        say("Studio Launcher KH did not answer", reason + " Open the trusted Launcher copy with its setup kit to repair the helper.")
+                    }
                 }
             }
             exit(0)
