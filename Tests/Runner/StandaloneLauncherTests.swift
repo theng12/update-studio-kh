@@ -490,5 +490,26 @@ func standaloneLauncherTests() {
                    && !fm.fileExists(atPath: folder.appendingPathComponent(".\(storyName).khu-staging").path),
                    "SL22 the refusal leaves no journal for recovery and retires the staged copy recoverably")
         }
+        // Slack in the promotion look must not matter: on the manual route the swap still asks
+        // nothing to stop, even though the app was quiet at that read and stays quiet throughout.
+        do {
+            let (_, cfg, folder, shell, http) = storySetup("story-quiet-hand")
+            let target = makeApp(folder.appendingPathComponent(storyName), version: "1.0", id: storyBundle)
+            let done = HandActions()
+            let quiet = AppControl(isRunning: { false },
+                                   quit: { done.quits += 1; return true },
+                                   launch: { done.launches += 1 },
+                                   stopService: { done.stops += 1; return true },
+                                   healthy: { _ in true }, healthSettle: 0)
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in quiet },
+                                            requested: [appID], appFolders: [folder])
+            expect(result?.apps.first { $0.app == appID }?.installed == "2.0" && marker(target) == "2.0",
+                   "SL23 a quiet explicit self-updating install still installs")
+            expect(done.quits == 0 && done.stops == 0 && done.launches == 0,
+                   "SL23 the hand route asks nothing to stop and leaves the quiet app stopped")
+            expect(!Recipe.isUnresolved(stateDir: cfg.stateDir, app: appID)
+                   && !fm.fileExists(atPath: folder.appendingPathComponent(".\(storyName).khu-staging").path),
+                   "SL23 the quiet hand install leaves no journal or staged copy")
+        }
     }
 }

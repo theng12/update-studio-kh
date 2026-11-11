@@ -344,9 +344,13 @@ public enum Recipe {
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
             throw khuFail(message)
         }
-        guard control.quit() else { try abandon("the app did not quit; the installed app was kept") }
-        appQuit = true
-        guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
+        // The hand route never asks anything to stop: it proved no quiet point, so an app or service
+        // that started after the last look is left running while the swap goes ahead without it.
+        if !refuseIfRunning {
+            guard control.quit() else { try abandon("the app did not quit; the installed app was kept") }
+            appQuit = true
+            guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
+        }
 
         // 4. Promote. Every throw from here restores the previous bundle before it is reported.
         do {
