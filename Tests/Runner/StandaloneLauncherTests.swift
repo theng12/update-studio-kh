@@ -213,4 +213,154 @@ func standaloneLauncherTests() {
         let down = try? Agent.installLocal(older, app: id, installed: "1.0", cfg: appCfg, stateDir: URL(fileURLWithPath: cfg.stateDir), shell: shell, control: { _, _ in control }, force: true)
         expect(down?.status == "current" && marker(target) == "1.0", "SL6 reinstall cannot turn into an SSD downgrade")
     }
+    // An app that updates itself (Story and Hub keep their own updaters): the person at this Mac
+    // may install or update it by choosing it, and nothing else may.
+    do {
+        let appID = "story", storyBundle = "com.fixture.story", storyName = "Story Studio KH.app"
+        func storySetup(_ tag: String, version: String = "2.0") -> (Rig, AgentConfig, URL, StandaloneShell, StandaloneHTTP) {
+            let rig = Rig("standalone-" + tag)
+            let folder = rig.root.appendingPathComponent("Applications")
+            try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            let mount = rig.root.appendingPathComponent("mount")
+            _ = makeApp(mount.appendingPathComponent(storyName), version: version, id: storyBundle)
+            let artifact = rig.artifact("Story Studio KH.dmg", "story installer bytes")
+            try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: appID, version: version, artifact: artifact,
+                                       kind: "app-dmg", allowSame: false, meta: { _ in
+                AppMeta(name: "Story Studio KH", bundleID: storyBundle, bundleName: storyName, version: version, iconPNG: nil)
+            })
+            let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+            let cfg = agentConfig(rig, token: token, apps: [:])
+            var settings = HelperSettings(); settings.autoInstall = true
+            try! settings.save(to: URL(fileURLWithPath: cfg.stateDir))
+            return (rig, cfg, folder, StandaloneShell(root: rig.root, mount: mount), StandaloneHTTP(rig.server))
+        }
+        func storySSD(_ rig: Rig, _ bytes: Data, version: String, mainOnly: Bool = false) -> SSDSource {
+            let ssd = rig.root.appendingPathComponent("SSD-" + UUID().uuidString.prefix(4))
+            try! fm.createDirectory(at: ssd, withIntermediateDirectories: true)
+            let file = ssd.appendingPathComponent("Story.dmg")
+            try! bytes.write(to: file)
+            var app = SSDApp(id: appID, name: "Story Studio KH", version: version, bundleID: storyBundle, bundleName: storyName,
+                             file: file.lastPathComponent, sha256: Signing.sha256Hex(bytes), updatesItself: true)
+            app.bytes = Int64(bytes.count); app.mainMacOnly = mainOnly
+            return SSDSource(volume: "Fixture SSD", root: ssd, index: SSDIndex(apps: [app]))
+        }
+        let control = AppControl(isRunning: { false }, quit: { true }, launch: {}, healthy: { _ in true }, healthSettle: 0)
+        // A fresh Mac with only the remote Updater: the app is offered, and installed by hand.
+        do {
+            let (rig, cfg, folder, shell, http) = storySetup("story-feed-only")
+            let offer = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            let row = offer?.apps.first { $0.app == appID }
+            expect(row?.statusOnly == true && row?.manuallyInstallable == true && row?.status == HelperApp.notInstalled
+                   && row?.installed == nil && offer?.commandsRun == 0,
+                   "SL10 an app that updates itself is offered on a Mac that does not have it, and nothing installs by itself")
+            let installed = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: [appID], appFolders: [folder])
+            expect(installed?.apps.first { $0.app == appID }?.installed == "2.0" && http.downloads == 1,
+                   "SL10 the person chooses it: it installs from the signed feed")
+            // Automatic is on for everything else, and still leaves this app alone.
+            try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: appID, version: "3.0",
+                                       artifact: rig.artifact("Story 3.dmg", "story three bytes"), kind: "app-dmg",
+                                       allowSame: false, meta: { _ in
+                AppMeta(name: "Story Studio KH", bundleID: storyBundle, bundleName: storyName, version: "3.0", iconPNG: nil)
+            })
+            let automatic = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(automatic?.commandsRun == 0 && automatic?.apps.first { $0.app == appID }?.installed == "2.0" && http.downloads == 1,
+                   "SL10 Automatic leaves an app that updates itself alone, and offers the newer version instead")
+            // The publisher's own order is not the person's choice: it never installs it.
+            let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+            _ = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                     body: Data(#"{"machine":"mac1","app":"story"}"#.utf8)), remote: "127.0.0.1")
+            let ordered = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(ordered?.apps.first { $0.app == appID }?.installed == "2.0" && http.downloads == 1,
+                   "SL10 a remote order never installs an app that updates itself")
+        }
+        // The SSD copy of the same version installs from there, with no download.
+        do {
+            let (rig, cfg, folder, shell, http) = storySetup("story-current-ssd")
+            // The copy on the SSD has to be the bytes the server signed for that version, or the
+            // catalog refuses it as "not the bytes the server signed".
+            let signed = try! FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey)
+            let published = try! Data(contentsOf: rig.feed.appendingPathComponent("artifacts/\(signed!.apps[appID]!.file)"))
+            let ssd = storySSD(rig, published, version: "2.0")
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: [appID], ssd: [ssd], appFolders: [folder])
+            expect(result?.apps.first { $0.app == appID }?.installed == "2.0" && http.downloads == 0,
+                   "SL11 an app that updates itself installs from the SSD copy, with no download")
+        }
+        // An older SSD copy is an explicit first install; the newer server version stays available.
+        do {
+            let (rig, cfg, folder, shell, http) = storySetup("story-older-ssd")
+            let ssd = storySSD(rig, Data("older story bytes".utf8), version: "1.0")
+            let oldMount = rig.root.appendingPathComponent("old-mount")
+            _ = makeApp(oldMount.appendingPathComponent(storyName), version: "1.0", id: storyBundle)
+            shell.mount = oldMount
+            let first = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: ["ssd:" + appID], ssd: [ssd], appFolders: [folder])
+            let row = first?.apps.first { $0.app == appID }
+            expect(row?.installed == "1.0" && row?.available == "2.0" && http.downloads == 0,
+                   "SL12 an older SSD copy is an explicit first install, and the newer server version stays available")
+            shell.mount = rig.root.appendingPathComponent("mount")
+            let second = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: [appID], ssd: [ssd], appFolders: [folder])
+            expect(second?.apps.first { $0.app == appID }?.installed == "2.0" && http.downloads == 1,
+                   "SL12 the next explicit choice installs the newer version over the older one")
+        }
+        // A running app is kept: this route proves no quiet point.
+        do {
+            let (_, cfg, folder, shell, http) = storySetup("story-running")
+            let running = AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in true }, healthSettle: 0)
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in running }, requested: [appID], appFolders: [folder])
+            let row = result?.apps.first { $0.app == appID }
+            expect(row?.status == HelperApp.failed && row?.reason?.contains("No quiet point was proved") == true
+                   && http.downloads == 0 && !fm.fileExists(atPath: folder.appendingPathComponent(storyName).path),
+                   "SL13 a running app that updates itself is kept, and the refusal says why")
+        }
+        // An app only the main Mac may install stays off this Mac.
+        do {
+            let (rig, cfg, folder, shell, http) = storySetup("story-main-mac")
+            let ssd = storySSD(rig, Data("story installer bytes".utf8), version: "2.0", mainOnly: true)
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: [appID], ssd: [ssd], appFolders: [folder])
+            expect(result?.commandsRun == 0 && !fm.fileExists(atPath: folder.appendingPathComponent(storyName).path),
+                   "SL14 an app marked for the main Mac is not installed here")
+        }
+        // An older copy is never put over a newer installed app.
+        do {
+            let (rig, cfg, folder, shell, http) = storySetup("story-downgrade")
+            let ssd = storySSD(rig, Data("older story bytes".utf8), version: "1.0")
+            _ = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: [appID], appFolders: [folder])
+            let oldMount = rig.root.appendingPathComponent("old-mount")
+            _ = makeApp(oldMount.appendingPathComponent(storyName), version: "1.0", id: storyBundle)
+            shell.mount = oldMount
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: ["ssd:" + appID], ssd: [ssd], appFolders: [folder])
+            expect(result?.apps.first { $0.app == appID }?.installed == "2.0"
+                   && marker(folder.appendingPathComponent(storyName)) == "2.0",
+                   "SL15 an older SSD copy never replaces a newer installed app")
+        }
+        // An interrupted first install keeps its registration, and the next run finishes it.
+        do {
+            let (_, cfg, folder, shell, http) = storySetup("story-interrupted")
+            shell.refused = true
+            let failed = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: [appID], appFolders: [folder])
+            let saved = try? AtomicFile.readJSON([String: AppConfig].self, from: URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("launcher-apps.json"))
+            expect(failed?.apps.first { $0.app == appID }?.status == HelperApp.failed && saved?[appID] != nil
+                   && !fm.fileExists(atPath: folder.appendingPathComponent(storyName).path),
+                   "SL16 an interrupted first install keeps its recovery registration and leaves no partial app")
+            shell.refused = false
+            let retried = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: [appID], appFolders: [folder])
+            expect(retried?.apps.first { $0.app == appID }?.installed == "2.0",
+                   "SL16 the retry resumes from the preserved first-install registration")
+        }
+        // An install a killed run left half done is finished or undone for this app too.
+        do {
+            let (rig, base, folder, shell, http) = storySetup("story-recovery")
+            let installed = makeApp(folder.appendingPathComponent(storyName), version: "1.0", id: storyBundle)
+            var cfg = base
+            cfg.apps[appID] = AppConfig(bundlePath: installed.path, recipe: "status", bundleID: storyBundle)
+            let journal = InstallJournal(phase: "staged", installed: installed.path, staged: installed.path + ".staged",
+                                         rollback: URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("rollback-story/Story Studio KH.app").path,
+                                         previousVersion: "1.0", wasRunning: false, version: "2.0")
+            try! AtomicFile.writeJSON(journal, to: Recipe.journalURL(stateDir: cfg.stateDir, app: appID))
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(result?.notes.contains(where: { $0.contains("interrupted install was undone") }) == true
+                   && !fm.fileExists(atPath: Recipe.journalURL(stateDir: cfg.stateDir, app: appID).path),
+                   "SL17 an interrupted install of an app that updates itself is undone, and its journal is settled")
+            _ = rig
+        }
+    }
 }

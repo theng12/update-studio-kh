@@ -74,6 +74,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             var row: [String: Any] = [
                 "id": app.app, "name": app.name.isEmpty ? AppNames.display(app.app) : app.name, "status": busy == app.app ? HelperApp.updating : app.status,
                 "managed": app.managed, "statusOnly": app.statusOnly, "automatic": app.automatic, "hidden": hidden.contains(app.app),
+                "manuallyInstallable": app.manuallyInstallable,
                 "open": app.bundlePath != nil, "setup": app.setupFolder != nil, "canRollBack": app.canRollBack, "helper": app.app == "updater",
             ]
             row["installed"] = app.installed; row["available"] = app.available; row["reason"] = app.reason
@@ -201,7 +202,9 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         switch action {
         case "install", "update": helper.request(id)
         case "installSSD":
-            guard app?.installed == nil, app?.initialSSD != nil, app?.statusOnly == false else { break }
+            // An app that updates itself may still be installed by hand: the person asked for it.
+            guard app?.installed == nil, app?.initialSSD != nil,
+                  app?.statusOnly == false || app?.manuallyInstallable == true else { break }
             helper.request("ssd:" + id)
         case "reinstall": helper.request("reinstall:" + id)
         case "rollback":

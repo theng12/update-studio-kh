@@ -259,6 +259,23 @@ public enum Agent {
     /// let running work finish first.
     static let statusOnly: Set<String> = ["story", "hub", "status"]
     static let knownRecipes: Set<String> = statusOnly.union(["app-dmg", "gateway", "updater", "fake-for-tests"])
+    /// An app that updates itself: its own updater owns its life, so KH Updater never installs or
+    /// updates it by itself — Automatic and remote orders leave it alone. The person at the Mac may
+    /// still choose to install or update it by hand, from the Launcher. The app id and the recipe are
+    /// both markers; an SSD's own index marks every other app that keeps its own updater.
+    static func updatesItself(app: String, recipe: String? = nil, entry: CatalogEntry? = nil) -> Bool {
+        if statusOnly.contains(app) { return true }
+        if let recipe, statusOnly.contains(recipe) { return true }
+        return entry?.updatesItself ?? false
+    }
+    /// A Production app that updates itself is not replaced while it runs: this route proves no
+    /// quiet point, so the person is asked to finish the work first — the same rule the explicit
+    /// SSD action keeps. Nothing is touched and nothing is downloaded.
+    static func refusesWhileRunning(app: String, cfg: AppConfig, control: (String, AppConfig) -> AppControl) -> String? {
+        guard updatesItself(app: app, recipe: cfg.recipe) else { return nil }
+        guard control(app, cfg).isRunning() ?? true else { return nil }
+        return "Quit this app when its work is finished, then try again. No quiet point was proved."
+    }
     /// A future-dated feed is refused rather than allowed to become a high-water mark nobody can pass.
     static let futureSlack: TimeInterval = 24 * 3600
     /// How old a signed order reply may be, in either direction, before it is treated as a replay.
@@ -372,7 +389,7 @@ public enum Agent {
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
-        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key }) where ["app-dmg", "gateway"].contains(cfg.recipe) {
+        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key }) where ["app-dmg", "gateway", "status"].contains(cfg.recipe) {
             let before = try? AtomicFile.readJSON(InstallJournal.self, from: Recipe.journalURL(stateDir: stateDir.path, app: app))
             let note = try Recipe.recover(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app,
                                           control: control(app, cfg), controlForPath: { path in
@@ -598,7 +615,7 @@ public enum Agent {
             }
         }
 
-        var todo: [(app: String, id: String, action: String, explicit: Bool)] = []
+        var todo: [(app: String, id: String, action: String, explicit: Bool, manual: Bool)] = []
         for command in orders.commands where command.machine == config.machine {
             if let done = memory.done[command.id] {
                 // Already carried out; only the report was lost.
@@ -606,25 +623,28 @@ public enum Agent {
                 continue
             }
             if !todo.contains(where: { $0.app == command.app || $0.id == command.id }) {
-                todo.append((command.app, command.id, command.action, true))
+                // A remote order is the publisher's, not this Mac's: it never installs an app that
+                // updates itself, whoever asked for it there.
+                todo.append((command.app, command.id, command.action, true, false))
             }
         }
         // "Update now" from the menu-bar icon is this Mac's own order: it runs even while paused.
         for app in requested.sorted() where (config.apps[app] != nil || registrationErrors[app] != nil) && !todo.contains(where: { $0.app == app }) {
-            todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.update, true))
+            todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.update, true, true))
         }
         for app in rollbacks.sorted() where config.apps[app] != nil && !todo.contains(where: { $0.app == app }) {
-            todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.rollback, true))
+            todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.rollback, true, true))
         }
         // A pause from the menu holds Automatic only; the owner's orders and "Update now" still run.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
-        where publisherAvailable && !helper.paused(at: now) && helper.installsAutomatically && !statusOnly.contains(cfg.recipe)
+        where publisherAvailable && !helper.paused(at: now) && helper.installsAutomatically
+            && !updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app })
             && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic) {
             guard !todo.contains(where: { $0.app == app }), let entry = feed.apps[app] else { continue }
             guard memory.rejected[app] != entry.sha256 else { continue }  // failed here before: wait for a new artifact
             let current = installed[app]
             if current == nil || VersionCompare.isNewer(entry.version, than: current!) {
-                todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false))
+                todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false, false))
             }
         }
         try remember()
@@ -666,7 +686,7 @@ public enum Agent {
                     }
                     res = try install(app: item.app, feed: feed, installed: current, config: config,
                                       serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
-                                      force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks)
+                                      force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual)
                 case ServerCommand.vendorInstall:
                     guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
                         throw khuFail("vendor install requires an explicit signed order for this Mac")
@@ -749,12 +769,18 @@ public enum Agent {
             let installed = cfg?.recipe == "updater" ? selfVersion(config: config, executable: executable) : info?.version
             let last = memory.done.values.filter { $0.app == app }.max { $0.at < $1.at }.map { ($0.status, $0.reason) }
             // An app its SSD marks as updating itself is shown that way, whatever this Mac's recipe.
-            let only = (cfg.map { statusOnly.contains($0.recipe) } ?? false) || (entry?.updatesItself ?? false)
+            let only = updatesItself(app: app, recipe: cfg?.recipe, entry: entry)
             let available = cfg?.recipe == "updater" ? feed.apps[app]?.version : (entry?.available ?? feed.apps[app]?.version)
-            let (status, reason) = HelperApp.status(installed: installed, available: only ? nil : available, statusOnly: only, last: last)
+            // An app that updates itself is never installed by KH Updater on its own, but the person
+            // at this Mac may install or update it by choosing it: that needs an installer and the
+            // app's own identity, so the Launcher can offer the right action.
+            let hasOffer = entry?.ssd != nil || entry?.initialSSD != nil || feed.apps[app] != nil
+            let manual = only && hasOffer && entry?.bundleID != nil && entry?.bundleName != nil
+            let (status, reason) = HelperApp.status(installed: installed, available: available, statusOnly: only, manual: manual, last: last)
             var row = HelperApp(app: app, installed: installed, available: available, statusOnly: only,
                                 automatic: !only && cfg != nil && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg!.automatic),
                                 status: status, reason: reason)
+            row.manuallyInstallable = manual
             // The build and byte identity of what is installed now: nil when the bundle carries no
             // build or its executable cannot be read — a row reports "not checked", never a match.
             row.installedBuild = info?.build
@@ -773,12 +799,14 @@ public enum Agent {
             row.serverVersion = feed.apps[app]?.version
             row.ssdVersion = entry?.ssd?.version ?? entry?.initialSSD?.version
             if installed == nil, let local = entry?.initialSSD, let server = feed.apps[app],
-               VersionCompare.isNewer(server.version, than: local.version), !only {
+               VersionCompare.isNewer(server.version, than: local.version), !only || manual {
                 row.initialSSD = "\(local.volume) · \(local.version)"
             }
             if let cfg, installed != nil, cfg.recipe != "updater" {
                 row.installedAt = ((try? FileManager.default.attributesOfItem(atPath: cfg.bundlePath))?[.modificationDate] as? Date).map(ISO.string)
-                row.canRollBack = FileManager.default.fileExists(atPath: Recipe.Paths(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app).rollback.path)
+                // An app that updates itself is never rolled back by KH Updater, so it offers no
+                // rollback: a button that could only be refused is no help.
+                row.canRollBack = !only && FileManager.default.fileExists(atPath: Recipe.Paths(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app).rollback.path)
             }
             if let cfg, installed != nil, cfg.recipe != "updater" { row.bundlePath = cfg.bundlePath }
             // The icon read from the app's own bundle (cached from an SSD or the feed), else the installed copy's.
@@ -837,7 +865,7 @@ public enum Agent {
         guard let cfg = config.apps[app] else {
             return RecipeResult(status: "refused", reason: "\(app) is not configured on this Mac")
         }
-        if statusOnly.contains(cfg.recipe) {
+        if updatesItself(app: app, recipe: cfg.recipe) {
             return RecipeResult(status: "refused", reason: "\(app) is updated by its own updater; KH Updater will not roll it back")
         }
         switch cfg.recipe {
@@ -867,9 +895,18 @@ public enum Agent {
 
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
-                        local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = []) throws -> RecipeResult {
+                        local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = [],
+                        manual: Bool = false) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
-        if statusOnly.contains(cfg.recipe) { return RecipeResult(status: "status_only", reason: "updated by its own updater") }
+        // An app that updates itself is never installed by KH Updater on its own: Automatic and a
+        // remote order leave it alone. Only a choice made here, at this Mac, may install it.
+        if updatesItself(app: app, recipe: cfg.recipe), !manual {
+            return RecipeResult(status: "status_only", reason: "updated by its own updater")
+        }
+        // A running Production app is kept: this route proves no quiet point.
+        if let refusal = refusesWhileRunning(app: app, cfg: cfg, control: control) {
+            return RecipeResult(status: "refused", reason: refusal)
+        }
         // An install this Mac could not finish or undo is not a settled app: an order for it must
         // not be answered "current" while a rollback is still owed. The next run picks it up.
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
@@ -903,7 +940,7 @@ public enum Agent {
         }
         DownloadControl.updateProgress("installing")
         switch cfg.recipe {
-        case "app-dmg", "gateway":
+        case "app-dmg", "gateway", "status":
             return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg))
         case "updater":
@@ -950,7 +987,7 @@ public enum Agent {
         DownloadControl.updateProgress("installing")
         var result: RecipeResult
         switch cfg.recipe {
-        case "app-dmg", "gateway":
+        case "app-dmg", "gateway", "status":
             result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg), verifyStaged: { path in
                 guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }

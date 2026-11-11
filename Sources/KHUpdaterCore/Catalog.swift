@@ -124,7 +124,8 @@ public struct CatalogEntry: Sendable, Equatable {
     public var setupFolder: String?
     public var icon: String?
     public var notes: String?
-    /// For an app that updates itself: the newest version an SSD carries (it is never installed here).
+    /// For an app that updates itself: the newest version an SSD carries (it is never installed by
+    /// KH Updater on its own; only the person at the Mac may install it).
     public var selfVersion: String?
     public var words = AppWords()
     public var released: String?
@@ -247,7 +248,7 @@ public enum Catalog {
                 if app.mainMacOnly == true { entry.mainMacOnly = true }
                 if let setup = app.setup { entry.setupFolder = source.root.appendingPathComponent(setup).path }
                 if let icon = app.icon, entry.icon == nil { entry.icon = source.root.appendingPathComponent(icon).path }
-                if let file = app.file, let sha = app.sha256, !app.updatesItself {
+                if let file = app.file, let sha = app.sha256 {
                     // The server's own copy of this app, when the feed names one.
                     let server = feed?.apps.values.first { $0.bundleID != nil && $0.bundleID == app.bundleID } ?? feed?.apps[app.id]
                     switch Catalog.ssdCopy(app, file: file, sha: sha, source: source, server: server) {
@@ -298,8 +299,11 @@ public enum Catalog {
                 let path = folder.appendingPathComponent(name).path
                 guard let info = try? BundleInfo.read(path), let hit = known[info.identifier],
                       config.apps[hit.id] == nil, found[hit.id] == nil, !taken.contains(LiveControl.realPath(path)) else { continue }
-                found[hit.id] = AppConfig(bundlePath: path, recipe: hit.updatesItself ? "status" : "app-dmg",
-                                          automatic: !hit.updatesItself, bundleID: info.identifier)
+                // An app that keeps its own updater is never managed here: it is reported, and only
+                // the person at this Mac may install or update it.
+                let itself = hit.updatesItself || Agent.updatesItself(app: hit.id)
+                found[hit.id] = AppConfig(bundlePath: path, recipe: itself ? "status" : "app-dmg",
+                                          automatic: !itself, bundleID: info.identifier)
             }
         }
         return found

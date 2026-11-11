@@ -120,7 +120,13 @@ function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['U
 function versionLine(a){if(a.installed&&a.available&&a.installed!=a.available&&a.status!='Updates itself')return el('span',{class:'ver'},a.installed+' → ',el('b',{},a.available));
  const v=a.installed||a.available;return v?el('span',{class:'ver'},el('b',{},v)):null}
 function mainAction(a){if(a.status=='Updating…')return null;
- if(a.statusOnly)return a.setup?['Open Setup Folder','setup','']:(a.open?['Open','open','']:null);
+ if(a.statusOnly){
+  // An app that updates itself is never installed by KH Updater on its own, but the person at
+  // this Mac may install or update it here, by choosing it.
+  if(a.manuallyInstallable&&a.available&&!a.installed)return ['Install','install','primary'];
+  if(a.manuallyInstallable&&a.available&&a.installed&&a.installed!=a.available)return ['Update','update','primary'];
+  return a.setup?['Open Setup Folder','setup','']:(a.open?['Open','open','']:null);
+ }
  if(!a.managed||a.installed==null)return a.available?['Install','install','primary']:null;
  if((a.status=='Update available'||a.status=='Failed')&&a.available)return ['Update','update','primary'];
  return a.open&&!a.helper?['Open','open','']:null}
@@ -206,7 +212,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
- if(a.initialSSD&&!a.installed&&!a.statusOnly)add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
+ if(a.initialSSD&&!a.installed&&(!a.statusOnly||a.manuallyInstallable))add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
  if(a.notes&&a.notes.length)add('Release notes',()=>openDetail(a.id,true));
  if(a.open&&!a.helper){add('Open',()=>post({action:'open',app:a.id}));add('Show in Finder',()=>post({action:'finder',app:a.id}))}
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
@@ -235,7 +241,7 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     el('button',{class:'btn icon',title:'Next app','aria-label':'Next app',onclick:()=>step(1)},svg('M6 3l5 5-5 5')),
     el('button',{class:'btn icon',title:'Close','aria-label':'Close',onclick:()=>{detail=null;closeLayers()}},svg('M4 4l8 8M12 4l-8 8')))),
   el('div',{class:'cols'},
-   el('div',{},a.description?el('p',{class:'desc'},a.description):el('p',{class:'desc sub'},a.statusOnly?(a.source=='Official vendor'?(a.setup?'The verified official installer is waiting in its setup folder.':'This app is installed from its official vendor’s installer.'):'This app updates itself from its own installer. Its setup folder on the SSD has the steps.'):'No description yet.'),
+   el('div',{},a.description?el('p',{class:'desc'},a.description):el('p',{class:'desc sub'},a.statusOnly?(a.manuallyInstallable?'This app updates itself from its own installer. You can still install or update it here whenever you choose.':(a.source=='Official vendor'?(a.setup?'The verified official installer is waiting in its setup folder.':'This app is installed from its official vendor’s installer.'):'This app updates itself from its own installer. Its setup folder on the SSD has the steps.')):'No description yet.'),
     a.features&&a.features.length?[el('h4',{},'Features'),el('ol',{class:'feat'},a.features.map(f=>el('li',{},el('b',{},f.title),f.text?el('span',{},f.text):null)))]:null),
    el('div',{},facts.length?[el('h4',{},'Latest release'),el('dl',{class:'facts'},facts.map(f=>el('div',{},el('dt',{},f[0]),el('dd',{class:'num'},f[1]))))]:null,
     a.initialSSD?el('p',{class:'sub'},'The SSD can install '+a.initialSSD+' first from the More menu. Then Update offers the newer server version. Your Automatic setting is kept.'):null,

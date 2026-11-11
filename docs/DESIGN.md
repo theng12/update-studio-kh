@@ -331,7 +331,10 @@ Automatic runs, preventing immediate reinstallation. Successful status posts and
 survive a later feed outage. HTTP refusals, TLS/cancellation errors and invalid signed feeds never
 grant offline permission. Uninstall turns that app's Automatic setting off. Installed, server and SSD versions remain separate
 facts; the installed executable hash is not the installer hash. Existing status-only and main-Mac
-policies remain in force. Native Edit shortcuts and text-input focus use normal responder behavior.
+policies remain in force, with one addition: an app that updates itself may be installed or updated
+by hand when the person at this Mac chooses it in the Launcher, and only then — Automatic and a
+remote order leave it alone, and a running one is kept until its work is finished. Native Edit
+shortcuts and text-input focus use normal responder behavior.
 
 An order runs once (by id; a redelivered one is re-reported, not re-run). Done records are not
 trimmed before fetching orders, and IDs in the latest reply are protected from trimming. An order for the
@@ -451,6 +454,15 @@ block replacement. Relaunch and recovery revalidate saved labels before non-forc
 and health requires those hosts running again. Gateway keeps its separate PID/port protocol.
 
 `story`, `hub`: status only in the online agent — those apps keep their own updaters. `updater`: self-update (below).
+
+An app that updates itself may still be installed or updated by hand, from the Launcher. The choice is
+local and explicit: Automatic and a remote order never install one, and the app keeps its own policy
+afterwards (it is registered under the `status` recipe, so no Automatic switch and no rollback are
+offered for it). The installer is the SSD copy when the drive carries one and the signed feed artifact
+otherwise, checked with the same containment, checksum, size, bundle-identity, staged-signature and
+health rules as any other install. An older SSD copy is an explicit first-install choice only, as
+elsewhere. A running app is kept — this route proves no Production quiet point — and the refusal says
+so plainly; nothing is downloaded and nothing is touched.
 
 The explicit SSD `ssd-update --volume` action updates or repairs installed KH bundles, including equal versions, and installs only Launcher when absent. It keeps newer versions, checks the SSD index identities and SHA-256, copies each installer privately and verifies those bytes again before mounting, and verifies the staged app signature through the existing journal/rollback recipe. A local pause holds this action. Running Hub, Story or Gateway is kept because this action has no Production quiet-point proof. The selected SSD index/checksum is the offline authority; it is not an authenticated online feed. The staged signature check accepts the exact exit-1 “code has no resources but signature indicates they must be present” verdict of accepted normal unsealed KH releases (Story 1.4.381); any other diagnostic or additional error still refuses. This does not change vendor signature/notarization checks or owner-rollback verification. Per-app refusals are shown and make the final result nonzero. Saved connections, grants and pauses are never rewritten.
 

@@ -39,4 +39,11 @@ func catalogSelectionTests() {
     bad = app("2.0"); bad.file = link.lastPathComponent
     expect(row(bad)?.ssd == nil, "CS11 symbolic installer links are refused")
     expect(Catalog.build(feed: feed, ssd: []).first?.available == "2.0", "CS12 a new feed-only app needs no registry change")
+    // An app that updates itself still carries its installer: the person at the Mac may choose it.
+    var itself = app("2.0"); itself.updatesItself = true
+    expect(row(itself)?.ssd?.version == "2.0" && row(itself)?.initialSSD?.version == "2.0",
+           "CS13 an app that updates itself still offers the copy on the SSD, for an explicit install")
+    itself = app("1.0"); itself.updatesItself = true
+    expect(row(itself)?.ssd == nil && row(itself)?.initialSSD?.version == "1.0",
+           "CS14 an older SSD copy of an app that updates itself stays an explicit first-install choice")
 }

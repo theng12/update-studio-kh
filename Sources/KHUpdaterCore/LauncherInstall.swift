@@ -8,7 +8,7 @@ extension Agent {
         var saved = try AtomicFile.readJSON([String: AppConfig].self, from: file) ?? [:]
         var failures: [String: String] = [:]
         for app in requested.sorted() where config.apps[app] == nil {
-            guard let entry = catalog.first(where: { $0.id == app }), !entry.updatesItself, !entry.mainMacOnly else { continue }
+            guard let entry = catalog.first(where: { $0.id == app }), !entry.mainMacOnly else { continue }
             do {
                 guard let bundle = entry.bundleName, let identity = entry.bundleID else {
                     throw khuFail("The installer for \(entry.name) does not name its app bundle. Update Studio needs to publish its app details before a first install.")
@@ -30,7 +30,10 @@ extension Agent {
                     }
                     path = folder.appendingPathComponent(bundle)
                 }
-                let cfg = AppConfig(bundlePath: path.path, recipe: "app-dmg", automatic: true, bundleID: identity)
+                // An app that updates itself keeps its own policy: it is registered so a first
+                // install can be recovered, but it is never managed by KH Updater on its own.
+                let itself = Agent.updatesItself(app: app, entry: entry)
+                let cfg = AppConfig(bundlePath: path.path, recipe: itself ? "status" : "app-dmg", automatic: !itself, bundleID: identity)
                 var candidate = config
                 candidate.apps[app] = cfg
                 try validate(candidate)
@@ -62,7 +65,7 @@ extension Agent {
             let id = "auto-\(app)-local-\(UUID().uuidString)"
             if let failure = failures[app] {
                 outcome = RecipeResult(status: "refused", reason: failure)
-            } else if let cfg = config.apps[app], !statusOnly.contains(cfg.recipe) {
+            } else if let cfg = config.apps[app], !Agent.updatesItself(app: app, recipe: cfg.recipe) || requested.contains(app) {
                 DownloadControl.reset()
                 installing(app)
                 defer { installing(nil) }
@@ -75,6 +78,8 @@ extension Agent {
                         if outcome.status == "rolled_back_by_owner", let displaced = outcome.version {
                             memory.offlineRollbacks = (memory.offlineRollbacks ?? [:]).merging([app: displaced]) { _, new in new }
                         }
+                    } else if let refusal = Agent.refusesWhileRunning(app: app, cfg: cfg, control: control) {
+                        outcome = RecipeResult(status: "refused", reason: refusal)
                     } else if let local = catalog.first(where: { $0.id == app })?.ssd {
                         outcome = try installLocal(local, app: app, installed: current, cfg: cfg,
                                                    stateDir: stateDir, shell: shell, control: control, force: reinstall.contains(app))

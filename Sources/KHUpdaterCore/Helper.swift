@@ -87,15 +87,26 @@ public struct HelperApp: Sendable, Equatable {
     public var installedBuild: String?
     /// SHA-256 of the installed executable's bytes as read from the bundle, nil when unreadable.
     public var installedExecutableSha256: String?
+    /// True when the person at this Mac may install or update this app by choosing it, even though
+    /// the app updates itself: KH Updater never does that on its own, the Launcher does it on request.
+    public var manuallyInstallable = false
 
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
                       failed = "Failed", updatesItself = "Updates itself", notInstalled = "Not installed",
                       notInFeed = "Not in the feed"
 
     /// One state per app, and nothing this Mac cannot vouch for reads as fine.
-    public static func status(installed: String?, available: String?, statusOnly: Bool,
+    public static func status(installed: String?, available: String?, statusOnly: Bool, manual: Bool = false,
                               last: (status: String, reason: String)?) -> (String, String?) {
-        if statusOnly { return (updatesItself, nil) }
+        if statusOnly {
+            // An app that updates itself is still installed by hand when the person asks for it: the
+            // state says what is true on this Mac, not who would do it.
+            guard manual, let available else { return (updatesItself, nil) }
+            let behind = installed.map { VersionCompare.isNewer(available, than: $0) } ?? true
+            if behind, let last, failures.contains(last.status) { return (failed, last.reason) }
+            if installed == nil { return (notInstalled, nil) }
+            return behind ? (updateAvailable, nil) : (updatesItself, nil)
+        }
         guard let available else { return (installed == nil ? notInstalled : notInFeed, nil) }
         let behind = installed.map { VersionCompare.isNewer(available, than: $0) } ?? true
         if behind, let last, failures.contains(last.status) { return (failed, last.reason) }
