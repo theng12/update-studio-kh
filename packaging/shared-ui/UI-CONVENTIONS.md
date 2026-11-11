@@ -30,7 +30,7 @@ Numbers (spacing, radii, text sizes, status names, toast limits): `design-tokens
 - Title, body, footer; one primary button on the right. System file/print/permission panels stay native.
 
 ## Pop-up messages (toasts)
-- Bottom-right, at most 3 at once, newest on top.
+- Bottom-right, at most 3 at once, newest on top. An app with a settled different placement keeps it and says so in its own notes (Media: bottom-centre).
 - Success: 5–8 s. Errors stay until read or dismissed and say the real reason.
 - One optional action: Undo, Retry or Open. Announced to screen readers (`role="status"` / live region).
 - Background events in menu-bar apps may use the system notification instead.
@@ -51,7 +51,7 @@ Numbers (spacing, radii, text sizes, status names, toast limits): `design-tokens
 - Sidebar footer entry with a heart icon, just above the version pill; opens the app's Support page.
 - The app is free with every feature unlocked. Offer a one-time donation through the shared public page `https://nowpayments.io/donation/studiokh`, opened in the user's browser through the app's allow-listed external opener.
 - Optional and non-blocking: never required, never nagging, no repeat reminders.
-- Every app gains Check for Updates and the conditional tiny update button on the same shared feed contract, including apps that never had an in-app updater. Never add a second updater.
+- Every app gains Check for Updates and the conditional tiny update button on the same shared feed contract, including apps that never had an in-app updater. Never add a second updater. The contract itself — `publisher.json`, the signed feed, the version rule, the five states and the hand-off — is `FEED-CONTRACT.md` beside this file.
 
 ## Settings
 - Sidebar row → Settings page. Sections as cards: this app / this Mac first, Appearance and About after (About carries version + What's New where there is no pill).
