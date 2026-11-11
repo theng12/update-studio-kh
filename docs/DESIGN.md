@@ -400,6 +400,28 @@ the page's, is later. The signed `/commands` reply carries `automaticAt` so the 
 same rule. A pause holds Automatic only: the owner's orders and Update now still run. Story and Hub
 stay status-only and get no switch. `KHU_NO_MENU` turns the icon off.
 
+**What the Launcher says about a policy, a source and its own data (unreleased).** A display never works
+out a policy of its own: `HelperSettings.automaticDecision` returns the value the agent follows and
+which of the three inputs (`mac` switch, `page` value, `config` default) it came from, and the row's
+value and the origin caption are that one answer in `AutomaticOrigin.words`. A controller echo with
+an identical timestamp and value retains this Mac's origin; a conflicting equal-time value still
+follows the controller, preserving the existing value rule. The menu-bar submenu,
+the page's More menu and the Settings sheet repeat it, they never resolve it again. There is still no
+reset-to-inherited control, and the reason is concrete rather than a choice of ours: a report merges
+each switch it carries into the controller's record per key and never drops one it did not carry, so
+clearing a switch here would leave whatever the controller last recorded ruling the next run — which
+is often this Mac's own switch echoed back, not a page setting — and no contract says that is what
+"reset to inherited" means; the origin caption is what the existing contract supports. `Catalog.ssdCopy`'s `refused(String)` is
+carried on the row as `ssdNote` and shown verbatim, only for a drive whose copy is not the offer, and
+the SSD fact reads `Not used` when no copy is in play — no line claims a saving, a download being
+avoided, or readiness, none of which a refusal reason proves. Settings states the real report (this
+Mac's name, installed apps with versions and builds, health, its Automatic switches and pause, and the
+read-only inventory), the real locality of this Mac's own files (settings, rollback copy, icons and
+`downloads/`, with replaced files moving to the restorable `_trash`) and the bounds the updater already
+enforces (`smallLimit` per reply, each artifact refused past its signed size, one install at a time):
+there is no storage quota, cache budget or resource claim, because none exists to show. Opening a
+dialog or reading any of this still submits nothing — no install, no pairing, no controller move.
+
 ## Recipes
 
 Other apps require a pinned Apple Team ID with evidence and a valid vendor signature/notarization before install; a published checksum is auxiliary and cannot authorize installation. DMGs reuse the journal/staging/rollback app recipe, verify the staged copy's vendor signature before promotion or execution, and refuse an existing app with a different bundle identity. Vendor destinations are registered in agent-owned `vendor-apps.json` before any install and merged into every run's recovery pass; journal and rollback keys consistently use `vendor-<id>`. Settled automatic rollbacks retain the recipe's actual outcome. Auxiliary checksums hash the downloaded installer, while vendor signatures verify the mounted and staged app. Packages are verified and kept in the agent's owned download folder; they return `needs_admin` with their path and are never executed by the agent. Launcher opens the setup folder so the person can run the vendor's own Installer; refused, blocked or failed payloads are never offered back as something to open, and every vendor refusal or handoff status counts as a failure wherever the publisher styles results. No credential collection, sudo or new privilege mechanism is added. Optional app bundles use the signed-in user's existing configured path or the standard Applications name; lack of write access never triggers privilege escalation.

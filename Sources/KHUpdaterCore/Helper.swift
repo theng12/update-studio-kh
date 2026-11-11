@@ -35,14 +35,56 @@ public struct HelperSettings: Codable, Sendable, Equatable {
 
     public func paused(at now: Date) -> Bool { pausedUntil.flatMap(ISO.date).map { now < $0 } ?? false }
 
+    /// Which of the three inputs the Automatic decision below takes its value from. It names the
+    /// rule's own branches, so a screen can say who set what it shows without working out a second,
+    /// competing policy.
+    public enum AutomaticOrigin: String, Codable, Sendable {
+        /// This Mac's switch, flipped from the menu-bar icon or the Launcher.
+        case mac
+        /// The controller page's value, which was the later change.
+        case page
+        /// Neither has it: this Mac's own configured default rules.
+        case config
+    }
+
+    /// The Automatic setting to follow, and where it came from.
+    public struct AutomaticDecision: Sendable {
+        public var on: Bool
+        public var origin: AutomaticOrigin
+        public init(on: Bool, origin: AutomaticOrigin) { self.on = on; self.origin = origin }
+    }
+
+    /// The Automatic setting to follow and where it comes from. `automatic(_:page:pageAt:config:)`
+    /// is this same decision's value, so the explanation cannot drift from what the agent does.
+    public func automaticDecision(_ app: String, page: Bool?, pageAt: String?, config: Bool) -> AutomaticDecision {
+        if let mine = automatic[app], let at = ISO.date(mine.at),
+           page == nil || pageAt.flatMap(ISO.date).map({ at > $0 }) ?? true {
+            return AutomaticDecision(on: mine.on, origin: .mac)
+        }
+        // A successful report echoes this Mac's switch with the same timestamp and value.
+        if let mine = automatic[app], let at = ISO.date(mine.at),
+           pageAt.flatMap(ISO.date) == at, page == mine.on {
+            return AutomaticDecision(on: mine.on, origin: .mac)
+        }
+        return AutomaticDecision(on: page ?? config, origin: page == nil ? .config : .page)
+    }
+
     /// The Automatic setting to follow: this Mac's switch when it is later than the page's (a page
     /// value with no time is older than any switch), else the page's, else the Mac's config.
     public func automatic(_ app: String, page: Bool?, pageAt: String?, config: Bool) -> Bool {
-        if let mine = automatic[app], let at = ISO.date(mine.at),
-           page == nil || pageAt.flatMap(ISO.date).map({ at > $0 }) ?? true {
-            return mine.on
+        automaticDecision(app, page: page, pageAt: pageAt, config: config).on
+    }
+}
+
+extension HelperSettings.AutomaticOrigin {
+    /// The origin in the words a person reads, said once here so the menu-bar icon and the Launcher
+    /// page describe the one rule above rather than each inventing their own.
+    public var words: String {
+        switch self {
+        case .mac: return "Set on this Mac"
+        case .page: return "Set in Update Studio"
+        case .config: return "This Mac’s default"
         }
-        return page ?? config
     }
 }
 
@@ -78,6 +120,11 @@ public struct HelperApp: Sendable, Equatable {
     public var bytes: Int64?
     /// The SSD the install would copy from, when it is not the feed.
     public var fromSSD: String?
+    /// Why an SSD's copy could not be used, in `Catalog`'s own words. nil when nothing was refused.
+    public var ssdNote: String?
+    /// Where the `automatic` value shown here comes from, in `AutomaticOrigin.words`. nil for an app
+    /// this Mac has no Automatic switch for (it updates itself, or it is not managed here).
+    public var automaticOrigin: String?
     public var serverVersion: String?
     public var ssdVersion: String?
     public var initialSSD: String?

@@ -72,6 +72,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 .menu button{display:flex;width:100%;text-align:left;border:0;background:none;padding:6px 10px;border-radius:6px;gap:8px;align-items:center}
 .menu button:hover,.menu button:focus-visible{background:var(--accent);color:var(--accent-ink);outline:0}.menu button.danger{color:var(--bad)}.menu button.danger:hover{color:var(--accent-ink)}
 .menu hr{border:0;border-top:1px solid var(--line2);margin:5px 4px}.menu .check{width:14px;text-align:center}
+.menu .why{margin:0 10px 5px 32px;font-size:11.5px;line-height:1.35;color:var(--sub)}
 .set{width:min(640px,100%)}.set .body{padding:6px 24px 22px}.set section{padding:14px 0;border-bottom:1px solid var(--line2)}.set section:last-child{border-bottom:0}
 .set h4{margin-bottom:12px}.row{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:8px 0}
 .row label{display:flex;gap:9px;align-items:flex-start}.row input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;margin:1px 0 0}
@@ -221,7 +222,12 @@ function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remo
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
  if(a.canRollBack)add('Roll back to the previous version',()=>post({action:'rollback',app:a.id}));
  if(a.status=='Failed'&&a.reason)add('Copy error report',()=>post({action:'copyReport',app:a.id}));
- if(a.managed&&!a.statusOnly){items.push(el('hr'));items.push(el('button',{role:'menuitemcheckbox','aria-checked':a.automatic,onclick:()=>{m.remove();post({action:'automatic',app:a.id,on:!a.automatic})}},el('span',{class:'check'},a.automatic?svg('M3.5 8.5l3 3 6-7'):''),'Update automatically'))}
+ if(a.managed&&!a.statusOnly){items.push(el('hr'));const why='automatic-origin-'+a.id;
+  items.push(el('button',{role:'menuitemcheckbox','aria-checked':a.automatic,'aria-describedby':a.automaticOrigin?why:null,onclick:()=>{m.remove();post({action:'automatic',app:a.id,on:!a.automatic})}},el('span',{class:'check'},a.automatic?svg('M3.5 8.5l3 3 6-7'):''),'Update automatically'));
+  // The words come from the agent's own decision, so this line can never disagree with the switch.
+  // Clearing this Mac's switch is not offered: the controller keeps the last value it was told, so
+  // what a cleared switch would fall back to is this Mac's own earlier choice, not a page setting.
+  if(a.automaticOrigin)items.push(el('p',{class:'why',id:why},a.automaticOrigin))}
  items.push(el('hr'));
  if(a.open&&!a.helper)add('Uninstall…',()=>post({action:'uninstall',app:a.id}),'danger');
  add(a.hidden?'Show app':'Hide app',()=>post({action:a.hidden?'unhide':'hide',app:a.id}));
@@ -233,7 +239,7 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
  const again=!!document.querySelector('.scrim.d');
  document.querySelectorAll('.scrim.d').forEach(x=>x.remove());
  const step=d=>{const n=list[(i+d+list.length)%list.length];if(n){detail={id:n.id};drawDetail()}};
- const facts=[['Installed',a.installed||'Not installed'],['Server',a.serverVersion||'Unknown'],['SSD',a.ssdVersion||'Not available'],['Selected',a.available||'Not available'],['Size',mb(a.bytes)||'Unknown'],['From',a.fromSSD||(a.source||'Unknown')],['Released',day(a.released)]].filter(f=>f[1]);
+ const facts=[['Installed',a.installed||'Not installed'],['Server',a.serverVersion||'Unknown'],['SSD',a.ssdVersion||(a.ssdNote?'Not used':'Not available')],['Selected',a.available||'Not available'],['Size',mb(a.bytes)||'Unknown'],['From',a.fromSSD||(a.source||'Unknown')],['Released',day(a.released)]].filter(f=>f[1]);
  const notes=a.notes||[],limit=showAll[a.id]?notes.length:5;
  const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':true,'aria-label':a.name,style:(a.accent?'--app:'+a.accent+';':'')+(again?'animation:none':''),onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},icon(a),el('div',{class:'t'},el('h3',{},a.name),a.tagline?el('div',{class:'sub'},a.tagline):null,
@@ -250,6 +256,11 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     a.statusOnly&&a.source!='Official vendor'&&!a.manuallyInstallable?el('p',{class:'sub'},a.setup?'Use Open Setup Folder to install. Open the installed app for its own updates.':a.open?'Open this app to use its own updater.':'No setup folder is connected. Connect the installer SSD to use this app’s setup. Remote installation through Launcher is not available for this app yet.'):null,
     a.features&&a.features.length?[el('h4',{},'Features'),el('ol',{class:'feat'},a.features.map(f=>el('li',{},el('b',{},f.title),f.text?el('span',{},f.text):null)))]:null),
    el('div',{},facts.length?[el('h4',{},'Latest release'),el('dl',{class:'facts'},facts.map(f=>el('div',{},el('dt',{},f[0]),el('dd',{class:'num'},f[1]))))]:null,
+    // Where the offer comes from, and why a drive's own copy was not used, in the words the Catalog
+    // chose. Neither line claims a saving or that anything is ready: bytes are read where they are.
+    a.fromSSD?el('p',{class:'sub'},'The version on offer is the copy on '+a.fromSSD+', read from that drive.'):
+     a.source=='Feed'?el('p',{class:'sub'},'The version on offer comes from the signed feed, so its installer is downloaded.'):null,
+    a.ssdNote&&!a.fromSSD?el('p',{class:'sub'},a.ssdNote):null,
     a.initialSSD?el('p',{class:'sub'},'The SSD can install '+a.initialSSD+' first from the More menu. Then Update offers the newer server version. Your Automatic setting is kept.'):null,
     el('h4',{id:'changes'},'What’s changed'),notes.length?el('ul',{class:'changes'},notes.slice(0,limit).map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.'),
     notes.length>5?el('button',{class:'more',onclick:()=>{showAll[a.id]=!showAll[a.id];drawDetail()}},showAll[a.id]?'Show fewer':'Show '+(notes.length-5)+' more'):null)));
@@ -288,10 +299,20 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
    el('section',{},el('h4',{},'Updates'),el('div',{class:'row'},el('span',{},'Check for updates'),seg('checkManually',[[false,'Automatically'],[true,'Manually']],s.checkManually)),
     check('autoInstall','Install updates automatically',s.autoInstall&&!s.checkManually,s.checkManually?'Off while checking manually. Use Check for updates now, then Update.':'Each app’s own switch is in its … menu.',s.checkManually),
     check('notify','Notify me when an update is ready',s.notify,null),
+    // One app's Automatic value comes from one of three places; the app's … menu names which, using
+    // the agent's own decision. Nothing here clears a Mac's switch: the controller keeps the value
+    // it was last given, so a cleared switch would inherit this Mac's earlier choice, not a page one.
+    el('p',{class:'note'},'A switch set on this Mac rules while it is the later change; otherwise Update Studio’s value does, and where neither has one this Mac’s default does. Each app’s menu names which of the three is in force.'),
     check('retireHelpers','Keep the current and previous helper versions',s.retireHelpers,s.helperCleanupAvailable?'Older versions move to restorable _trash after '+(s.helperHealthySeconds/60).toLocaleString()+' minutes of repeated healthy reports.':'Cleanup settings could not be read. Older versions are kept.',!s.helperCleanupAvailable),
     // The updater's own switch is live data, and its automatic-on-connect default is stated, not implied.
     updater?check('updaterAutomatic','Update Studio KH updates itself automatically',!!updater.automatic,'Automatic is on when a Mac connects; change it in Update Studio KH’s … menu.',true):null),
    connSection,
+   el('section',{},el('h4',{},'This Mac and Update Studio'),
+    // Said from what the agent’s own report and recipes actually do; no budget is claimed here that
+    // the updater does not enforce, and nothing here can be changed by reading it.
+    el('p',{class:'note',style:'margin-left:0'},'Update Studio is told this Mac’s name, which apps are installed here and at which versions and builds, whether each one started, the Automatic switches set on this Mac and any pause, and a read-only snapshot of the hardware, network addresses and app list. Results of installs go back to the same address.'),
+    el('p',{class:'note',style:'margin-left:0'},'What is downloaded or copied from a connected drive stays on this Mac, as do these settings, the copy kept for Roll back and the icons this Mac has seen — under '+(S.stateDir||'this Mac’s own updater folder')+'. A file that is replaced moves to the restorable _trash folder there instead of being deleted.'),
+    el('p',{class:'note',style:'margin-left:0'},'The sign-in is sent only to the saved controller; this page never shows it, and a download mirror the signed feed names does not receive it. What arrives is bounded the way the updater already bounds it: '+(S.replyLimitBytes?'a reply bigger than '+mb(S.replyLimitBytes)+' is refused rather than buffered, and ':'')+'an installer is refused once it passes the size its signature names. One app installs at a time, so Pause and Cancel act on the transfer you can see. There is no separate storage budget to set here.')),
    el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','Match system'],['dark','Dark'],['light','Light']],s.appearance)),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),

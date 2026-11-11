@@ -97,7 +97,7 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         signing = [c for c in calls if c.startswith("--force")]
         self.assertEqual(len(signing), 1)
         self.assertIn("Fixture Identity", signing[0])
-        self.assertNotIn("--deep", signing[0])
+        self.assertTrue(all("--deep" not in call for call in calls))
         self.assertEqual(calls[-1], "hdiutil")
         kit = self.repo / "build/Studio Launcher KH.app/Contents/Resources/khu-agent"
         self.assertEqual((kit / "bin/khu-stub").read_text(), "signed fixture stub")

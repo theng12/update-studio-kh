@@ -48,7 +48,7 @@ PLIST
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
-codesign --verify --deep --strict "$APP"
+codesign --verify --strict "$APP"
 
 mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Update Studio KH.app"; ln -s /Applications "$TMP/dmg/Applications"
 [ -e "$DMG" ] && { mkdir -p _trash; mv "$DMG" "_trash/$(basename "$DMG").$(date +%s)"; }

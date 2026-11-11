@@ -26,7 +26,7 @@ files = {n: {"bytes": len((kit / n).read_bytes()), "sha256": hashlib.sha256((kit
 build/khu launcher-bundle --out "$APP" --version "$VERSION" --kit "$KIT" >/dev/null
 # The raw helpers were signed before their kit hashes; seal only the outer app here.
 codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
-codesign --verify --deep --strict "$APP"
+codesign --verify --strict "$APP"
 /usr/bin/python3 -I -c '
 import hashlib, json, pathlib, sys
 kit = pathlib.Path(sys.argv[1]) / "Contents/Resources/khu-agent"

@@ -784,9 +784,14 @@ public enum Agent {
             let hasOffer = entry?.ssd != nil || entry?.initialSSD != nil || feed.apps[app] != nil
             let manual = only && hasOffer && entry?.bundleID != nil && entry?.bundleName != nil
             let (status, reason) = HelperApp.status(installed: installed, available: available, statusOnly: only, manual: manual, last: last)
+            // The row's value and the origin shown beside it are one answer, not two rules: an app
+            // that updates itself, or one this Mac does not manage, has no switch to explain.
+            let auto: HelperSettings.AutomaticDecision? = only || cfg == nil ? nil
+                : helper.automaticDecision(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg!.automatic)
             var row = HelperApp(app: app, installed: installed, available: available, statusOnly: only,
-                                automatic: !only && cfg != nil && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg!.automatic),
+                                automatic: auto?.on ?? false,
                                 status: status, reason: reason)
+            row.automaticOrigin = auto?.origin.words
             row.manuallyInstallable = manual
             // The build and byte identity of what is installed now: nil when the bundle carries no
             // build or its executable cannot be read — a row reports "not checked", never a match.
@@ -803,6 +808,9 @@ public enum Agent {
             row.released = entry?.released ?? feed.apps[app]?.released
             row.bytes = entry?.ssd == nil ? feed.apps[app]?.bytes : entry?.bytes
             row.fromSSD = entry?.ssd?.volume
+            // The drive's own reason, when a copy on it could not be used. It never claims what the
+            // copy would have saved, only why this one is not the offer.
+            row.ssdNote = entry?.ssdNote
             row.serverVersion = feed.apps[app]?.version
             row.ssdVersion = entry?.ssd?.version ?? entry?.initialSSD?.version
             if installed == nil, let local = entry?.initialSSD, let server = feed.apps[app],

@@ -331,4 +331,58 @@ const failedConnection=Object.assign({},state([]).connection,{serverOk:false,ser
 render(state([row()],{settingsNote:'Could not save that change. Your previous settings are kept.',connection:failedConnection}));
 assert.match(document.querySelector('.scrim.s .sheet').textContent,/Could not save that change/);
 assert.equal(document.getElementById('addr').value,'http://100.64.0.9:8790/release.json','failed address check retains the editable draft');
-console.log('PASS: Launcher rendering, source choices, offline state, delta/fallback bytes, editing focus, Story/Hub routes and save feedback');
+
+// The Automatic switch names which setting it follows, in the agent's own words for its own decision.
+run('settingsOpen=false;detail=null;closeLayers()');
+for (const words of ['Set on this Mac','Set in Update Studio','This Mac’s default']) {
+  render(state([row({status:'Up to date',automatic:words=='Set on this Mac',automaticOrigin:words})]));
+  posts.length=0;
+  run("openMenu(S.apps[0],document.querySelector('.card'))");
+  const why=document.querySelector('.menu .why');
+  assert(why&&why.textContent==words,words+' — the switch says which of the three settings rules');
+  assert(!document.querySelectorAll('.menu button').some(b=>b.textContent.includes(words)),'the origin is a caption, never a control');
+  assert.equal(posts.length,0,'a caption is not something the page acts on');
+}
+const box=document.querySelectorAll('.menu button').find(b=>b.getAttribute('role')=='menuitemcheckbox');
+assert.equal(box.getAttribute('aria-describedby'),'automatic-origin-story','the switch is announced with its origin');
+posts.length=0; box.fire('click');
+assert.deepEqual(posts.map(p=>p.action),['automatic'],'the switch itself still sends exactly one request');
+render(state([row({status:'Up to date',automatic:true})]));
+posts.length=0; run("openMenu(S.apps[0],document.querySelector('.card'))");
+assert(!document.querySelector('.menu .why'),'an origin the helper did not say is left unsaid, not guessed');
+assert.equal(posts.length,0);
+// A drive's copy that could not be used says why; the source in use says what it is. Neither claims
+// a saving, a speed or readiness the helper has not proved.
+run('settingsOpen=false;detail=null;closeLayers()');
+const refused='The copy on ATLAS is not the bytes the server signed for 2.0.';
+render(state([row({status:'Update available',installed:'1.0',available:'2.0',ssdNote:refused,fromSSD:null,ssdVersion:null})]));
+run("openDetail('story')");
+const sheetRefused=document.querySelector('.sheet').textContent;
+assert.match(document.querySelector('.facts').textContent,/SSDNot used/,'a refused drive copy reads as not used, not as fine');
+assert.match(sheetRefused,/not the bytes the server signed/,"the drive's own refusal reason is shown in full");
+assert.doesNotMatch(sheetRefused,/saves|faster|ready to install|no download/,'no saving or readiness is implied');
+render(state([row({status:'Up to date',installed:'2.0',available:'2.0',fromSSD:'ATLAS',source:'ATLAS',ssdVersion:'2.0',ssdNote:'The copy on NOVA is not the bytes the server signed for 2.0.'})]));
+run("openDetail('story')");
+const sheetSSD=document.querySelector('.sheet').textContent;
+assert.match(sheetSSD,/The version on offer is the copy on ATLAS, read from that drive\./,'the source in use is named');
+assert.doesNotMatch(sheetSSD,/NOVA/,'a drive that is not the source is not talked about');
+render(state([row({status:'Update available',installed:'1.0',available:'2.0',fromSSD:null,source:'Feed',ssdNote:null,ssdVersion:null})]));
+run("openDetail('story')");
+assert.match(document.querySelector('.sheet').textContent,/comes from the signed feed, so its installer is downloaded/,'a feed offer is a download, said plainly');
+// Settings says what leaves this Mac, where its own files stay, and the limits the updater applies.
+run('detail=null;settingsOpen=true;closeLayers();drawSettings()');
+posts.length=0;
+render(state([row()],{stateDir:'/Users/test/Library/KHUpdater',replyLimitBytes:8388608}));
+const said=document.querySelector('.scrim.s .sheet').textContent;
+assert.match(said,/Update Studio is told this Mac’s name/,'what the controller is told is written out');
+assert.match(said,/under \/Users\/test\/Library\/KHUpdater/,'the folder this Mac keeps its files in is named');
+assert.match(said,/restorable _trash/,'replaced files are retired, not deleted');
+assert.match(said,/a reply bigger than 8 MB is refused rather than buffered/,'the cap shown is the cap the updater carries');
+assert.match(said,/no separate storage budget to set here/,'no budget is offered that nothing enforces');
+assert.match(said,/A switch set on this Mac rules while it is the later change/,'the three-way rule is stated once, beside the switches');
+assert.equal(posts.length,0,'reading the explanation sends nothing and starts nothing');
+render(state([row()],{stateDir:null,replyLimitBytes:null}));
+const unsaid=document.querySelector('.scrim.s .sheet').textContent;
+assert.doesNotMatch(unsaid,/is refused rather than buffered/,'a limit the helper did not send is not stated as a number');
+assert.match(unsaid,/this Mac’s own updater folder/,'the folder is still named in plain words');
+console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits and save feedback');

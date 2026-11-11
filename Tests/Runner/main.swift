@@ -2500,6 +2500,67 @@ func helperTests() {
         let reply = enrolStatusPost(rig.server, machine: "mac1", token: cfg.token, body: ["machine": "mac1", "automatic_local": many])
         expect(reply.status == 400 && record(rig)?.automatic.isEmpty == true, "H6 an unbounded list of switches is refused")
     }
+    // H9. A row says where its Automatic value came from, in the one rule's own words, and carries a
+    // drive's refusal reason through to the row that shows it. Nothing here decides a second policy.
+    do {
+        // (a) A switch on this Mac, later than the controller's, is the value, and the row says so.
+        let (rig, cfg, client) = setup("h9a", page: false)
+        local(cfg, true, at: Date().addingTimeInterval(1))
+        let mine = try? Agent.runOnce(config: cfg, http: client)
+        expect(mine?.apps.first { $0.app == "demo" }?.automatic == true
+               && mine?.apps.first { $0.app == "demo" }?.automaticOrigin == HelperSettings.AutomaticOrigin.mac.words,
+               "H9a the value is this Mac's later switch, and the row names it")
+        // (b) A later change on the controller's page is the value, and the row says that instead.
+        local(cfg, true, at: Date().addingTimeInterval(-60))
+        setPage(rig, "demo", false)
+        let theirs = try? Agent.runOnce(config: cfg, http: client)
+        expect(theirs?.apps.first { $0.app == "demo" }?.automatic == false
+               && theirs?.apps.first { $0.app == "demo" }?.automaticOrigin == HelperSettings.AutomaticOrigin.page.words,
+               "H9b the value is the controller's later change, and the row names it")
+        expect(theirs?.apps.first { $0.app == "hub" }?.automaticOrigin == nil,
+               "H9c an app with no switch has no origin to claim")
+        // (d) Neither has said anything: this Mac's own configured default, named in the same words.
+        let (_, plain, plainClient) = setup("h9d")
+        let fallback = try? Agent.runOnce(config: plain, http: plainClient)
+        expect(fallback?.apps.first { $0.app == "demo" }?.automaticOrigin == HelperSettings.AutomaticOrigin.config.words,
+               "H9d with neither rule having a value, the row names this Mac's default")
+        let at = "2026-11-11T00:00:00Z"
+        let echoed = HelperSettings(automatic: ["demo": .init(on: true, at: at)])
+        let same = echoed.automaticDecision("demo", page: true, pageAt: at, config: false)
+        let conflict = echoed.automaticDecision("demo", page: false, pageAt: at, config: true)
+        expect(same.on && same.origin == .mac && !conflict.on && conflict.origin == .page,
+               "H9e an echoed Mac switch keeps its origin; conflicting equal-time values still follow the page")
+        // (f) A drive's copy that cannot be used keeps its own reason on the row that shows it.
+        let root = tmpDir("h9-ssd")
+        let bytes = Data("demo installer bytes".utf8)
+        try! bytes.write(to: root.appendingPathComponent("Demo.dmg"))
+        let sha = Signing.sha256Hex(bytes)
+        var copy = SSDApp(id: "demo", name: "Demo", version: "2.0.0", bundleID: "com.example.demo",
+                          bundleName: "H.app", file: "Demo.dmg", sha256: sha)
+        copy.bytes = Int64(bytes.count)
+        var served = FeedApp(version: "2.0.0", file: "demo.zip", sha256: sha, bytes: Int64(bytes.count), kind: "app-dmg")
+        served.bundleID = "com.example.demo"; served.bundleName = "H.app"
+        let drive = SSDSource(volume: "ATLAS", root: root, index: SSDIndex(apps: [copy]))
+        var wrongBytes = copy
+        wrongBytes.sha256 = String(repeating: "0", count: 64)
+        let refused = Catalog.build(feed: Feed(published_at: ISO.string(Date()), apps: ["demo": served]),
+                                    ssd: [SSDSource(volume: "ATLAS", root: root, index: SSDIndex(apps: [wrongBytes]))])
+            .first { $0.id == "demo" }
+        expect(refused?.ssd == nil && refused?.ssdNote?.hasPrefix("The copy on ATLAS is not the bytes") == true,
+               "H9f a copy that is not the signed bytes is refused with its reason in plain words")
+        let used = Catalog.build(feed: Feed(published_at: ISO.string(Date()), apps: ["demo": served]), ssd: [drive])
+        let rig9 = Rig("h9g")
+        let cfg9 = agentConfig(rig9, token: "unused", apps: ["demo": AppConfig(bundlePath: root.appendingPathComponent("H.app").path, recipe: "fake-for-tests")])
+        let rows = Agent.snapshot(config: cfg9, feed: Feed(published_at: ISO.string(Date()), apps: ["demo": served]),
+                                  catalog: used, orders: try! JSONDecoder().decode(CommandsReply.self,
+                                      from: Data(#"{"machine":"mac1","at":"2026-11-09T00:00:00Z","commands":[],"automatic":{}}"#.utf8)),
+                                  helper: HelperSettings(), memory: AgentMemory(), executable: nil,
+                                  http: InProcessClient(server: rig9.server),
+                                  serverBase: URL(string: "http://pub.test/artifacts")!,
+                                  stateDir: URL(fileURLWithPath: cfg9.stateDir))
+        expect(rows.first { $0.app == "demo" }?.ssdNote == nil,
+               "H9g a copy that can be used carries no refusal to show")
+    }
     // H8. The apps that update themselves are listed under Apps & updates with the newest version a Mac has.
     do {
         let (rig, cfg, client) = setup("h8")

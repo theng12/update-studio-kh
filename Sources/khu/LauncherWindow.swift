@@ -79,6 +79,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             ]
             row["installed"] = app.installed; row["available"] = app.available; row["reason"] = app.reason
             row["source"] = app.source; row["fromSSD"] = app.fromSSD; row["released"] = app.released; row["installedAt"] = app.installedAt
+            row["ssdNote"] = app.ssdNote; row["automaticOrigin"] = app.automaticOrigin
             row["serverVersion"] = serverKnown ? app.serverVersion : nil; row["ssdVersion"] = app.ssdVersion; row["initialSSD"] = app.initialSSD
             row["bytes"] = app.bytes.map { NSNumber(value: $0) }
             row["tagline"] = app.words.tagline; row["description"] = app.words.description; row["accent"] = app.words.accent
@@ -97,6 +98,9 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             "apps": rows, "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any,
             "lastAttempt": attempt.map(ISO.string) as Any, "serverKnown": serverKnown, "settingsNote": helper.settingsNote as Any,
             "version": helper.version ?? "", "whatsNew": helper.version.map(WhatsNew.lines(for:)) ?? [],
+            // Where this Mac's own files live and the cap one reply may carry: the page says both
+            // from what the updater really does, never from a number typed into the page.
+            "stateDir": helper.stateDir.path, "replyLimitBytes": NSNumber(value: Int64(URLSessionHTTPClient().smallLimit)),
             "paused": settings.paused(at: Date()),
             "settings": ["checkManually": settings.checkManually ?? false, "autoInstall": settings.autoInstall ?? true,
                          "notify": settings.notify ?? false, "appearance": settings.appearance ?? "system",

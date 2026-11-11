@@ -152,7 +152,8 @@ func respawn(_ label: String) {
 
 /// `Recipe`'s stop phase, verbatim from the worktree, with only its inputs faked.
 func stopPhase(wasRunning: Bool, control: AppControl,
-               paths: (staged: URL, journal: URL, trash: URL), fm: FileManager) throws {
+               paths: (staged: URL, journal: URL, trash: URL), fm: FileManager,
+               refuseIfRunning: Bool = false) throws {
 STOP_BLOCK
 }
 
@@ -345,10 +346,9 @@ def stop_block(recipes: str) -> str:
     """The stop phase of `Recipe`'s install, verbatim: from the `appQuit` flag through the guard that
     refuses when a service will not stop. Nothing below it may run, so the throw is the proof."""
     start = recipes.index("        var appQuit = false")
-    guard_line = recipes.index("guard control.stopService()", start)
-    end = recipes.index("\n", guard_line)
+    end = recipes.index("\n        // 4. Promote.", start)
     block = recipes[start:end]
-    assert "control.launch()" in block and "appQuit" in block, "the stop phase no longer looks like this"
+    assert "control.launch()" in block and "guard control.stopService()" in block, "the stop phase no longer looks like this"
     return block
 
 

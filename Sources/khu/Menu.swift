@@ -145,7 +145,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         lock.lock(); let list = apps, error = lastError, busy = installingApp; lock.unlock()
         let settings = HelperSettings.load(from: stateDir)
         menu.removeAllItems()
-        func note(_ text: String) { let i = NSMenuItem(title: text, action: nil, keyEquivalent: ""); i.isEnabled = false; menu.addItem(i) }
+        func note(_ text: String, to target: NSMenu? = nil) { let i = NSMenuItem(title: text, action: nil, keyEquivalent: ""); i.isEnabled = false; (target ?? menu).addItem(i) }
         func action(_ title: String, _ selector: Selector, _ app: String? = nil, to target: NSMenu? = nil) -> NSMenuItem {
             let i = NSMenuItem(title: title, action: selector, keyEquivalent: "")
             i.target = self; i.representedObject = app
@@ -168,13 +168,14 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
             guard !app.statusOnly else { row.isEnabled = false; continue }
             let sub = NSMenu()
             sub.autoenablesItems = false
-            if let reason = app.reason {
-                let r = NSMenuItem(title: Self.short(reason), action: nil, keyEquivalent: ""); r.isEnabled = false; sub.addItem(r)
-            }
+            if let reason = app.reason { note(Self.short(reason), to: sub) }
             if let available = app.available, [HelperApp.updateAvailable, HelperApp.failed, HelperApp.notInstalled].contains(app.status) {
                 action("Update now to \(available)", #selector(updateNow(_:)), app.app, to: sub).isEnabled = busy == nil
             }
             action("Automatic updates", #selector(toggleAutomatic(_:)), app.app, to: sub).state = app.automatic ? .on : .off
+            // Whichever of the three settings this value follows, in the same words the Launcher
+            // page uses; the rule itself lives in `HelperSettings.automaticDecision`.
+            if let from = app.automaticOrigin { note(from, to: sub) }
             row.submenu = sub
         }
         menu.addItem(.separator())
