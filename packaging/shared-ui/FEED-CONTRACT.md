@@ -61,7 +61,12 @@ and symbol are named so a reviewer can check the claim instead of trusting it.
   not a version (`isValid` false).
 - Compare part by part numerically, missing parts as 0; `isNewer(feed, installed)`
   is true only when both sides parse **and** the feed is strictly greater.
-- Installed version is your own `CFBundleShortVersionString`. Never compare
+- Installed version is your own `CFBundleShortVersionString`, **read from the
+  installed bundle at runtime** — the updater reads exactly that field
+  (`BundleInfo.read`), so the two answers must come from the same place. A build
+  stamp or generated constant is a fallback for running outside a bundle, not the
+  authority: a stale stamp makes your app offer an update the updater already
+  considers installed, or hide one it is about to install. Never compare
   strings, never trust a feed version that does not parse: report it as a feed
   problem.
 
@@ -109,12 +114,14 @@ Rules:
 
 ## Two platform facts this session paid for
 
-- **ATS:** a bundled app doing plain HTTP to a numeric tailnet address is blocked
-  on macOS 14+ unless its `Info.plist` carries
-  `NSAppTransportSecurity → NSExceptionDomains → "100.64.0.0/10" →
-  NSExceptionAllowsInsecureHTTPLoads = true`. A bare command-line tool is not
-  subject to this; a `.app` is. Copy the block from the Launcher's plist
-  (`Sources/khu/Launcher.swift`, `FrontDoor` bundle writer).
+- **ATS:** a bundled app doing plain HTTP through Apple's stack (`URLSession`,
+  WKWebView) to a numeric tailnet address is blocked on macOS 14+ unless its
+  `Info.plist` carries `NSAppTransportSecurity → NSExceptionDomains →
+  "100.64.0.0/10" → NSExceptionAllowsInsecureHTTPLoads = true`. Copy the block
+  from the Launcher's plist (`Sources/khu/Launcher.swift`, `FrontDoor` bundle
+  writer). A bare command-line tool is not subject to ATS, and neither is a
+  non-Apple HTTP client: Library does the check in its Go server and needs no
+  exception, while an app that fetches from its own `URLSession` still does.
 - **Read it yourself, do not ask the helper for the answer:** the helper may be
   busy or its window may never appear (a slow mounted volume can hold it), so a
   check that depends on the helper answering can hang or lie. `publisher.json`
