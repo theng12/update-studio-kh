@@ -49,10 +49,13 @@ enum LauncherBundle {
             "CFBundleExecutable": "Studio Launcher KH", "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version,
             "CFBundleVersion": version, "CFBundleIconFile": "AppIcon", "LSUIElement": true, "LSMinimumSystemVersion": "13.0",
             "NSHighResolutionCapable": true,
-            // macOS 14+ applies ATS to numeric IPs, and neither an IP literal nor a CIDR range is
-            // matched in NSExceptionDomains, so plain HTTP is allowed for this bundle. The feed is
-            // held to the tailnet or loopback where its URL is checked (FeedNetwork.feedURL).
-            "NSAppTransportSecurity": ["NSAllowsArbitraryLoads": true],
+            // macOS 14+ applies ATS to numeric IPs; only the private tailnet may use HTTP. The
+            // Tailscale MagicDNS name is how a Mac keeps reaching the publisher when its address
+            // changes, so the tailnet's own DNS suffix is exempt with it (owner, 2026-11-12).
+            "NSAppTransportSecurity": ["NSExceptionDomains": [
+                "100.64.0.0/10": ["NSExceptionAllowsInsecureHTTPLoads": true],
+                "ts.net": ["NSIncludesSubdomains": true, "NSExceptionAllowsInsecureHTTPLoads": true],
+            ]],
         ]
         try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             .write(to: bundle.appendingPathComponent("Contents/Info.plist"))
