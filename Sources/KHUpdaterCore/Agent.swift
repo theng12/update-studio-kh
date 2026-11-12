@@ -939,12 +939,16 @@ public enum Agent {
                                     force: force, manual: manual, catalogEntry: catalogEntry)
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
-        if let installed {
-            guard let order = VersionCompare.compare(entry.version, installed) else {
-                return RecipeResult(status: "refused", reason: "\(installed) here and \(entry.version) in the feed cannot be compared")
+        // The report can lag the disk: a stale one re-downloaded and reinstalled media-studio 0.1.109
+        // over itself at 01:21. Judge the installed bundle now, before any download; fall back to
+        // the report only when the bundle cannot be read.
+        let liveVersion = cfg.bundlePath.isEmpty ? nil : (try? BundleInfo.read(cfg.bundlePath))?.version
+        if let current = liveVersion ?? installed {
+            guard let order = VersionCompare.compare(entry.version, current) else {
+                return RecipeResult(status: "refused", reason: "\(current) here and \(entry.version) in the feed cannot be compared")
             }
-            if order == 0 && !force { return RecipeResult(status: "current", reason: "\(installed) is already installed") }
-            if order < 0 { return RecipeResult(status: "refused", reason: "the feed has \(entry.version), older than \(installed) here; no downgrade") }
+            if order == 0 && !force { return RecipeResult(status: "current", reason: "\(entry.version) is already installed") }
+            if order < 0 { return RecipeResult(status: "refused", reason: "the feed has \(entry.version), older than \(current) here; no downgrade") }
         }
 
         let artifact: URL
@@ -988,12 +992,15 @@ public enum Agent {
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
             return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept.")
         }
-        if let installed {
-            guard let order = VersionCompare.compare(local.version, installed) else {
+        // The same live check as a downloaded install: a stale report must not reinstall an equal
+        // version from the SSD either.
+        let liveVersion = cfg.bundlePath.isEmpty ? nil : (try? BundleInfo.read(cfg.bundlePath))?.version
+        if let current = liveVersion ?? installed {
+            guard let order = VersionCompare.compare(local.version, current) else {
                 return RecipeResult(status: "refused", reason: "The installed and SSD versions cannot be compared. Nothing was changed.")
             }
             if order < 0 || (order == 0 && !force) {
-                return RecipeResult(status: "current", reason: "\(installed) is already installed; \(local.volume) has \(local.version). No downgrade.")
+                return RecipeResult(status: "current", reason: "\(current) is already installed; \(local.volume) has \(local.version). No downgrade.")
             }
         }
         let source = URL(fileURLWithPath: local.file)

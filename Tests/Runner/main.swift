@@ -134,6 +134,13 @@ final class LaunchShell: Shell, @unchecked Sendable {
     }
 }
 
+/// Fails every request: a no-op install must never reach the network.
+final class NoNetworkHTTP: HTTPClient, @unchecked Sendable {
+    func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { throw URLError(.cannotConnectToHost) }
+    func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) { throw URLError(.cannotConnectToHost) }
+    func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int { throw URLError(.cannotConnectToHost) }
+}
+
 struct RecipeRig {
     let root: URL, apps: URL, installed: URL, mount: URL, state: URL
     let shell: RecordingShell
@@ -207,6 +214,22 @@ func recipeTests() {
         expect(res?.reason?.contains("unattended") == true,
                "the report says an unattended install never opens an app")
         expect(marker(rig.installed) == "1.2.3", "the unattended install still promoted the new version")
+    }
+    // A stale report must not reinstall a version already on disk (Media, 2026-11-13).
+    do {
+        let root = tmpDir("live-version")
+        let bundle = makeApp(root.appendingPathComponent("Foo.app"), version: "1.2.3")
+        let cfg = AgentConfig(feedURL: "", publicKey: "", stateDir: root.appendingPathComponent("state").path,
+                              machine: "m", token: "",
+                              apps: ["foo": AppConfig(bundlePath: bundle.path, bundleID: "com.example.foo")])
+        let entry = FeedApp(version: "1.2.3", file: "x.dmg", sha256: String(repeating: "a", count: 64), bytes: 1, kind: "app-dmg")
+        let feed = Feed(published_at: ISO.string(Date()), apps: ["foo": entry])
+        let result = try? Agent.install(app: "foo", feed: feed, installed: "1.0.0", config: cfg,
+                                        serverBase: URL(string: "http://127.0.0.1:1")!, stateDir: root,
+                                        http: NoNetworkHTTP(), shell: LaunchShell(),
+                                        control: { _, _ in AppControl(isRunning: { false }, quit: { true }, launch: {}, healthy: { _ in true }) })
+        expect(result?.status == "current" && result?.reason?.contains("already installed") == true,
+               "a stale report does not reinstall an equal version already on disk")
     }
     // The relaunch asks LaunchServices for a hidden background launch, never a visible window.
     do {

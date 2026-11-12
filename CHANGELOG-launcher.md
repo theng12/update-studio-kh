@@ -8,6 +8,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> â€
 
 - An automatic update no longer opens the app in front of you: it stays closed for you to open.
 - An update you asked for on this Mac reopens the app in the background, and a hidden or test copy is replaced but never reopened as your app.
+- A version already installed is left alone instead of being downloaded and installed again from an out-of-date report.
 
 ## 0.1.25 â€” 2026-11-12
 
