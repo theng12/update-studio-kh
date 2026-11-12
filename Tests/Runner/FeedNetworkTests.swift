@@ -139,6 +139,18 @@ func feedNetworkTests() {
         let after = try Data(contentsOf: FeedPublisher.releaseFile(in: publisher))
         expect(before == after, "FN invalid network settings cannot replace a signed release")
     } catch { expect(false, "FN signed network publication: \(error)") }
+    // A publisher must bind where this Mac is now, not where it was when a plist was written.
+    do {
+        expect((try? BindAddress.resolve("127.0.0.1")) == "127.0.0.1", "FN loopback bind is passed through")
+        expect(BindAddress.isHostName("test-mac.tail4e72cf.ts.net"), "FN a MagicDNS name is a host name")
+        expect(!BindAddress.isHostName("0.0.0.0"), "FN an IPv4 literal is not a host name")
+        expect(!BindAddress.isHostName("bad_host"), "FN an underscore is not a host name")
+        expectThrows("FN a name off the tailnet is refused with the reason", contains: "not a tailnet address") {
+            _ = try BindAddress.resolve("localhost")
+        }
+        _ = try FeedHostRole(enabled: true, bind: "auto").validated()
+        expect(true, "FN auto is accepted and resolved when the server starts")
+    } catch { expect(false, "FN bind resolution: \(error)") }
     do {
         let state = tmpDir("host-report-recovery")
         let statusFile = state.appendingPathComponent("feed-host-status.json")

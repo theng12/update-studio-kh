@@ -2,7 +2,10 @@
 # Set up this Mac as the KH Updater publisher. Run once, on the Mac Studio:
 #
 #   ./build.sh build
-#   packaging/publisher-init.sh --tailscale-ip "$(tailscale ip -4)" --backup-to /Volumes/<USB drive>
+#   packaging/publisher-init.sh --backup-to /Volumes/<USB drive>
+#
+# The launchd job binds "auto", which the server resolves to whatever tailnet address this Mac has
+# when it starts, so a renumbered Mac keeps serving instead of binding an address it no longer has.
 #
 # It installs build/khu to ~/Library/KHUpdater/bin/khu, creates the signing key with `khu keygen`
 # (CryptoKit, mode 0600), copies that key once to the removable drive named by --backup-to and
@@ -71,8 +74,13 @@ cp "$KEY" "$BACKUP_KEY"
 chmod 600 "$BACKUP_KEY"
 cmp -s "$KEY" "$BACKUP_KEY" || fail "the backup copy does not match the key; do not use this key until it does"
 
+# The launchd job binds "auto": the server asks for this Mac's tailnet address when it starts and
+# refuses to start when there is none, so a renumbered Mac never serves where nobody can reach it.
+# The URL written into publisher.json stays numeric: a MagicDNS name would need an ATS exception
+# in every app's bundle, and widening transport security is the owner's decision, not this script's.
 FEED_URL="http://${TAILSCALE_IP}:8790/release.json"
 ENROL_URL="http://${TAILSCALE_IP}:8790/enrol"
+BIND="auto"
 python3 -I - "$K/publisher.json" "$FEED_URL" "$ENROL_URL" "$PUBLIC" <<'PY'
 import json, sys
 path, feed_url, enrol_url, public = sys.argv[1:]
@@ -81,13 +89,14 @@ with open(path, "x") as f:
 PY
 chmod 644 "$K/publisher.json"
 
-sed -e "s|__HOME__|$HOME_DIR|g" -e "s|__TAILSCALE_IP__|$TAILSCALE_IP|g" \
+sed -e "s|__HOME__|$HOME_DIR|g" -e "s|__TAILSCALE_IP__|$BIND|g" \
   "$ROOT/packaging/com.khupdater.publisher.plist" > "$PLIST.tmp"
 /usr/bin/plutil -lint "$PLIST.tmp" >/dev/null
 mv "$PLIST.tmp" "$PLIST"
 
 echo "publisher set up (not started)"
 echo "  feed:       $FEED_URL"
+echo "  bind:       $BIND"
 echo "  enrol:      $ENROL_URL"
 echo "  public key: $PUBLIC"
 echo "  backup:     $BACKUP_KEY (checked; keep that drive offline)"

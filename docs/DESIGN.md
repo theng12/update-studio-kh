@@ -114,9 +114,12 @@ remain the no-script fallback. Refresh pauses while details are open, including 
 started before opening, to preserve edits. Hardware and icons follow actual reported values,
 never the connection name. Missing inventory reads Not reported. App inventory is read-only.
 
-`khu serve --feed <dir> --state <dir> --bind <ip> [--bind <ip>…] --port <p>`. Every address is
-bound before any is served. Each connection runs on its own thread (at most 32 at once; more get
-503) with a 15 s total read deadline and a 30 s send timeout, and artifacts stream from disk —
+`khu serve --feed <dir> --state <dir> --bind <ip|auto|host> [--bind …] --port <p>`. `auto` takes
+this Mac's tailnet address at start and a host name is resolved then; anything that resolves to no
+tailnet address stops the server with the reason, so a renumbered Mac never serves where nobody can
+reach it. Every address is bound before any is served. Each connection runs on its own thread (at
+most 32 at once; more get 503) with a 15 s total read deadline and a 30 s send timeout, and
+artifacts stream from disk —
 one slow or stalled Mac never holds up the others.
 
 - `GET /release.json`, `GET /artifacts/<file>` (percent-decoded once; any `SafeName` file stored

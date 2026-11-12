@@ -208,7 +208,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
  $('vgrid').setAttribute('aria-pressed',view=='grid');$('vlist').setAttribute('aria-pressed',view=='list');$('sort').value=sort;
  const m=$('main');m.replaceChildren();
- if(!S.apps.length)m.append(el('p',{class:'empty'},'Checking…'));
+ if(!S.apps.length)m.append(el('p',{class:'empty'},S.error?'The publisher at '+(S.connection.destination||'the saved address')+' could not be reached: '+S.error:'Checking…'));
  else if(!list.length)m.append(el('p',{class:'empty'},'No app matches “'+q+'”.'));
  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
   m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}

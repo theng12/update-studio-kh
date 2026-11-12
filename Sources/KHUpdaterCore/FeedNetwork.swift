@@ -1,5 +1,61 @@
 import Foundation
 
+/// The address a server binds, resolved at start rather than kept in a file. A tailnet address
+/// changes when Tailscale renumbers a Mac; a stored literal then binds nothing and every Mac sees
+/// an empty publisher page with no reason.
+public enum BindAddress {
+    /// "auto" means this Mac's current tailnet address; a host name is looked up now. Anything that
+    /// resolves to nothing on the tailnet fails with the reason, so the publisher stops loudly
+    /// instead of serving where nobody can reach it.
+    public static func resolve(_ value: String) throws -> String {
+        if value == "0.0.0.0" || value == "127.0.0.1" || FeedServer.isTailnet(value) { return value }
+        if value == "auto" {
+            guard let ip = MacInventory.interfaceAddresses().tailscaleIPv4 else {
+                throw khuFail("this Mac has no tailnet address right now (is Tailscale running?), so the publisher cannot bind \"auto\"")
+            }
+            return ip
+        }
+        guard isHostName(value) else { throw khuFail("\(value) is not an IPv4 address, a host name or \"auto\"") }
+        guard let ip = lookup(value) else { throw khuFail("\(value) does not resolve to an address on this Mac; the publisher cannot start") }
+        guard FeedServer.isTailnet(ip) else {
+            throw khuFail("\(value) resolves to \(ip), which is not a tailnet address (100.64.0.0/10)")
+        }
+        return ip
+    }
+
+    /// Letters, digits, dots and hyphens, and not an IPv4 literal. Kept strict so a typo in a bind
+    /// value fails at validation instead of at DNS.
+    public static func isHostName(_ value: String) -> Bool {
+        guard !value.isEmpty, value.count <= 253, !value.hasPrefix("."), !value.hasSuffix(".") else { return false }
+        guard value.allSatisfy({ $0.isLetter && $0.isASCII || $0.isNumber && $0.isASCII || $0 == "." || $0 == "-" }) else { return false }
+        return value.contains { $0.isLetter }
+    }
+
+    /// First IPv4 the name resolves to, preferring a tailnet one.
+    private static func lookup(_ host: String) -> String? {
+        var hints = addrinfo(ai_flags: AI_ADDRCONFIG, ai_family: AF_INET, ai_socktype: SOCK_STREAM,
+                             ai_protocol: IPPROTO_TCP, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var list: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &list) == 0, let first = list else { return nil }
+        defer { freeaddrinfo(first) }
+        var fallback: String?
+        var node: UnsafeMutablePointer<addrinfo>? = first
+        while let current = node {
+            if let address = current.pointee.ai_addr {
+                var sin = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                if inet_ntop(AF_INET, &sin.sin_addr, &text, socklen_t(INET_ADDRSTRLEN)) != nil {
+                    let ip = String(cString: text)
+                    if FeedServer.isTailnet(ip) { return ip }
+                    fallback = fallback ?? ip
+                }
+            }
+            node = current.pointee.ai_next
+        }
+        return fallback
+    }
+}
+
 public struct FeedHostRole: Codable, Sendable, Equatable {
     public var enabled: Bool
     public var bind: String
@@ -8,7 +64,10 @@ public struct FeedHostRole: Codable, Sendable, Equatable {
         self.enabled = enabled; self.bind = bind; self.port = port
     }
     public func validated() throws -> FeedHostRole {
-        guard (FeedServer.isTailnet(bind) || bind == "127.0.0.1"), (1...65535).contains(port) else {
+        // "auto" and a host name are resolved when the server starts, so a host whose address
+        // moved still serves at whatever address it has then.
+        let deferred = bind == "auto" || BindAddress.isHostName(bind)
+        guard (FeedServer.isTailnet(bind) || deferred || bind == "127.0.0.1"), (1...65535).contains(port) else {
             throw khuFail("feed hosting requires this Mac's existing tailnet address and a port from 1 to 65535")
         }
         return self

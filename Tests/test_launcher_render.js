@@ -422,4 +422,10 @@ posts.length = 0;
 document.getElementById('support').fire('click');
 assert.equal(posts.length, 1, 'R10 Support posts one message');
 assert.equal(posts[0] && posts[0].action, 'support', 'R10 Support asks the app to open the donation page, nothing else');
-console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up and the footer group');
+// R11 an empty app list says which publisher could not be reached, instead of "Checking…" forever.
+render(state([], { error: 'The request timed out.' }));
+assert.match(document.querySelector('.empty').textContent, /could not be reached: The request timed out\./, 'R11 an empty list names the failure');
+assert.match(document.querySelector('.empty').textContent, /100\.64\.0\.7/, 'R11 and the address it tried');
+render(state([]));
+assert.match(document.querySelector('.empty').textContent, /^Checking…$/, 'R11 a first load still says Checking…');
+console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group and the empty list’s reason');

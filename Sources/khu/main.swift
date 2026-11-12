@@ -288,11 +288,15 @@ struct KHUMain {
                 catch { FileHandle.standardError.write(Data("warning: no pairing code could be made, so new Macs cannot pair: \(error)\n".utf8)) }
             }
             // Every address is bound before any is served, so a bad --bind fails the start.
+            // "auto" and names become this Mac's address now, not the one written in a plist months ago.
+            let wanted = binds.isEmpty ? ["127.0.0.1"] : binds
+            let addresses: [String]
+            do { addresses = try wanted.map { try BindAddress.resolve($0) } } catch { fail("\(error)") }
             var servers: [(FeedServer, Int32)] = []
-            for address in (binds.isEmpty ? ["127.0.0.1"] : binds) {
+            for address in addresses {
                 let srv = FeedServer(feedDir: URL(fileURLWithPath: f), stateDir: URL(fileURLWithPath: s),
                                      bind: address, port: port, commandKey: commandKey,
-                                     publisherBind: binds.first(where: { FeedServer.isTailnet($0) }), feedOnly: feedOnly)
+                                     publisherBind: addresses.first(where: { FeedServer.isTailnet($0) }), feedOnly: feedOnly)
                 do { servers.append((srv, try srv.listen())) } catch { fail("\(error)") }
                 print("serving on \(address):\(port)")
             }
