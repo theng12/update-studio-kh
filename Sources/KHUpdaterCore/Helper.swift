@@ -29,7 +29,11 @@ public struct HelperSettings: Codable, Sendable, Equatable {
     public static func file(in stateDir: URL) -> URL { stateDir.appendingPathComponent("helper.json") }
     /// An unreadable file is no settings rather than a stopped agent: the page's setting then rules.
     public static func load(from stateDir: URL) -> HelperSettings {
-        (try? AtomicFile.readJSON(HelperSettings.self, from: file(in: stateDir))) ?? HelperSettings()
+        var settings = (try? AtomicFile.readJSON(HelperSettings.self, from: file(in: stateDir))) ?? HelperSettings()
+        // "Default" was a fourth choice until 2026-11-12; a stored one means System now, mapped on
+        // read so no screen has to know the old name.
+        if settings.appearance == "default" { settings.appearance = "system" }
+        return settings
     }
     public func save(to stateDir: URL) throws { try AtomicFile.writeJSON(self, to: Self.file(in: stateDir)) }
 

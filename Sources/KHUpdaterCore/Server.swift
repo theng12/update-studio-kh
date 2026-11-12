@@ -1109,7 +1109,7 @@ public final class FeedServer: @unchecked Sendable {
             + "<div class=setting><div><h3>Pairing protection</h3><p class=sub>The code is protected against repeated wrong attempts.</p></div><div>\(lockStatus)<a href=#connect>View code and connect a Mac</a><p class=sub>Already connected Macs keep their connection and Automatic choices.</p></div></div>"
             + "<div class=setting><div><h3>Automatic updates</h3><p class=sub>Every Mac keeps its own choices.</p></div><div><p>New Launcher connections start with Launcher automatic updates on. Other apps follow that Mac’s saved settings.</p><p class=sub>Use the Automatic control beside an app in a Mac’s details to change its effective setting. Existing choices are never reset by connecting.</p><a href=#macs>Manage choices in Macs</a></div></div>"
             + "<div class=setting><div><h3>Appearance</h3><p class=sub>System matches this Mac. Light and Dark force that look. Default uses the look Update Studio KH was designed with.</p></div>"
-            + "<div><div class=themes role=group aria-label=Appearance><button type=button data-appearance=system aria-pressed=true>System</button><button type=button data-appearance=light aria-pressed=false>Light</button><button type=button data-appearance=dark aria-pressed=false>Dark</button><button type=button data-appearance=default aria-pressed=false>Default</button></div></div></div></div></section>"
+            + "<div><div class=themes role=group aria-label=Appearance><button type=button data-appearance=system aria-pressed=true>System</button><button type=button data-appearance=light aria-pressed=false>Light</button><button type=button data-appearance=dark aria-pressed=false>Dark</button></div></div></div></div></section>"
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
         let sizes = ByteCountFormatter()
@@ -1168,7 +1168,7 @@ public final class FeedServer: @unchecked Sendable {
         var S=sessionStorage,L=localStorage,mode=S.getItem('khu-mode')||'all',refreshing=false;
         function show(){var v=location.hash.slice(1)||S.getItem('khu-view')||'macs';if(['macs','apps','connect','settings','support'].indexOf(v)<0)v='macs';var was=S.getItem('khu-view');S.setItem('khu-view',v);
         document.querySelectorAll('[data-view]').forEach(function(e){e.hidden=e.getAttribute('data-view')!=v});document.querySelectorAll('[data-tab]').forEach(function(a){a.setAttribute('aria-current',a.getAttribute('data-tab')==v?'page':'false')});if(was&&was!=v)window.scrollTo(0,0)}
-        function applyAppearance(v){if(['system','light','dark','default'].indexOf(v)<0)v='system';if(v=='light'||v=='dark')document.documentElement.setAttribute('data-theme',v);else document.documentElement.removeAttribute('data-theme');document.querySelectorAll('[data-appearance]').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-appearance')==v))})}
+        function applyAppearance(v){if(v=='default')v='system';if(['system','light','dark'].indexOf(v)<0)v='system';if(v=='light'||v=='dark')document.documentElement.setAttribute('data-theme',v);else document.documentElement.removeAttribute('data-theme');document.querySelectorAll('[data-appearance]').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-appearance')==v))})}
         applyAppearance(L.getItem('khu-appearance')||'system');
         function bind(){show();
         // In main, which a refresh replaces: bound again with each fresh copy.

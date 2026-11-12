@@ -428,4 +428,7 @@ assert.match(document.querySelector('.empty').textContent, /could not be reached
 assert.match(document.querySelector('.empty').textContent, /100\.64\.0\.7/, 'R11 and the address it tried');
 render(state([]));
 assert.match(document.querySelector('.empty').textContent, /^Checking…$/, 'R11 a first load still says Checking…');
+// R12 the appearance segment offers exactly System, Light and Dark — no Default.
+assert(!script.includes("'default','Default'"), 'R12 the appearance segment no longer offers Default');
+assert.match(script, /\['system','System'\],\['light','Light'\],\['dark','Dark'\]/, 'R12 exactly three appearance choices');
 console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group and the empty list’s reason');

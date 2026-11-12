@@ -129,6 +129,16 @@ func standaloneLauncherTests() {
         expect(second?.apps.first(where: { $0.app == id })?.installed == "2.0" && http.downloads == 1, "SL2 subsequent server update installs the newer version")
         expect((try? BundleInfo.read(URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("rollback-\(id)/New KH.app").path).version) == "1.0", "SL2 previous working app remains available for rollback")
         expect(HelperSettings.load(from: URL(fileURLWithPath: cfg.stateDir)).autoInstall == false, "SL2 manual update setting stays off")
+        // The fourth appearance choice is gone: a stored "default" from before reads as System.
+        let legacyDir = tmpDir("legacy-appearance")
+        var legacy = HelperSettings(); legacy.appearance = "default"
+        try? legacy.save(to: legacyDir)
+        expect(HelperSettings.load(from: legacyDir).appearance == "system",
+               "SL2 a stored Default appearance reads as System")
+        var kept = HelperSettings(); kept.appearance = "dark"
+        try? kept.save(to: legacyDir)
+        expect(HelperSettings.load(from: legacyDir).appearance == "dark",
+               "SL2 a real choice is left alone")
         let offline = try? Agent.runOnce(config: cfg, http: StandaloneHTTP(), shell: shell, control: { _, _ in control }, requested: ["rollback:" + id], appFolders: [folder])
         expect(offline?.commandsRun == 1 && offline?.apps.first(where: { $0.app == id })?.installed == "1.0", "SL2 explicit rollback works offline and has a visible result")
         var automatic = HelperSettings.load(from: URL(fileURLWithPath: cfg.stateDir))
