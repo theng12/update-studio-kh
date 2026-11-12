@@ -11,6 +11,23 @@ turned on.
 - **Agent** (each Mac): `khu agent --config <file>`
 - **Stub**: `khu-stub --base <dir>` (kept alive by launchd)
 
+## Release path (owner, 2026-11-12)
+
+This Mac builds, signs and tests. The release host, 1301, is the **only** feed writer, and every
+Mac pulls from it. A publish run on this Mac reaches nobody.
+
+1. Build and sign here: `packaging/build-app.sh <version>`, `packaging/build-launcher.sh <version> <publisher.json>`.
+   Each writes its DMG into `dist/` — no separate copy step.
+2. Once the release is accepted, `packaging/record-dist.sh rotate <app> <version>` keeps the
+   latest two installers and retires the rest to `_trash`.
+3. `packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog>` copies the DMG and its
+   changelog to the host's staging folder, publishes there with the host's own key, and reads the
+   served feed back to prove the version it now offers.
+4. Macs pull from `http://100.82.91.102:8790/release.json`.
+
+Test installs on this Mac are expected and harmless: they prove download and update, they are not
+the release source.
+
 ## Build
 
 ```
