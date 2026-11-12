@@ -263,8 +263,10 @@ public enum FeedPublisher {
         guard let release = try? AtomicFile.readJSON(Release.self, from: file),
               let data = release.feedData,
               let feed = try? JSON.decode(Feed.self, from: data) else { return [] }
+        // Only the rollback release's own pins: rolling back to it needs what it installs, not the
+        // generation before that, which is what keeps exactly one recoverable step rather than two.
         var names = Set<String>()
-        for entry in Array(feed.apps.values) + Array((feed.previous ?? [:]).values) {
+        for entry in feed.apps.values {
             names.insert(entry.file)
             if let icon = entry.icon { names.insert(icon) }
             if let delta = entry.delta { names.insert(delta.file) }
