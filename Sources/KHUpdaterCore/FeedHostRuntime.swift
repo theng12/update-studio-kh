@@ -66,8 +66,11 @@ public enum FeedHostRuntime {
             if FileManager.default.fileExists(atPath: plist.path) {
                 _ = try Trash.move(plist, into: home.appendingPathComponent("Library/_trash"))
             }
-            return loaded ? "feed host is off; its launchd job was stopped"
-                          : "feed host is off; nothing was installed"
+            // Reporting, not a verdict on this run: the note must never read as "nothing was
+            // installed" (the 2026-11-13 1301 report misled a reader into thinking an install was
+            // refused). Feed hosting is a role on this Mac; installs are unaffected.
+            return loaded ? "feed hosting is off on this Mac; its job was stopped"
+                          : "feed hosting is off on this Mac (it does not host the feed)"
         }
 
         _ = try role.validated()
