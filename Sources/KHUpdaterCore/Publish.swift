@@ -153,6 +153,11 @@ public enum FeedPublisher {
             let previous = feed.publishedAt ?? .distantPast
             feed.published_at = ISO.string(max(now, previous.addingTimeInterval(0.001)))
             let signed = try feed.validated()
+            // Rollback must always name the release that was live immediately before this one. Only
+            // a mirror host used to write this file, so on a primary host it could name a release
+            // whose artifacts were retired long ago. Rotated from the file on disk, before the new
+            // release replaces it, and before the keep-set is read below.
+            rotateRollbackRelease(in: feedDir)
             // Every pin this signed release carries, plus what the retention ledger still holds
             // as a recovery copy, read before the commit so an unreadable ledger refuses the
             // publish itself rather than quietly retiring the pins it names.
@@ -230,6 +235,23 @@ public enum FeedPublisher {
             }
         }
         return names
+    }
+
+    /// `previous-release.json` becomes a copy of the release that is live right now, so a rollback
+    /// always lands on the release before this one. Nothing is rotated on a first publish.
+    private static func rotateRollbackRelease(in dir: URL) {
+        let live = dir.appendingPathComponent("release.json")
+        let previous = dir.appendingPathComponent("previous-release.json")
+        guard FileManager.default.fileExists(atPath: live.path) else { return }
+        let temporary = dir.appendingPathComponent(".previous-release.json.khu-tmp-\(UUID().uuidString)")
+        let fm = FileManager.default
+        guard (try? fm.copyItem(at: live, to: temporary)) != nil else { return }
+        if fm.fileExists(atPath: previous.path) {
+            _ = try? fm.replaceItemAt(previous, withItemAt: temporary)
+        } else {
+            _ = try? fm.moveItem(at: temporary, to: previous)
+        }
+        _ = try? fm.removeItem(at: temporary)
     }
 
     /// The artifacts a mirror's rollback release still names. A missing or unreadable file keeps
