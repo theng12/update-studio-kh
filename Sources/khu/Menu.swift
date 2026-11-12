@@ -160,7 +160,15 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         if let error { note("Last check failed: \(Self.short(error))") }
         if list.isEmpty && error == nil { note("Checking…") }
         menu.addItem(.separator())
-        for app in list where app.managed {
+        // A fleet of many apps must not turn this menu into a wall of rows: by default only the
+        // apps that need action are listed. Small fleets still show everything, and the choice is
+        // a saved switch, not a fixed rule.
+        let showsAll = UserDefaults.standard.bool(forKey: "com.khupdater.menuShowsAllApps")
+            || list.filter { $0.managed }.count <= 8
+        let needingAction: (HelperApp) -> Bool = { app in
+            [HelperApp.updateAvailable, HelperApp.failed, HelperApp.notInstalled].contains(app.status)
+        }
+        for app in list where app.managed && (showsAll || needingAction(app)) {
             let status = busy == app.app ? HelperApp.updating : app.status
             let row = NSMenuItem(title: "\(app.name.isEmpty ? AppNames.display(app.app) : app.name)   \(app.installed ?? "—") · \(status)", action: nil, keyEquivalent: "")
             menu.addItem(row)
@@ -178,8 +186,13 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
             if let from = app.automaticOrigin { note(from, to: sub) }
             row.submenu = sub
         }
+        if !showsAll {
+            let rest = list.filter { $0.managed && !needingAction($0) }.count
+            if rest > 0 { note("\(rest) more up to date — open the window for everything") }
+        }
         menu.addItem(.separator())
         _ = action("Open Studio Launcher…", #selector(openWindow))
+        _ = action(showsAll ? "Show only apps needing attention" : "Show all apps in menu", #selector(toggleShowAll))
         _ = action("Check for Updates Now", #selector(checkNow))
         _ = action(settings.paused(at: Date()) ? "Resume Automatic Updates" : "Pause Automatic Updates for 24 Hours", #selector(togglePause))
         menu.addItem(.separator())
@@ -226,6 +239,14 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         var settings = HelperSettings.load(from: stateDir)
         settings.pausedUntil = settings.paused(at: Date()) ? nil : ISO.string(Date().addingTimeInterval(24 * 3600))
         save(settings)
+    }
+
+    /// A saved switch, not a fixed rule: the menu lists only apps needing action unless the owner
+    /// asks for the full list (large fleets would otherwise fill the menu).
+    @objc private func toggleShowAll() {
+        let key = "com.khupdater.menuShowsAllApps"
+        UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: key), forKey: key)
+        if let item, let menu = item.menu { menuNeedsUpdate(menu) }
     }
 
     /// A change is saved, then the agent runs at once so the page hears of it in one report.
