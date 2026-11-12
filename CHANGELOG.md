@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.24 — 2026-11-12
+- Settings → Appearance offers System, Light and Dark; a saved "Default" now reads as System.
+- Publishing keeps a restorable previous release, so Roll back works on the publisher's own Mac.
+- The helper and the Launcher reach the feed by its Tailscale name and nothing else.
+
 ## 1.0.23 — 2026-11-12
 - The helper and the Launcher reach the feed by its Tailscale name, so a publisher whose address changes keeps working without touching every Mac.
 - The feed now lives on the 1301 Mac; this app updates from there.

@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.21 — 2026-11-12
+- The helper reaches the feed by its Tailscale name, so a publisher whose address changes keeps working.
+- Settings → Appearance offers System, Light and Dark; a saved "Default" now reads as System.
+- Quit Studio Launcher KH sits in the app menu and in the menu-bar menu.
+
 ## 0.1.20 — 2026-11-12
 - The footer now holds a version pill that opens What's New, an icon-only Check for Updates, and a small update button that appears only when a newer Launcher is ready.
 - Support this app sits in the footer and in the menu bar's menu; it explains the free one-time donation.
