@@ -163,6 +163,10 @@ public enum FeedPublisher {
                 if let delta = entry.delta { keep.insert(delta.file) }
             }
             keep.formUnion(try ledgerNames(in: feedDir))
+            // A mirror host keeps the release before its last sync in previous-release.json for
+            // rollback. Publishing used to retire exactly the artifacts that file names, leaving a
+            // rollback that pointed at nothing; its pins are kept now.
+            keep.formUnion(rollbackNames(in: feedDir))
             try saveFeed(signed, to: feedDir, key: key)
             // `## Feed`: the signed release is committed first; only now may installers it no
             // longer names leave the feed directory. A failure here cannot undo the release or
@@ -224,6 +228,22 @@ public enum FeedPublisher {
                 names.insert(previous.file)
                 if let icon = previous.icon { names.insert(icon) }
             }
+        }
+        return names
+    }
+
+    /// The artifacts a mirror's rollback release still names. A missing or unreadable file keeps
+    /// nothing (and blocks nothing): the next mirror sync rewrites it.
+    private static func rollbackNames(in dir: URL) -> Set<String> {
+        let file = dir.appendingPathComponent("previous-release.json")
+        guard let release = try? AtomicFile.readJSON(Release.self, from: file),
+              let data = release.feedData,
+              let feed = try? JSON.decode(Feed.self, from: data) else { return [] }
+        var names = Set<String>()
+        for entry in Array(feed.apps.values) + Array((feed.previous ?? [:]).values) {
+            names.insert(entry.file)
+            if let icon = entry.icon { names.insert(icon) }
+            if let delta = entry.delta { names.insert(delta.file) }
         }
         return names
     }
