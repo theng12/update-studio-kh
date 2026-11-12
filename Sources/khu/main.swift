@@ -4,6 +4,14 @@ import CryptoKit
 @main
 struct KHUMain {
     static func main() {
+        // An app launched by LaunchServices inherits 256 descriptors, and an install that runs
+        // ditto, codesign and launchctl then dies with -24 "Too many open files". Raise our own
+        // limit at start instead of relying on the launchd job's plist, which only covers the job.
+        var limit = rlimit(rlim_cur: 0, rlim_max: 0)
+        if getrlimit(RLIMIT_NOFILE, &limit) == 0, limit.rlim_cur < 4096 {
+            limit.rlim_cur = min(4096, limit.rlim_max)
+            _ = setrlimit(RLIMIT_NOFILE, &limit)
+        }
         let args = Array(CommandLine.arguments.dropFirst())
         func usage() -> Never {
             FileHandle.standardError.write(Data("""
