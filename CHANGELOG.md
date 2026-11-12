@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 1.0.23 — 2026-11-12
+- The helper and the Launcher reach the feed by its Tailscale name, so a publisher whose address changes keeps working without touching every Mac.
+- The feed now lives on the 1301 Mac; this app updates from there.
+- A check that cannot read the feed says which publisher address it tried and why it failed, instead of showing an empty list.
+
 ## 1.0.22 — 2026-11-12
 - Update Studio KH has a left sidebar: Connect a Mac, Macs, Apps & updates, Settings and Support this app, each with an icon.
 - The version pill opens What's New, the round-arrow button checks for updates, and a small down-arrow appears only when an update is ready.
