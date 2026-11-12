@@ -3,6 +3,12 @@
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
 
+
+## 1.0.26 — 2026-11-12
+
+- An install repairs a LaunchAgent that still names a deleted bundle path, when the executable name is unchanged.
+- Opening the Launcher re-reads the installed versions immediately instead of showing the last report.
+
 ## 1.0.25 — 2026-11-12
 
 - Update and Install now ask before they run, naming the app and versions.

@@ -63,6 +63,24 @@ public enum FeedPublisher {
         return try? JSON.decode(Feed.self, from: data)
     }
 
+    /// Removes one app key from the signed feed — used to repair a mis-keyed duplicate entry.
+    /// Artifacts stay on disk so the next publish's retention pass decides what is unreferenced.
+    public static func unpublish(feedDir: URL, keyFile: URL, app: String) throws {
+        let key = try Signing.loadPrivateKey(from: keyFile)
+        try FileLock.withExclusive(feedDir.appendingPathComponent("publish.lock")) {
+            guard var feed = try loadVerifiedFeed(from: feedDir, publicKey: key.publicKey) else {
+                throw khuFail("nothing is published in \(feedDir.path)")
+            }
+            guard feed.apps.removeValue(forKey: app) != nil else { throw khuFail("the feed has no \(app)") }
+            if feed.previous?.removeValue(forKey: app) != nil, feed.previous?.isEmpty == true { feed.previous = nil }
+            var priors = priorMap(in: feedDir)
+            priors.removeValue(forKey: app)
+            try AtomicFile.writeJSON(priors, to: feedDir.appendingPathComponent("priors.json"))
+            feed.published_at = ISO.string(Date())
+            try saveFeed(feed, to: feedDir, key: key)
+        }
+    }
+
     public static func saveFeed(_ feed: Feed, to dir: URL, key: Curve25519.Signing.PrivateKey) throws {
         let data = JSON.encode(feed)
         try AtomicFile.writeJSON(Release(feed: data, signature: try Signing.sign(data, with: key)), to: releaseFile(in: dir))

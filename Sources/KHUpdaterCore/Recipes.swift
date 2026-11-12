@@ -335,6 +335,27 @@ public enum Recipe {
         }
     }
 
+    /// An install that renamed a bundle can leave a LaunchAgent naming a path that no longer
+    /// exists: that job can never start, and its app never runs to repair it. Only the
+    /// unambiguous case is fixed — same executable basename, old bundle path gone.
+    static func repairLaunchAgents(installedPath: String, fileManager fm: FileManager) {
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
+        guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for url in entries where url.pathExtension == "plist" {
+            guard let data = try? Data(contentsOf: url),
+                  var plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                  var args = plist["ProgramArguments"] as? [String], let first = args.first,
+                  first.contains("/Contents/MacOS/"), !fm.fileExists(atPath: first) else { continue }
+            let executable = URL(fileURLWithPath: first).lastPathComponent
+            let repaired = URL(fileURLWithPath: installedPath).appendingPathComponent("Contents/MacOS/\(executable)").path
+            guard fm.fileExists(atPath: repaired) else { continue }
+            args[0] = repaired
+            plist["ProgramArguments"] = args
+            guard let out = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else { continue }
+            _ = try? out.write(to: url, options: .atomic)
+        }
+    }
+
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false) throws -> RecipeResult {
@@ -394,6 +415,7 @@ public enum Recipe {
             if let bundleID = Self.bundleIdentifier(at: installedPath) {
                 Self.retireDuplicateBundles(bundleID: bundleID, keeping: installedPath, trash: paths.trash, fileManager: fm)
             }
+            Self.repairLaunchAgents(installedPath: installedPath, fileManager: fm)
         } catch {
             let cause = error
             let restored: String

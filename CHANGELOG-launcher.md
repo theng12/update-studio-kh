@@ -3,6 +3,11 @@
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
 
+
+## 0.1.23 — 2026-11-12
+
+- Opening the window re-reads the installed versions right away.
+
 ## 0.1.22 — 2026-11-12
 
 - Update, Install and Reinstall ask for confirmation first, then show progress and the result.

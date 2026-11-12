@@ -2,6 +2,9 @@ import AppKit
 
 extension HelperMenu {
     func showWindow() {
+        // A Mac opened the window: re-inventory now, so the installed versions drawn are the
+        // bundles on disk rather than the last periodic report.
+        wake.signal()
         rescanSSDs()
         if window == nil { window = LauncherWindow(helper: self) }
         window?.reload()

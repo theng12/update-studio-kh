@@ -132,6 +132,23 @@ struct KHUMain {
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
+        case "unpublish":
+            var feed: String?, key: String?, app: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--feed": feed = value("--feed", &i)
+                case "--key": key = value("--key", &i)
+                case "--app": app = value("--app", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let feed, let key, let app else { usage() }
+            do {
+                try FeedPublisher.unpublish(feedDir: URL(fileURLWithPath: feed), keyFile: URL(fileURLWithPath: key), app: app)
+                print("removed \(app) from the feed")
+            } catch { fail("\(error)") }
         case "network":
             var feed: String?, key: String?, file: String?
             var i = 1
