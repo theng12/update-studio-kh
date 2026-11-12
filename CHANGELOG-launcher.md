@@ -4,6 +4,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.24 — 2026-11-12
+
+- The helper switches to the version an update points at, even when the update came from somewhere else, so the running helper always matches the version shown.
+- Each installed version carries its own named helper app, so a newly switched version starts without needing an older one.
+
 ## 0.1.23 — 2026-11-12
 
 - Opening the window re-reads the installed versions right away.

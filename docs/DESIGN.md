@@ -538,6 +538,15 @@ Links change by renaming a fresh symlink over the old one (old one copied to `_t
 kill at any instant leaves whole versions; `previous` moves before `current`. Installing the
 version already running is a no-op, and a version directory is never overwritten.
 
+`current` decides what runs: every start uses it whenever it resolves to an executable, and the
+recorded `target` in `stub-state.json` is only the fallback when the link is missing or cannot
+run. Each launch logs which was chosen and why. A switch made by another process (an update, a
+hand switch) is noticed within the poll interval: the running child is stopped without counting
+as a crash and the new `current` starts. The switcher records `current` and `target` together,
+with a fresh probation window, so the two never persistently disagree. Every version directory
+carries its `Update Studio KH Helper.app` built from that version's binary (the executable is a
+hard link to it), and a switch never promotes a version whose bundle cannot run.
+
 After a status report is accepted, optional helper retirement observes fresh heartbeats from the settled current child. It defaults on, waits 300 seconds across repeated reports, and resets on a restart, rollback, stale heartbeat or missed report interval. Its setting can disable cleanup or change the healthy duration. Only real older version directories move to restorable `_trash`; current and previous stay protected under `switch.lock`. A cleanup failure is a note and does not block updates.
 
 Every new target `current` resolves to — first start, self-update, rollback — starts a probation:

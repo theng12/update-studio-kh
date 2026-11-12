@@ -148,7 +148,7 @@ assert(document.getElementById('main') && document.getElementById('q') && docume
 const stored = new Map();
 const localStorage = { getItem: k => (stored.has(k) ? stored.get(k) : null), setItem: (k, v) => stored.set(k, String(v)) };
 const posts = [];
-const window = { webkit: { messageHandlers: { khu: { postMessage: m => posts.push(m) } } } };
+const window = { confirm: () => true, webkit: { messageHandlers: { khu: { postMessage: m => posts.push(m) } } } };
 const ctx = vm.createContext({ document, window, localStorage, setInterval: () => 0, innerWidth: 1000, innerHeight: 800 });
 vm.runInContext(script, ctx, { filename: 'LauncherPage.swift <script>' });
 const run = code => vm.runInContext(code, ctx);

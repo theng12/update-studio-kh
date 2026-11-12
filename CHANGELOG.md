@@ -4,6 +4,12 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.27 — 2026-11-12
+
+- The helper always runs the version the update points at, and switches to a new one as soon as an update moves it, instead of keeping the old helper running.
+- Every installed version carries its own named helper app, so a new version starts even when the older ones were never opened.
+- A rollback records the same pointer the switch uses, so the launcher and the helper can no longer disagree about what is running.
+
 ## 1.0.26 — 2026-11-12
 
 - An install repairs a LaunchAgent that still names a deleted bundle path, when the executable name is unchanged.

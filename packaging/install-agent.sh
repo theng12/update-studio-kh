@@ -145,6 +145,8 @@ if [[ "$REPAIR" == false ]]; then
     # The launchd job runs from a named helper bundle, so process lists show the product instead
     # of a bare khu-stub. The binary inside is a link to the same file as bin/khu-stub.
     helper_bundle "$STAGE/KHUpdater/Update Studio KH Helper.app" "$STAGE/KHUpdater/bin/khu-stub"
+    # Every version folder carries its own helper bundle, built from that version's binary.
+    helper_bundle "$STAGE/KHUpdater/base/versions/$VERSION/Update Studio KH Helper.app" "$STAGE/KHUpdater/base/versions/$VERSION/khu"
     ln -s "versions/$VERSION/khu" "$STAGE/KHUpdater/base/current"
     /usr/bin/plutil -convert json -o "$STAGE/KHUpdater/base/config.json" "$CONFIG"
     /usr/bin/plutil -replace stateDir -string "$K/state" "$STAGE/KHUpdater/base/config.json"
@@ -273,6 +275,7 @@ mkdir -p "$K/base/versions/$VERSION"
 created "$K/base/versions/$VERSION/khu"
 cp "$STAGE/KHUpdater/base/versions/$VERSION/khu" "$K/base/versions/$VERSION/khu"
 chmod 755 "$K/base/versions/$VERSION/khu"
+helper_bundle "$K/base/versions/$VERSION/Update Studio KH Helper.app" "$K/base/versions/$VERSION/khu"
 # The version this Mac was running is kept as the fallback before `current` moves on. A `previous`
 # that is already there is kept as it is.
 OLD_CURRENT=""

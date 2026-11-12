@@ -29,6 +29,13 @@ public struct StubState: Codable, Sendable, Equatable {
     public var switchedAt: Date? { switched_at.flatMap(ISO.date) }
     public var heartbeatAt: Date? { heartbeat_at.flatMap(ISO.date) }
     public var exitDates: [Date] { exits.compactMap(ISO.date) }
+
+    /// The one reader for `stub-state.json`, shared by the stub and the switcher so both write
+    /// the same file. An absent or unreadable file is a fresh state, never a crash at startup.
+    public static func load(from url: URL) -> StubState {
+        guard let data = try? Data(contentsOf: url) else { return StubState() }
+        return (try? JSONDecoder().decode(StubState.self, from: data)) ?? StubState()
+    }
 }
 
 public enum StubDecision: Sendable, Equatable {

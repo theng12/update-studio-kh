@@ -475,6 +475,78 @@ func stubTests() {
         let code = StubRunner(layout: layout2, childArguments: [], pollInterval: 0.05, restartDelay: 0.05).run()
         expect(code == 0 && layout2.currentBinary().map(StubLayout.version) == "1.0.0", "R10 a missing current falls back to previous and runs it")
     }
+    // V1: `current` decides what runs; the recorded target is only the fallback, and a switcher
+    // keeps both in agreement (owner, 2026-11-12: the helper stayed on 0.1.21 while current was 0.1.23).
+    do {
+        let layout = StubLayout(base: tmpDir("stub-current-wins"))
+        let seen = layout.base.appendingPathComponent("seen")
+        makeVersion(layout, "1.0.0", script: "echo old >> \(seen.path); exit 0")
+        makeVersion(layout, "2.0.0", script: "echo new >> \(seen.path); exit 0")
+        try! fm.createSymbolicLink(atPath: layout.currentLink.path, withDestinationPath: (try! layout.binary(for: "2.0.0")).path)
+        try! AtomicFile.writeJSON(StubState(switched_at: nil, target: (try! layout.binary(for: "1.0.0")).path), to: layout.stateFile)
+        let code = StubRunner(layout: layout, childArguments: [], pollInterval: 0.05, restartDelay: 0.05).run()
+        let ran = (try? String(contentsOf: seen, encoding: .utf8))?.split(separator: "\n").map(String.init) ?? []
+        expect(code == 0 && ran == ["new"], "V1 current wins when it disagrees with the recorded target (ran \(ran))")
+    }
+    do {
+        let layout = StubLayout(base: tmpDir("stub-target-fallback"))
+        let marker = layout.base.appendingPathComponent("ran-target")
+        makeVersion(layout, "1.0.0", script: "echo ran >> \(marker.path); exit 0")
+        // No current and no previous: only the recorded target can run.
+        try! AtomicFile.writeJSON(StubState(switched_at: nil, target: (try! layout.binary(for: "1.0.0")).path), to: layout.stateFile)
+        let code = StubRunner(layout: layout, childArguments: [], pollInterval: 0.05, restartDelay: 0.05).run()
+        let ran = (try? String(contentsOf: marker, encoding: .utf8))?.contains("ran") ?? false
+        expect(code == 0 && ran && layout.currentBinary() == nil,
+               "V1 a missing current runs the recorded target instead of giving up")
+    }
+    do {
+        let layout = StubLayout(base: tmpDir("stub-state-target"))
+        makeVersion(layout, "1.0.0", script: "exit 0"); makeVersion(layout, "2.0.0", script: "exit 0")
+        let sw = StubSwitcher(layout: layout)
+        _ = try? sw.install(version: "1.0.0")
+        _ = try? sw.install(version: "2.0.0", at: Date(timeIntervalSince1970: 1_900_000_000))
+        let installed = StubState.load(from: layout.stateFile)
+        expect(installed.target == (try! layout.binary(for: "2.0.0")).standardizedFileURL.path && installed.switched_at != nil,
+               "V1 a switch records stub-state target together with current")
+        _ = try? sw.switchBack(at: Date(timeIntervalSince1970: 1_900_000_100))
+        let rolled = StubState.load(from: layout.stateFile)
+        expect(rolled.target == (try! layout.binary(for: "1.0.0")).standardizedFileURL.path,
+               "V1 a rollback records stub-state target too")
+    }
+    do {
+        let layout = StubLayout(base: tmpDir("stub-current-moves"))
+        let seen = layout.base.appendingPathComponent("seen")
+        makeVersion(layout, "1.0.0", script: "echo old >> \(seen.path); sleep 5")
+        makeVersion(layout, "2.0.0", script: "echo new >> \(seen.path); exit 0")
+        try! fm.createSymbolicLink(atPath: layout.currentLink.path, withDestinationPath: (try! layout.binary(for: "1.0.0")).path)
+        let target = (try! layout.binary(for: "2.0.0")).path
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+            let fresh = layout.base.appendingPathComponent(".current.tmp")
+            try? fm.removeItem(at: fresh)
+            try? fm.createSymbolicLink(atPath: fresh.path, withDestinationPath: target)
+            rename(fresh.path, layout.currentLink.path)
+        }
+        let t0 = Mono.now()
+        let code = StubRunner(layout: layout, childArguments: [], pollInterval: 0.05, restartDelay: 0.05,
+                              policy: StubPolicy(crashWindow: 30, crashLimit: 3, heartbeatGrace: 30)).run()
+        let ran = (try? String(contentsOf: seen, encoding: .utf8))?.split(separator: "\n").map(String.init) ?? []
+        expect(code == 0 && ran == ["old", "new"] && Mono.now() - t0 < 4,
+               "V1 a running stub follows current when the link moves (ran \(ran), \(Int(Mono.now() - t0)) s)")
+    }
+    do {
+        let layout = StubLayout(base: tmpDir("stub-bundle"))
+        makeVersion(layout, "1.0.0", script: "exit 0"); makeVersion(layout, "2.0.0", script: "exit 0")
+        let sw = StubSwitcher(layout: layout)
+        _ = try? sw.install(version: "1.0.0")
+        let helper = (try! layout.helperBundle(for: "1.0.0")).appendingPathComponent("Contents/MacOS/Update Studio KH Helper")
+        expect(fm.isExecutableFile(atPath: helper.path), "V1 every promoted version carries its helper bundle")
+        makeVersion(layout, "3.0.0", script: "exit 0")
+        try! Data("not a bundle".utf8).write(to: try! layout.helperBundle(for: "3.0.0"))
+        expectThrows("V1 a switch refuses a version whose helper bundle cannot run", contains: "helper bundle") {
+            _ = try sw.install(version: "3.0.0")
+        }
+        expect(layout.currentBinary().map(StubLayout.version) == "1.0.0", "V1 the refused version left current unchanged")
+    }
     // R9 / S2: a new target gets its own probation, however long ago the last switch was.
     do {
         let layout = StubLayout(base: tmpDir("stub-probation"))

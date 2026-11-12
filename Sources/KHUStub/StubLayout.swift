@@ -93,11 +93,43 @@ public struct StubSwitcher: @unchecked Sendable {
         guard fileManager.isExecutableFile(atPath: binary.path) else {
             throw khuFail("no executable at \(binary.path)")
         }
+        // Every version directory carries its full helper bundle, built from that version's
+        // binary. A version whose bundle cannot run is never promoted.
+        try ensureHelperBundle(for: version, binary: binary)
         let current = layout.currentBinary(fileManager: fileManager)
         if current?.path == binary.path { return false }
         if let current { try point(layout.previousLink, at: current, at: date) }
         try point(layout.currentLink, at: binary, at: date)
+        recordTarget(binary, at: date)
         return true
+    }
+
+    /// Create (or repair) `versions/<version>/Update Studio KH Helper.app` around this version's
+    /// binary. The executable inside is a hard link to the same file, so it cannot drift.
+    private func ensureHelperBundle(for version: String, binary: URL) throws {
+        let executable: URL
+        do {
+            executable = try HelperBundle.ensure(
+                HelperBundle.Spec(name: "Update Studio KH Helper", bundleID: "com.khupdater.agent",
+                                  executableName: HelperBundle.helperExecutable, version: version),
+                source: binary, out: try layout.helperBundle(for: version), fileManager: fileManager)
+        } catch {
+            throw khuFail("cannot build the helper bundle for \(version): \(error); nothing was switched")
+        }
+        guard fileManager.isExecutableFile(atPath: executable.path) else {
+            throw khuFail("the helper bundle for \(version) has no runnable executable; nothing was switched")
+        }
+    }
+
+    /// `current` and the recorded `target` move together. The stub re-reads `current` at every
+    /// start and rewrites this on the next one, so a failed write here is corrected by the stub.
+    private func recordTarget(_ target: URL, at date: Date) {
+        var state = StubState.load(from: layout.stateFile)
+        state.switched_at = ISO.string(date)
+        state.target = target.standardizedFileURL.path
+        state.exits = []
+        state.heartbeat_at = nil
+        try? AtomicFile.writeJSON(state, to: layout.stateFile)
     }
 
     /// Put `current` back on `previous`. Returns the version restored, or nil when there is no
@@ -106,6 +138,7 @@ public struct StubSwitcher: @unchecked Sendable {
     public func switchBack(at date: Date = Date()) throws -> String? {
         guard let previous = usablePrevious() else { return nil }
         try point(layout.currentLink, at: previous, at: date)
+        recordTarget(previous, at: date)
         return StubLayout.version(of: previous)
     }
 

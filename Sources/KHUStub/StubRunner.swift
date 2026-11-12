@@ -47,10 +47,7 @@ public final class StubRunner: @unchecked Sendable {
         self.now = now
     }
 
-    public func loadState() -> StubState {
-        guard let data = try? Data(contentsOf: layout.stateFile) else { return StubState() }
-        return (try? JSONDecoder().decode(StubState.self, from: data)) ?? StubState()
-    }
+    public func loadState() -> StubState { StubState.load(from: layout.stateFile) }
 
     public func save(_ supervisor: StubSupervisor) {
         do { try AtomicFile.writeJSON(supervisor.state, to: layout.stateFile) }
@@ -120,17 +117,31 @@ public final class StubRunner: @unchecked Sendable {
             return true
         }
 
+        /// `current` wins whenever it resolves to an executable. The recorded target is only the
+        /// last thing this stub ran: it is what to run when the link itself is missing or broken.
+        func chosenBinary() -> (binary: URL, reason: String)? {
+            if let current = layout.currentBinary() { return (current, "current") }
+            if let recorded = supervisor.state.target,
+               FileManager.default.isExecutableFile(atPath: recorded) {
+                return (URL(fileURLWithPath: recorded).standardizedFileURL,
+                        "recorded target (current is missing or cannot run)")
+            }
+            return nil
+        }
+
         while true {
             if shutdownSignal.requested {
                 log("shutdown requested; no child running, not starting one")
                 return Self.shutdownExitCode
             }
-            guard let binary = layout.currentBinary() else {
-                // Missing, dangling or not executable: the fallback is the only thing that can run.
+            guard let choice = chosenBinary() else {
+                // Neither the link nor a recorded target can run: the fallback is the last resort.
                 if rollBack("current is missing or cannot run") { continue }
                 log("no runnable version under \(layout.base.path) — cannot start")
                 return 2
             }
+            let binary = choice.binary
+            log("launch decision: \(choice.reason), \(binary.path)")
             if supervisor.state.target != binary.path {
                 // A new target — first start, a self-update, or a hand switch — gets a fresh window.
                 supervisor.recordSwitch(at: now(), target: binary.path)
@@ -158,10 +169,19 @@ public final class StubRunner: @unchecked Sendable {
             }
 
             var rolledBack = false
+            var switchedUnderneath = false
             while child.isRunning {
                 if waitOrShutdown(pollInterval) {
                     stopOwnedChildForShutdown(child)
                     return Self.shutdownExitCode
+                }
+                if let live = layout.currentBinary(), RealPath.of(live.path) != RealPath.of(binary.path) {
+                    // The link moved (an update, a hand switch). Whatever the recorded target says,
+                    // `current` is what must run: stop this child and start the new one.
+                    log("current now names \(live.path); restarting to run it")
+                    switchedUnderneath = true
+                    stop(child)
+                    break
                 }
                 if let beat = readHeartbeat(from: layout.heartbeatFile), beat.nonce == nonce,
                    beat.pid == child.processIdentifier, let date = beat.date {
@@ -187,7 +207,9 @@ public final class StubRunner: @unchecked Sendable {
                     _ = rollBack(reason)  // only logs: there is nothing to fall back to
                 }
             }
-            if rolledBack { continue }
+            // A child we stopped ourselves for a switch did not crash; the new version gets its
+            // own probation in the next iteration.
+            if rolledBack || switchedUnderneath { continue }
 
             if shutdownSignal.requested {
                 child.waitUntilExit()
