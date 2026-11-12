@@ -5,6 +5,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.29 — 2026-11-13
+
+- Pair again works with no code typed while the publisher's allow-a-Mac window is open; the older sign-in is replaced and the old token stops working.
+- A failed pairing names the publisher address and the exact mismatch (address, key or clock) instead of saying the code is wrong.
+
 ## 0.1.28 — 2026-11-13
 
 - Re-pairing works from this Mac: entering the pairing code replaces the older sign-in, no Remove on the publisher Mac needed, and the old token stops working.

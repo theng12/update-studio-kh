@@ -482,22 +482,21 @@ public final class FeedServer: @unchecked Sendable {
                 }
                 window = open
             }
-            // A Mac this publisher already has a record of is replaced only by a claim carrying the
-            // valid pairing code (the owner's authorisation, rate-limited and lockable), or by its
-            // own retry: a window-enrolled Mac resending the same machine and nonce because the
-            // signed reply was lost on the way back. A window claim without a code, and any claim
-            // from a machine that has reported under a different nonce, is still refused — the
-            // code is what makes replacing an existing sign-in legitimate.
+            // A Mac this publisher already has a record of is replaced by the valid pairing code,
+            // by an OPEN ENROLMENT WINDOW (the owner's deliberate allow-a-Mac action, so a
+            // same-tailnet Mac re-pairs with no code typing), or by its own retry: a window-enrolled
+            // Mac resending the same machine and nonce because the signed reply was lost. A claim
+            // with neither a code nor an open window is still refused.
             let retry = state.machines[machine].map { record in
                 (record.enrolmentSource == MachineState.windowSource || record.enrolmentSource == MachineState.pairingSource)
                     && record.lastSeen == nil && record.enrolNonceHash == Enrolment.sha256Hex(nonce)
             } ?? false
-            guard state.machines[machine] == nil || retry || pairedByCode else {
-                return Self.text(409, "This Mac's name is already in use. Enter the pairing code from Update Studio KH on this Mac's Pair again screen to reclaim it.")
+            guard state.machines[machine] == nil || retry || pairedByCode || window != nil else {
+                return Self.text(409, "This Mac's name is already in use. Enter the pairing code from Update Studio KH on this Mac's Pair again screen, or open an enrolment window on the publisher, to reclaim it.")
             }
             let replaced = state.machines[machine]
-            // A resend is the same enrolment, not a second one: it must not spend another slot.
-            guard retry || window.map({ $0.enrolled < maxEnrolmentsPerWindow }) ?? true else {
+            // A resend and a replacement are not new Macs: neither spends a window slot.
+            guard retry || replaced != nil || window.map({ $0.enrolled < maxEnrolmentsPerWindow }) ?? true else {
                 return Self.text(429, "this enrolment window has already enrolled as many Macs as it allows (\(maxEnrolmentsPerWindow)); ask the owner to open a new one")
             }
             let token = Enrolment.token()
@@ -511,15 +510,17 @@ public final class FeedServer: @unchecked Sendable {
             }
             Enrolment.store(token, for: machine, at: now, source: window == nil ? MachineState.pairingSource : MachineState.windowSource,
                             nonce: nonce, in: &state)
-            if pairedByCode, replaced?.tokenHash != nil, var record = state.machines[machine] {
-                // The code revoked the earlier token by replacing its hash; keep an audit line on
+            if pairedByCode || window != nil, replaced?.tokenHash != nil, var record = state.machines[machine] {
+                // The new token revoked the earlier one by replacing its hash; keep an audit line on
                 // the Mac's own page so a replacement is visible, never silent.
+                let how = pairedByCode ? "the pairing code" : "the open enrolment window"
                 let audit = HistoryEntry(app: "Update Studio", from: nil, to: nil, status: "paired again",
-                                         reason: "the pairing code replaced this Mac's earlier sign-in", at: ISO.string(now))
+                                         reason: "\(how) replaced this Mac's earlier sign-in", at: ISO.string(now))
                 record.history = Array(([audit] + (record.history ?? [])).prefix(HistoryEntry.kept))
                 state.machines[machine] = record
             }
-            if !retry, let window { state.enrolWindow?.enrolled = window.enrolled + 1 }
+            // A replacement is not a new Mac: it must not spend a window slot.
+            if !retry, replaced == nil, let window { state.enrolWindow?.enrolled = window.enrolled + 1 }
             return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
         }
     }

@@ -268,8 +268,8 @@ func connectionFlowTests() {
         try! JSONSerialization.data(withJSONObject: original).write(to: file)
         let client = InProcessClient(server: r.server)
 
-        let saved = try! Connect.changeDestination(to: "100.64.0.7:8790", file: file, http: client)
-        expect(saved == "http://100.64.0.7:8790/release.json", "CF6 a Tailscale address serving this Mac's signed feed is saved")
+        let saved = try! Connect.changeDestination(to: "host.tail1234.ts.net:8790", file: file, http: client)
+        expect(saved == "http://host.tail1234.ts.net:8790/release.json", "CF6 a Tailscale name serving this Mac's signed feed is saved")
         let after = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]
         expect(after?["feedURL"] as? String == saved && after?["token"] as? String == "tok-abc-0123456789"
                && after?["publicKey"] as? String == r.rig.pair.publicKeyBase64
@@ -279,7 +279,7 @@ func connectionFlowTests() {
         expect(mode == 0o600, "CF6 the settings file stays private (got \(String(describing: mode)))")
 
         let afterSuccess = try! Data(contentsOf: file)
-        expectThrows("CF6 an address outside the Tailscale range is refused", contains: "100.64.0.0/10") {
+        expectThrows("CF6 a numeric IP is refused with the ATS reason", contains: "App Transport Security") {
             _ = try Connect.changeDestination(to: "192.168.1.9:8790", file: file, http: client)
         }
         expectThrows("CF6 a path on the typed address is refused", contains: "without a path") {
@@ -289,7 +289,7 @@ func connectionFlowTests() {
             _ = try Connect.changeDestination(to: "https://100.64.0.7:8790", file: file, http: client)
         }
         expectThrows("CF6 an unreachable address is one honest sentence", contains: "could not be reached") {
-            _ = try Connect.changeDestination(to: "100.64.0.7:8790", file: file, http: OfflineHTTP())
+            _ = try Connect.changeDestination(to: "host.tail1234.ts.net:8790", file: file, http: OfflineHTTP())
         }
         expect(try! Data(contentsOf: file) == afterSuccess, "CF6 every refused address left the saved settings byte for byte as they were")
         var impostor = original
@@ -298,7 +298,7 @@ func connectionFlowTests() {
         let impostorBytes = try! Data(contentsOf: file)
         expectThrows("CF6 an address not serving this Mac's signed updates is refused: trust needs a kit, not a typed address",
                      contains: "setup kit") {
-            _ = try Connect.changeDestination(to: "100.64.0.7:8790", file: file, http: client)
+            _ = try Connect.changeDestination(to: "host.tail1234.ts.net:8790", file: file, http: client)
         }
         expect(try! Data(contentsOf: file) == impostorBytes, "CF6 the trust refusal wrote nothing either")
         try! JSONSerialization.data(withJSONObject: original).write(to: file)
@@ -306,7 +306,7 @@ func connectionFlowTests() {
         concurrent["token"] = "fixture-fresh-connection-token"
         let concurrentBytes = try! JSONSerialization.data(withJSONObject: concurrent, options: [.sortedKeys])
         expectThrows("CF6 a connection replaced during an address check is preserved", contains: "settings changed") {
-            _ = try Connect.changeDestination(to: "100.64.0.7:8790", file: file,
+            _ = try Connect.changeDestination(to: "host.tail1234.ts.net:8790", file: file,
                 http: ConcurrentConfigHTTP(inner: client, file: file, replacement: concurrentBytes))
         }
         expect(try! Data(contentsOf: file) == concurrentBytes, "CF6 saving an address never restores a superseded sign-in")
@@ -354,16 +354,16 @@ func connectionFlowTests() {
         let client = CountingHTTP(InProcessClient(server: r.server))
         if scenario == "success" {
             let out = try? Connect.run(kit: k, home: home, machine: "edited-mac", code: code,
-                destination: "100.64.0.7:8790", http: client, shell: SystemShell())
+                destination: "host.tail1234.ts.net:8790", http: client, shell: SystemShell())
             let file = home.appendingPathComponent("Library/KHUpdater/base/config.json")
             let saved = try? JSON.decode(AgentConfig.self, from: Data(contentsOf: file))
-            expect(out != nil && saved?.feedURL == "http://100.64.0.7:8790/release.json"
+            expect(out != nil && saved?.feedURL == "http://host.tail1234.ts.net:8790/release.json"
                    && saved?.publicKey == r.rig.pair.publicKeyBase64,
                    "CF14 edited first-run address is used and saved with the original pin")
         } else {
-            expectThrows("CF14 invalid destination or different publisher cannot install", contains: scenario == "wrong-pin" ? "not signed" : "Tailscale range") {
+            expectThrows("CF14 invalid destination or different publisher cannot install", contains: scenario == "wrong-pin" ? "not signed" : "App Transport Security") {
                 _ = try Connect.run(kit: k, home: home, machine: "edited-mac", code: code,
-                    destination: scenario == "wrong-pin" ? "100.64.0.7:8790" : "8.8.8.8:8790",
+                    destination: scenario == "wrong-pin" ? "host.tail1234.ts.net:8790" : "8.8.8.8:8790",
                     http: client, shell: SystemShell())
             }
             expect(!Connect.isSetUp(home: home) && (scenario != "public-address" || client.posts == 0),
@@ -410,11 +410,8 @@ func connectionFlowTests() {
             expectThrows("CF9 unconfirmed recovery sends nothing", contains: "not confirmed") {
                 _ = try Connect.repair(configFile: file, code: code, confirmed: false, http: client)
             }
-            expectThrows("CF9 a pairing code is required even after confirmation", contains: "type the pairing code") {
-                _ = try Connect.repair(configFile: file, code: " ", confirmed: true, http: client)
-            }
             expect(client.posts == 0 && r.machines["repair-mac"] == nil && (try! Data(contentsOf: file)) == before,
-                   "CF9 refusal before confirmation or code preserves the existing sign-in and enrols nobody")
+                   "CF9 a refusal before confirmation preserves the existing sign-in and enrols nobody")
         } else if scenario == "wrong-code" {
             expectThrows("CF10 wrong recovery code is refused", contains: "pairing code is wrong") {
                 _ = try Connect.repair(configFile: file, code: code == "000000" ? "000001" : "000000", confirmed: true, http: client)
@@ -455,6 +452,18 @@ func connectionFlowTests() {
             }
             expect((try! fm.attributesOfItem(atPath: file.path))[.posixPermissions] as? Int == 0o600,
                    "CF13 renewed credentials stay private")
+            // No code typing: an open allow-a-Mac window re-pairs too; without one the publisher
+            // explains what is missing and nothing changes.
+            let noCodeBefore = try! Data(contentsOf: file)
+            expectThrows("CF13b an empty code with no window gets the publisher's explanation", contains: "pairing code") {
+                _ = try Connect.repair(configFile: file, code: "", confirmed: true, http: client)
+            }
+            expect((try! Data(contentsOf: file)) == noCodeBefore, "CF13b the refused no-code attempt changes nothing")
+            r.openWindow(30)
+            let noCode = try? Connect.repair(configFile: file, code: "", confirmed: true, http: client)
+            let afterNoCode = (try! JSONSerialization.jsonObject(with: try! Data(contentsOf: file))) as! [String: Any]
+            expect(noCode == "repair-mac" && (afterNoCode["token"] as? String) != token,
+                   "CF13c Pair again with no code succeeds while the publisher's allow-a-Mac window is open")
         }
     }
 

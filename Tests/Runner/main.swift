@@ -752,7 +752,12 @@ final class InProcessClient: HTTPClient, @unchecked Sendable {
     func respond(_ method: String, _ url: URL, _ headers: [String: String], _ body: Data) -> HTTPResponse {
         var target = url.path
         if let q = url.query { target += "?" + q }
-        let lower = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+        var lower = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+        // A real URLSession sends the Host the Mac typed; the publisher's reply must name that
+        // address, so the fixture sends it too instead of falling back to the bind address.
+        if lower["host"] == nil, let host = url.host {
+            lower["host"] = host + (url.port.map { ":\($0)" } ?? "")
+        }
         return server.handleRequest(HTTPRequest(method: method, path: target, headers: lower, body: body), remote: "100.64.0.9")
     }
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
@@ -2829,9 +2834,16 @@ func pairingTests() {
                "PC4 the new token reports normally")
         expect(r.machines["mac-a"]?.history?.contains { $0.status == "paired again" } == true,
                "PC4 the replacement is kept as an audit line on the Mac's page")
+        // An open allow-a-Mac window re-pairs an existing Mac with no code typed (owner, 2026-11-13).
         r.openWindow(30)
-        expect(enrolPost(server, machine: "mac-a", nonce: enrolNonce()).status == 409,
-               "PC4 a window claim without a code still cannot rotate an enrolled Mac")
+        let windowClaim = enrolPost(server, machine: "mac-a", nonce: enrolNonce())
+        let third = enrolReply(windowClaim, key: r.rig.pair.privateKey)
+        expect(windowClaim.status == 200 && third?.token != second?.token,
+               "PC4 an open window re-pairs an existing Mac with no code typed")
+        expect(enrolStatusPost(server, machine: "mac-a", token: second!.token, body: ["machine": "mac-a"]).status == 401,
+               "PC4 the window re-pair revokes the previous token too")
+        expect(r.machines["mac-a"]?.history?.filter { $0.status == "paired again" }.count == 2,
+               "PC4 both replacements are audited")
         expect(post(server, "mac-c", wrong(p)).status == 403 && post(server, "mac-a", wrong(p)).status == 403,
                "PC4 a wrong code never says which ids are enrolled")
         // A lost reply can still be resent by the same claim before it reports.
@@ -2932,21 +2944,28 @@ func enrolWindowTests() {
                "E2 the X-Hub-Token header is ignored: a request without one enrols just the same")
     }
 
-    // E3. A Mac that is already enrolled is refused, and its token is not rotated.
+    // E3. Without a code or an open window an enrolled Mac is refused and its token is not rotated;
+    // an open window re-pairs it with no code typed (owner, 2026-11-13).
     do {
         let r = EnrolRig("e3-taken")
-        r.openWindow(30)
         let real = try! Enrolment.enrol(stateDir: r.rig.state, machine: "mac1")
         let hash = r.machines["mac1"]?.tokenHash
         let reply = enrolPost(r.server, machine: "mac1", nonce: enrolNonce())
-        expect(reply.status == 409, "E3 an already-enrolled Mac is refused over the network (\(reply.status))")
-        expect(String(decoding: reply.data, as: UTF8.self) == "This Mac's name is already in use. Enter the pairing code from Update Studio KH on this Mac's Pair again screen to reclaim it.",
-               "E3 reconnect refusal explains the pairing-code recovery in plain words")
-        expect(r.machines["mac1"]?.tokenHash == hash && r.window?.enrolled == 0,
-               "E3 the refused Mac's token is NOT rotated and nothing was counted")
+        expect(reply.status == 403, "E3 an enrolled Mac with no code and no window is refused (\(reply.status))")
+        expect(String(decoding: reply.data, as: UTF8.self).contains("open enrolment window"),
+               "E3 reconnect refusal names the code or window recovery in plain words")
+        expect(r.machines["mac1"]?.tokenHash == hash && r.window == nil,
+               "E3 the refused Mac's token is NOT rotated and no window was counted")
         let use = r.server.handleRequest(HTTPRequest(method: "POST", path: "/status",
             headers: ["authorization": "Bearer \(real)"], body: Data(#"{"machine":"mac1"}"#.utf8)), remote: "100.64.0.9")
         expect(use.status == 200, "E3 the Mac's real token still works after a tailnet device tried to take its place")
+        r.openWindow(30)
+        let claim = enrolReply(enrolPost(r.server, machine: "mac1", nonce: enrolNonce()), key: r.rig.pair.privateKey)
+        expect(claim != nil && r.machines["mac1"]?.tokenHash == claim.map { Enrolment.sha256Hex($0.token) },
+               "E3 an open window re-pairs the enrolled Mac, and the new token is stored")
+        expect(enrolStatusPost(r.server, machine: "mac1", token: real, body: ["machine": "mac1"]).status == 401,
+               "E3 the re-paired Mac's old token stops working")
+        expect(r.window?.enrolled == 0, "E3 a replacement spends no window slot")
         _ = try? Enrolment.enrol(stateDir: r.rig.state, machine: "mac1")
         expect(r.machines["mac1"]?.tokenHash != hash,
                "E3 re-enrolment on the publisher itself is what rotates a token")
@@ -3136,7 +3155,7 @@ func enrolWindowTests() {
         expect(r.stateBytes == closedBytes, "E11 refusals while the window was closed changed nothing at all")
         r.openWindow(30)
         let openBytes = r.stateBytes
-        _ = enrolPost(r.server, machine: "taken", nonce: enrolNonce())                      // already enrolled
+        _ = enrolPost(r.server, machine: "taken", nonce: "short")                           // bad nonce
         _ = enrolOwnerPost(r, "/api/enrol-window", ["minutes": "999"])                      // impossible window
         expect(r.stateBytes == openBytes && r.machines.count == 1 && r.removed.isEmpty,
                "E11 refusals while the window was open changed nothing either")
@@ -3573,18 +3592,22 @@ func enrolWindowTests() {
         expect(enrolStatusPost(r.server, machine: "retry-mac", token: firstToken,
                                body: ["machine": "retry-mac"]).status == 401,
                "E22 the token only the lost reply carried no longer works")
-        expect(enrolPost(r.server, machine: "retry-mac", nonce: enrolNonce()).status == 409,
-               "E22 the same machine with a DIFFERENT nonce is refused: another device cannot rotate it")
-        expect(enrolPost(r.server, machine: "retry-mac", nonce: n).status == 409,
-               "E22 once the Mac has reported, the same nonce is refused as well")
+        // Owner, 2026-11-13: an open window re-pairs an existing Mac with no code typed; closing it
+        // refuses, and an owner-enrolled Mac is likewise only re-minted while a window is open.
+        let third = enrolPost(r.server, machine: "retry-mac", nonce: enrolNonce())
+        let thirdToken = enrolReply(third, key: r.rig.pair.privateKey)?.token ?? ""
+        expect(third.status == 200 && thirdToken != againToken,
+               "E22 with the window open a different nonce re-pairs the Mac")
+        expect(enrolStatusPost(r.server, machine: "retry-mac", token: againToken,
+                               body: ["machine": "retry-mac"]).status == 401,
+               "E22 the re-paired Mac's previous token stops working")
         try! EnrolmentWindow.close(stateDir: r.rig.state)
         expect(enrolPost(r.server, machine: "retry-mac", nonce: n).status == 403,
                "E22 with the window closed nothing is re-minted")
         let owned = EnrolRig("e22-owner")
-        owned.openWindow(60)
         _ = try! Enrolment.enrol(stateDir: owned.rig.state, machine: "owner-mac")
-        expect(enrolPost(owned.server, machine: "owner-mac", nonce: enrolNonce()).status == 409,
-               "E22 a Mac the owner enrolled has no nonce to match, so it is never re-minted over the network")
+        expect(enrolPost(owned.server, machine: "owner-mac", nonce: enrolNonce()).status == 403,
+               "E22 an owner-enrolled Mac with no window and no code is refused")
     }
 
     // E23. /enrol is the one route anything on the tailnet may reach, so it says nothing about this

@@ -83,7 +83,8 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         case .repair(_, let plan):
             intro = Self.wrap("Your current sign-in file will be preserved in ~/Library/KHUpdater/_trash, and this Mac "
                 + "keeps its name, its apps and its pinned key. Type the pairing code shown in Update Studio KH "
-                + "on the controller Mac, under Connect a Mac. Nothing is sent until you press Pair again.")
+                + "on the controller Mac, under Connect a Mac — or leave it empty while that Mac has its "
+                + "allow-a-Mac window open. Nothing is sent until you press Pair again.")
             destination.stringValue = plan.feedURL
             destination.isEditable = false
             destination.isBezeled = false
@@ -181,13 +182,14 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     }
 
     /// Pair again: only after the plain confirmation — the old sign-in is preserved, a pairing
-    /// code is required, and Cancel here sends nothing and writes nothing.
+    /// code or the publisher's open allow-a-Mac window is required, and Cancel here sends nothing
+    /// and writes nothing.
     static func runRepair(configFile: URL) -> Outcome {
         let confirm = NSAlert()
         confirm.messageText = "Pair again with Update Studio?"
         confirm.informativeText = "Your current sign-in file will be preserved in ~/Library/KHUpdater/_trash, and this Mac "
-            + "keeps its name, its apps and its pinned key. A pairing code from Update Studio is required, and "
-            + "nothing is sent unless you continue."
+            + "keeps its name, its apps and its pinned key. A pairing code from Update Studio, or an open "
+            + "allow-a-Mac window on the publisher, is required, and nothing is sent unless you continue."
         confirm.addButton(withTitle: "Continue")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return .cancelled }
@@ -280,8 +282,9 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             machine = nameField.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
             guard !machine.isEmpty else { show("Type the name for this Mac.", color: .systemRed, spinning: false); return }
         case .repair(_, let plan):
+            // Empty is allowed: the publisher's open allow-a-Mac window authorises the pairing,
+            // and it answers with its own sentence when no window is open either.
             code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
-            guard !code.isEmpty else { show("Type the pairing code from Update Studio.", color: .systemRed, spinning: false); return }
             machine = plan.machine
         }
         let destination = destinationField.stringValue

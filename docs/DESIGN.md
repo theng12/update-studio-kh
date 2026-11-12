@@ -194,14 +194,15 @@ token, and it is the only way a Mac gets a token without the owner touching the 
   with the `--key` key, after the reply is signed and only then written to state. The machine id goes
   through `SafeName`, the nonce must be exactly 64 hexadecimal characters, and a body over 4 KiB is
   refused before it is parsed.
-- An id that already has a record is refused **409** for a claim that carries no valid pairing code:
-  a window alone can never rotate a real Mac's token. A claim that presents the publisher's current
-  pairing code **replaces** the record (owner, 2026-11-13: "why re-pairing a machine requires going
-  to the 1301 Mac to remove it first"): a new token is issued, the stored hash is overwritten so the
-  previous token stops working, and a `paired again` line is kept on the Mac's page. The code is the
-  authorisation; it is rate-limited per address, locks after the configured wrong tries, and the
-  owner can replace it with New code. Re-enrolment on the publisher itself (`khu enrol`) and through
-  Remove Mac remain available.
+- An id that already has a record is refused **409** only when the claim carries neither the
+  publisher's valid pairing code nor an **open enrolment window**. Either one **replaces** the record
+  (owner, 2026-11-13: re-pairing must not need a Remove on the publisher Mac, and a same-tailnet Mac
+  should not need six digits typed): a new token is issued, the stored hash is overwritten so the
+  previous token stops working, and a `paired again` line is kept on the Mac's page. The code is
+  rate-limited per address, locks after the configured wrong tries, and the owner can replace it
+  with New code; the window is the owner's deliberate allow-a-Mac action, bounded by its end time
+  and cap, and a replacement spends no window slot. Re-enrolment on the publisher itself
+  (`khu enrol`) and through Remove Mac remain available.
   **The other exception is the same claim arriving twice:** a window-enrolled record that has never
   reported (`/status` once), resent with the **same nonce**, is answered with a freshly signed reply
   carrying a new token instead of a 409. The token it was sent the first time may have died with a
@@ -596,14 +597,13 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
 - The status page has no CSRF token: it relies on loopback-only, Host and Origin/Referer checks.
 - **An open enrolment window is not a proof of identity, and this is what it does not protect
   against:** any device that can reach the tailnet address while a window is open can claim a *new*
-  machine id and get a token. A window claim cannot take an existing Mac's id (409) and cannot rotate
-  a real Mac's token, cannot reopen the window, and cannot reach the owner's route from off this Mac.
-  A claim carrying the current **pairing code** can replace an existing Mac's enrolment by design
-  (owner, 2026-11-13); what bounds that is the code's own secrecy, the per-address attempt rate and
-  lockout after the configured wrong tries, and the owner's ability to replace it with New code.
-  Windows are bounded by their end time (240 minutes at most, opened deliberately, closed by hand or
-  by the clock), the `EnrolPolicy.maxPerWindow` cap on new ids per window, the page listing every Mac
-  that enrolled through a window with its time, and Remove Mac dropping any of them in one click.
+  machine id and get a token. It cannot reopen the window and cannot reach the owner's route from
+  off this Mac. A claim carrying the current **pairing code** or arriving while the owner has an
+  **open window** can replace an existing Mac's enrolment by design (owner, 2026-11-13); what bounds
+  that is the code's own secrecy (per-address attempt rate and lockout, replaceable with New code),
+  and the window's end time (240 minutes at most, opened deliberately, closed by hand or by the
+  clock). The `EnrolPolicy.maxPerWindow` cap counts new ids only; the page lists every Mac enrolled
+  through a window with its time, and Remove Mac drops any of them in one click.
 - During an open window a device on the tailnet can learn **whether a given machine id is already
   enrolled**: an id with a record answers 409 (without the pairing code) and one without is enrolled.
   The fleet's names are not secret from the tailnet; nothing else about an enrolled Mac — its token,

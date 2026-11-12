@@ -5,6 +5,12 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.31 — 2026-11-13
+
+- Re-pairing a Mac on the same tailnet no longer needs the six-digit code while the publisher's allow-a-Mac window is open: leave the code empty and press Pair again.
+- Pair again now names the publisher address and exactly what did not match (address, key or clock), instead of saying the code is wrong or giving a generic mismatch.
+- Includes Studio Launcher KH 0.1.29 with the same pairing fixes.
+
 ## 1.0.30 — 2026-11-13
 
 - Re-pairing a Mac no longer needs a Remove on the publisher Mac: entering its pairing code replaces the older sign-in, and the previous token stops working.

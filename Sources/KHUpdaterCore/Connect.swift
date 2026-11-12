@@ -537,8 +537,10 @@ public enum Connect {
     ///
     /// `confirmed` must be true only after the person read the plain confirmation — without it
     /// this returns before any network call or file write, so an unconfirmed attempt cannot
-    /// enrol or touch anything. The pairing code is required (an empty one is refused here, never
-    /// spent at the publisher). The reply must be signed by — and must name — the key already
+    /// enrol or touch anything. The pairing code may be left empty when the publisher's owner has
+    /// opened its allow-a-Mac window: that window is the authorisation, and the publisher replaces
+    /// the machine's earlier sign-in; a wrong or missing code without a window is the publisher's
+    /// refusal, never a client-side guess. The reply must be signed by — and must name — the key already
     /// pinned in these settings, the same address and the same machine: pairing never adopts a
     /// different key or publisher. Only after every check passes are the current bytes preserved
     /// under this updater's own `_trash` (`<KHUpdater>/_trash/<machine>/`) and the token replaced;
@@ -549,21 +551,31 @@ public enum Connect {
                               http: HTTPClient = URLSessionHTTPClient(), now: Date = Date()) throws -> String {
         guard confirmed else { throw khuFail("pairing was not confirmed; nothing was sent") }
         let typed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !typed.isEmpty else { throw khuFail("type the pairing code from Update Studio") }
         guard let snapshot = try? Data(contentsOf: configFile) else {
             throw khuFail("this Mac's updater settings could not be read (\(configFile.path))")
         }
         let plan = try makePlan(from: snapshot)
         let nonce = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
         guard let enrolURL = URL(string: plan.enrolURL) else { throw khuFail("this Mac's saved publisher address is not a URL") }
-        let body = try JSONSerialization.data(withJSONObject: ["machine": plan.machine, "nonce": nonce, "code": typed])
+        var body: [String: Any] = ["machine": plan.machine, "nonce": nonce]
+        if !typed.isEmpty { body["code"] = typed }
         let data: Data, status: Int
-        do { (data, status) = try http.post(enrolURL, headers: ["Content-Type": "application/json"], body: body) }
+        do { (data, status) = try http.post(enrolURL, headers: ["Content-Type": "application/json"],
+                                            body: try JSONSerialization.data(withJSONObject: body)) }
         catch { throw khuFail("Update Studio could not be reached at \(plan.feedURL) (\(error.localizedDescription))") }
         guard status == 200 else {
-            // The publisher's own sentence: wrong code, locked, or an id it still has a record of.
-            let reason = String(decoding: data.prefix(512), as: UTF8.self).filter { !$0.isNewline }
-            throw khuFail(reason.isEmpty ? "the publisher refused this pairing (\(status))" : reason)
+            // The publisher's own sentence, with the address that answered: a wrong code, a lock,
+            // or a different publisher at this address must be told apart, never guessed at.
+            let host = URL(string: plan.feedURL)?.host ?? plan.feedURL
+            let sentence = String(decoding: data.prefix(512), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if sentence.isEmpty {
+                throw khuFail("Update Studio at \(host) refused this pairing (HTTP \(status)); nothing was changed")
+            }
+            if sentence.hasPrefix("<") {
+                throw khuFail("the address \(host) answered with a web page, not a pairing reply (HTTP \(status)); check the address in Settings")
+            }
+            throw khuFail("Update Studio at \(host) said: \(sentence)")
         }
         let signed = try JSON.decode(SignedReply.self, from: data)
         guard let replyData = signed.replyData, let signature = signed.signatureData,
@@ -572,10 +584,25 @@ public enum Connect {
             throw khuFail("the publisher's reply was not signed by this Mac's pinned key; nothing was changed")
         }
         let reply = try JSON.decode(EnrolReply.self, from: replyData)
-        guard reply.machine == plan.machine, reply.nonce == nonce, reply.feedURL == plan.feedURL,
-              reply.publicKey == plan.publicKey,
-              abs(now.timeIntervalSince1970 - Double(reply.issuedAt)) <= 300, reply.token.count >= 32 else {
-            throw khuFail("the publisher's reply does not match this Mac's saved sign-in; nothing was changed")
+        // One sentence per failed agreement, so a reply from the wrong address, a clock difference
+        // and a wrong key are never collapsed into "does not match".
+        guard reply.machine == plan.machine else {
+            throw khuFail("the publisher answered for \(reply.machine), not this Mac (\(plan.machine)); nothing was changed")
+        }
+        guard reply.nonce == nonce else {
+            throw khuFail("the publisher's reply does not answer this pairing request; nothing was changed")
+        }
+        guard reply.feedURL == plan.feedURL else {
+            throw khuFail("the publisher named \(reply.feedURL) in its reply, but this Mac's saved address is \(plan.feedURL); nothing was changed — check the address in Settings")
+        }
+        guard reply.publicKey == plan.publicKey else {
+            throw khuFail("the reply names a different publisher key than this Mac pins; nothing was changed")
+        }
+        guard abs(now.timeIntervalSince1970 - Double(reply.issuedAt)) <= 300 else {
+            throw khuFail("this Mac's clock and the publisher's differ by more than five minutes; use the same time on both and try Pair again")
+        }
+        guard reply.token.count >= 32 else {
+            throw khuFail("the publisher's reply carried no usable token; nothing was changed")
         }
         // The settings may have changed while the request was in flight: a reply for the older
         // snapshot is refused rather than written over the newer sign-in.
