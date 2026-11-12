@@ -23,13 +23,16 @@ case "$MODE" in
       cp "$DMG" "$DEST.tmp" && mv "$DEST.tmp" "$DEST"
       echo "copied $(basename "$DMG") to dist/$APP-$VERSION.dmg"
     fi
+    # Rotate straight away: keeping the latest two is never a hand step. Anything older goes to the
+    # repo's _trash, and the shared tool never moves a file its ledger or a pin still names.
+    [ -f "$DIST/.release-dist.json" ] && "$0" rotate "$APP" "$VERSION"
     ;;
   rotate)
     DRY=""
     if [ ! -f "$DIST/$APP-$VERSION.dmg" ]; then
       echo "dist has no $APP-$VERSION.dmg; run the copy step first" >&2; exit 2
     fi
-    mkdir -p "$ROOT/_trash/dist"
+    mkdir -p "$ROOT/_trash"
     PIN=$(mktemp -t khu-dist-pins)
     /usr/bin/python3 -I - "$DIST" "$APP" "$VERSION" "$ROOT" "$PIN" <<'PY'
 import hashlib, json, os, re, sys
@@ -66,7 +69,7 @@ if present:
     releases.append({"version": v, "source": path, "sha256": sha2, "bytes": size2,
                      "evidence": record.get("provenance") or "retained from the previous release"})
 pin = {"schema": 1, "apps": [{"app": app, "project": root,
-                              "retirement_trash": os.path.join(root, "_trash", "dist"),
+                              "retirement_trash": os.path.join(root, "_trash"),
                               "releases": releases}]}
 json.dump(pin, open(out, "w"), indent=2)
 PY
