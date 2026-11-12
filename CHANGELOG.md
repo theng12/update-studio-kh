@@ -4,6 +4,12 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+
+## 1.0.29 — 2026-11-13
+
+- The Launcher's Update/Install confirmation is an in-page dialog; the webview's built-in confirm() was a silent no-op.
+- An unattended install no longer opens the app, and an already-installed equal version is not reinstalled.
+
 ## 1.0.29 — 2026-11-13
 
 - Includes Studio Launcher KH 0.1.26: an app replaced by an automatic update no longer opens in front of you; it stays closed for you to open.

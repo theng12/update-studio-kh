@@ -4,6 +4,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+
+## 0.1.26 — 2026-11-13
+
+- Update and Install work again: the confirmation is a real in-page dialog, because the packaged webview's confirm() silently did nothing.
+
 ## 0.1.26 — 2026-11-13
 
 - An automatic update no longer opens the app in front of you: it stays closed for you to open.

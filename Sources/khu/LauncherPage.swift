@@ -161,14 +161,28 @@ function paint(box,p){const t=phase(p),line=box.firstChild,bar=box.lastChild,i=b
 function svg(d){const s=document.createElementNS('http://www.w3.org/2000/svg','svg');s.setAttribute('viewBox','0 0 16 16');const p=document.createElementNS('http://www.w3.org/2000/svg','path');
  p.setAttribute('d',d);p.setAttribute('fill',d.includes('z')?'currentColor':'none');p.setAttribute('stroke','currentColor');p.setAttribute('stroke-width','1.8');p.setAttribute('stroke-linecap','round');s.append(p);return s}
 function icon(a){return a.icon?el('img',{src:a.icon,alt:''}):el('div',{class:'ph','aria-hidden':true},svg('M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z'))}
+// An in-page confirmation. window.confirm() does not work in the packaged webview, which made
+// Update/Install look dead: it returned false without showing anything.
+function ask(question,confirmLabel){return new Promise(done=>{
+ const back=el('div',{role:'dialog','aria-modal':'true',style:'position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99'});
+ const box=el('div',{style:'background:var(--panel,#fff);color:var(--text,#111);border-radius:14px;padding:20px 20px 16px;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:14px -apple-system,BlinkMacSystemFont,sans-serif'});
+ box.append(el('p',{style:'margin:0 0 16px;line-height:1.4'},question));
+ const row=el('div',{style:'display:flex;gap:10px;justify-content:flex-end'});
+ row.append(el('button',{class:'btn',onclick:()=>{back.remove();done(false)}},'Cancel'));
+ row.append(el('button',{class:'btn main',onclick:()=>{back.remove();done(true)}},confirmLabel));
+ box.append(row);back.append(box);document.body.append(back);
+});
+}
 function buttons(a,big){const out=[],m=mainAction(a);
  if(a.status=='Updating…'&&!big)return [progress(a)];
  if(m)out.push(el('button',{class:'btn main '+m[2],onclick:e=>{e.stopPropagation();
-  // Nothing changes a Mac without being asked first: the confirmation names the app and versions.
+  // Nothing changes a Mac without being asked first. A webview confirm() is not reliable here,
+  // so the dialog is an in-page one and the action waits for its answer.
   if(['update','install','reinstall'].includes(m[1])){
    const verb=m[1]=='update'?'Update':'Install';
    const what=(a.installed&&a.available)?a.name+' '+a.installed+' → '+a.available:a.name+' '+(a.available||'');
-   if(!window.confirm(verb+' '+what.trim()+'?'))return;
+   ask(verb+' '+what.trim()+'?',verb).then(ok=>{if(ok)post({action:m[1],app:a.id})});
+   return;
   }
   post({action:m[1],app:a.id})}},m[0]));
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
