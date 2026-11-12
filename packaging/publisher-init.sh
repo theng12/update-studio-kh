@@ -2,10 +2,12 @@
 # Set up this Mac as the KH Updater publisher. Run once, on the Mac Studio:
 #
 #   ./build.sh build
-#   packaging/publisher-init.sh --backup-to /Volumes/<USB drive>
+#   packaging/publisher-init.sh --tailscale-ip "$(tailscale ip -4)" --backup-to /Volumes/<USB drive>
 #
-# The launchd job binds "auto", which the server resolves to whatever tailnet address this Mac has
-# when it starts, so a renumbered Mac keeps serving instead of binding an address it no longer has.
+# publisher.json carries this Mac's Tailscale MagicDNS name (derived from `tailscale status`; pass
+# --tailnet-host to name it, or --tailnet-host none to keep the numeric address), so a Mac that
+# updates keeps reaching the publisher after its address changes. The launchd job binds "auto",
+# which the server resolves to whatever tailnet address this Mac has when it starts.
 #
 # It installs build/khu to ~/Library/KHUpdater/bin/khu, creates the signing key with `khu keygen`
 # (CryptoKit, mode 0600), copies that key once to the removable drive named by --backup-to and
@@ -18,11 +20,13 @@
 set -euo pipefail
 umask 077
 TAILSCALE_IP=""
+TAILNET_HOST=""
 BACKUP_TO=""
 HOME_DIR="$HOME"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tailscale-ip) TAILSCALE_IP="${2:-}"; shift 2 ;;
+    --tailnet-host) TAILNET_HOST="${2:-}"; shift 2 ;;
     --backup-to) BACKUP_TO="${2:-}"; shift 2 ;;
     --home) HOME_DIR="${2:-}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -74,12 +78,25 @@ cp "$KEY" "$BACKUP_KEY"
 chmod 600 "$BACKUP_KEY"
 cmp -s "$KEY" "$BACKUP_KEY" || fail "the backup copy does not match the key; do not use this key until it does"
 
-# The launchd job binds "auto": the server asks for this Mac's tailnet address when it starts and
-# refuses to start when there is none, so a renumbered Mac never serves where nobody can reach it.
-# The URL written into publisher.json stays numeric: a MagicDNS name would need an ATS exception
-# in every app's bundle, and widening transport security is the owner's decision, not this script's.
-FEED_URL="http://${TAILSCALE_IP}:8790/release.json"
-ENROL_URL="http://${TAILSCALE_IP}:8790/enrol"
+# The URL every Mac copies must survive this Mac's address changing, so it carries the Tailscale
+# MagicDNS name — derived from `tailscale status` unless --tailnet-host names one, with "none"
+# keeping the numeric address. The launchd job binds "auto", which the server resolves to this
+# Mac's address when it starts and refuses to start without.
+if [[ "$TAILNET_HOST" == "none" ]]; then
+  TAILNET_HOST=""
+elif [[ -z "$TAILNET_HOST" ]]; then
+  TS="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+  if command -v tailscale >/dev/null 2>&1; then TS="$(command -v tailscale)"; fi
+  if [[ -x "$TS" ]]; then
+    TAILNET_HOST=$("$TS" status --json 2>/dev/null \
+      | python3 -I -c 'import json,sys; print((json.load(sys.stdin).get("Self") or {}).get("DNSName","").rstrip("."))' 2>/dev/null || true)
+  fi
+fi
+FEED_HOST="${TAILNET_HOST:-$TAILSCALE_IP}"
+[[ "$FEED_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail "not a host name: $FEED_HOST" 2
+[[ -n "$TAILNET_HOST" ]] || echo "note: no MagicDNS name found; publisher.json keeps the numeric address" >&2
+FEED_URL="http://${FEED_HOST}:8790/release.json"
+ENROL_URL="http://${FEED_HOST}:8790/enrol"
 BIND="auto"
 python3 -I - "$K/publisher.json" "$FEED_URL" "$ENROL_URL" "$PUBLIC" <<'PY'
 import json, sys
