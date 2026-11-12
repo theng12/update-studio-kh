@@ -64,12 +64,22 @@ public struct SystemShell: Shell {
             if process.isRunning { kill(pid, SIGKILL) }
             process.waitUntilExit()
             _ = group.wait(timeout: .now() + 5)
+            closeReadEnds(outPipe, errPipe)
             throw khuFail("timeout running \(executable) after \(Int(timeout)) s; it was stopped")
         }
         process.waitUntilExit()
         _ = group.wait(timeout: .now() + 30)
+        closeReadEnds(outPipe, errPipe)
         return ShellResult(exitCode: process.terminationStatus,
                            stdout: String(decoding: out, as: UTF8.self),
                            stderr: String(decoding: err, as: UTF8.self))
+    }
+
+    /// A Pipe's read ends are not closed when it deallocates: they stayed open for the life of the
+    /// process, two per command. A helper that runs `ditto`, `codesign` and `launchctl` all day
+    /// reached the 256-descriptor limit and the next install failed with "Too many open files"
+    /// (NSOSStatusErrorDomain -24). Closing is idempotent; the write ends belong to the child.
+    private func closeReadEnds(_ pipes: Pipe...) {
+        for pipe in pipes { try? pipe.fileHandleForReading.close() }
     }
 }

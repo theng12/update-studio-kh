@@ -334,6 +334,19 @@ func supportTests() {
         expect(pid > 0 && kill(pid, 0) != 0 && !fm.fileExists(atPath: late.path) && Mono.now() - t0 < 10,
                "S11 a TERM-ignoring helper is killed and reaped, and writes nothing after")
     }
+    // S12: a helper that runs commands all day must give every descriptor back. Two pipes per
+    // command leaked until the 256-descriptor limit, and the next install failed with EMFILE.
+    do {
+        let shell = SystemShell()
+        func openDescriptors() -> Int {
+            (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
+        }
+        _ = try? shell.run("/bin/echo", arguments: ["warm"], timeout: 10)
+        let before = openDescriptors()
+        for _ in 0..<12 { _ = try? shell.run("/bin/echo", arguments: ["x"], timeout: 10) }
+        let after = openDescriptors()
+        expect(before > 0 && after <= before + 2, "S12 repeated commands do not leak descriptors (\(before) -> \(after))")
+    }
     // R35: versions are dotted numbers only.
     expect(VersionCompare.parse("1.0.0-beta") == nil && !VersionCompare.isNewer("1.0.1-beta", than: "1.0.0")
            && VersionCompare.compare("1.0.0-beta", "1.0.0") == nil, "R35 a prerelease is not silently compared as a release")
