@@ -27,6 +27,11 @@ class SigningTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
             target.chmod(0o755)
+        # The dist copy step is stubbed here: this fixture stubs hdiutil, so no DMG is written,
+        # and signing is what this file is about. Packaging's own suite covers the real script.
+        stub = self.repo / "packaging/record-dist.sh"
+        stub.write_text("#!/bin/bash\nexit 0\n")
+        stub.chmod(0o755)
         tools = self.work / "tools"
         tools.mkdir()
         self.calls = self.work / "calls"

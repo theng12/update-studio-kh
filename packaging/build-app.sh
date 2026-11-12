@@ -48,3 +48,4 @@ mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Update Studio KH.app"; ln -s /Applicati
 [ -e "$DMG" ] && { mkdir -p _trash; mv "$DMG" "_trash/$(basename "$DMG").$(date +%s)"; }
 hdiutil create -volname "Update Studio KH" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" >/dev/null
 echo "built $APP and $DMG"
+packaging/record-dist.sh copy "Update Studio KH" "$VERSION" "$DMG"

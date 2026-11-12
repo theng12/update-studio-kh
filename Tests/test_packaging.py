@@ -427,6 +427,11 @@ try:
     new_bundle.mkdir()
     check(khu.hub_data_dir(hub_home) == new_bundle / "Contents" / "Resources" / "voice",
           "hub_data_dir finds the Hub Studio KH.app bundle too")
+    packaging = Path(__file__).resolve().parent.parent / "packaging"
+    check('record-dist.sh copy "Update Studio KH"' in (packaging / "build-app.sh").read_text()
+          and 'record-dist.sh copy "Studio Launcher KH"' in (packaging / "build-launcher.sh").read_text()
+          and (packaging / "record-dist.sh").stat().st_mode & 0o111,
+          "every packaged DMG is written into dist/ by the build itself, not by remembering")
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

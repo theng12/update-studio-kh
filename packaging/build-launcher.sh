@@ -40,3 +40,4 @@ TMP="$(mktemp -d)"; mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Studio Launcher KH.
 hdiutil create -volname "Studio Launcher KH" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" >/dev/null 2>&1
 mv "$TMP" "_trash/launcher-dmg-staging.$(date +%s)"
 echo "built $APP and $DMG (agent $(lipo -archs "$KIT/bin/khu"))"
+packaging/record-dist.sh copy "Studio Launcher KH" "$VERSION" "$DMG"
