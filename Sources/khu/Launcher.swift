@@ -53,7 +53,6 @@ enum LauncherBundle {
             // Tailscale MagicDNS name is how a Mac keeps reaching the publisher when its address
             // changes, so the tailnet's own DNS suffix is exempt with it (owner, 2026-11-12).
             "NSAppTransportSecurity": ["NSExceptionDomains": [
-                "100.64.0.0/10": ["NSExceptionAllowsInsecureHTTPLoads": true],
                 "ts.net": ["NSIncludesSubdomains": true, "NSExceptionAllowsInsecureHTTPLoads": true],
             ]],
         ]

@@ -374,12 +374,11 @@ func connectionFlowTests() {
         let plist = data.flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
         let ats = plist?["NSAppTransportSecurity"] as? [String: Any]
         let domains = ats?["NSExceptionDomains"] as? [String: [String: Any]]
-        expect(result?.exitCode == 0 && ats?.count == 1 && domains?.count == 2
-               && domains?["100.64.0.0/10"]?["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true
+        expect(result?.exitCode == 0 && ats?.count == 1 && domains?.count == 1
                && domains?["ts.net"]?["NSExceptionAllowsInsecureHTTPLoads"] as? Bool == true
                && domains?["ts.net"]?["NSIncludesSubdomains"] as? Bool == true
-               && ats?["NSAllowsArbitraryLoads"] == nil,
-               "CF15 bundled ATS permits tailnet HTTP by address and MagicDNS name, without arbitrary-load or local-network bypass")
+               && domains?["100.64.0.0/10"] == nil && ats?["NSAllowsArbitraryLoads"] == nil,
+               "CF15 bundled ATS permits the tailnet's DNS suffix with subdomains, and nothing else")
     }
 
     // CF9–CF13. Re-pair from saved trust only, without an embedded kit or installer.

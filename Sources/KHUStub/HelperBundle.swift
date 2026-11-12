@@ -72,7 +72,7 @@ public enum HelperBundle {
         \(versionKeys)
         <key>LSMinimumSystemVersion</key><string>13.0</string>
         <key>LSUIElement</key><true/>
-        <key>NSAppTransportSecurity</key><dict><key>NSExceptionDomains</key><dict><key>100.64.0.0/10</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict><key>ts.net</key><dict><key>NSIncludesSubdomains</key><true/><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict></dict></dict>
+        <key>NSAppTransportSecurity</key><dict><key>NSExceptionDomains</key><dict><key>ts.net</key><dict><key>NSIncludesSubdomains</key><true/><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict></dict></dict>
         </dict>
         </plist>
         """
