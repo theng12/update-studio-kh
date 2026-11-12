@@ -8,6 +8,8 @@ enum LauncherMenus {
         let applicationItem = NSMenuItem()
         let application = NSMenu(title: "Studio Launcher KH")
         application.addItem(NSMenuItem(title: "Hide Studio Launcher KH", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+        application.addItem(.separator())
+        application.addItem(NSMenuItem(title: "Quit Studio Launcher KH", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         applicationItem.submenu = application
         menu.addItem(applicationItem)
         let editItem = NSMenuItem()

@@ -186,7 +186,12 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         note("Studio Launcher KH \(version ?? "")")
         _ = action("What's New…", #selector(whatsNew))
         _ = action("Support This App…", #selector(supportApp))
+        menu.addItem(.separator())
+        _ = action("Quit Studio Launcher KH", #selector(quitApp))
     }
+
+    /// The status item has no Dock icon, so this is the only obvious way to stop it.
+    @objc private func quitApp() { NSApp.terminate(nil) }
 
     /// The same free, optional donation the page offers, opened in the browser.
     @objc private func supportApp() {
