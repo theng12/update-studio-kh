@@ -936,7 +936,7 @@ public enum Agent {
         if let local {
             DownloadControl.updateProgress("copying")
             return try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
-                                    force: force, catalogEntry: catalogEntry)
+                                    force: force, manual: manual, catalogEntry: catalogEntry)
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
         if let installed {
@@ -974,7 +974,7 @@ public enum Agent {
             }
             return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
-                                     refuseIfRunning: itself)
+                                     refuseIfRunning: itself, relaunchAfterInstall: manual)
         }
     }
 
@@ -983,7 +983,7 @@ public enum Agent {
     /// download does.
     static func installLocal(_ local: CatalogEntry.Local, app: String, installed: String?, cfg: AppConfig, stateDir: URL,
                              shell: Shell, control: (String, AppConfig) -> AppControl, force: Bool = false,
-                             catalogEntry: CatalogEntry? = nil) throws -> RecipeResult {
+                             manual: Bool = false, catalogEntry: CatalogEntry? = nil) throws -> RecipeResult {
         let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
             return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept.")
@@ -1024,7 +1024,7 @@ public enum Agent {
             }
             result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
-                                     refuseIfRunning: itself, verifyStaged: { path in
+                                     refuseIfRunning: itself, relaunchAfterInstall: manual, verifyStaged: { path in
                 guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
             })
         }

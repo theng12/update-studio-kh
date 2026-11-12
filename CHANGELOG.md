@@ -6,8 +6,8 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 1.0.29 — 2026-11-13
 
-- Includes Studio Launcher KH 0.1.26: an app replaced by an update is reopened in the background instead of appearing in front of you.
-- A hidden or test run of an app is replaced but not reopened as your app.
+- Includes Studio Launcher KH 0.1.26: an app replaced by an automatic update no longer opens in front of you; it stays closed for you to open.
+- An update you asked for on this Mac reopens the app in the background, and a hidden or test run is replaced but never reopened as your app.
 
 ## 1.0.28 — 2026-11-12
 

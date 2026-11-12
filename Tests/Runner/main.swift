@@ -149,10 +149,11 @@ struct RecipeRig {
         state = root.appendingPathComponent("state")
         shell = RecordingShell(mount: mount)
     }
-    func run(_ app: FakeApp, expectedID: String? = nil, fileManager: FileManager = .default) -> Result<RecipeResult, Error> {
+    func run(_ app: FakeApp, expectedID: String? = nil, relaunchAfterInstall: Bool = true,
+             fileManager: FileManager = .default) -> Result<RecipeResult, Error> {
         Result { try Recipe.appDmg(shell: shell, installedPath: installed.path, artifactPath: "/tmp/x.dmg", feedVersion: "1.2.3",
                                    expectedBundleID: expectedID, stateDir: state.path, app: "foo", control: app.control,
-                                   fileManager: fileManager) }
+                                   relaunchAfterInstall: relaunchAfterInstall, fileManager: fileManager) }
     }
     var rollback: URL { state.appendingPathComponent("rollback-foo/Foo.app") }
     var journal: URL { state.appendingPathComponent("install-foo.json") }
@@ -195,6 +196,17 @@ func recipeTests() {
                "a test instance is replaced and left stopped (events \(app.events))")
         expect(res?.reason?.contains("test instance") == true, "the report says a test instance was left stopped")
         expect(marker(rig.installed) == "1.2.3", "the test-instance install still promoted the new version")
+    }
+    // An unattended install never opens the app: it is closed for the swap and left closed.
+    do {
+        let rig = RecipeRig("unattended")
+        let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
+        let res = try? rig.run(app, relaunchAfterInstall: false).get()
+        expect(res?.status == "updated" && app.events == ["quit", "stop"],
+               "an unattended install leaves the app closed (events \(app.events))")
+        expect(res?.reason?.contains("unattended") == true,
+               "the report says an unattended install never opens an app")
+        expect(marker(rig.installed) == "1.2.3", "the unattended install still promoted the new version")
     }
     // The relaunch asks LaunchServices for a hidden background launch, never a visible window.
     do {

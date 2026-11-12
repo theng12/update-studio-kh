@@ -444,8 +444,12 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
    the previous bundle, relaunches it and says exactly what was restored — or, loudly, that it
    could not be, **and keeps the journal** so the next run retries instead of reporting a Mac
    whose app is merely the new version as settled;
-5. relaunch if it was running and require it healthy as the new version. A first install with
-   no previous bundle is always launched and checked, even if nothing was running before;
+5. relaunch only when the install was asked for here at this Mac (attended), and then require
+   it healthy as the new version; the relaunch is background and hidden (`open -g -j`) and a
+   running test/hidden instance is never relaunched. An unattended install (Automatic or a
+   remote order) never opens the app: it is left stopped and reported as such, so an install can
+   never take the owner's desktop; a first install with no previous bundle is checked the same
+   way when attended, and left stopped when not;
 6. otherwise quit and stop both again (else `rollback_blocked`, both bundles kept and journal
    kept), copy and verify the previous bundle into a sibling on the installed volume, move the
    unhealthy bundle to another sibling, and rename the prepared previous bundle into place.

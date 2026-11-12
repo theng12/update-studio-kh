@@ -126,6 +126,9 @@ public struct InstallJournal: Codable, Sendable, Equatable {
     /// The running instance was a test/hidden run: replace it, but never relaunch it in the owner's
     /// profile. Nil in journals written before it existed (treated as the owner's app).
     public var testInstance: Bool? = nil
+    /// Whether the install that wrote this journal was allowed to relaunch afterwards. False for
+    /// every unattended install; nil for journals written before it existed (old behaviour).
+    public var relaunchAfterwards: Bool? = nil
     /// The version this install is putting in place, so a recovered journal can prove which side it
     /// found at `installed`. Absent in a journal written before it existed.
     public var version: String? = nil
@@ -164,7 +167,7 @@ public enum Recipe {
     /// stopped or replaced. Every other install keeps its own quit-and-promote contract.
     public static func appDmg(shell: Shell, installedPath: String, artifactPath: String, feedVersion: String,
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
-                              refuseIfRunning: Bool = false,
+                              refuseIfRunning: Bool = false, relaunchAfterInstall: Bool = true,
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
@@ -210,7 +213,7 @@ public enum Recipe {
 
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
-                                    refuseIfRunning: refuseIfRunning)
+                                    refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -367,12 +370,16 @@ public enum Recipe {
 
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
-                                 notes: [String], refuseIfRunning: Bool = false) throws -> RecipeResult {
+                                 notes: [String], refuseIfRunning: Bool = false,
+                                 relaunchAfterInstall: Bool = true) throws -> RecipeResult {
         let installedPath = paths.installedPath
         let wasRunning = control.isRunning() ?? true
         // A test/hidden instance (extra launch arguments or an isolated HOME) is not the owner's
         // app: it may be replaced, but it is never relaunched into the owner's profile afterwards.
+        // An unattended install never relaunches either: an app that activates itself on launch
+        // would otherwise take the owner's desktop, whatever flags `open` was given.
         let testInstance = wasRunning && control.isTestInstance()
+        let mayRelaunch = relaunchAfterInstall && !testInstance
         // The last read before anything would be stopped is the one that decides. An app that
         // updates itself came up between the staging look and here: this route proves no quiet
         // point, so it is kept exactly as it is — no journal, no quit, no service stop, no relaunch.
@@ -384,7 +391,8 @@ public enum Recipe {
                                      rollback: paths.rollback.path,
                                      // Nothing installed: a rollback bundle kept from before is the previous version.
                                      previousVersion: installedInfo?.version ?? (try? BundleInfo.read(paths.rollback.path))?.version,
-                                     wasRunning: wasRunning, testInstance: testInstance, version: targetVersion)
+                                     wasRunning: wasRunning, testInstance: testInstance,
+                                     relaunchAfterwards: relaunchAfterInstall, version: targetVersion)
         journal.order = order
         journal.intent = order == nil ? nil : "owner_rollback"
         journal.serviceLabels = control.serviceLabels()
@@ -397,7 +405,7 @@ public enum Recipe {
         // 3. Stop what is running; on refusal, leave the old app as it was.
         var appQuit = false
         func abandon(_ message: String) throws -> Never {
-            if wasRunning && !testInstance && (appQuit || control.isRunning() != true) { control.launch() }
+            if wasRunning && mayRelaunch && (appQuit || control.isRunning() != true) { control.launch() }
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
             throw khuFail(message)
@@ -433,7 +441,7 @@ public enum Recipe {
             let restored: String
             do { restored = try restoreAfterFailure(journal, fileManager: fm) }
             catch { throw khuFail("installing failed (\(cause)); \(error); recovery journal kept at \(paths.journal.path)") }
-            if wasRunning && !testInstance { control.launch() }
+            if wasRunning && mayRelaunch { control.launch() }
             try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
             throw khuFail("installing failed (\(cause)); \(restored)")
         }
@@ -470,6 +478,11 @@ public enum Recipe {
         if testInstance {
             return finish(settled(RecipeResult(status: "updated",
                 reason: "it was running as a test instance, so it was left stopped")))
+        }
+        if !relaunchAfterInstall {
+            return finish(settled(RecipeResult(status: "updated",
+                reason: wasRunning ? "it was closed for the update and left closed; an unattended install never opens an app"
+                                   : "it was left stopped")))
         }
         guard wasRunning || journal.previousVersion == nil else {
             return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
@@ -551,8 +564,9 @@ public enum Recipe {
     static func recover(_ paths: Paths, control: AppControl, fileManager fm: FileManager) throws -> String {
         guard let journal = try AtomicFile.readJSON(InstallJournal.self, from: paths.journal) else { return "" }
         control.restoreServices(journal.serviceLabels ?? [])
-        // A test/hidden instance is never relaunched in the owner's profile, even during recovery.
-        let relaunch = journal.wasRunning && !(journal.testInstance ?? false)
+        // A test/hidden instance and an unattended install are never relaunched in the owner's
+        // profile, even during recovery.
+        let relaunch = journal.wasRunning && !(journal.testInstance ?? false) && (journal.relaunchAfterwards ?? true)
         let found = try? BundleInfo.read(journal.installed)
         let previousIsInPlace = found?.version == journal.previousVersion && found?.executableIsRunnable(in: journal.installed) == true
         let expectedNew = journal.version ?? (try? BundleInfo.read(journal.staged).version)
@@ -616,9 +630,9 @@ public enum Recipe {
     /// settled — a rollback that could not be put back keeps the journal for the next run.
     static func finishPromotion(_ paths: Paths, journal: InstallJournal, newVersion: String, control: AppControl,
                                 fileManager fm: FileManager) -> (note: String, resolved: Bool) {
-        if journal.testInstance == true {
-            return ("an interrupted install had finished putting \(newVersion) in place while a test "
-                    + "instance was running; it was left stopped", true)
+        if journal.testInstance == true || journal.relaunchAfterwards == false {
+            return ("an interrupted install had finished putting \(newVersion) in place without a "
+                    + "relaunch; it was left stopped", true)
         }
         guard journal.wasRunning || journal.previousVersion == nil else {
             return ("an interrupted install had finished putting \(newVersion) in place while the app was "
@@ -654,7 +668,7 @@ public enum Recipe {
         pending.phase = "rolling_back"
         try AtomicFile.writeJSON(pending, to: paths.journal)
         try putBack(paths, journal: pending, expectedVersion: previousVersion, fileManager: fm)
-        if journal.testInstance == true {
+        if journal.testInstance == true || journal.relaunchAfterwards == false {
             return RecipeResult(status: "rolled_back", reason: "the new version was not healthy; \(previousVersion) was put back and left stopped")
         }
         control.launch()
