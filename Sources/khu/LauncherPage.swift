@@ -163,7 +163,14 @@ function svg(d){const s=document.createElementNS('http://www.w3.org/2000/svg','s
 function icon(a){return a.icon?el('img',{src:a.icon,alt:''}):el('div',{class:'ph','aria-hidden':true},svg('M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z'))}
 function buttons(a,big){const out=[],m=mainAction(a);
  if(a.status=='Updating…'&&!big)return [progress(a)];
- if(m)out.push(el('button',{class:'btn main '+m[2],onclick:e=>{e.stopPropagation();post({action:m[1],app:a.id})}},m[0]));
+ if(m)out.push(el('button',{class:'btn main '+m[2],onclick:e=>{e.stopPropagation();
+  // Nothing changes a Mac without being asked first: the confirmation names the app and versions.
+  if(['update','install','reinstall'].includes(m[1])){
+   const verb=m[1]=='update'?'Update':'Install';
+   const what=(a.installed&&a.available)?a.name+' '+a.installed+' → '+a.available:a.name+' '+(a.available||'');
+   if(!window.confirm(verb+' '+what.trim()+'?'))return;
+  }
+  post({action:m[1],app:a.id})}},m[0]));
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
 function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);

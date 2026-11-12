@@ -91,6 +91,9 @@ public enum FeedPublisher {
                 }
             }
             feed = try withPreviousInstallers(feed, in: feedDir)
+            // Captured before this publish replaces `previous` with the displaced current version:
+            // this *is* the generation that drops out of current+previous and becomes the prior.
+            let retiringPriors = feed.previous
             let (sha, bytes) = try Signing.sha256Hex(fileAt: artifact)
             guard bytes > 0 else { throw khuFail("\(artifact.path) is empty") }
             let base = String(try SafeName.component(artifact.lastPathComponent, what: "artifact").prefix(100))
@@ -158,6 +161,9 @@ public enum FeedPublisher {
             // whose artifacts were retired long ago. Rotated from the file on disk, before the new
             // release replaces it, and before the keep-set is read below.
             try rotateRollbackRelease(in: feedDir)
+            // Owner rule: keep the latest three verified versions in the feed. `release` + `previous`
+            // cover two; the retiring `previous` generation becomes the third and stays pinned here.
+            try rotatePriors(from: retiringPriors, in: feedDir)
             // Every pin this signed release carries, plus what the retention ledger still holds
             // as a recovery copy, read before the commit so an unreadable ledger refuses the
             // publish itself rather than quietly retiring the pins it names.
@@ -172,6 +178,7 @@ public enum FeedPublisher {
             // rollback. Publishing used to retire exactly the artifacts that file names, leaving a
             // rollback that pointed at nothing; its pins are kept now.
             keep.formUnion(rollbackNames(in: feedDir))
+            keep.formUnion(priorNames(in: feedDir))
             try saveFeed(signed, to: feedDir, key: key)
             // `## Feed`: the signed release is committed first; only now may installers it no
             // longer names leave the feed directory. A failure here cannot undo the release or
@@ -255,6 +262,28 @@ public enum FeedPublisher {
         }
         _ = try? fm.removeItem(at: temporary)
     }
+
+    /// Feed retention keeps current + previous + one prior = three verified versions. The partner
+    /// of `release.json` that is about to be replaced becomes the prior; only its artifact files are
+    /// pinned, and only the newest two are kept. Never a name `release`/`previous` already covers.
+    private static func rotatePriors(from previous: [String: FeedApp]?, in dir: URL) throws {
+        var priors = priorMap(in: dir)
+        if let previous {
+            // Per app: other apps keep their own prior generation untouched by this publish.
+            for (app, entry) in previous {
+                priors[app] = [entry.file] + (entry.icon.map { [$0] } ?? [])
+            }
+        }
+        try AtomicFile.writeJSON(priors, to: dir.appendingPathComponent("priors.json"))
+    }
+
+    private static func priorMap(in dir: URL) -> [String: [String]] {
+        let url = dir.appendingPathComponent("priors.json")
+        guard let data = try? Data(contentsOf: url), let priors = try? JSON.decode([String: [String]].self, from: data) else { return [:] }
+        return priors
+    }
+
+    private static func priorNames(in dir: URL) -> Set<String> { Set(priorMap(in: dir).values.flatMap { $0 }) }
 
     /// The artifacts a mirror's rollback release still names. A missing or unreadable file keeps
     /// nothing (and blocks nothing): the next mirror sync rewrites it.

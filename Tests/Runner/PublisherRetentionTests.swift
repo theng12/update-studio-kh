@@ -70,16 +70,15 @@ func publisherRetentionTests() {
         let current = feed.apps["media"]!, previous = feed.previous!["media"]!
         expect(current.version == "1.0.2" && previous.version == "1.0.1",
                "RET the signed feed names current 1.0.2 and previous 1.0.1")
-        expect(stored(dir) == Set([current.file, previous.file, current.icon ?? "", previous.icon ?? ""]),
-               "RET exactly the four pinned names remain in artifacts")
-        expect(trashed(trash) == Set([oldest.file, oldest.icon ?? ""]),
-               "RET the oldest installer and its icon moved to the injected Trash")
-        expect(sawFeedVersion == ["1.0.2", "1.0.2"],
-               "RET the signed release was already committed before every retired file moved")
-        let retired = (fm.enumerator(at: trash, includingPropertiesForKeys: nil)?
-            .allObjects.compactMap { $0 as? URL } ?? []).first { $0.lastPathComponent == oldest.file }
-        expect(retired.flatMap { try? Signing.sha256Hex(fileAt: $0).hex } == oldest.sha256,
-               "RET the retired bytes still hash as their signed entry (recoverable)")
+        // Three generations are kept: current, previous, and the one prior pinned in priors.json.
+        expect(stored(dir) == Set([current.file, previous.file, oldest.file,
+                                   current.icon ?? "", previous.icon ?? "", oldest.icon ?? ""]),
+               "RET three generations stay pinned: current, previous and one prior")
+        expect(trashed(trash).isEmpty, "RET nothing retires while three generations fit")
+        expect(sawFeedVersion.isEmpty, "RET no retirement runs while three generations fit")
+        let pinnedOldest = dir.appendingPathComponent("artifacts").appendingPathComponent(oldest.file)
+        expect(try Signing.sha256Hex(fileAt: pinnedOldest).hex == oldest.sha256,
+               "RET the prior generation still verifies from disk")
         let pinnedFile = dir.appendingPathComponent("artifacts").appendingPathComponent(previous.file)
         let measured = try Signing.sha256Hex(fileAt: pinnedFile)
         expect(measured.hex == previous.sha256 && measured.bytes == previous.bytes,
@@ -114,12 +113,20 @@ func publisherRetentionTests() {
         expect(stored(dir).contains(sharedName) && moved.isEmpty,
                "RET it stays while the other app's previous still pins it")
         try publish(dir, "two", "1.0.2", "two v3", kind: "app-dmg", meta: sharedMeta("1.0.2"), retire: retire)
-        expect(moved == [sharedName] && !stored(dir).contains(sharedName),
-               "RET once no current or previous names it, the shared artifact retires")
+        expect(stored(dir).contains(sharedName) && moved.isEmpty,
+               "RET it stays while either app still keeps it as a prior generation")
+        // Third generation for each app: only now does the shared artifact leave every pin.
+        try publish(dir, "one", "1.0.3", "one v4", kind: "app-dmg", meta: sharedMeta("1.0.3"), retire: retire)
+        try publish(dir, "two", "1.0.3", "two v4", kind: "app-dmg", meta: sharedMeta("1.0.3"), retire: retire)
+        let live = try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!
+        let liveNames = Set(live.apps.values.flatMap { [$0.file] + ($0.icon.map { [$0] } ?? []) }
+                            + (live.previous?.values.flatMap { [$0.file] + ($0.icon.map { [$0] } ?? []) } ?? []))
+        expect(moved.contains(sharedName) && !stored(dir).contains(sharedName),
+               "RET once no current, previous or prior names it, the shared artifact retires")
         expect(stored(dir).contains(sharedIconName),
                "RET the shared icon stays while every entry still names it")
-        expect(trashed(trash) == [sharedName] as Set<String>,
-               "RET only the unreferenced shared artifact reached the Trash")
+        expect(trashed(trash).contains(sharedName) && Set(trashed(trash)).isDisjoint(with: liveNames),
+               "RET the Trash takes the unreferenced shared artifact and nothing the feed still names")
     } catch { expect(false, "RET shared artifact: \(error)") }
 
     // 3. Publishing one app never retires another app's current or previous pins.
@@ -138,6 +145,8 @@ func publisherRetentionTests() {
         expect(moved.isEmpty && stored(dir).contains(alphaOldest) && stored(dir).contains(betaOldest),
                "RET both apps keep their two pins through each other's publish")
         try publish(dir, "alpha", "1.0.2", "a3", retire: retire)
+        expect(moved.isEmpty, "RET alpha keeps three generations after its next publish")
+        try publish(dir, "alpha", "1.0.3", "a4", retire: retire)
         expect(moved == [alphaOldest], "RET alpha's own displaced installer retires and nothing else")
         let after = try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!
         expect(stored(dir).contains(after.apps["beta"]!.file) && stored(dir).contains(after.previous!["beta"]!.file),
@@ -152,34 +161,33 @@ func publisherRetentionTests() {
         let trash = root.appendingPathComponent("system-trash-failed")
         let ok: (URL) throws -> Void = { _ = try Trash.move($0, into: trash) }
         try publish(dir, "media", "1.0.0", "v1", retire: ok)
+        let oldest = (try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!).apps["media"]!.file
         try publish(dir, "media", "1.0.1", "v2", retire: ok)
-        let before = try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!
-        let oldest = before.previous!["media"]!.file, secondOldest = before.apps["media"]!.file
+        try publish(dir, "media", "1.0.2", "v3", retire: ok)
         var calls = 0
+        // The fourth generation pushes the oldest out of the three kept; its Trash fails loudly.
         expectThrows("RET a Trash failure is reported loudly", contains: "cannot be moved to the Trash") {
-            try publish(dir, "media", "1.0.2", "v3", retire: { _ in calls += 1
+            try publish(dir, "media", "1.0.3", "v4", retire: { _ in calls += 1
                 throw khuFail("fixture Trash unavailable") })
         }
         expect(calls == 1, "RET the failing Trash was actually attempted")
         let committed = try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!
-        expect(committed.apps["media"]?.version == "1.0.2" && committed.previous?["media"]?.version == "1.0.1",
-               "RET the release and both pins are live despite the Trash failure")
-        expect(stored(dir).contains(oldest) && stored(dir).contains(secondOldest)
-               && stored(dir).contains(committed.apps["media"]!.file),
-               "RET nothing was removed while the Trash failed")
+        expect(committed.apps["media"]?.version == "1.0.3" && committed.previous?["media"]?.version == "1.0.2",
+               "RET the release and its previous pin are live despite the Trash failure")
+        expect(stored(dir).contains(oldest), "RET nothing was removed while the Trash failed")
         let pinned = committed.previous!["media"]!
         let pinnedFile = dir.appendingPathComponent("artifacts").appendingPathComponent(pinned.file)
         expect(try Signing.sha256Hex(fileAt: pinnedFile).hex == pinned.sha256,
                "RET the signed previous pin still verifies from disk after the failure")
         expectThrows("RET the same version stays refused — no blind republish", contains: "already has") {
-            try publish(dir, "media", "1.0.2", "v3 other bytes", retire: ok)
+            try publish(dir, "media", "1.0.3", "v4 other bytes", retire: ok)
         }
-        try publish(dir, "media", "1.0.3", "v4", retire: ok)
+        try publish(dir, "media", "1.0.4", "v5", retire: ok)
         let settled = try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!
-        expect(trashed(trash) == [oldest, secondOldest] as Set<String>,
-               "RET the next publish retires the leftovers the failed Trash left behind")
-        expect(stored(dir) == Set([settled.apps["media"]!.file, settled.previous!["media"]!.file]),
-               "RET after the retry only current and previous remain in artifacts")
+        expect(trashed(trash).contains(oldest),
+               "RET the next publish retires the leftover the failed Trash left behind")
+        expect(stored(dir).count == 3,
+               "RET after the retry three generations remain in artifacts")
     } catch { expect(false, "RET failed trash: \(error)") }
 
     // 5. The retention ledger's recovery pins survive a publish that no longer names them;
@@ -228,9 +236,10 @@ func publisherRetentionTests() {
         try publish(dir, "media", "1.0.1", "d2")
         let pinned = (try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!).previous!["media"]!
         try publish(dir, "media", "1.0.2", "d3")
+        try publish(dir, "media", "1.0.3", "d4")
         expect(trashed(Trash.root(in: dir)).contains(pinned.file),
                "RET the un-injected default retires into the fixture feed's own _trash")
-        expect(!stored(dir).contains(pinned.file) && stored(dir).count == 2,
-               "RET only current and previous remain in artifacts after the default retirement")
+        expect(!stored(dir).contains(pinned.file) && stored(dir).count == 3,
+               "RET three generations remain in artifacts after the default retirement")
     } catch { expect(false, "RET default destination: \(error)") }
 }

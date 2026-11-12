@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+
+## 0.1.22 — 2026-11-12
+
+- Update, Install and Reinstall ask for confirmation first, then show progress and the result.
+- The feed's liveness probe answers, and the app raises its own file-descriptor limit before installing.
+
 ## 0.1.21 — 2026-11-12
 - The helper reaches the feed by its Tailscale name, so a publisher whose address changes keeps working.
 - Settings → Appearance offers System, Light and Dark; a saved "Default" now reads as System.

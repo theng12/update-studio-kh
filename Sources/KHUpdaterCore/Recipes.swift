@@ -310,6 +310,31 @@ public enum Recipe {
     /// From the journal onward: stop what is running, promote the staged bundle, and require the
     /// version that went in to be healthy and to stay healthy. An owner order runs through exactly
     /// this path, so its swap and its fallback are the install's own.
+    static func bundleIdentifier(at path: String) -> String? {
+        let info = URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: info),
+              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
+        else { return nil }
+        return plist["CFBundleIdentifier"] as? String
+    }
+
+    /// Retires every other bundle with the same identifier, in `/Applications` and `~/Applications`.
+    /// A move that fails is ignored here: the install already succeeded and must not be undone by
+    /// housekeeping.
+    static func retireDuplicateBundles(bundleID: String, keeping installedPath: String, trash: URL, fileManager fm: FileManager) {
+        let installed = URL(fileURLWithPath: installedPath).standardizedFileURL.path
+        let roots = [URL(fileURLWithPath: "/Applications"),
+                     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
+        for root in roots {
+            let entries = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+            for url in entries where url.pathExtension == "app" {
+                let candidate = url.standardizedFileURL.path
+                guard candidate != installed, Self.bundleIdentifier(at: candidate) == bundleID else { continue }
+                _ = try? Trash.move(url, into: trash, fileManager: fm)
+            }
+        }
+    }
+
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false) throws -> RecipeResult {
@@ -364,6 +389,11 @@ public enum Recipe {
             journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
             try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath))
             journal.phase = "promoted"; try AtomicFile.writeJSON(journal, to: paths.journal)
+            // One bundle per bundle id: a leftover copy can start its own services and fight over
+            // ports, so an install retires any other copy to the feed's Trash.
+            if let bundleID = Self.bundleIdentifier(at: installedPath) {
+                Self.retireDuplicateBundles(bundleID: bundleID, keeping: installedPath, trash: paths.trash, fileManager: fm)
+            }
         } catch {
             let cause = error
             let restored: String

@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+
+## 1.0.25 — 2026-11-12
+
+- Update and Install now ask before they run, naming the app and versions.
+- The Launcher's own liveness probe answers, so a reachable feed no longer reads as "feed host is off".
+- Installing retires a second copy of the same app, and the feed keeps three verified versions for rollback.
+
 ## 1.0.24 — 2026-11-12
 - Settings → Appearance offers System, Light and Dark; a saved "Default" now reads as System.
 - Publishing keeps a restorable previous release, so Roll back works on the publisher's own Mac.

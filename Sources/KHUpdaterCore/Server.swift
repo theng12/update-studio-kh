@@ -514,6 +514,9 @@ public final class FeedServer: @unchecked Sendable {
     /// waiting; every real caller leaves it alone.
     public func handleRequest(_ req: HTTPRequest, remote: String, now: Date = Date()) -> HTTPResponse {
         if req.method == "GET" {
+            // A read-only liveness probe. The agent treats a dead host as "feed host is off" and
+            // refuses local installs, so this must answer without a token or a body.
+            if req.path == "/status" { return HTTPResponse(200, "application/json", data: Data("{\"ok\":true}".utf8)) }
             if req.path == "/release.json" {
                 let url = FeedPublisher.releaseFile(in: feedDir)
                 guard let data = try? Data(contentsOf: url) else { return Self.text(404, "nothing published yet") }
