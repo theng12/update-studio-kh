@@ -5,3 +5,4 @@ _trash/
 dist/
 .release-dist.lock
 __pycache__/
+.test-tmp/
