@@ -5,13 +5,16 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.30 — 2026-11-13
+
+- Re-pairing a Mac no longer needs a Remove on the publisher Mac: entering its pairing code replaces the older sign-in, and the previous token stops working.
+- The Launcher's address field accepts the publisher's Tailscale name (ending in .ts.net) and says plainly why a numeric IP cannot be used.
+- Includes Studio Launcher KH 0.1.28 with the same connection fixes.
+
 ## 1.0.29 — 2026-11-13
 
 - The Launcher's Update/Install confirmation is an in-page dialog; the webview's built-in confirm() was a silent no-op.
 - An unattended install no longer opens the app, and an already-installed equal version is not reinstalled.
-
-## 1.0.29 — 2026-11-13
-
 - Includes Studio Launcher KH 0.1.26: an app replaced by an automatic update no longer opens in front of you; it stays closed for you to open.
 - An update you asked for on this Mac reopens the app in the background, and a hidden or test run is replaced but never reopened as your app.
 - A version already installed is left alone instead of being downloaded and installed again from an out-of-date report.

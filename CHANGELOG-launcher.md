@@ -5,12 +5,15 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.28 — 2026-11-13
+
+- Re-pairing works from this Mac: entering the pairing code replaces the older sign-in, no Remove on the publisher Mac needed, and the old token stops working.
+- The address field accepts the publisher's Tailscale name (ending in .ts.net); a numeric IP is refused with the reason macOS gives.
+- A refused sign-in still offers Pair again, and pairing reconnects without a step on the publisher Mac.
+
 ## 0.1.26 — 2026-11-13
 
 - Update and Install work again: the confirmation is a real in-page dialog, because the packaged webview's confirm() silently did nothing.
-
-## 0.1.26 — 2026-11-13
-
 - An automatic update no longer opens the app in front of you: it stays closed for you to open.
 - An update you asked for on this Mac reopens the app in the background, and a hidden or test copy is replaced but never reopened as your app.
 - A version already installed is left alone instead of being downloaded and installed again from an out-of-date report.

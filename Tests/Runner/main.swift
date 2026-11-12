@@ -2810,19 +2810,38 @@ func pairingTests() {
         let after = start.addingTimeInterval(Double(EnrolPolicy.pairingLockMinutes) * 60 + 1)
         expect(post(server, "mac-b", p.code, now: after).status == 200, "PC3 the right code works when the lock ends")
     }
-    // PC4. An enrolled id is still refused with the right code; a lost reply can still be resent.
+    // PC4. A valid pairing code replaces an existing enrolment (owner 2026-11-13): the old token
+    // stops working, the new one reports, and the Mac's page keeps an audit line. A window claim
+    // without a code is still refused, and a wrong code never says which ids are enrolled.
     do {
         let (r, server, p) = rig("pc4")
+        let firstNonce = enrolNonce()
+        let first = enrolReply(post(server, "mac-a", p.code, nonce: firstNonce), key: r.rig.pair.privateKey)
+        _ = enrolStatusPost(server, machine: "mac-a", token: first!.token, body: ["machine": "mac-a"])
+        let again = post(server, "mac-a", p.code, nonce: enrolNonce())
+        let second = enrolReply(again, key: r.rig.pair.privateKey)
+        expect(again.status == 200 && second?.token != first?.token
+               && r.machines["mac-a"]?.tokenHash == second.map { Enrolment.sha256Hex($0.token) },
+               "PC4 a valid pairing code replaces an existing enrolment with a new token")
+        expect(enrolStatusPost(server, machine: "mac-a", token: first!.token, body: ["machine": "mac-a"]).status == 401,
+               "PC4 the replaced token is revoked")
+        expect(enrolStatusPost(server, machine: "mac-a", token: second!.token, body: ["machine": "mac-a"]).status == 200,
+               "PC4 the new token reports normally")
+        expect(r.machines["mac-a"]?.history?.contains { $0.status == "paired again" } == true,
+               "PC4 the replacement is kept as an audit line on the Mac's page")
+        r.openWindow(30)
+        expect(enrolPost(server, machine: "mac-a", nonce: enrolNonce()).status == 409,
+               "PC4 a window claim without a code still cannot rotate an enrolled Mac")
+        expect(post(server, "mac-c", wrong(p)).status == 403 && post(server, "mac-a", wrong(p)).status == 403,
+               "PC4 a wrong code never says which ids are enrolled")
+        // A lost reply can still be resent by the same claim before it reports.
+        let (rr, rserver, _) = rig("pc4-resend")
+        rr.openWindow(30)
         let nonce = enrolNonce()
-        let first = enrolReply(post(server, "mac-a", p.code, nonce: nonce), key: r.rig.pair.privateKey)
-        let hash = r.machines["mac-a"]?.tokenHash
-        expect(first != nil && post(server, "mac-a", p.code).status == 409 && r.machines["mac-a"]?.tokenHash == hash,
-               "PC4 another claim on an enrolled id is refused and its token is untouched")
-        let resend = enrolReply(post(server, "mac-a", p.code, nonce: nonce), key: r.rig.pair.privateKey)
-        expect(resend != nil && resend?.token != first?.token, "PC4 the same claim resent, before the Mac has reported, gets a fresh token")
-        _ = enrolStatusPost(server, machine: "mac-a", token: resend!.token, body: ["machine": "mac-a"])
-        expect(post(server, "mac-a", p.code, nonce: nonce).status == 409, "PC4 once it has reported, even the same claim is refused")
-        expect(post(server, "mac-c", wrong(p)).status == 403 && post(server, "mac-a", wrong(p)).status == 403, "PC4 a wrong code never says which ids are enrolled")
+        let a = enrolReply(enrolPost(rserver, machine: "mac-b", nonce: nonce), key: rr.rig.pair.privateKey)
+        let b = enrolReply(enrolPost(rserver, machine: "mac-b", nonce: nonce), key: rr.rig.pair.privateKey)
+        expect(a != nil && b != nil && a?.token != b?.token,
+               "PC4 the same window claim resent before it reports gets a fresh token")
     }
     // PC5. No code and no window is refused; no code with a window works as before and spends the window.
     do {
@@ -2851,6 +2870,24 @@ func pairingTests() {
                "PC6 the old code stops working, the new one works, and connected Macs stay")
         let mode = (try? FileManager.default.attributesOfItem(atPath: StateStore.stateFile(in: r.rig.state).path))?[.posixPermissions] as? Int
         expect(mode == 0o600, "PC6 the file holding the code is private")
+    }
+    // PC7. The signed reply names the address the Mac used: the tailnet host from its Host header,
+    // the bind address when it reached that, and never a foreign host.
+    do {
+        let (r, server, p) = rig("pc7")
+        func reply(host: String?) -> EnrolReply? {
+            var headers = ["content-type": "application/json"]
+            if let host { headers["host"] = host }
+            let body = try! JSONSerialization.data(withJSONObject: ["machine": "mac-a", "nonce": enrolNonce(), "code": p.code])
+            return enrolReply(server.handleRequest(HTTPRequest(method: "POST", path: "/enrol", headers: headers, body: body), remote: "100.64.0.9"),
+                              key: r.rig.pair.privateKey)
+        }
+        expect(reply(host: "host.tail1234.ts.net:8790")?.feedURL == "http://host.tail1234.ts.net:8790/release.json",
+               "PC7 a Mac reaching the publisher by tailnet name gets that name in the signed reply")
+        expect(reply(host: "100.64.0.7:8790")?.feedURL == "http://100.64.0.7:8790/release.json",
+               "PC7 a Mac reaching the bind address gets the bind address")
+        expect(reply(host: "evil.example:8790")?.feedURL == "http://100.64.0.7:8790/release.json",
+               "PC7 a foreign Host is never echoed")
     }
 }
 
@@ -2903,8 +2940,8 @@ func enrolWindowTests() {
         let hash = r.machines["mac1"]?.tokenHash
         let reply = enrolPost(r.server, machine: "mac1", nonce: enrolNonce())
         expect(reply.status == 409, "E3 an already-enrolled Mac is refused over the network (\(reply.status))")
-        expect(String(decoding: reply.data, as: UTF8.self) == "This Mac's name is already in use. If this Mac was reset, remove it in Update Studio (Remove Mac), then connect again.",
-               "E3 reconnect refusal explains Remove Mac in plain words")
+        expect(String(decoding: reply.data, as: UTF8.self) == "This Mac's name is already in use. Enter the pairing code from Update Studio KH on this Mac's Pair again screen to reclaim it.",
+               "E3 reconnect refusal explains the pairing-code recovery in plain words")
         expect(r.machines["mac1"]?.tokenHash == hash && r.window?.enrolled == 0,
                "E3 the refused Mac's token is NOT rotated and nothing was counted")
         let use = r.server.handleRequest(HTTPRequest(method: "POST", path: "/status",

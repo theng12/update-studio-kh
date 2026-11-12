@@ -148,6 +148,12 @@ assert(document.getElementById('main') && document.getElementById('q') && docume
 const stored = new Map();
 const localStorage = { getItem: k => (stored.has(k) ? stored.get(k) : null), setItem: (k, v) => stored.set(k, String(v)) };
 const posts = [];
+// A main-action click opens the page's own confirmation; its label is the action's verb.
+function confirmAction(label) {
+  const button = document.querySelectorAll('button').filter(b => b.textContent === label).pop();
+  assert(button, 'the in-page confirmation offers ' + label);
+  button.fire('click');
+}
 const window = { confirm: () => true, webkit: { messageHandlers: { khu: { postMessage: m => posts.push(m) } } } };
 const ctx = vm.createContext({ document, window, localStorage, setInterval: () => 0, innerWidth: 1000, innerHeight: 800 });
 vm.runInContext(script, ctx, { filename: 'LauncherPage.swift <script>' });
@@ -276,13 +282,13 @@ run('settingsOpen=false;detail=null;closeLayers()');
 render(state([row({ id:'story', statusOnly:true, manuallyInstallable:true, managed:false, installed:null, available:'2.0', status:'Not installed' })]));
 let manual=document.querySelectorAll('.card button').find(b=>b.textContent=='Install');
 assert(manual,'a self-updating app with an installer offers Install');
-posts.length=0; manual.fire('click');
+posts.length=0; manual.fire('click'); confirmAction('Install');
 assert.equal(posts[0].action,'install');
 assert.equal(posts[0].app,'story');
 render(state([row({ id:'story', statusOnly:true, manuallyInstallable:true, managed:true, installed:'1.0', available:'2.0', status:'Update available' })]));
 manual=document.querySelectorAll('.card button').find(b=>b.textContent=='Update');
 assert(manual,'an installed self-updating app with a newer version offers Update');
-posts.length=0; manual.fire('click');
+posts.length=0; manual.fire('click'); confirmAction('Update');
 assert.equal(posts[0].action,'update');
 render(state([row({ id:'story', statusOnly:true, manuallyInstallable:false, managed:false, installed:null, available:null, status:'Updates itself', setup:true })]));
 assert(!document.querySelectorAll('.card button').find(b=>b.textContent=='Install'),'a self-updating app with no installer offers no Install');

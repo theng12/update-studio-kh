@@ -163,7 +163,7 @@ function svg(d){const s=document.createElementNS('http://www.w3.org/2000/svg','s
 function icon(a){return a.icon?el('img',{src:a.icon,alt:''}):el('div',{class:'ph','aria-hidden':true},svg('M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z'))}
 // An in-page confirmation. window.confirm() does not work in the packaged webview, which made
 // Update/Install look dead: it returned false without showing anything.
-function ask(question,confirmLabel){return new Promise(done=>{
+function ask(question,confirmLabel,done){
  const back=el('div',{role:'dialog','aria-modal':'true',style:'position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99'});
  const box=el('div',{style:'background:var(--panel,#fff);color:var(--text,#111);border-radius:14px;padding:20px 20px 16px;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:14px -apple-system,BlinkMacSystemFont,sans-serif'});
  box.append(el('p',{style:'margin:0 0 16px;line-height:1.4'},question));
@@ -171,7 +171,6 @@ function ask(question,confirmLabel){return new Promise(done=>{
  row.append(el('button',{class:'btn',onclick:()=>{back.remove();done(false)}},'Cancel'));
  row.append(el('button',{class:'btn main',onclick:()=>{back.remove();done(true)}},confirmLabel));
  box.append(row);back.append(box);document.body.append(back);
-});
 }
 function buttons(a,big){const out=[],m=mainAction(a);
  if(a.status=='Updating…'&&!big)return [progress(a)];
@@ -181,7 +180,7 @@ function buttons(a,big){const out=[],m=mainAction(a);
   if(['update','install','reinstall'].includes(m[1])){
    const verb=m[1]=='update'?'Update':'Install';
    const what=(a.installed&&a.available)?a.name+' '+a.installed+' → '+a.available:a.name+' '+(a.available||'');
-   ask(verb+' '+what.trim()+'?',verb).then(ok=>{if(ok)post({action:m[1],app:a.id})});
+   ask(verb+' '+what.trim()+'?',verb,ok=>{if(ok)post({action:m[1],app:a.id})});
    return;
   }
   post({action:m[1],app:a.id})}},m[0]));

@@ -312,19 +312,26 @@ func connectionFlowTests() {
         expect(try! Data(contentsOf: file) == concurrentBytes, "CF6 saving an address never restores a superseded sign-in")
     }
 
-    // CF7. The address grammar itself: only what the Hub's own scope allows gets through.
+    // CF7. The address grammar itself: the app's ATS exempts the tailnet's DNS suffix for plain
+    // http, so the Tailscale name is what is accepted and a numeric IP is refused with the reason.
     do {
-        expect((try? Connect.destination("100.64.0.7:8790")) == "http://100.64.0.7:8790/release.json",
-               "CF7 host:port is normalised to the feed address")
-        expect((try? Connect.destination("http://100.127.1.2/")) == "http://100.127.1.2/release.json",
-               "CF7 the top of the Tailscale range and a trailing slash are fine")
-        expect((try? Connect.destination("100.64.0.7:8790/release.json")) == "http://100.64.0.7:8790/release.json",
+        expect((try? Connect.destination("host.tail1234.ts.net:8790")) == "http://host.tail1234.ts.net:8790/release.json",
+               "CF7 the Tailscale name:port is normalised to the feed address")
+        expect((try? Connect.destination("http://host.tail1234.ts.net/")) == "http://host.tail1234.ts.net/release.json",
+               "CF7 a trailing slash is fine")
+        expect((try? Connect.destination("host.tail1234.ts.net:8790/release.json")) == "http://host.tail1234.ts.net:8790/release.json",
                "CF7 the full feed URL is accepted as typed")
-        expectThrows("CF7 below the Tailscale range is refused", contains: "100.64.0.0/10") { _ = try Connect.destination("100.63.0.1") }
-        expectThrows("CF7 a name is refused instead of being resolved", contains: "IPv4") { _ = try Connect.destination("update-studio.example") }
-        expectThrows("CF7 a zero port is refused", contains: "port") { _ = try Connect.destination("100.64.0.7:0") }
-        expectThrows("CF7 a leading-zero octet is refused", contains: "IPv4") { _ = try Connect.destination("100.064.0.7") }
-        expectThrows("CF7 https is refused", contains: "plain http") { _ = try Connect.destination("https://100.64.0.7:8790") }
+        expectThrows("CF7 a numeric IP is refused with the ATS reason", contains: "App Transport Security") {
+            _ = try Connect.destination("100.64.0.7:8790")
+        }
+        expectThrows("CF7 a numeric IP as a URL is refused too", contains: "App Transport Security") {
+            _ = try Connect.destination("http://100.127.1.2/")
+        }
+        expectThrows("CF7 any other name is refused for the same reason", contains: "ts.net") {
+            _ = try Connect.destination("update-studio.example")
+        }
+        expectThrows("CF7 a zero port is refused", contains: "port") { _ = try Connect.destination("host.tail1234.ts.net:0") }
+        expectThrows("CF7 https is refused", contains: "plain http") { _ = try Connect.destination("https://host.tail1234.ts.net:8790") }
     }
 
     // CF14. Editing the first-run route never replaces the kit's pinned key.

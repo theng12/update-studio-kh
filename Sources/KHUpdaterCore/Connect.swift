@@ -391,8 +391,9 @@ public enum Connect {
         }
     }
 
-    /// The address typed in Settings, normalised to this tool's one feed address: a plain IPv4 in
-    /// the Tailscale range the Hub itself accepts (100.64.0.0/10), an optional port, http only.
+    /// The address typed in Settings, normalised to this tool's one feed address: the publisher's
+    /// Tailscale DNS name (ending in `.ts.net`), an optional port, http only. A numeric IP is
+    /// refused with the ATS reason: the app cannot reach it with plain http.
     /// No DNS, no autodiscovery, nothing guessed — a bind outside that range is refused rather
     /// than adopted (`## Server`: the Hub's publisher_config accepts exactly this range).
     public static func destination(_ typed: String) throws -> String {
@@ -418,19 +419,18 @@ public enum Connect {
             }
             port = ":\(number)"
         }
+        // The app's Info.plist exempts only the tailnet's own DNS suffix for plain http (ATS). A
+        // numeric IP is blocked inside the app before any request leaves it, so it is refused here
+        // with the reason — a transport error would leave the field looking broken.
         let octets = host.split(separator: ".")
-        guard octets.count == 4 else {
-            throw khuFail("Update Studio's address is an IPv4 address in the Tailscale range 100.64.0.0/10, not \(host)")
+        let numeric = octets.count == 4 && octets.allSatisfy { octet in
+            !octet.isEmpty && octet.allSatisfy { $0.isNumber }
         }
-        var numbers: [Int] = []
-        for octet in octets {
-            guard let number = Int(octet), (0...255).contains(number), String(number) == octet else {
-                throw khuFail("\(host) is not an IPv4 address; type the Tailscale address Update Studio serves on")
-            }
-            numbers.append(number)
+        if numeric {
+            throw khuFail("type the publisher's Tailscale name, not the numeric IP \(host): macOS blocks plain http to an IP address (App Transport Security). The name ends in .ts.net and is shown on the publisher's Update Studio window.")
         }
-        guard numbers[0] == 100, (64...127).contains(numbers[1]) else {
-            throw khuFail("\(host) is outside the Tailscale range 100.64.0.0/10 this tool accepts; no other address is used")
+        guard host.lowercased().hasSuffix(".ts.net") else {
+            throw khuFail("type the publisher's Tailscale name ending in .ts.net: macOS only allows plain http to that name (App Transport Security), not to \(host).")
         }
         return "http://\(host)\(port)/release.json"
     }

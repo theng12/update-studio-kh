@@ -194,29 +194,39 @@ token, and it is the only way a Mac gets a token without the owner touching the 
   with the `--key` key, after the reply is signed and only then written to state. The machine id goes
   through `SafeName`, the nonce must be exactly 64 hexadecimal characters, and a body over 4 KiB is
   refused before it is parsed.
-- An id that already has a record is refused **409**, whatever else is true: a device on the tailnet
-  can never rotate a real Mac's token out from under it. Re-enrolment stays on the publisher
-  (`khu enrol`), and a Mac the owner removed has no record, so it enrols again through a window.
-  **One exception, and it is the same claim arriving twice:** a window-enrolled record that has never
+- An id that already has a record is refused **409** for a claim that carries no valid pairing code:
+  a window alone can never rotate a real Mac's token. A claim that presents the publisher's current
+  pairing code **replaces** the record (owner, 2026-11-13: "why re-pairing a machine requires going
+  to the 1301 Mac to remove it first"): a new token is issued, the stored hash is overwritten so the
+  previous token stops working, and a `paired again` line is kept on the Mac's page. The code is the
+  authorisation; it is rate-limited per address, locks after the configured wrong tries, and the
+  owner can replace it with New code. Re-enrolment on the publisher itself (`khu enrol`) and through
+  Remove Mac remain available.
+  **The other exception is the same claim arriving twice:** a window-enrolled record that has never
   reported (`/status` once), resent with the **same nonce**, is answered with a freshly signed reply
   carrying a new token instead of a 409. The token it was sent the first time may have died with a
   reply that never arrived, and a permanent 409 would strand that Mac until the owner removed it by
-  hand. The nonce is what makes it the same claim — a different nonce is still 409, a record that has
-  reported is still 409, and a closed window mints nothing — and the resend spends no second slot of
-  the window's cap. The stored hash is replaced, so the token from the lost reply stops working.
+  hand. The nonce is what makes it the same claim — a different nonce without the code is still 409,
+  a record that has reported is still 409, and a closed window mints nothing — and the resend spends
+  no second slot of the window's cap. The stored hash is replaced, so the token from the lost reply
+  stops working.
 - Closed window: **403**. No `--key`: **403** (it could not sign a reply, and an unsigned reply is
   one the Mac must refuse). Past the window's cap of `EnrolPolicy.maxPerWindow`: **429**. `/enrol`
   attempts are rate-limited per client address (`EnrolPolicy.attemptsPerMinute`, in memory) so the
   attempts a window's cap does not count cannot be made for free. **Every refusal leaves the state
   byte for byte as it was**; the numbers the page shows are the numbers the server enforces.
-- `feedURL` is the address **this listener was bound to**, written the one way `publisher.json`
-  writes it (`http://<bind>:<port>/release.json`). That is the address the Mac just reached the
-  publisher at, so it cannot drift from what the Mac's kit says. Only the **Tailscale range the Hub
-  itself accepts** (`100.64.0.0/10`) is such an address: the Hub's `publisher_config` refuses any
-  other one, so a publisher bound to a LAN address would enrol a Mac and then hand it a feed URL its
-  own Hub refuses to adopt. Loopback, wildcard, link-local, multicast and ordinary LAN binds are all
-  refused (403) instead of guessed at — fail closed, and the launch agent binds the Tailscale
-  address.
+- `feedURL` is **the address the Mac's own request used**, when that is this listener's tailnet
+  address or this publisher's Tailscale DNS name (`*.ts.net`); otherwise the bound tailnet address,
+  written the one way `publisher.json` writes it (`http://<host>:<port>/release.json`). A kit that
+  names the tailnet host therefore gets a reply it agrees with, and a foreign `Host` is never
+  echoed. Only the **Tailscale range the Hub itself accepts** (`100.64.0.0/10`) or the tailnet's own
+  DNS suffix is such an address: the Hub's `publisher_config` refuses any other one, so a publisher
+  bound to a LAN address would enrol a Mac and then hand it a feed URL its own Hub refuses to adopt.
+  Loopback, wildcard, link-local, multicast and ordinary LAN binds are all refused (403) instead of
+  guessed at — fail closed, and the launch agent binds the Tailscale address.
+- The Launcher's typed address accepts the publisher's **Tailscale name** and refuses a numeric IP
+  with the reason: the app's ATS exception allows plain http only to `*.ts.net`, so an IP would be
+  blocked inside the app before any request left it (the fleet defect fixed 2026-11-13).
 
 Launcher connection attempts are serialized per home. A pending claim keeps its machine, address,
 publisher key and nonce in a private local file until installation succeeds; a failed local install
@@ -238,8 +248,9 @@ parse, compile and test logs. Runner CF18 additionally checks exact executable, 
 current GUI UID, saved plist path, timeouts and absence of extra calls. These fixtures do not
 verify the unidentified powered-off affected Mac or replace full-module/native release checks.
 
-**Removing a Mac is what makes re-enrolment possible.** `POST /api/remove-machine` (`Remove Mac` on
-the page) or `khu remove --state <dir> --machine <id>` drops the live record — its token hash and its
+**Removing a Mac revokes it; a valid pairing code is also enough to re-pair it** (owner, 2026-11-13).
+`POST /api/remove-machine` (`Remove Mac` on the page) or `khu remove --state <dir> --machine <id>`
+drops the live record — its token hash and its
 waiting orders with it, so the old token cannot report or fetch orders — and appends
 `{machine, removedAt, installed, health, lastSeen, enrolledAt, enrolmentSource, droppedOrders}` to
 `state.removed`, newest last. One read-modify-write under state.lock, like every other change, so
@@ -585,16 +596,21 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
 - The status page has no CSRF token: it relies on loopback-only, Host and Origin/Referer checks.
 - **An open enrolment window is not a proof of identity, and this is what it does not protect
   against:** any device that can reach the tailnet address while a window is open can claim a *new*
-  machine id and get a token. It cannot take an existing Mac's id (409), cannot rotate a real Mac's
-  token, cannot reopen the window, and cannot reach the owner's route from off this Mac. What bounds
-  it is the window's own end time (240 minutes at most, opened deliberately, closed by hand or by the
-  clock), the `EnrolPolicy.maxPerWindow` cap on new ids per window, the page listing every Mac that
-  enrolled through a window with its time, and Remove Mac dropping any of them in one click.
+  machine id and get a token. A window claim cannot take an existing Mac's id (409) and cannot rotate
+  a real Mac's token, cannot reopen the window, and cannot reach the owner's route from off this Mac.
+  A claim carrying the current **pairing code** can replace an existing Mac's enrolment by design
+  (owner, 2026-11-13); what bounds that is the code's own secrecy, the per-address attempt rate and
+  lockout after the configured wrong tries, and the owner's ability to replace it with New code.
+  Windows are bounded by their end time (240 minutes at most, opened deliberately, closed by hand or
+  by the clock), the `EnrolPolicy.maxPerWindow` cap on new ids per window, the page listing every Mac
+  that enrolled through a window with its time, and Remove Mac dropping any of them in one click.
 - During an open window a device on the tailnet can learn **whether a given machine id is already
-  enrolled**: an id with a record answers 409 and one without is enrolled. The fleet's names are not
-  secret from the tailnet; nothing else about an enrolled Mac — its token, its apps, its orders — is
-  answered to anything but that Mac's own token. The one record that can be re-minted over the
-  network is one that has never reported, and only by repeating the nonce it enrolled with. That Mac
+  enrolled**: an id with a record answers 409 (without the pairing code) and one without is enrolled.
+  The fleet's names are not secret from the tailnet; nothing else about an enrolled Mac — its token,
+  its apps, its orders — is answered to anything but that Mac's own token. The one record that can
+  be re-minted over the network without the code is one that has never reported, and only by
+  repeating the nonce it enrolled with; with the current pairing code any record can be replaced.
+  That Mac
   may still be holding the token it was sent — its agent has not run yet — so the honest statement is
   that a re-mint displaces **no token the publisher has evidence was used**: a Mac that has reported
   is never re-minted, whatever nonce it sends, and neither is one whose record was minted for a

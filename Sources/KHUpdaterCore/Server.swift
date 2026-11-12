@@ -322,13 +322,19 @@ public final class FeedServer: @unchecked Sendable {
         return hash == Enrolment.sha256Hex(token)
     }
 
-    /// The feed URL a Mac learning this publisher gets. It is the address THIS listener was bound
-    /// to, which is the address the Mac just reached it at, written the one way `publisher.json`
-    /// writes it — so the Mac's own check that the reply agrees with its kit cannot fail for a
-    /// mistake in a second place. Nothing is guessed: an address the Mac's Hub would refuse is one
-    /// the reply must not name, so enrolment is refused instead.
-    var enrolFeedURL: String? {
+    /// The feed URL a Mac learning this publisher gets: the address its own request used, when that
+    /// is this listener's tailnet address or this publisher's Tailscale DNS name. A kit that names
+    /// the tailnet host therefore gets a reply it agrees with, while a request arrived by the bound
+    /// IP still gets that IP. Any other Host falls back to the bound tailnet address — nothing is
+    /// guessed and no foreign host is echoed; a Mac that reached the publisher by name and gets a
+    /// different host refuses the reply on its own side.
+    func enrolFeedURL(for hostHeader: String?) -> String? {
         guard (1...65535).contains(port), Self.isTailnet(bind) else { return nil }
+        let sent = (hostHeader ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostOnly = (sent.split(separator: ":").first.map(String.init) ?? "").lowercased()
+        if Self.isTailnet(hostOnly) || hostOnly.hasSuffix(".ts.net") {
+            return "http://\(sent)/release.json"
+        }
         return "http://\(bind):\(port)/release.json"
     }
 
@@ -436,13 +442,17 @@ public final class FeedServer: @unchecked Sendable {
         }
         // A sentence for the sender, never the bind or the port this listener was given: `/enrol`
         // is open to anything on the tailnet, and where the publisher listens is not its business.
-        guard let feedURL = enrolFeedURL else {
+        guard let feedURL = enrolFeedURL(for: req.headers["host"]) else {
             return Self.text(403, "this publisher is not listening on an address a Mac can reach, so it cannot enrol one: its owner must bind the Tailscale address (the LaunchAgent does)")
         }
         let publicKey = commandKey.publicKey.rawRepresentation.base64EncodedString()
         let issuedAt = Int(now.timeIntervalSince1970)
         return transact(genericFailure: true) { state in
             var window: EnrolWindow?
+            // The owner's rule (2026-11-13): the pairing code is the authorisation, so a Mac named
+            // by a valid code may replace its own earlier enrolment instead of being told to ask
+            // the host's owner to remove it by hand first.
+            var pairedByCode = false
             if let sent = object["code"] {
                 guard var pairing = state.pairing else {
                     return Self.text(403, "this publisher has no pairing code yet; ask its owner to click New code in Update Studio KH")
@@ -465,31 +475,27 @@ public final class FeedServer: @unchecked Sendable {
                 pairing.wrongTries = 0
                 pairing.lockedUntil = nil
                 state.pairing = pairing
+                pairedByCode = true
             } else {
                 guard let open = state.enrolWindow, open.isOpen(at: now) else {
                     return Self.text(403, "this publisher needs a pairing code to take a new Mac, or an open enrolment window; ask its owner")
                 }
                 window = open
             }
-            // A Mac this publisher already has a record of is refused over the network, whatever
-            // else happens: another device on the tailnet must never be able to rotate a real Mac's
-            // token out from under it. Re-enrolment runs on the publisher itself (`khu enrol`), and
-            // a removed Mac enrols again through a window because it has no record left.
-            //
-            // The one exception is the SAME claim arriving twice: a Mac that enrolled through a
-            // window and never reported, resending its own machine and nonce because the signed
-            // reply was lost on the way back. It cannot use the token it never received, so a plain
-            // 409 would strand it until the owner removed it by hand. The nonce is what makes it
-            // the same claim — a different nonce, or a record that has reported, is still 409 —
-            // and the resend mints a fresh token, so a reply that WAS seen and kept is replaced by
-            // one this Mac asked for with the same question.
+            // A Mac this publisher already has a record of is replaced only by a claim carrying the
+            // valid pairing code (the owner's authorisation, rate-limited and lockable), or by its
+            // own retry: a window-enrolled Mac resending the same machine and nonce because the
+            // signed reply was lost on the way back. A window claim without a code, and any claim
+            // from a machine that has reported under a different nonce, is still refused — the
+            // code is what makes replacing an existing sign-in legitimate.
             let retry = state.machines[machine].map { record in
                 (record.enrolmentSource == MachineState.windowSource || record.enrolmentSource == MachineState.pairingSource)
                     && record.lastSeen == nil && record.enrolNonceHash == Enrolment.sha256Hex(nonce)
             } ?? false
-            guard state.machines[machine] == nil || retry else {
-                return Self.text(409, "This Mac's name is already in use. If this Mac was reset, remove it in Update Studio (Remove Mac), then connect again.")
+            guard state.machines[machine] == nil || retry || pairedByCode else {
+                return Self.text(409, "This Mac's name is already in use. Enter the pairing code from Update Studio KH on this Mac's Pair again screen to reclaim it.")
             }
+            let replaced = state.machines[machine]
             // A resend is the same enrolment, not a second one: it must not spend another slot.
             guard retry || window.map({ $0.enrolled < maxEnrolmentsPerWindow }) ?? true else {
                 return Self.text(429, "this enrolment window has already enrolled as many Macs as it allows (\(maxEnrolmentsPerWindow)); ask the owner to open a new one")
@@ -505,6 +511,14 @@ public final class FeedServer: @unchecked Sendable {
             }
             Enrolment.store(token, for: machine, at: now, source: window == nil ? MachineState.pairingSource : MachineState.windowSource,
                             nonce: nonce, in: &state)
+            if pairedByCode, replaced?.tokenHash != nil, var record = state.machines[machine] {
+                // The code revoked the earlier token by replacing its hash; keep an audit line on
+                // the Mac's own page so a replacement is visible, never silent.
+                let audit = HistoryEntry(app: "Update Studio", from: nil, to: nil, status: "paired again",
+                                         reason: "the pairing code replaced this Mac's earlier sign-in", at: ISO.string(now))
+                record.history = Array(([audit] + (record.history ?? [])).prefix(HistoryEntry.kept))
+                state.machines[machine] = record
+            }
             if !retry, let window { state.enrolWindow?.enrolled = window.enrolled + 1 }
             return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
         }

@@ -160,6 +160,9 @@ func respawn(_ label: String) {
 func stopPhase(wasRunning: Bool, control: AppControl,
                paths: (staged: URL, journal: URL, trash: URL), fm: FileManager,
                refuseIfRunning: Bool = false) throws {
+        // This fixture exercises the owner's stop phase, where a relaunch is allowed; the shipped
+        // rule that decides it (relaunchAfterInstall/testInstance) is covered by the Swift suite.
+        let mayRelaunch = true
 STOP_BLOCK
 }
 
@@ -319,7 +322,7 @@ default:
 for call in calls {
     verify(call == "/bin/launchctl list" || call.hasPrefix("/usr/bin/osascript")
            || call.hasPrefix("/bin/launchctl kickstart gui/\(getuid())/")
-           || call == "/usr/bin/open " + bundle, "the only outside calls are asking: saw " + call)
+           || call == "/usr/bin/open -g -j " + bundle, "the only outside calls are asking: saw " + call)
 }
 for row in rows where refused.contains(row.label) {
     verify(alive(row.pid), "the refused job \(row.label) must not have been signalled")
