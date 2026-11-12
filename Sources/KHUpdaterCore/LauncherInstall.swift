@@ -86,7 +86,7 @@ extension Agent {
                     } else if let local = policy?.ssd {
                         outcome = try installLocal(local, app: app, installed: current, cfg: cfg,
                                                    stateDir: stateDir, shell: shell, control: control, force: reinstall.contains(app),
-                                                   catalogEntry: policy)
+                                                   manual: true, catalogEntry: policy)
                     } else {
                         outcome = RecipeResult(status: "refused", reason: "Update Studio is unreachable and no eligible SSD installer is available. Nothing was installed.")
                     }
