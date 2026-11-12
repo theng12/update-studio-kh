@@ -20,7 +20,11 @@ public struct AppControl {
     public var isRunning: () -> Bool?
     /// Ask the desktop app to quit; a separately verified service is stopped by stopService.
     public var quit: () -> Bool
+    /// Launch the installed app. Always background/hidden: an install never takes the desktop.
     public var launch: () -> Void
+    /// True when the running instance is a test/hidden run (extra launch arguments or an isolated
+    /// HOME), not the owner's ordinary launch. It is replaced but never relaunched in their profile.
+    public var isTestInstance: () -> Bool
     /// Stop verified services that outlive their desktop app; true only once the bundle is quiet.
     /// Gateway also verifies its service endpoint and listener ownership.
     public var stopService: () -> Bool
@@ -37,11 +41,13 @@ public struct AppControl {
     public init(isRunning: @escaping () -> Bool?, quit: @escaping () -> Bool, launch: @escaping () -> Void,
                 stopService: @escaping () -> Bool = { true }, healthy: @escaping (String) -> Bool,
                 healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10,
-                serviceLabels: @escaping () -> [String] = { [] }, restoreServices: @escaping ([String]) -> Void = { _ in }) {
+                serviceLabels: @escaping () -> [String] = { [] }, restoreServices: @escaping ([String]) -> Void = { _ in },
+                isTestInstance: @escaping () -> Bool = { false }) {
         self.isRunning = isRunning; self.quit = quit; self.launch = launch; self.stopService = stopService
         self.serviceLabels = serviceLabels; self.restoreServices = restoreServices
         self.healthy = healthy; self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
         self.healthSettle = healthSettle
+        self.isTestInstance = isTestInstance
     }
 }
 
@@ -117,6 +123,9 @@ public struct InstallJournal: Codable, Sendable, Equatable {
     public var rollback: String
     public var previousVersion: String?
     public var wasRunning: Bool
+    /// The running instance was a test/hidden run: replace it, but never relaunch it in the owner's
+    /// profile. Nil in journals written before it existed (treated as the owner's app).
+    public var testInstance: Bool? = nil
     /// The version this install is putting in place, so a recovered journal can prove which side it
     /// found at `installed`. Absent in a journal written before it existed.
     public var version: String? = nil
@@ -361,6 +370,9 @@ public enum Recipe {
                                  notes: [String], refuseIfRunning: Bool = false) throws -> RecipeResult {
         let installedPath = paths.installedPath
         let wasRunning = control.isRunning() ?? true
+        // A test/hidden instance (extra launch arguments or an isolated HOME) is not the owner's
+        // app: it may be replaced, but it is never relaunched into the owner's profile afterwards.
+        let testInstance = wasRunning && control.isTestInstance()
         // The last read before anything would be stopped is the one that decides. An app that
         // updates itself came up between the staging look and here: this route proves no quiet
         // point, so it is kept exactly as it is — no journal, no quit, no service stop, no relaunch.
@@ -372,7 +384,7 @@ public enum Recipe {
                                      rollback: paths.rollback.path,
                                      // Nothing installed: a rollback bundle kept from before is the previous version.
                                      previousVersion: installedInfo?.version ?? (try? BundleInfo.read(paths.rollback.path))?.version,
-                                     wasRunning: wasRunning, version: targetVersion)
+                                     wasRunning: wasRunning, testInstance: testInstance, version: targetVersion)
         journal.order = order
         journal.intent = order == nil ? nil : "owner_rollback"
         journal.serviceLabels = control.serviceLabels()
@@ -385,7 +397,7 @@ public enum Recipe {
         // 3. Stop what is running; on refusal, leave the old app as it was.
         var appQuit = false
         func abandon(_ message: String) throws -> Never {
-            if wasRunning && (appQuit || control.isRunning() != true) { control.launch() }
+            if wasRunning && !testInstance && (appQuit || control.isRunning() != true) { control.launch() }
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
             throw khuFail(message)
@@ -421,7 +433,7 @@ public enum Recipe {
             let restored: String
             do { restored = try restoreAfterFailure(journal, fileManager: fm) }
             catch { throw khuFail("installing failed (\(cause)); \(error); recovery journal kept at \(paths.journal.path)") }
-            if wasRunning { control.launch() }
+            if wasRunning && !testInstance { control.launch() }
             try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
             throw khuFail("installing failed (\(cause)); \(restored)")
         }
@@ -453,6 +465,12 @@ public enum Recipe {
         }
 
         // 5. Preserve stopped updates; a first install always needs a live health check.
+        // A test/hidden instance is never relaunched in the owner's profile: the install settles
+        // on the verified bytes, and the owner's next launch proves the app itself.
+        if testInstance {
+            return finish(settled(RecipeResult(status: "updated",
+                reason: "it was running as a test instance, so it was left stopped")))
+        }
         guard wasRunning || journal.previousVersion == nil else {
             return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
         }
@@ -533,6 +551,8 @@ public enum Recipe {
     static func recover(_ paths: Paths, control: AppControl, fileManager fm: FileManager) throws -> String {
         guard let journal = try AtomicFile.readJSON(InstallJournal.self, from: paths.journal) else { return "" }
         control.restoreServices(journal.serviceLabels ?? [])
+        // A test/hidden instance is never relaunched in the owner's profile, even during recovery.
+        let relaunch = journal.wasRunning && !(journal.testInstance ?? false)
         let found = try? BundleInfo.read(journal.installed)
         let previousIsInPlace = found?.version == journal.previousVersion && found?.executableIsRunnable(in: journal.installed) == true
         let expectedNew = journal.version ?? (try? BundleInfo.read(journal.staged).version)
@@ -555,21 +575,21 @@ public enum Recipe {
                 do {
                     try fm.moveItem(atPath: journal.staged, toPath: journal.installed)
                     note = "an interrupted owner rollback was recovered by promoting the staged \(expectedNew)"
-                    if journal.wasRunning { control.launch() }
-                    resolved = !journal.wasRunning || waitHealthy(control, version: expectedNew)
+                    if relaunch { control.launch() }
+                    resolved = !relaunch || waitHealthy(control, version: expectedNew)
                 } catch {
                     note = try restoreAfterFailure(journal, fileManager: fm)
-                    if journal.wasRunning { control.launch() }
-                    resolved = !journal.wasRunning || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
+                    if relaunch { control.launch() }
+                    resolved = !relaunch || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
                 }
             } else {
                 note = try restoreAfterFailure(journal, fileManager: fm)
-                if journal.wasRunning { control.launch() }
-                resolved = !journal.wasRunning || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
+                if relaunch { control.launch() }
+                resolved = !relaunch || journal.previousVersion.map { waitHealthy(control, version: $0) } == true
             }
         } else if previousIsInPlace {
-            if journal.wasRunning { control.launch() }
-            resolved = !journal.wasRunning || waitHealthy(control, version: found!.version)
+            if relaunch { control.launch() }
+            resolved = !relaunch || waitHealthy(control, version: found!.version)
             note = "an interrupted install was undone; the previous app was put back"
         } else if journal.phase == "rolling_back", newIsInPlace {
             guard control.quit(), control.stopService() else { return "rollback remains blocked; journal kept" }
@@ -596,6 +616,10 @@ public enum Recipe {
     /// settled — a rollback that could not be put back keeps the journal for the next run.
     static func finishPromotion(_ paths: Paths, journal: InstallJournal, newVersion: String, control: AppControl,
                                 fileManager fm: FileManager) -> (note: String, resolved: Bool) {
+        if journal.testInstance == true {
+            return ("an interrupted install had finished putting \(newVersion) in place while a test "
+                    + "instance was running; it was left stopped", true)
+        }
         guard journal.wasRunning || journal.previousVersion == nil else {
             return ("an interrupted install had finished putting \(newVersion) in place while the app was "
                     + "not running; it was left stopped", true)
@@ -630,6 +654,9 @@ public enum Recipe {
         pending.phase = "rolling_back"
         try AtomicFile.writeJSON(pending, to: paths.journal)
         try putBack(paths, journal: pending, expectedVersion: previousVersion, fileManager: fm)
+        if journal.testInstance == true {
+            return RecipeResult(status: "rolled_back", reason: "the new version was not healthy; \(previousVersion) was put back and left stopped")
+        }
         control.launch()
         return waitHealthy(control, version: previousVersion)
             ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy within \(Int(control.healthTimeout)) s; \(previousVersion) is running again")
@@ -780,6 +807,50 @@ public enum LiveControl {
         return String(cString: buffer)
     }
 
+    /// The argv and environment a same-user process was started with, or nil when the kernel table
+    /// cannot be read. Used only to tell a test/hidden instance from the owner's ordinary launch.
+    public static func launchDetails(_ pid: pid_t) -> (argv: [String], environment: [String])? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        let argc = Int(buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) })
+        guard argc > 0, argc < 4096 else { return nil }
+        var index = MemoryLayout<Int32>.size
+        while index < size && buffer[index] != 0 { index += 1 }   // executable path
+        while index < size && buffer[index] == 0 { index += 1 }   // alignment NULs
+        func strings(limit: Int) -> [String] {
+            var out: [String] = []
+            while out.count < limit, index < size {
+                var end = index
+                while end < size && buffer[end] != 0 { end += 1 }
+                guard end > index else { index += 1; break }   // an empty entry ends this region
+                out.append(String(decoding: buffer[index..<end], as: UTF8.self))
+                index = end + 1
+            }
+            return out
+        }
+        return (strings(limit: argc), strings(limit: 4096))
+    }
+
+    /// A test/hidden run is the app's own desktop executable started with extra arguments, or with
+    /// an isolated HOME. The bundle's service processes are not the app and are ignored.
+    public static func isTestInstance(_ installedPath: String, shell: Shell, agents: URL) -> Bool {
+        guard let info = try? BundleInfo.read(installedPath) else { return false }
+        let desktop = realPath(installedPath + "/Contents/MacOS/" + info.executable)
+        let home = realPath(FileManager.default.homeDirectoryForCurrentUser.path)
+        let services = Set(serviceProcesses(installedPath, shell: shell, agents: agents).values)
+        for pid in processes(inBundle: installedPath) ?? [] where !services.contains(pid) {
+            guard let details = launchDetails(pid), let first = details.argv.first,
+                  realPath(first) == desktop else { continue }
+            if details.argv.count > 1 { return true }
+            if let entry = details.environment.first(where: { $0.hasPrefix("HOME=") }),
+               realPath(String(entry.dropFirst("HOME=".count))) != home { return true }
+        }
+        return false
+    }
+
     public static func isRunning(_ installedPath: String) -> Bool? {
         processes(inBundle: installedPath).map { !$0.isEmpty }
     }
@@ -876,7 +947,8 @@ public enum LiveControl {
                     // Start only the already-loaded job we stopped; never force or change its settings.
                     _ = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(label)"], timeout: 15)
                 }
-                _ = try? shell.run("/usr/bin/open", arguments: [installedPath], timeout: 30)
+                // Background and hidden: an install never brings an app or window to the desktop.
+                _ = try? shell.run("/usr/bin/open", arguments: ["-g", "-j", installedPath], timeout: 30)
             },
             stopService: {
                 guard let all = processes(inBundle: installedPath) else { return false }
@@ -904,7 +976,8 @@ public enum LiveControl {
             },
             healthTimeout: 60,
             serviceLabels: { Array(requiredServices.union(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)).sorted() },
-            restoreServices: { requiredServices = Set($0.filter(BundleInfo.isBundleID)); servicePlanFrozen = true })
+            restoreServices: { requiredServices = Set($0.filter(BundleInfo.isBundleID)); servicePlanFrozen = true },
+            isTestInstance: { isTestInstance(installedPath, shell: shell, agents: agents) })
     }
 
     /// The pids owning the *listening* socket on `port`, asked of `lsof` by port (absolute path,

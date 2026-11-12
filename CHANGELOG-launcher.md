@@ -4,6 +4,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.26 — 2026-11-13
+
+- After an update, the app is reopened in the background instead of opening a window in front of you.
+- An app that was running as a hidden or test copy is replaced but never reopened as your app.
+
 ## 0.1.25 — 2026-11-12
 
 - On large fleets the menu lists only the apps that need action, so it stays short; a saved switch shows every app.

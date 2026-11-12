@@ -105,6 +105,7 @@ final class FakeApp: @unchecked Sendable {
     var quits: [Bool]
     var stops: [Bool]
     var healthyVersions: Set<String>
+    var testInstance = false
     let installed: URL
     init(installed: URL, running: Bool = true, quits: [Bool] = [true], stops: [Bool] = [true], healthy: Set<String>) {
         self.installed = installed; self.running = running; self.quits = quits; self.stops = stops; self.healthyVersions = healthy
@@ -119,7 +120,17 @@ final class FakeApp: @unchecked Sendable {
                 let onDisk = (try? BundleInfo.read(self.installed.path))?.version
                 return self.running && onDisk == expected && self.healthyVersions.contains(expected)
             },
-            healthTimeout: 0.3, pollInterval: 0.05)
+            healthTimeout: 0.3, pollInterval: 0.05,
+            isTestInstance: { self.testInstance })
+    }
+}
+
+/// Records shell commands without running them, for the launch path.
+final class LaunchShell: Shell, @unchecked Sendable {
+    var calls: [String] = []
+    func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+        calls.append(([executable] + arguments).joined(separator: " "))
+        return ShellResult(exitCode: 0, stdout: "", stderr: "")
     }
 }
 
@@ -173,6 +184,38 @@ func recipeTests() {
         expect(rig.shell.detaches >= 1, "R22 DMG detached after staging")
         expect(rig.shell.calls.filter { $0.hasPrefix("/usr/bin/hdiutil detach") }.allSatisfy { $0.hasSuffix(" /dev/disk9s1") },
                "DMG cleanup uses the attached device ID, never a volume path")
+    }
+    // A test/hidden instance is replaced but never relaunched into the owner's profile (2026-11-13).
+    do {
+        let rig = RecipeRig("testinstance")
+        let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
+        app.testInstance = true
+        let res = try? rig.run(app).get()
+        expect(res?.status == "updated" && app.events == ["quit", "stop"],
+               "a test instance is replaced and left stopped (events \(app.events))")
+        expect(res?.reason?.contains("test instance") == true, "the report says a test instance was left stopped")
+        expect(marker(rig.installed) == "1.2.3", "the test-instance install still promoted the new version")
+    }
+    // The relaunch asks LaunchServices for a hidden background launch, never a visible window.
+    do {
+        let dir = tmpDir("launch-hidden")
+        let app = dir.appendingPathComponent("Foo.app")
+        makeApp(app, version: "1.0.0")
+        let shell = LaunchShell()
+        LiveControl.appDmg(app.path, shell: shell, agentsDirectory: dir.appendingPathComponent("agents")).launch()
+        expect(shell.calls.contains { $0.hasPrefix("/usr/bin/open -g -j ") },
+               "the relaunch is hidden and background (calls \(shell.calls))")
+    }
+    // The test-instance signal reads a real process's own argv.
+    do {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "sleep 20", "khu-test-marker"]
+        try? p.run()
+        let details = LiveControl.launchDetails(p.processIdentifier)
+        expect(details?.argv.contains("khu-test-marker") == true, "a process's own argv is readable")
+        if p.isRunning { p.terminate() }
+        p.waitUntilExit()
     }
     // R24 / S-pre: a DMG holding another app (right version) is refused before anything stops.
     do {
