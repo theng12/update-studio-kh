@@ -4,6 +4,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.28 — 2026-11-12
+
+- Includes Studio Launcher KH 0.1.25: on large fleets the menu lists only the apps that need action, so it stays short.
+- A saved switch shows every app, and small fleets still list everything.
+
 ## 1.0.27 — 2026-11-12
 
 - The helper always runs the version the update points at, and switches to a new one as soon as an update moves it, instead of keeping the old helper running.

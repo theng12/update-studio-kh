@@ -4,6 +4,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.25 — 2026-11-12
+
+- On large fleets the menu lists only the apps that need action, so it stays short; a saved switch shows every app.
+- Small fleets still list everything, and the choice is remembered.
+
 ## 0.1.24 — 2026-11-12
 
 - The helper switches to the version an update points at, even when the update came from somewhere else, so the running helper always matches the version shown.
