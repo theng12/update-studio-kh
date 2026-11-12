@@ -56,8 +56,11 @@ public enum HelperBundle {
         <key>CFBundleShortVersionString</key><string>\(xml($0))</string>
         <key>CFBundleVersion</key><string>\(xml($0))</string>
         """ } ?? ""
-        // The feed is HTTP on the tailnet; inside a bundle macOS applies ATS, unlike the bare
-        // binary this replaces. The Launcher's own Info.plist carries the same exception.
+        // The feed is plain HTTP on the tailnet; inside a bundle macOS applies ATS, unlike the bare
+        // binary this replaces. ATS matches neither an address range nor an IP literal in
+        // NSExceptionDomains ("100.64.0.0/10" sat here until 2026-11-12 and blocked every check
+        // with -1022), so plain HTTP is allowed here and the tailnet limit is kept where the feed
+        // URL is checked (FeedNetwork.feedURL). The Launcher's own Info.plist carries the same key.
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -72,7 +75,7 @@ public enum HelperBundle {
         \(versionKeys)
         <key>LSMinimumSystemVersion</key><string>13.0</string>
         <key>LSUIElement</key><true/>
-        <key>NSAppTransportSecurity</key><dict><key>NSExceptionDomains</key><dict><key>100.64.0.0/10</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict><key>ts.net</key><dict><key>NSIncludesSubdomains</key><true/><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict></dict></dict>
+        <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
         </dict>
         </plist>
         """

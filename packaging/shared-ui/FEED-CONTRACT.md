@@ -115,13 +115,19 @@ Rules:
 ## Two platform facts this session paid for
 
 - **ATS:** a bundled app doing plain HTTP through Apple's stack (`URLSession`,
-  WKWebView) to a numeric tailnet address is blocked on macOS 14+ unless its
-  `Info.plist` carries `NSAppTransportSecurity → NSExceptionDomains →
-  "100.64.0.0/10" → NSExceptionAllowsInsecureHTTPLoads = true`. Copy the block
-  from the Launcher's plist (`Sources/khu/Launcher.swift`, `FrontDoor` bundle
-  writer). A bare command-line tool is not subject to ATS, and neither is a
-  non-Apple HTTP client: Library does the check in its Go server and needs no
-  exception, while an app that fetches from its own `URLSession` still does.
+  WKWebView) to a tailnet address is blocked on macOS 14+ unless its
+  `Info.plist` carries `NSAppTransportSecurity → NSAllowsArbitraryLoads = true`.
+  `NSExceptionDomains` matches domain names only: an IP literal and a range
+  such as `"100.64.0.0/10"` are ignored (this repo shipped the CIDR key until
+  2026-11-12; it did nothing and every feed check failed with -1022), and
+  `NSAllowsLocalNetworking` covers only `.local` and single-label names. The
+  tailnet limit therefore lives where the feed URL is checked
+  (`FeedNetwork.feedURL`), not in ATS. Copy the key from the Launcher's plist
+  (`Sources/khu/Launcher.swift`, `FrontDoor` bundle writer) or the helper's
+  (`Sources/KHUStub/HelperBundle.swift`). A bare command-line tool is not
+  subject to ATS, and neither is a non-Apple HTTP client: Library does the
+  check in its Go server and needs no exception, while an app that fetches from
+  its own `URLSession` still does.
 - **Read it yourself, do not ask the helper for the answer:** the helper may be
   busy or its window may never appear (a slow mounted volume can hold it), so a
   check that depends on the helper answering can hang or lie. `publisher.json`

@@ -192,12 +192,9 @@ try:
     check((helper / "Contents/MacOS/Update Studio KH Helper").read_bytes() == (home / "Library/KHUpdater/bin/khu-stub").read_bytes(),
           "the helper bundle wraps the supervisor stub, not the agent binary")
     ats = helper_info.get("NSAppTransportSecurity", {})
-    domains = ats.get("NSExceptionDomains", {})
-    check(domains.get("100.64.0.0/10", {}).get("NSExceptionAllowsInsecureHTTPLoads") is True
-          and domains.get("ts.net", {}).get("NSIncludesSubdomains") is True
-          and domains.get("ts.net", {}).get("NSExceptionAllowsInsecureHTTPLoads") is True
-          and "NSAllowsArbitraryLoads" not in ats,
-          "the helper reaches the feed by tailnet address and MagicDNS name, and nothing else")
+    check(ats.get("NSAllowsArbitraryLoads") is True and "NSExceptionDomains" not in ats,
+          "the helper allows the feed's plain HTTP (ATS matches neither an IP literal nor a CIDR "
+          "range); FeedNetwork.feedURL is what holds the feed to the tailnet or loopback")
     before = installed_config.read_bytes(), plist.read_bytes()
     calls.unlink()
     loaded.unlink()
