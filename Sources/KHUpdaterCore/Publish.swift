@@ -157,7 +157,7 @@ public enum FeedPublisher {
             // a mirror host used to write this file, so on a primary host it could name a release
             // whose artifacts were retired long ago. Rotated from the file on disk, before the new
             // release replaces it, and before the keep-set is read below.
-            rotateRollbackRelease(in: feedDir)
+            try rotateRollbackRelease(in: feedDir)
             // Every pin this signed release carries, plus what the retention ledger still holds
             // as a recovery copy, read before the commit so an unreadable ledger refuses the
             // publish itself rather than quietly retiring the pins it names.
@@ -239,17 +239,19 @@ public enum FeedPublisher {
 
     /// `previous-release.json` becomes a copy of the release that is live right now, so a rollback
     /// always lands on the release before this one. Nothing is rotated on a first publish.
-    private static func rotateRollbackRelease(in dir: URL) {
+    private static func rotateRollbackRelease(in dir: URL) throws {
         let live = dir.appendingPathComponent("release.json")
         let previous = dir.appendingPathComponent("previous-release.json")
-        guard FileManager.default.fileExists(atPath: live.path) else { return }
-        let temporary = dir.appendingPathComponent(".previous-release.json.khu-tmp-\(UUID().uuidString)")
         let fm = FileManager.default
-        guard (try? fm.copyItem(at: live, to: temporary)) != nil else { return }
+        guard fm.fileExists(atPath: live.path) else { return }
+        let temporary = dir.appendingPathComponent(".previous-release.json.khu-tmp-\(UUID().uuidString)")
+        // A rotation that silently no-ops would leave the stale pointer exactly as it is, so a
+        // failure here refuses the publish.
+        try fm.copyItem(at: live, to: temporary)
         if fm.fileExists(atPath: previous.path) {
-            _ = try? fm.replaceItemAt(previous, withItemAt: temporary)
+            _ = try fm.replaceItemAt(previous, withItemAt: temporary)
         } else {
-            _ = try? fm.moveItem(at: temporary, to: previous)
+            try fm.moveItem(at: temporary, to: previous)
         }
         _ = try? fm.removeItem(at: temporary)
     }
