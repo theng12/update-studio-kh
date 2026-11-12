@@ -899,8 +899,9 @@ func agentAndServerTests() {
                "R19/R5-1 \(failure) failure moves the partial file to state trash before returning")
         client.downloadFailure = nil
         let retry = try? Agent.runOnce(config: config, http: client, shell: shell, control: control)
-        expect(retry?.updates == 1 && marker(installed) == "2.0.0" && app.running && client.downloads == 2,
-               "R5-1 a good run after \(failure) installs and launches the app")
+        expect(retry?.updates == 1 && marker(installed) == "2.0.0" && !app.running
+               && !app.events.contains("launch") && client.downloads == 2,
+               "R5-1 a good run after \(failure) installs and leaves the app closed (Automatic never opens it)")
     }
 
     // R25: the agent's high-water mark.
