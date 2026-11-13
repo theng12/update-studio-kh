@@ -383,6 +383,24 @@ func recipeTests() {
 }
 
 func supportTests() {
+    // The agent's log file rotates at a cap, keeping a fixed number of older copies, because a log
+    // that silently stops being written hid a working agent for hours (2026-11-13, 1301).
+    do {
+        let dir = tmpDir("log-rotate")
+        let log = dir.appendingPathComponent("agent.log")
+        try! Data(repeating: 65, count: 64).write(to: log)
+        try! Data("one".utf8).write(to: log.appendingPathExtension("1"))
+        LogFile.rotateIfNeeded(log, maxBytes: 32, keep: 3)
+        let live = (try? Data(contentsOf: log))?.count
+        let first = (try? Data(contentsOf: log.appendingPathExtension("1")))?.count
+        let second = (try? String(contentsOf: log.appendingPathExtension("2")))
+        expect(live == 0 && first == 64 && second == "one",
+               "SUP1 the log rotates at its cap: the live file restarts empty and older copies shift")
+        let small = dir.appendingPathComponent("small.log")
+        try! Data("keep".utf8).write(to: small)
+        LogFile.rotateIfNeeded(small, maxBytes: 32, keep: 3)
+        expect((try? String(contentsOf: small)) == "keep", "SUP1 a log under the cap is left alone")
+    }
     // S9: a private key never exists with wider permissions than asked for.
     do {
         let dir = tmpDir("key")
@@ -2672,9 +2690,10 @@ func helperTests() {
                && !mine.automatic("a", page: false, pageAt: ISO.string(t1.addingTimeInterval(1)), config: true)
                && mine.automatic("a", page: false, pageAt: nil, config: false)
                && mine.automatic("a", page: nil, pageAt: nil, config: false)
+               && mine.automatic("a", page: false, pageAt: ISO.string(t1), config: false)
                && !HelperSettings().automatic("a", page: nil, pageAt: nil, config: false)
                && HelperSettings().automatic("a", page: true, pageAt: nil, config: false),
-               "H1 the later switch wins, a timeless page value counts as older, and the config is the fallback")
+               "H1 the later switch wins, a tie is the Mac's, a timeless page value counts as older, and the config is the fallback")
     }
     // H2. A switch on the Mac turns Automatic on, reaches the page in one report, and the reply carries its time.
     do {
@@ -2767,8 +2786,8 @@ func helperTests() {
         let echoed = HelperSettings(automatic: ["demo": .init(on: true, at: at)])
         let same = echoed.automaticDecision("demo", page: true, pageAt: at, config: false)
         let conflict = echoed.automaticDecision("demo", page: false, pageAt: at, config: true)
-        expect(same.on && same.origin == .mac && !conflict.on && conflict.origin == .page,
-               "H9e an echoed Mac switch keeps its origin; conflicting equal-time values still follow the page")
+        expect(same.on && same.origin == .mac && conflict.on && conflict.origin == .mac,
+               "H9e an echoed Mac switch keeps its origin; an equal-time page value is not provably later, so this Mac's switch wins")
         // (f) A drive's copy that cannot be used keeps its own reason on the row that shows it.
         let root = tmpDir("h9-ssd")
         let bytes = Data("demo installer bytes".utf8)

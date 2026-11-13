@@ -162,6 +162,29 @@ public enum FileLock {
     }
 }
 
+/// The agent's own log file, which launchd opens with O_APPEND: a rotated copy keeps the writer
+/// on the same name, because the next line lands at whatever the live file's end now is. Every
+/// retired copy goes to `_trash`, never away.
+public enum LogFile {
+    public static func rotateIfNeeded(_ url: URL, maxBytes: Int = 8 << 20, keep: Int = 3) {
+        let fm = FileManager.default
+        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size >= maxBytes else { return }
+        let trash = url.deletingLastPathComponent().appendingPathComponent("_trash")
+        for index in stride(from: keep, through: 1, by: -1) {
+            let from = index == 1 ? url : url.appendingPathExtension("\(index - 1)")
+            let to = url.appendingPathExtension("\(index)")
+            guard fm.fileExists(atPath: from.path) else { continue }
+            if fm.fileExists(atPath: to.path) { _ = try? Trash.move(to, into: trash) }
+            _ = try? fm.moveItem(at: from, to: to)
+            if index == 1 {
+                // The live name is free again: the writer's next append starts a fresh file.
+                fm.createFile(atPath: url.path, contents: nil)
+            }
+        }
+        truncate(url.path, 0)
+    }
+}
+
 public enum JSON {
     public static func encode<T: Encodable>(_ value: T, pretty: Bool = true) -> Data {
         let encoder = JSONEncoder()

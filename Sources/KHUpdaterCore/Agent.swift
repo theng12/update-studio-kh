@@ -553,6 +553,9 @@ public enum Agent {
             }
         }
         Catalog.remember(ssd, feed: feed, in: stateDir)
+        result.notes += adoptInstalledApps(config: &config, feed: feed, folders: appFolders)
+        result.notes += repairConfiguredPaths(config: &config, feed: feed, folders: appFolders, stateDir: stateDir,
+                                              installed: &installed, build: &installedBuild, health: &health)
         let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))
         upgradeObservedOnlyRecipes(config: &config, catalog: catalog, feed: feed, stateDir: stateDir)
         let registrationErrors = try registerLauncherApps(requested, catalog: catalog, config: &config, stateDir: stateDir, folders: appFolders)
@@ -660,13 +663,27 @@ public enum Agent {
                 todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false, false))
             }
         }
-        // A skip is a decision, not silence: an app left behind because its live sources say it
-        // updates itself says so in the run's notes, instead of showing up only as `updates=0`.
-        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
-        where updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app }) {
-            guard let entry = feed.apps[app], let current = installed[app],
-                  VersionCompare.isNewer(entry.version, than: current) else { continue }
-            result.notes.append("\(app): skipped — the live sources mark it as updating itself")
+        // A skip is a decision, not silence: every feed app left behind says why, once, with the
+        // origin of the rule that stopped it — never only `updates=0` in a log nobody can explain.
+        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key }) {
+            guard let entry = feed.apps[app], !todo.contains(where: { $0.app == app }) else { continue }
+            let current = installed[app]
+            guard current == nil || VersionCompare.isNewer(entry.version, than: current!) else { continue }
+            if updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app }) {
+                result.notes.append("\(app): skipped — the live sources mark it as updating itself")
+            } else if !publisherAvailable {
+                result.notes.append("\(app): skipped — the publisher is unavailable, so remote switches are unknown")
+            } else if helper.paused(at: now) {
+                result.notes.append("\(app): skipped — automatic updates are paused on this Mac")
+            } else if !helper.installsAutomatically {
+                result.notes.append("\(app): skipped — automatic installs are set to manual on this Mac")
+            } else if let sha = memory.rejected[app], sha == entry.sha256 {
+                result.notes.append("\(app): skipped — this exact version failed here; a new artifact clears it")
+            } else {
+                let decision = helper.automaticDecision(app, page: orders.automatic[app],
+                                                        pageAt: orders.automaticAt?[app], config: cfg.automatic)
+                if !decision.on { result.notes.append("\(app): skipped — automatic is off (\(decision.origin.words))") }
+            }
         }
         try remember()
 

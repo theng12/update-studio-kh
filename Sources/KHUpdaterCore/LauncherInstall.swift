@@ -31,6 +31,75 @@ extension Agent {
         try? AtomicFile.writeJSON(saved, to: file)
     }
 
+    /// Every configured app must name a bundle that is really there. A path that is gone (a renamed
+    /// app, a hand-written config) is repaired from the signed feed's bundle name, else from the
+    /// app's own bundle ID in the usual Applications folders. The repair is said out loud once per
+    /// run, in one line, instead of the app being skipped in silence.
+    static func repairConfiguredPaths(config: inout AgentConfig, feed: Feed, folders: [URL], stateDir: URL,
+                                      installed: inout [String: String], build: inout [String: String],
+                                      health: inout [String: String]) -> [String] {
+        let fm = FileManager.default
+        var notes: [String] = []
+        let file = stateDir.appendingPathComponent("launcher-apps.json")
+        var saved = (try? AtomicFile.readJSON([String: AppConfig].self, from: file)) ?? [:]
+        var savedChanged = false
+        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key }) where cfg.recipe != "updater" {
+            let want = cfg.bundleID ?? feed.apps[app]?.bundleID
+            let existing = try? BundleInfo.read(cfg.bundlePath)
+            if let existing, want == nil || existing.identifier == want { continue }
+            // The candidate names: the feed's own bundle name first, then the configured one.
+            var names: [String] = []
+            if let name = feed.apps[app]?.bundleName { names.append(name) }
+            let configuredName = URL(fileURLWithPath: cfg.bundlePath).lastPathComponent
+            if !configuredName.isEmpty, !names.contains(configuredName) { names.append(configuredName) }
+            var candidates: [URL] = names.map { $0 }.flatMap { name in
+                folders.map { $0.appendingPathComponent(name) }.filter { fm.fileExists(atPath: $0.path) }
+            }
+            if candidates.isEmpty, let want {
+                candidates = folders.flatMap { folder in
+                    ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).sorted().compactMap { name in
+                        guard name.hasSuffix(".app") else { return nil }
+                        let path = folder.appendingPathComponent(name)
+                        return (try? BundleInfo.read(path.path))?.identifier == want ? path : nil
+                    }
+                }
+            }
+            let matches = candidates.filter { candidate in
+                guard let info = try? BundleInfo.read(candidate.path) else { return false }
+                return want == nil || info.identifier == want
+            }
+            guard let found = matches.first else { continue }  // nothing installed: a first install uses the configured path
+            var repaired = cfg
+            repaired.bundlePath = found.path
+            config.apps[app] = repaired
+            if saved[app] != nil { saved[app] = repaired; savedChanged = true }
+            let because = fm.fileExists(atPath: cfg.bundlePath) ? "holds another app" : "is missing"
+            notes.append("\(app): configured bundle path \(cfg.bundlePath) \(because); using \(found.path)")
+            if let info = try? BundleInfo.read(found.path) {
+                installed[app] = info.version
+                if let value = info.build { build[app] = value }
+            }
+            switch LiveControl.isRunning(found.path) {
+            case true?: health[app] = "running"
+            case false?: health[app] = "not running"
+            case nil: health[app] = "unknown"
+            }
+        }
+        if savedChanged { try? AtomicFile.writeJSON(saved, to: file) }
+        return notes
+    }
+
+    /// A Mac that was only just enrolled has nothing but the helper configured. Every app the signed
+    /// feed names and this Mac already has is adopted by its bundle ID — never by a path, never with
+    /// a hand edit — so a Hub-only mini updates through the Launcher on its first run.
+    static func adoptInstalledApps(config: inout AgentConfig, feed: Feed, folders: [URL]) -> [String] {
+        guard config.apps.keys.allSatisfy({ $0 == "updater" }) else { return [] }
+        let discovered = Catalog.discover(config: config, known: Catalog.knownBundles(feed: feed, ssd: []), folders: folders)
+        guard !discovered.isEmpty else { return [] }
+        config.apps = Catalog.adopting(config.apps, discovered: discovered)
+        return discovered.keys.sorted().map { "\($0): adopted this Mac's installed app from the signed feed" }
+    }
+
     /// Register before staging so recovery can find even an interrupted first installation.
     static func registerLauncherApps(_ requested: Set<String>, catalog: [CatalogEntry], config: inout AgentConfig,
                                      stateDir: URL, folders: [URL]) throws -> [String: String] {

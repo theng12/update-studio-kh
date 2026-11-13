@@ -566,5 +566,45 @@ func standaloneLauncherTests() {
                    && !fm.fileExists(atPath: folder.appendingPathComponent(".\(storyName).khu-staging").path),
                    "SL23 the quiet hand install leaves no journal or staged copy")
         }
+        // A configured path that no longer exists is repaired by bundle ID from the feed's own
+        // bundle name, said out loud once, and the install goes ahead instead of skipping.
+        do {
+            let (_, cfg, folder, _, shell, http) = setup("stale-path")
+            _ = makeApp(folder.appendingPathComponent("New KH.app"), version: "1.0", id: bundleID)
+            var local = cfg
+            local.apps[id] = AppConfig(bundlePath: folder.appendingPathComponent("Old KH.app").path, recipe: "app-dmg",
+                                       automatic: true, bundleID: bundleID)
+            let result = try? Agent.runOnce(config: local, http: http, shell: shell, control: { _, _ in control },
+                                            requested: [id], appFolders: [folder])
+            expect(result?.notes.contains { $0.contains("\(id): configured bundle path") && $0.contains("is missing; using")
+                   && $0.contains(folder.appendingPathComponent("New KH.app").path) } == true,
+                   "SL24 a missing configured path is repaired from the feed's bundle name, and the run says so")
+            expect(result?.apps.first { $0.app == id }?.installed == "2.0" && http.downloads == 1,
+                   "SL24 the repaired app updates from the feed")
+        }
+        // A Mac enrolled with only the helper adopts every installed app the signed feed names,
+        // by bundle ID, on its first run — and updates it.
+        do {
+            let (_, cfg, folder, _, shell, http) = setup("sparse-adopt")
+            _ = makeApp(folder.appendingPathComponent("New KH.app"), version: "1.0", id: bundleID)
+            try! HelperSettings().save(to: URL(fileURLWithPath: cfg.stateDir))
+            let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(cfg.apps.isEmpty && result?.notes.contains { $0.hasPrefix("\(id): adopted") } == true
+                   && result?.apps.first { $0.app == id }?.installed == "2.0" && http.downloads == 1,
+                   "SL25 a first run with only the helper adopts the installed app by bundle ID and updates it")
+        }
+        // A skipped app names the rule that stopped it, in that rule's own words.
+        do {
+            let (_, cfg, folder, _, shell, http) = setup("skip-reason")
+            _ = makeApp(folder.appendingPathComponent("New KH.app"), version: "1.0", id: bundleID)
+            try! HelperSettings().save(to: URL(fileURLWithPath: cfg.stateDir))
+            var local = cfg
+            local.apps[id] = AppConfig(bundlePath: folder.appendingPathComponent("New KH.app").path, recipe: "app-dmg",
+                                       automatic: false, bundleID: bundleID)
+            let result = try? Agent.runOnce(config: local, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(result?.notes.contains("\(id): skipped — automatic is off (\(HelperSettings.AutomaticOrigin.config.words))") == true
+                   && http.downloads == 0,
+                   "SL26 a skipped app says which rule stopped it, with that rule's own words")
+        }
     }
 }

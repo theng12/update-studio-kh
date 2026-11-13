@@ -62,12 +62,11 @@ public struct HelperSettings: Codable, Sendable, Equatable {
     /// is this same decision's value, so the explanation cannot drift from what the agent does.
     public func automaticDecision(_ app: String, page: Bool?, pageAt: String?, config: Bool) -> AutomaticDecision {
         if let mine = automatic[app], let at = ISO.date(mine.at),
-           page == nil || pageAt.flatMap(ISO.date).map({ at > $0 }) ?? true {
-            return AutomaticDecision(on: mine.on, origin: .mac)
-        }
-        // A successful report echoes this Mac's switch with the same timestamp and value.
-        if let mine = automatic[app], let at = ISO.date(mine.at),
-           pageAt.flatMap(ISO.date) == at, page == mine.on {
+           page == nil || pageAt.flatMap(ISO.date).map({ at >= $0 }) ?? true {
+            // A page value can only win by being provably later. A value stamped with this Mac's
+            // own switch time — the echo of the report, or a tie — is not later, so the person's
+            // switch at the Mac decides. This is the case that silently turned Hub and the Launcher
+            // off across the fleet while every Mac's own switch said on.
             return AutomaticDecision(on: mine.on, origin: .mac)
         }
         return AutomaticDecision(on: page ?? config, origin: page == nil ? .config : .page)

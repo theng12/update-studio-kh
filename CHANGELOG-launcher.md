@@ -7,6 +7,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 0.1.32 — 2026-11-13
 
+- Your Mac's own Automatic switch now wins whenever the update page's value is not provably later, including a publisher default. Across this fleet that turns Hub and the Launcher back on for the machines whose records defaulted them off (56 of 63 records carried "hub/updater off" as a default) — the switches themselves already said on.
+- A configured app path that no longer exists (a renamed app) is repaired from the signed feed's own bundle name and said out loud once, instead of the app being skipped in silence.
+- A Mac that has just been enrolled adopts every KH app it already has whose bundle ID is in the signed feed, by bundle ID, on its first run — a Hub-only mini updates through the Launcher with no hand-edited config.
+- Every skipped app now says why in the log, with the rule's own origin, for example: hub: skipped — automatic is off (This Mac's default).
+- The agent's log lines appear immediately instead of waiting in a buffer, and the log rotates at 8 MB keeping three older copies, so a quiet log can no longer hide a working agent.
 - The saved app list is repaired as well: an app an older setup recorded as updating itself does not fall back to that after it is moved or replaced.
 
 ## 0.1.31 — 2026-11-13

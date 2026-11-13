@@ -309,6 +309,17 @@ Vendor installs share the same run lock, machine-bound signed-order validation, 
    artifact changes or an explicit order arrives;
 6. fetch `SignedReply` of orders, verify the signature and freshness, refuse one for another Mac.
 
+After the feed is verified, before any order runs, the config is reconciled with what is really on
+disk. A configured app whose bundle path is gone (a renamed app, a hand-written config) is repaired
+from the signed feed's own `bundleName`, else from the app's bundle ID in the usual Applications
+folders, and one line says so (`hub: configured bundle path … is missing; using …`) instead of the
+app being skipped in silence. A Mac whose config is empty apart from the helper adopts every app
+the signed feed names and this Mac already has, by bundle ID — the first-run path for a Hub-only
+node. Every feed app left behind by Automatic logs the rule that stopped it, with that rule's own
+origin (`hub: skipped — automatic is off (This Mac's default)`). Stdout is line-buffered so those
+lines land immediately, and the agent's log rotates at 8 MB, keeping three older copies in
+`~/Library/Logs/_trash`.
+
 Feed-host status is re-observed through `launchctl print` before each status report and saved
 with its check time. A loaded job or successful bootstrap alone never claims a running process;
 only a running state with a positive PID does. Compact observed status fits the existing 64-byte
@@ -415,15 +426,17 @@ process (no Dock icon, no second app): each app's version and state, Update now,
 Now, an Automatic switch per app and a 24-hour pause, stored in `state/helper.json`. Each switch has
 its time; the agent reports them on `/status` and the publisher keeps whichever change, the Mac's or
 the page's, is later. The signed `/commands` reply carries `automaticAt` so the agent applies the
-same rule. A pause holds Automatic only: the owner's orders and Update now still run. Story and Hub
-stay status-only and get no switch. `KHU_NO_MENU` turns the icon off.
+same rule: a page value wins only by being provably later — a value stamped with this Mac's own
+switch time (the echo of a report, or a tie) is not later, so the switch at the Mac decides, and a
+publisher default never acts as a page value. A pause holds Automatic only: the owner's orders and
+Update now still run. `KHU_NO_MENU` turns the icon off.
 
 **What the Launcher says about a policy, a source and its own data (unreleased).** A display never works
 out a policy of its own: `HelperSettings.automaticDecision` returns the value the agent follows and
 which of the three inputs (`mac` switch, `page` value, `config` default) it came from, and the row's
-value and the origin caption are that one answer in `AutomaticOrigin.words`. A controller echo with
-an identical timestamp and value retains this Mac's origin; a conflicting equal-time value still
-follows the controller, preserving the existing value rule. The menu-bar submenu,
+value and the origin caption are that one answer in `AutomaticOrigin.words`. A controller value
+stamped with this Mac's own switch time — the echo of a report, or a tie — retains this Mac's origin
+and value; only a provably later controller change wins. The menu-bar submenu,
 the page's More menu and the Settings sheet repeat it, they never resolve it again. There is still no
 reset-to-inherited control, and the reason is concrete rather than a choice of ours: a report merges
 each switch it carries into the controller's record per key and never drops one it did not carry, so

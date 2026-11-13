@@ -1,9 +1,20 @@
 import Foundation
 import CryptoKit
 
+/// The launchd job's own log path; another plist or an isolated test home simply has no file here.
+private func rotateAgentLog() {
+    LogFile.rotateIfNeeded(FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/khupdater-agent.log"))
+}
+
 @main
 struct KHUMain {
     static func main() {
+        // launchd writes our stdout into a file, which Swift then block-buffers: a run's lines sat
+        // invisible in a 4 KB buffer until the process restarted, and the log looked dead while
+        // installs were happening. Line-buffered stdout makes every "agent run:" land at once.
+        setvbuf(stdout, nil, _IOLBF, 0)
+        rotateAgentLog()
         // An app launched by LaunchServices inherits 256 descriptors, and an install that runs
         // ditto, codesign and launchctl then dies with -24 "Too many open files". Raise our own
         // limit at start instead of relying on the launchd job's plist, which only covers the job.
@@ -378,6 +389,7 @@ struct KHUMain {
                         menu?.finished(nil, error: "\(error)")
                     }
                     if cfg.once { break }
+                    rotateAgentLog()
                     let seconds = Double(max(1, cfg.intervalMinutes) * 60)
                     if let menu { requested = menu.waitForNextRun(seconds: seconds) } else { Thread.sleep(forTimeInterval: seconds) }
                 } while true
