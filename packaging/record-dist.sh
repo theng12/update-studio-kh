@@ -25,7 +25,8 @@ case "$MODE" in
     fi
     # Rotate straight away: keeping the latest two is never a hand step. Anything older goes to the
     # repo's _trash, and the shared tool never moves a file its ledger or a pin still names.
-    [ -f "$DIST/.release-dist.json" ] && "$0" rotate "$APP" "$VERSION"
+    # A first build in a fresh checkout has no ledger yet; that is not a failed copy.
+    if [ -f "$DIST/.release-dist.json" ]; then "$0" rotate "$APP" "$VERSION"; fi
     ;;
   rotate)
     DRY=""
