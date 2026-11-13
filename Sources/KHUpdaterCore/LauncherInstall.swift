@@ -92,8 +92,8 @@ extension Agent {
     /// A Mac that was only just enrolled has nothing but the helper configured. Every app the signed
     /// feed names and this Mac already has is adopted by its bundle ID — never by a path, never with
     /// a hand edit — so a Hub-only mini updates through the Launcher on its first run.
-    static func adoptInstalledApps(config: inout AgentConfig, feed: Feed, folders: [URL]) -> [String] {
-        guard config.apps.keys.allSatisfy({ $0 == "updater" }) else { return [] }
+    static func adoptInstalledApps(config: inout AgentConfig, feed: Feed, folders: [URL], sparseConfig: Bool) -> [String] {
+        guard sparseConfig else { return [] }
         let discovered = Catalog.discover(config: config, known: Catalog.knownBundles(feed: feed, ssd: []), folders: folders)
         guard !discovered.isEmpty else { return [] }
         config.apps = Catalog.adopting(config.apps, discovered: discovered)

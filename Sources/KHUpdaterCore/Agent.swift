@@ -340,6 +340,10 @@ public enum Agent {
                                requested: Set<String> = [], installing: ((String?) -> Void)? = nil,
                                ssd: [SSDSource] = [], appFolders: [URL] = Catalog.applicationFolders,
                                connectionFile: URL? = nil) throws -> AgentRunResult {
+        // A config that names only the helper is a Mac that was just enrolled: it seeds itself from
+        // the signed feed and what is installed here (see `adoptInstalledApps`). Read before this
+        // run's own discovery adds anything, so "just enrolled" stays a fact about the saved file.
+        let sparseConfig = config.apps.keys.allSatisfy { $0 == "updater" }
         // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
         let stateURL = URL(fileURLWithPath: config.stateDir)
         var config = config
@@ -352,7 +356,8 @@ public enum Agent {
         return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"), wait: false) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
-                          requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile, appFolders: appFolders)
+                          requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile,
+                          appFolders: appFolders, sparseConfig: sparseConfig)
         }
     }
 
@@ -363,7 +368,8 @@ public enum Agent {
     static func runLocked(config: AgentConfig, stateDir: URL, http: HTTPClient, shell: Shell,
                           control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
                           requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = [],
-                          connectionFile: URL? = nil, appFolders: [URL] = Catalog.applicationFolders) throws -> AgentRunResult {
+                          connectionFile: URL? = nil, appFolders: [URL] = Catalog.applicationFolders,
+                          sparseConfig: Bool = false) throws -> AgentRunResult {
         DownloadControl.reset()
         var config = config
         let registrations = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("launcher-apps.json")) ?? [:]
@@ -553,7 +559,7 @@ public enum Agent {
             }
         }
         Catalog.remember(ssd, feed: feed, in: stateDir)
-        result.notes += adoptInstalledApps(config: &config, feed: feed, folders: appFolders)
+        result.notes += adoptInstalledApps(config: &config, feed: feed, folders: appFolders, sparseConfig: sparseConfig)
         result.notes += repairConfiguredPaths(config: &config, feed: feed, folders: appFolders, stateDir: stateDir,
                                               installed: &installed, build: &installedBuild, health: &health)
         let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))
