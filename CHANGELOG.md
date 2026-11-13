@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.36 — 2026-11-13
+
+- Includes Studio Launcher KH 0.1.34: a newly enrolled Mac registers the KH apps it already has once, with a one-line "adopted" note, instead of rediscovering them silently every cycle.
+
 ## 1.0.35 — 2026-11-13
 
 - Includes Studio Launcher KH 0.1.33: the path-repair line appears for every repair, including one found during the startup check.

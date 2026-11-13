@@ -92,12 +92,29 @@ extension Agent {
     /// A Mac that was only just enrolled has nothing but the helper configured. Every app the signed
     /// feed names and this Mac already has is adopted by its bundle ID — never by a path, never with
     /// a hand edit — so a Hub-only mini updates through the Launcher on its first run.
-    static func adoptInstalledApps(config: inout AgentConfig, feed: Feed, folders: [URL], sparseConfig: Bool) -> [String] {
+    static func adoptInstalledApps(config: inout AgentConfig, feed: Feed, folders: [URL], sparseConfig: Bool,
+                                   stateDir: URL) -> [String] {
         guard sparseConfig else { return [] }
         let discovered = Catalog.discover(config: config, known: Catalog.knownBundles(feed: feed, ssd: []), folders: folders)
         guard !discovered.isEmpty else { return [] }
         config.apps = Catalog.adopting(config.apps, discovered: discovered)
+        persistAdoptions(Array(discovered.keys), config: config, stateDir: stateDir)
         return discovered.keys.sorted().map { "\($0): adopted this Mac's installed app from the signed feed" }
+    }
+
+    /// Saves the adopted apps beside the other Launcher registrations, so a Mac that has just been
+    /// enrolled keeps what it found instead of rediscovering it (and reprinting the note) each run.
+    static func persistAdoptions(_ ids: [String], config: AgentConfig, stateDir: URL) {
+        let file = stateDir.appendingPathComponent("launcher-apps.json")
+        var saved = (try? AtomicFile.readJSON([String: AppConfig].self, from: file)) ?? [:]
+        var changed = false
+        for id in ids where saved[id] == nil {
+            guard let cfg = config.apps[id] else { continue }
+            saved[id] = cfg
+            changed = true
+        }
+        guard changed else { return }
+        try? AtomicFile.writeJSON(saved, to: file)
     }
 
     /// Register before staging so recovery can find even an interrupted first installation.

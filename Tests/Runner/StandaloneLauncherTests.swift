@@ -592,6 +592,13 @@ func standaloneLauncherTests() {
             expect(cfg.apps.isEmpty && result?.notes.contains { $0.hasPrefix("\(id): adopted") } == true
                    && result?.apps.first { $0.app == id }?.installed == "2.0" && http.downloads == 1,
                    "SL25 a first run with only the helper adopts the installed app by bundle ID and updates it")
+            let saved = try? AtomicFile.readJSON([String: AppConfig].self,
+                                                 from: URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("launcher-apps.json"))
+            expect(saved?[id]?.bundlePath == folder.appendingPathComponent("New KH.app").path,
+                   "SL25 the adopted app is registered, so the next run starts with it")
+            let again = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            expect(again?.notes.contains { $0.hasPrefix("\(id): adopted") } == false,
+                   "SL25 the adoption line is said once, not on every cycle")
         }
         // A skipped app names the rule that stopped it, in that rule's own words.
         do {

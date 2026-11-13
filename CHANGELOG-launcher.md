@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.34 — 2026-11-13
+
+- A Mac that has just been enrolled keeps the apps it found: each installed KH app the signed feed names is registered once, with a one-line "adopted this Mac's installed app" note, instead of being rediscovered silently on every cycle.
+
 ## 0.1.33 — 2026-11-13
 
 - The one-line path repair now appears for every repair, including one found during the startup check, so a renamed app's old path is always named in the log.

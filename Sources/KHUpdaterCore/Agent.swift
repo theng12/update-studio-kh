@@ -347,10 +347,21 @@ public enum Agent {
         // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
         let stateURL = URL(fileURLWithPath: config.stateDir)
         var config = config
-        var repairNotes: [String] = []
+        // Saved registrations join the config before discovery, so an app adopted last run is not
+        // found (and announced) again on every cycle.
+        let savedRegistrations = try mergeRegistrations(config: config, stateDir: stateURL)
+        config = savedRegistrations.config
+        let startingNotes = savedRegistrations.notes
+        var repairNotes: [String] = [], adoptedIDs: [String] = []
         config.apps = Catalog.adopting(config.apps,
                                        discovered: Catalog.discover(config: config, known: Catalog.known(in: stateURL, ssd: ssd), folders: appFolders),
-                                       repairs: &repairNotes)
+                                       repairs: &repairNotes, adopted: &adoptedIDs)
+        // An app found on this Mac is kept: its registration is saved, so the next run starts with
+        // it and the one-line note is said once, not on every cycle.
+        if !adoptedIDs.isEmpty {
+            persistAdoptions(adoptedIDs, config: config, stateDir: stateURL)
+            repairNotes += adoptedIDs.sorted().map { "\($0): adopted this Mac's installed app" }
+        }
         try validate(config)
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
@@ -359,8 +370,23 @@ public enum Agent {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
                           requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile,
-                          appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: repairNotes)
+                          appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: startingNotes + repairNotes)
         }
+    }
+
+    /// The saved Launcher registrations, merged under the config's own entries. Both the pre-run
+    /// discovery and the locked run use it, so an app adopted last run is not found again.
+    static func mergeRegistrations(config: AgentConfig, stateDir: URL) throws -> (config: AgentConfig, notes: [String]) {
+        let registrations = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("launcher-apps.json")) ?? [:]
+        var merged = config
+        var notes: [String] = []
+        for (app, registration) in registrations.sorted(by: { $0.key < $1.key }) where merged.apps[app] == nil {
+            var candidate = merged
+            candidate.apps[app] = registration
+            do { try validate(candidate); merged = candidate }
+            catch { notes.append("\(app): saved Launcher registration was skipped: \(error)") }
+        }
+        return (merged, notes)
     }
 
     static func liveControl(_ cfg: AppConfig, shell: Shell) -> AppControl {
@@ -374,15 +400,10 @@ public enum Agent {
                           sparseConfig: Bool = false, startingNotes: [String] = []) throws -> AgentRunResult {
         DownloadControl.reset()
         var config = config
-        let registrations = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("launcher-apps.json")) ?? [:]
+        let mergedRegistrations = try mergeRegistrations(config: config, stateDir: stateDir)
+        config = mergedRegistrations.config
         try validate(config)
-        var registrationNotes: [String] = []
-        for (app, registration) in registrations.sorted(by: { $0.key < $1.key }) where config.apps[app] == nil {
-            var candidate = config
-            candidate.apps[app] = registration
-            do { try validate(candidate); config = candidate }
-            catch { registrationNotes.append("\(app): saved Launcher registration was skipped: \(error)") }
-        }
+        let registrationNotes = mergedRegistrations.notes
         let vendors = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("vendor-apps.json")) ?? [:]
         config.apps.merge(vendors) { configured, _ in configured }
         // From the Launcher: "<app>" installs or updates, "reinstall:<app>" installs the same
@@ -561,7 +582,8 @@ public enum Agent {
             }
         }
         Catalog.remember(ssd, feed: feed, in: stateDir)
-        result.notes += adoptInstalledApps(config: &config, feed: feed, folders: appFolders, sparseConfig: sparseConfig)
+        result.notes += adoptInstalledApps(config: &config, feed: feed, folders: appFolders, sparseConfig: sparseConfig,
+                                           stateDir: stateDir)
         result.notes += repairConfiguredPaths(config: &config, feed: feed, folders: appFolders, stateDir: stateDir,
                                               installed: &installed, build: &installedBuild, health: &health)
         let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))

@@ -325,18 +325,23 @@ public enum Catalog {
     /// The config with the apps `discover` found: a configured app whose bundle is gone takes the
     /// path its bundle id now lives at, keeping the owner's recipe and Automatic choice.
     public static func adopting(_ apps: [String: AppConfig], discovered: [String: AppConfig]) -> [String: AppConfig] {
-        var ignored: [String] = []
-        return adopting(apps, discovered: discovered, repairs: &ignored)
+        var ignored: [String] = [], ignoredAdopted: [String] = []
+        return adopting(apps, discovered: discovered, repairs: &ignored, adopted: &ignoredAdopted)
     }
 
-    /// The same merge, also listing each repaired path in one line: a renamed app is never fixed
-    /// in silence. Discovery can find the app before the feed is read, so this is the earliest
-    /// place the repair is known.
+    /// The same merge, also listing each repaired path and each newly adopted app in one line:
+    /// neither a renamed app nor a first-run discovery happens in silence.
     public static func adopting(_ apps: [String: AppConfig], discovered: [String: AppConfig],
                                 repairs: inout [String]) -> [String: AppConfig] {
+        var ignoredAdopted: [String] = []
+        return adopting(apps, discovered: discovered, repairs: &repairs, adopted: &ignoredAdopted)
+    }
+
+    public static func adopting(_ apps: [String: AppConfig], discovered: [String: AppConfig],
+                                repairs: inout [String], adopted: inout [String]) -> [String: AppConfig] {
         var merged = apps
         for (id, found) in discovered {
-            guard var existing = merged[id] else { merged[id] = found; continue }
+            guard var existing = merged[id] else { merged[id] = found; adopted.append(id); continue }
             // The helper is a binary the stub runs, not an app bundle: discovery never gives it a
             // path (which would then collide with the Launcher app's own entry).
             guard existing.recipe != "updater" else { continue }
