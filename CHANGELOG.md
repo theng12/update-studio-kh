@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.35 — 2026-11-13
+
+- Includes Studio Launcher KH 0.1.33: the path-repair line appears for every repair, including one found during the startup check.
+
 ## 1.0.34 — 2026-11-13
 
 - Your Mac's own Automatic switch now wins whenever the update page's value is not provably later, including a publisher default. Across this fleet that turns Hub and the Launcher back on for the machines whose records defaulted them off (56 of 63 records carried "hub/updater off" as a default); those Macs' own switches already said on.

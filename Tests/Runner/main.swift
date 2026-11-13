@@ -2295,6 +2295,13 @@ func launcherTests() {
         expect(moved["hub"]?.bundlePath == renamed.appendingPathComponent("Hub Studio KH.app").path
                && moved["hub"]?.automatic == false && moved["hub"]?.recipe == "status" && moved["hub"]?.bundleID == "com.t.hub",
                "L2b a renamed app is followed by its bundle id, keeping its key, recipe and Automatic choice")
+        // That repair is not silent: the run names the missing path and the one it uses instead.
+        var repairNotes: [String] = []
+        _ = Catalog.adopting(["hub": oldHub], discovered: Catalog.discover(
+            config: agentConfig(rig, token: token, apps: [:]), known: Catalog.known(in: URL(fileURLWithPath: cfg.stateDir), ssd: [source]),
+            folders: [renamed]), repairs: &repairNotes)
+        expect(repairNotes == ["hub: configured bundle path \(oldHub.bundlePath) is missing; using \(renamed.appendingPathComponent("Hub Studio KH.app").path)"],
+               "L2b the repaired path is named in one line, with the old and the new path")
     }
     // L3. An SSD install checks the copy's SHA-256 first: a mismatch is refused and changes nothing.
     do {

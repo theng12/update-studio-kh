@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.33 — 2026-11-13
+
+- The one-line path repair now appears for every repair, including one found during the startup check, so a renamed app's old path is always named in the log.
+
 ## 0.1.32 — 2026-11-13
 
 - Your Mac's own Automatic switch now wins whenever the update page's value is not provably later, including a publisher default. Across this fleet that turns Hub and the Launcher back on for the machines whose records defaulted them off (56 of 63 records carried "hub/updater off" as a default) — the switches themselves already said on.

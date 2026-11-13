@@ -347,8 +347,10 @@ public enum Agent {
         // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
         let stateURL = URL(fileURLWithPath: config.stateDir)
         var config = config
+        var repairNotes: [String] = []
         config.apps = Catalog.adopting(config.apps,
-                                       discovered: Catalog.discover(config: config, known: Catalog.known(in: stateURL, ssd: ssd), folders: appFolders))
+                                       discovered: Catalog.discover(config: config, known: Catalog.known(in: stateURL, ssd: ssd), folders: appFolders),
+                                       repairs: &repairNotes)
         try validate(config)
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
@@ -357,7 +359,7 @@ public enum Agent {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
                           requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile,
-                          appFolders: appFolders, sparseConfig: sparseConfig)
+                          appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: repairNotes)
         }
     }
 
@@ -369,7 +371,7 @@ public enum Agent {
                           control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
                           requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = [],
                           connectionFile: URL? = nil, appFolders: [URL] = Catalog.applicationFolders,
-                          sparseConfig: Bool = false) throws -> AgentRunResult {
+                          sparseConfig: Bool = false, startingNotes: [String] = []) throws -> AgentRunResult {
         DownloadControl.reset()
         var config = config
         let registrations = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("launcher-apps.json")) ?? [:]
@@ -400,7 +402,7 @@ public enum Agent {
             try AtomicFile.writeJSON(memory, to: memoryFile)
         }
         var result = AgentRunResult()
-        result.notes = registrationNotes
+        result.notes = startingNotes + registrationNotes
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]

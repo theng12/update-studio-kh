@@ -325,6 +325,15 @@ public enum Catalog {
     /// The config with the apps `discover` found: a configured app whose bundle is gone takes the
     /// path its bundle id now lives at, keeping the owner's recipe and Automatic choice.
     public static func adopting(_ apps: [String: AppConfig], discovered: [String: AppConfig]) -> [String: AppConfig] {
+        var ignored: [String] = []
+        return adopting(apps, discovered: discovered, repairs: &ignored)
+    }
+
+    /// The same merge, also listing each repaired path in one line: a renamed app is never fixed
+    /// in silence. Discovery can find the app before the feed is read, so this is the earliest
+    /// place the repair is known.
+    public static func adopting(_ apps: [String: AppConfig], discovered: [String: AppConfig],
+                                repairs: inout [String]) -> [String: AppConfig] {
         var merged = apps
         for (id, found) in discovered {
             guard var existing = merged[id] else { merged[id] = found; continue }
@@ -332,6 +341,7 @@ public enum Catalog {
             // path (which would then collide with the Launcher app's own entry).
             guard existing.recipe != "updater" else { continue }
             if !FileManager.default.fileExists(atPath: existing.bundlePath) {
+                repairs.append("\(id): configured bundle path \(existing.bundlePath) is missing; using \(found.bundlePath)")
                 existing.bundlePath = found.bundlePath
                 merged[id] = existing
             }
