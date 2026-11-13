@@ -5,6 +5,16 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.32 — 2026-11-13
+
+- Every app in the signed feed can now be installed or updated from its card on any Mac, including this publisher Mac: the feed's offers are what an install uses, never this Mac's feed-hosting role.
+- Story Studio KH and Hub Studio KH are managed apps now: they install and update through the same safe route as every other app, which quits them safely, stops their services and reopens them in the background only when you asked.
+- A first Install for an app this Mac was not configured for is adopted from the signed feed's own app name and identity, so it is no longer silently skipped.
+- A click is acknowledged at once ("Receiving update…") and then reports downloading, installing and the result.
+- An SSD or a saved app list can no longer mark an app as updating itself when the signed feed offers it as an installer; the feed decides, and a skipped app says why in the log.
+- Studio Launcher KH is published as its own feed entry, so its window can update its own app; the helper entry is only the helper.
+- Includes Studio Launcher KH 0.1.30 with the same installer fixes.
+
 ## 1.0.31 — 2026-11-13
 
 - Re-pairing a Mac on the same tailnet no longer needs the six-digit code while the publisher's allow-a-Mac window is open: leave the code empty and press Pair again.

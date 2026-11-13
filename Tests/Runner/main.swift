@@ -739,6 +739,35 @@ func publisherTests() {
         expectThrows("R25 an invalid published_at is refused") { _ = try bad.validated() }
         expectThrows("R25 an unknown schema is refused") { _ = try Feed(schema: 2, published_at: ISO.string(Date())).validated() }
     }
+    // The Launcher app is its own feed entry; the `updater` entry is the helper binary and never
+    // borrows an app's identity or icon.
+    do {
+        let rig = Rig("pub-launcher")
+        let launcher = AppMeta(name: "Studio Launcher KH", bundleID: "com.khupdater.launcher",
+                               bundleName: "Studio Launcher KH.app", version: "0.1.29", iconPNG: Data("png".utf8))
+        // Simulate a feed written by the old flow: the helper entry inherited the Launcher's identity.
+        try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "updater", version: "0.1.29",
+                                  artifact: rig.artifact("khu-29", "helper 29"), kind: "app-dmg", allowSame: false, meta: { _ in launcher })
+        try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "updater", version: "0.1.30",
+                                  artifact: rig.artifact("khu-30", "helper 30"), kind: "updater", allowSame: false, meta: nil)
+        try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "launcher", version: "0.1.30",
+                                  artifact: rig.artifact("Studio Launcher KH-0.1.30.dmg", "launcher bytes"), kind: "app-dmg",
+                                  allowSame: false, meta: { _ in
+            AppMeta(name: "Studio Launcher KH", bundleID: "com.khupdater.launcher",
+                    bundleName: "Studio Launcher KH.app", version: "0.1.30", iconPNG: Data("png".utf8))
+        })
+        let feed = try FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey)
+        expect(feed?.apps["updater"]?.bundleID == nil && feed?.apps["updater"]?.bundleName == nil
+               && feed?.apps["updater"]?.icon == nil && feed?.apps["updater"]?.kind == "updater",
+               "PB1 the updater entry is the helper binary: it never carries an app's identity or icon")
+        expect(feed?.apps["launcher"]?.bundleID == "com.khupdater.launcher"
+               && feed?.apps["launcher"]?.bundleName == "Studio Launcher KH.app" && feed?.apps["launcher"]?.name == "Studio Launcher KH",
+               "PB2 the Launcher app is its own feed entry, with its own name, identity and icon")
+        let catalog = Catalog.build(feed: feed, ssd: [])
+        expect(catalog.contains { $0.id == "launcher" && $0.name == "Studio Launcher KH" }
+               && !catalog.contains { $0.id == "updater" },
+               "PB3 the Launcher app is listed and installable; the helper is never an app on offer")
+    } catch { expect(false, "PB Launcher feed entries: \(error)") }
 }
 
 /// Calls the server's handler directly — the same code the sockets reach — with fault hooks.
@@ -1799,7 +1828,7 @@ func ownerRollbackTests() {
                "R6-6 an explicit update order clears the rollback rejection")
     }
     // 7. Status-only apps and the updater itself: refused, and the app is not touched.
-    for recipe in ["story", "hub", "status", "updater"] {
+    for recipe in ["status", "updater"] {
         let r = R6Rig("refuse-" + recipe, recipe: recipe)
         r.order()
         r.run()
@@ -2166,7 +2195,7 @@ func launcherTests() {
                && AppNames.display("hub") == "Hub Studio KH"
                && AppNames.display("gateway") == "Gateway Studio KH"
                && AppNames.display("story") == "Story Studio KH"
-               && AppNames.display("updater") == "Studio Launcher KH"
+               && AppNames.display("updater") == "Update Studio Helper"
                && AppNames.display("kh-updater-app") == "Update Studio KH"
                && AppNames.display("media-studio") == "Media Studio KH"
                && AppNames.display("printer-studio") == "Printer Studio KH"
@@ -2213,6 +2242,12 @@ func launcherTests() {
         expect(ms?.installed["printer"] == "1.0.2" && ms?.installed["hub"] == "0.6.213", "L2 the found apps are reported to the page")
         let later = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server), appFolders: [apps])
         expect(later?.apps.contains { $0.app == "printer" && $0.managed } == true, "L2 they stay recognised after the SSD is unplugged")
+        // Discovery never hands the helper an app path: it is the binary the stub runs.
+        let keptHelper = Catalog.adopting(["updater": AppConfig(bundlePath: "", recipe: "updater")],
+                                          discovered: ["updater": AppConfig(bundlePath: apps.appendingPathComponent("Studio Launcher KH.app").path,
+                                                                           recipe: "app-dmg")])
+        expect(keptHelper["updater"]?.bundlePath == "" && keptHelper["updater"]?.recipe == "updater",
+               "L2 the helper's saved recipe and empty path survive discovery of a Launcher app")
         let both = Catalog.discover(config: agentConfig(rig, token: token, apps: ["printer": AppConfig(bundlePath: apps.appendingPathComponent("Printer.app").path)]),
                                     known: Catalog.known(in: URL(fileURLWithPath: cfg.stateDir), ssd: []), folders: [apps])
         expect(both["printer"] == nil, "L2 an app already in the config is not added twice")
@@ -2667,14 +2702,16 @@ func helperTests() {
         _ = try? Agent.runOnce(config: cfg, http: client)
         expect(record(rig)?.pausedUntil == nil, "H4 an ended pause is cleared on the page")
     }
-    // H5. The menu shows each app's state; Story and Hub get no switch.
+    // H5. The menu shows each app's state; a legacy hub recipe is a managed app now, while an app
+    // only the live sources mark as updating itself still has no switch.
     do {
         let (_, cfg, client) = setup("h5")
         let r = try? Agent.runOnce(config: cfg, http: client)
         let demo = r?.apps.first { $0.app == "demo" }, hub = r?.apps.first { $0.app == "hub" }
         expect(demo?.installed == "1.0.0" && demo?.available == "2.0.0" && demo?.status == HelperApp.updateAvailable && demo?.automatic == false,
                "H5 an app behind the feed is Update available")
-        expect(hub?.statusOnly == true && hub?.automatic == false && hub?.status == HelperApp.updatesItself, "H5 Hub updates itself and has no switch")
+        expect(hub?.statusOnly == false && hub?.automatic == true && hub?.status == HelperApp.notInFeed,
+               "H5 a legacy hub recipe is a managed app with its switch, never a self-updating stub")
         let failed = HelperApp.status(installed: "1.0.0", available: "2.0.0", statusOnly: false, last: ("rolled_back", "not healthy"))
         let current = HelperApp.status(installed: "2.0.0", available: "2.0.0", statusOnly: false, last: ("failed", "old"))
         expect(failed.0 == HelperApp.failed && failed.1 == "not healthy" && current.0 == HelperApp.upToDate && current.1 == nil
@@ -2705,8 +2742,8 @@ func helperTests() {
         expect(theirs?.apps.first { $0.app == "demo" }?.automatic == false
                && theirs?.apps.first { $0.app == "demo" }?.automaticOrigin == HelperSettings.AutomaticOrigin.page.words,
                "H9b the value is the controller's later change, and the row names it")
-        expect(theirs?.apps.first { $0.app == "hub" }?.automaticOrigin == nil,
-               "H9c an app with no switch has no origin to claim")
+        expect(theirs?.apps.first { $0.app == "hub" }?.automaticOrigin == HelperSettings.AutomaticOrigin.config.words,
+               "H9c a legacy hub recipe is managed, and its value names this Mac's default")
         // (d) Neither has said anything: this Mac's own configured default, named in the same words.
         let (_, plain, plainClient) = setup("h9d")
         let fallback = try? Agent.runOnce(config: plain, http: plainClient)

@@ -136,12 +136,21 @@ public enum FeedPublisher {
             let old = feed.apps[app]
             entry.name = displayName ?? old?.name; entry.bundleID = old?.bundleID; entry.bundleName = old?.bundleName
             entry.icon = old?.icon; entry.iconSha256 = old?.iconSha256
+            if kindNow == "updater" {
+                // The `updater` entry is the `khu` helper binary, never an app bundle: an app's
+                // identity and icon here would make the Launcher app look like the helper (and the
+                // helper look like the app it is showing).
+                entry.name = "Update Studio Helper"
+                entry.bundleID = nil; entry.bundleName = nil; entry.icon = nil; entry.iconSha256 = nil
+            }
             // The card's words are carried over unless this publish names new ones.
             let w = words ?? AppWords(tagline: old?.tagline, description: old?.description, features: old?.features, accent: old?.accent)
             entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
             entry.released = ISO.string(now)
             entry.mainMacOnly = mainMacOnly ?? old?.mainMacOnly
-            if ["app-dmg", "gateway"].contains(kindNow), let read = meta {
+            // A DMG that installs an app carries that app's own name and identity whatever kind of
+            // app it is — `status` included: the hand route still offers it, so it needs an identity.
+            if ["app-dmg", "gateway", "status"].contains(kindNow), let read = meta {
                 guard let info = try? read(dest.path) else {
                     throw khuFail("\(artifact.lastPathComponent) cannot be read as an app DMG, so its version is unknown; nothing was published")
                 }

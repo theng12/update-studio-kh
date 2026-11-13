@@ -255,14 +255,18 @@ public struct AgentMemory: Codable, Sendable, Equatable {
 }
 
 public enum Agent {
-    /// Recipes that never install from KH Updater in v1: those apps keep their own updaters, which
-    /// let running work finish first.
-    static let statusOnly: Set<String> = ["story", "hub", "status"]
-    static let knownRecipes: Set<String> = statusOnly.union(["app-dmg", "gateway", "updater", "fake-for-tests"])
+    /// The one recipe that never installs: an app observed on this Mac that keeps its own updater.
+    /// It is only set by `Catalog.discover` for an app the live sources mark that way.
+    static let statusOnly: Set<String> = ["status"]
+    /// Recipes that put a bundle in place with the journaled app-dmg route. `story` and `hub` are the
+    /// names older configs still carry for Story and Hub; they now install like every other app.
+    static let appDmgRecipes: Set<String> = ["app-dmg", "gateway", "story", "hub"]
+    static let knownRecipes: Set<String> = statusOnly.union(appDmgRecipes).union(["updater", "fake-for-tests"])
     /// An app that updates itself: its own updater owns its life, so KH Updater never installs or
     /// updates it by itself — Automatic and remote orders leave it alone. The person at the Mac may
-    /// still choose to install or update it by hand, from the Launcher. The app id and the recipe are
-    /// both markers; an SSD's own index marks every other app that keeps its own updater.
+    /// still choose to install or update it by hand, from the Launcher. Only the live catalog marks
+    /// one (the signed feed's kind, or an SSD for an app the feed does not list); no app id is
+    /// special-cased here.
     static func updatesItself(app: String, recipe: String? = nil, entry: CatalogEntry? = nil) -> Bool {
         if statusOnly.contains(app) { return true }
         if let recipe, statusOnly.contains(recipe) { return true }
@@ -394,10 +398,10 @@ public enum Agent {
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
-        // A hand install of a `story`/`hub` recipe is journaled like any other, so recovery reads
+        // A hand install of an observed-only app is journaled like any other, so recovery reads
         // every recipe that can put a bundle in place.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
-        where ["app-dmg", "gateway"].contains(cfg.recipe) || statusOnly.contains(cfg.recipe) {
+        where appDmgRecipes.contains(cfg.recipe) || statusOnly.contains(cfg.recipe) {
             let before = try? AtomicFile.readJSON(InstallJournal.self, from: Recipe.journalURL(stateDir: stateDir.path, app: app))
             let note = try Recipe.recover(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app,
                                           control: control(app, cfg), controlForPath: { path in
@@ -646,14 +650,22 @@ public enum Agent {
         // A pause from the menu holds Automatic only; the owner's orders and "Update now" still run.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
         where publisherAvailable && !helper.paused(at: now) && helper.installsAutomatically
-            && !updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app })
             && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic) {
             guard !todo.contains(where: { $0.app == app }), let entry = feed.apps[app] else { continue }
+            guard !updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app }) else { continue }
             guard memory.rejected[app] != entry.sha256 else { continue }  // failed here before: wait for a new artifact
             let current = installed[app]
             if current == nil || VersionCompare.isNewer(entry.version, than: current!) {
                 todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false, false))
             }
+        }
+        // A skip is a decision, not silence: an app left behind because its live sources say it
+        // updates itself says so in the run's notes, instead of showing up only as `updates=0`.
+        for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
+        where updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app }) {
+            guard let entry = feed.apps[app], let current = installed[app],
+                  VersionCompare.isNewer(entry.version, than: current) else { continue }
+            result.notes.append("\(app): skipped — the live sources mark it as updating itself")
         }
         try remember()
 
@@ -795,11 +807,15 @@ public enum Agent {
                                 status: status, reason: reason)
             row.automaticOrigin = auto?.origin.words
             row.manuallyInstallable = manual
+            // The Launcher only draws Install or Update for an app the agent can really adopt: an
+            // app this Mac already manages, or one whose signed offer names the bundle to install.
+            row.installable = cfg != nil || (hasOffer && entry?.bundleID != nil && entry?.bundleName != nil
+                                             && entry?.mainMacOnly != true)
             // The build and byte identity of what is installed now: nil when the bundle carries no
             // build or its executable cannot be read — a row reports "not checked", never a match.
             row.installedBuild = info?.build
             if let cfg, let info { row.installedExecutableSha256 = info.executableSha256(in: cfg.bundlePath) }
-            row.name = cfg?.recipe == "updater" ? "Studio Launcher KH" : (entry?.name ?? feed.apps[app]?.name ?? AppNames.display(app))
+            row.name = cfg?.recipe == "updater" ? "Update Studio Helper" : (entry?.name ?? feed.apps[app]?.name ?? AppNames.display(app))
             row.source = entry?.source
             row.notes = entry?.notes ?? feed.apps[app]?.notes
             row.setupFolder = entry?.setupFolder
@@ -886,7 +902,7 @@ public enum Agent {
             return RecipeResult(status: "refused", reason: "\(app) is updated by its own updater; KH Updater will not roll it back")
         }
         switch cfg.recipe {
-        case "app-dmg", "gateway":
+        case let recipe where appDmgRecipes.contains(recipe):
             guard installed != nil || FileManager.default.fileExists(atPath: cfg.bundlePath) else {
                 return RecipeResult(status: "refused", reason: "\(app) is not installed at \(cfg.bundlePath), so there is nothing to roll back from")
             }
@@ -964,16 +980,16 @@ public enum Agent {
             return RecipeResult(status: "download_failed", reason: "\(error)")
         }
         DownloadControl.updateProgress("installing")
-        // One journaled app-dmg path for every recipe that installs a bundle: the plain ones and the
-        // supported status-only names (`story`, `hub`, `status`), which get here only when the person
-        // at this Mac chose it. A self-updating app is checked again before anything is stopped.
+        // One journaled app-dmg path for every recipe that installs a bundle: the plain ones and a
+        // legacy `story`/`hub` config, and an observed-only app the person chose to install here.
+        // A self-updating app is checked again before anything is stopped.
         switch cfg.recipe {
         case "updater":
             return try installUpdater(entry, artifact: artifact, config: config)
         case "fake-for-tests":
             return RecipeResult(status: "updated")
         default:
-            guard cfg.recipe == "app-dmg" || cfg.recipe == "gateway" || statusOnly.contains(cfg.recipe) else {
+            guard appDmgRecipes.contains(cfg.recipe) || statusOnly.contains(cfg.recipe) else {
                 throw khuFail("unknown recipe \(cfg.recipe)")
             }
             return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
@@ -1025,8 +1041,8 @@ public enum Agent {
         case "fake-for-tests":
             result = RecipeResult(status: "updated", reason: "from \(local.volume)")
         default:
-            // The same journaled app-dmg path for the plain recipes and the status-only names.
-            guard cfg.recipe == "app-dmg" || cfg.recipe == "gateway" || statusOnly.contains(cfg.recipe) else {
+            // The same journaled app-dmg path for the plain recipes and the legacy names.
+            guard appDmgRecipes.contains(cfg.recipe) || statusOnly.contains(cfg.recipe) else {
                 return RecipeResult(status: "refused", reason: "the \(cfg.recipe) recipe does not install from an SSD")
             }
             result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,

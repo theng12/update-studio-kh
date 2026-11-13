@@ -362,9 +362,11 @@ policies remain in force, with one addition: an app that updates itself may be i
 by hand when the person at this Mac chooses it in the Launcher, and only then — Automatic and a
 remote order leave it alone, and a running one is kept until its work is finished. Native Edit
 shortcuts and text-input focus use normal responder behavior.
-Signed `story`, `hub` and `status` feed kinds keep that policy even on a fresh Mac with no SSD
-history; discovery records them as status-only, with Automatic off, and an installed copy can
-always be opened for its own updater. The freshness timestamp advances only after a successful
+A signed `status` feed kind keeps that policy even on a fresh Mac with no SSD history; discovery
+records it as status-only, with Automatic off, and an installed copy can always be opened for its
+own updater. A feed entry of any other kind is installable: the feed's kind decides, and a stale
+self-updating flag in a drive index or the remembered cache cannot override it — `Catalog.remember`
+corrects the cached entry and the SSD indexer rewrites the flag at the next index. The freshness timestamp advances only after a successful
 server check; a failed attempt keeps it and reports its own attempt time beside the error.
 Ordinary settings save synchronously with visible saved/failed feedback, and a failed write keeps
 the Automatic and appearance choice shown before it. An address draft survives a refused check;
@@ -379,7 +381,8 @@ installs a newer version unless that exact artifact already failed here (an upda
 back (see Recipes). Anything else than `update` or `rollback` is `refused` and nothing is touched.
 It runs under the same one-run-at-a-time lock and the same outbox as an install, so its result
 survives a lost report and a redelivered order is answered, never carried out twice. It is refused
-for an app this Mac does not run, for `story`/`hub` (their own updaters) and for `updater` itself:
+for an app this Mac does not run, for an app the live sources mark as updating itself, and for
+`updater` itself:
 the stub only restores a version it watched fail, so there is no order to give it here. After a
 successful rollback the version rolled back FROM is marked rejected by the SHA the feed names for
 that same version — Automatic will not put it straight back, and a new artifact or an update order
@@ -513,7 +516,8 @@ empty bundle process set and launchd's clean exit status. Unsupported or newly a
 block replacement. Relaunch and recovery revalidate saved labels before non-forcing `kickstart`,
 and health requires those hosts running again. Gateway keeps its separate PID/port protocol.
 
-`story`, `hub`: status only in the online agent — those apps keep their own updaters. `updater`: self-update (below).
+`app-dmg` (also the legacy `story`/`hub` recipe names older kits wrote): the journaled install and
+rollback route. `status`: observed only — the app keeps its own updater. `updater`: self-update (below).
 
 An app that updates itself may still be installed or updated by hand, from the Launcher. The choice is
 local and explicit: Automatic and a remote order never install one, and the app keeps its own policy
@@ -526,9 +530,9 @@ so plainly; nothing is downloaded and nothing is touched.
 
 Two details decide this route, and both read live data rather than one flag. The policy comes from the
 catalog as well as the recipe: a Mac configured by an earlier kit may carry the app's own recipe name
-(`story`, `hub`) or an `app-dmg` entry for an app its SSD marks as updating itself, and either way it stays
-hand-only — the same journaled path installs it, and the same recovery loop finishes or undoes a killed run
-for it. The running check is made at the door, before anything is downloaded, and once more at the shared
+(`story`, `hub`) — those are ordinary installable recipes now — while an app the signed feed does not
+list and an SSD marks as updating itself stays hand-only. The same journaled path installs it, and the
+same recovery loop finishes or undoes a killed run for it. The running check is made at the door, before anything is downloaded, and once more at the shared
 promotion point, where the swap would stop the app: the read taken there is the one that decides, so an
 app that came up in between is kept too. Its staged copy goes to `_trash`, nothing is quit, stopped,
 started or replaced, and no journal is left for recovery to find.

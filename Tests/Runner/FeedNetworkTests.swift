@@ -94,7 +94,14 @@ func feedNetworkTests() {
         var hostMemory = memory
         hostMemory.feedNetwork = FeedNetwork(feedURLs: [mirror, upstream], hosts: ["client": FeedHostRole(enabled: true, bind: "100.64.0.2")])
         let sources = try Agent.feedSources(config: config, memory: hostMemory, serverBase: origin)
-        expect(sources == [URL(string: upstream)!], "FN a feed host refreshes from the original publisher rather than itself")
+        expect(sources == [URL(string: upstream)!, URL(string: mirror)!],
+               "FN a feed host reads the original publisher first, never its own mirror")
+        // A host whose role is off (a publisher Mac that does not mirror) reads the same source:
+        // an install there must never depend on the hosting role.
+        var offMemory = memory
+        offMemory.feedNetwork = FeedNetwork(feedURLs: [mirror, upstream], hosts: ["client": FeedHostRole(enabled: false, bind: "100.64.0.2")])
+        let offSources = try Agent.feedSources(config: config, memory: offMemory, serverBase: origin)
+        expect(offSources == sources, "FN a host with its hosting role off selects the configured feed exactly the same way")
     } catch { expect(false, "FN source verification: \(error)") }
     do {
         let http = NetworkClient(); http.statusOffline = true

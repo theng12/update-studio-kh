@@ -10,6 +10,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     var lastError: String?
     var installingApp: String?
     var requested: Set<String> = []
+    /// The apps this run was asked for and has not started yet: their rows say "Receiving update…"
+    /// from the click until `installing` names them, so a queued click is never drawn as nothing.
+    var active: Set<String> = []
     let wake = DispatchSemaphore(value: 0)
     let stateDir: URL
     let machine: String
@@ -74,14 +77,14 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     func waitForNextRun(seconds: Double) -> Set<String> {
         _ = wake.wait(timeout: .now() + seconds)
         lock.lock(); defer { lock.unlock() }
-        let asked = requested; requested = []
+        let asked = requested; requested = []; active = asked
         return asked
     }
     /// Says which app the agent is working on right now. The Launcher's "Updating…" row is driven
     /// by this flag, so the flag changing has to move the window too: pushing state only at the end
     /// of a run left a stopped attempt still drawn as Installing.
     func installing(_ app: String?) {
-        lock.lock(); installingApp = app; lock.unlock()
+        lock.lock(); installingApp = app; if let app { active.remove(app) }; lock.unlock()
         DispatchQueue.main.async {
             self.refreshIcon()
             self.window?.reload()
@@ -96,6 +99,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         if serverKnown { lastRun = lastAttempt }
         let ready = apps.filter { $0.managed && !$0.statusOnly && $0.status == HelperApp.updateAvailable }
         installingApp = nil
+        active = []
         lock.unlock()
         Notifier.announce(ready, stateDir: stateDir)
         DispatchQueue.main.async {
@@ -142,7 +146,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        lock.lock(); let list = apps, error = lastError, busy = installingApp; lock.unlock()
+        lock.lock(); let list = apps, error = lastError, busy = installingApp, pending = active.union(requested); lock.unlock()
         let settings = HelperSettings.load(from: stateDir)
         menu.removeAllItems()
         func note(_ text: String, to target: NSMenu? = nil) { let i = NSMenuItem(title: text, action: nil, keyEquivalent: ""); i.isEnabled = false; (target ?? menu).addItem(i) }
@@ -169,15 +173,15 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
             [HelperApp.updateAvailable, HelperApp.failed, HelperApp.notInstalled].contains(app.status)
         }
         for app in list where app.managed && (showsAll || needingAction(app)) {
-            let status = busy == app.app ? HelperApp.updating : app.status
+            let status = busy == app.app ? HelperApp.updating : (pending.contains(app.app) ? HelperApp.receiving : app.status)
             let row = NSMenuItem(title: "\(app.name.isEmpty ? AppNames.display(app.app) : app.name)   \(app.installed ?? "—") · \(status)", action: nil, keyEquivalent: "")
             menu.addItem(row)
-            // Story and Hub update themselves: a status line, no switch.
+            // An observed-only app has no switch: a status line only.
             guard !app.statusOnly else { row.isEnabled = false; continue }
             let sub = NSMenu()
             sub.autoenablesItems = false
             if let reason = app.reason { note(Self.short(reason), to: sub) }
-            if let available = app.available, [HelperApp.updateAvailable, HelperApp.failed, HelperApp.notInstalled].contains(app.status) {
+            if app.installable, let available = app.available, [HelperApp.updateAvailable, HelperApp.failed, HelperApp.notInstalled].contains(app.status) {
                 action("Update now to \(available)", #selector(updateNow(_:)), app.app, to: sub).isEnabled = busy == nil
             }
             action("Automatic updates", #selector(toggleAutomatic(_:)), app.app, to: sub).state = app.automatic ? .on : .off

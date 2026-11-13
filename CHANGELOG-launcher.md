@@ -5,6 +5,15 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.30 — 2026-11-13
+
+- Every app in the signed feed can now be installed or updated from its card on any Mac, including the publisher's own Mac: a first Install no longer does nothing, and Storage Studio KH, Media, Music, Library, Printer and Relay all install from the feed.
+- Story Studio KH and Hub Studio KH update through Studio Launcher like every other app: it quits them safely, stops their services, replaces them, and reopens them in the background only when you asked for the update here.
+- A click now says "Receiving update…" at once, then shows the download and install, and finally the result.
+- The log says why an app was left alone ("marked as updating itself") instead of only reporting that nothing happened.
+- An SSD or a saved list can no longer keep an app marked as updating itself when the signed feed offers it as an installer; the feed decides.
+- Studio Launcher KH is in the feed as its own app, so its window can update its own app.
+
 ## 0.1.29 — 2026-11-13
 
 - Pair again works with no code typed while the publisher's allow-a-Mac window is open; the older sign-in is replaced and the old token stops working.

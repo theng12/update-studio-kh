@@ -20,11 +20,14 @@ extension Agent {
 
     static func feedSources(config: AgentConfig, memory: AgentMemory, serverBase: URL) throws -> [URL] {
         let network = memory.feedNetwork ?? config.network
-        // A host always refreshes from its original signer, never from its own mirror.
-        let addresses = network?.hosts[config.machine]?.enabled == true ? [] : (network?.feedURLs ?? [])
-        var sources = try addresses.map { try FeedNetwork.feedURL($0) }
+        // A host mirrors *to* other Macs, never *from* its own mirror, so it reads its original
+        // signer first — whether or not its hosting role is on. An install on the publisher's own
+        // Mac therefore never depends on `FeedHostRuntime`; a client still prefers its mirrors.
+        let isHost = network?.hosts[config.machine] != nil
         let original = serverBase.appendingPathComponent("release.json")
-        if !sources.contains(original) { sources.append(original) }
+        var sources = try (network?.feedURLs ?? []).map { try FeedNetwork.feedURL($0) }
+        sources.removeAll { $0 == original }
+        if isHost { sources.insert(original, at: 0) } else { sources.append(original) }
         return sources
     }
 

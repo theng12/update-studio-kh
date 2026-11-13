@@ -10,8 +10,8 @@ set -euo pipefail
 HOST="${KHU_RELEASE_HOST:-vengtheng@100.82.91.102}"
 KEY="${KHU_RELEASE_KEY:-$HOME/.ssh/id_ed25519_gateway1301}"
 STAGE="${KHU_RELEASE_STAGE:-Library/KHUpdater/feed-incoming-$(date +%Y%m%d)}"
-[ $# -eq 4 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog>" >&2; exit 2; }
-APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"
+[ $# -eq 4 ] || [ $# -eq 5 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind]" >&2; exit 2; }
+APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; KIND="${5:-}"
 [ -f "$DMG" ] || { echo "no such DMG: $DMG" >&2; exit 2; }
 [ -f "$LOG" ] || { echo "no such changelog: $LOG" >&2; exit 2; }
 BASE=$(basename "$DMG")
@@ -21,7 +21,8 @@ SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "$HOST")
 scp -i "$KEY" -o BatchMode=yes "$DMG" "$HOST:$STAGE/$BASE"
 scp -i "$KEY" -o BatchMode=yes "$LOG" "$HOST:$STAGE/changelogs/$APP.md"
 "${SSH[@]}" "K=\$HOME/Library/KHUpdater; \"\$K/bin/khu\" publish --feed \"\$K/feed\" --key \"\$K/keys/private.key\" \
-  --app '$APP' --version '$VERSION' --artifact \"\$HOME/$STAGE/$BASE\" --changelog \"\$HOME/$STAGE/changelogs/$APP.md\""
+  --app '$APP' --version '$VERSION' --artifact \"\$HOME/$STAGE/$BASE\" --changelog \"\$HOME/$STAGE/changelogs/$APP.md\" \
+  ${KIND:+--kind '$KIND'}"
 
 /usr/bin/python3 -I - "$HOST" "$APP" "$VERSION" <<'PY'
 import base64, json, sys, urllib.request

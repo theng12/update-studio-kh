@@ -197,6 +197,8 @@ func standaloneLauncherTests() {
         let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: ["bad", id], appFolders: [folder])
         expect(result?.commandsRun == 2 && result?.apps.first(where: { $0.app == id })?.installed == "2.0" && http.downloads == 1,
                "SL7 one refused first install does not stop the next app")
+        expect(result?.apps.first { $0.app == "bad" }?.installable == false,
+               "SL7 an offer with no app identity is drawn without an Install the agent could not run")
         let memory = try? AtomicFile.readJSON(AgentMemory.self, from: URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("agent-memory.json"))
         expect(memory?.done.values.contains(where: { $0.app == "bad" && $0.status == "refused" }) == true,
                "SL7 per-app registration failure has a durable visible result")
@@ -247,12 +249,13 @@ func standaloneLauncherTests() {
         let down = try? Agent.installLocal(older, app: id, installed: "1.0", cfg: appCfg, stateDir: URL(fileURLWithPath: cfg.stateDir), shell: shell, control: { _, _ in control }, force: true)
         expect(down?.status == "current" && marker(target) == "1.0", "SL6 reinstall cannot turn into an SSD downgrade")
     }
-    // An app that updates itself (Story and Hub keep their own updaters): the person at this Mac
-    // may install or update it by choosing it, and nothing else may.
+    // An app the live sources mark as updating itself: the person at this Mac may install or update
+    // it by choosing it, and nothing else may. The feed's own `status` kind is that marker now —
+    // Story and Hub publish as `app-dmg` and install like every other app.
     do {
         let appID = "story", storyBundle = "com.fixture.story", storyName = "Story Studio KH.app"
         func storySetup(_ tag: String, version: String = "2.0", app: String = appID, bundle: String = storyBundle,
-                        name: String = storyName, label: String = "Story Studio KH", kind: String = "app-dmg",
+                        name: String = storyName, label: String = "Story Studio KH", kind: String = "status",
                         bytes: String = "story installer bytes") -> (Rig, AgentConfig, URL, StandaloneShell, StandaloneHTTP) {
             let rig = Rig("standalone-" + tag)
             let folder = rig.root.appendingPathComponent("Applications")
@@ -295,13 +298,15 @@ func standaloneLauncherTests() {
                    "SL10 the person chooses it: it installs from the signed feed")
             // Automatic is on for everything else, and still leaves this app alone.
             try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: appID, version: "3.0",
-                                       artifact: rig.artifact("Story 3.dmg", "story three bytes"), kind: "app-dmg",
+                                       artifact: rig.artifact("Story 3.dmg", "story three bytes"), kind: "status",
                                        allowSame: false, meta: { _ in
                 AppMeta(name: "Story Studio KH", bundleID: storyBundle, bundleName: storyName, version: "3.0", iconPNG: nil)
             })
             let automatic = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
             expect(automatic?.commandsRun == 0 && automatic?.apps.first { $0.app == appID }?.installed == "2.0" && http.downloads == 1,
                    "SL10 Automatic leaves an app that updates itself alone, and offers the newer version instead")
+            expect(automatic?.notes.contains { $0.hasPrefix("\(appID): skipped") && $0.contains("updating itself") } == true,
+                   "SL10 a skipped app says why in the run's notes, never only as updates=0")
             // The publisher's own order is not the person's choice: it never installs it.
             let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
             _ = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
@@ -400,18 +405,28 @@ func standaloneLauncherTests() {
             _ = rig
         }
         // A Mac configured by an earlier kit carries the app's own recipe name (`story`, `hub`).
-        // The hand route takes the same journaled path, and recovery reads it too.
+        // That is an ordinary installable recipe now: Automatic updates it through the same safe
+        // route, and recovery reads its journal too.
         for own in [(app: "story", bundle: storyBundle, name: storyName, label: "Story Studio KH", feedKind: "app-dmg"),
                     (app: "hub", bundle: "com.fixture.hub", name: "Studio Hub.app", label: "Studio Hub", feedKind: "hub")] {
-            let (rig, base, folder, shell, http) = storySetup("own-recipe-\(own.app)", app: own.app, bundle: own.bundle,
-                                                              name: own.name, label: own.label, kind: own.feedKind,
-                                                              bytes: "\(own.app) installer bytes")
+            let (_, base, folder, shell, http) = storySetup("own-recipe-\(own.app)", app: own.app, bundle: own.bundle,
+                                                            name: own.name, label: own.label, kind: own.feedKind,
+                                                            bytes: "\(own.app) installer bytes")
             let target = makeApp(folder.appendingPathComponent(own.name), version: "1.0", id: own.bundle)
             var cfg = base
             cfg.apps[own.app] = AppConfig(bundlePath: target.path, recipe: own.app, automatic: true, bundleID: own.bundle)
             let automatic = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
-            expect(automatic?.commandsRun == 0 && http.downloads == 0 && marker(target) == "1.0",
-                   "SL19 Automatic never installs an existing \(own.app)-recipe config")
+            expect(automatic?.commandsRun == 1 && automatic?.updates == 1 && http.downloads == 1 && marker(target) == "2.0",
+                   "SL19 an existing \(own.app)-recipe config is managed: Automatic installs the feed's newer version")
+        }
+        // A killed install under a legacy recipe name is undone by the same recovery loop.
+        for own in [(app: "story", bundle: storyBundle, name: storyName, label: "Story Studio KH"),
+                    (app: "hub", bundle: "com.fixture.hub", name: "Studio Hub.app", label: "Studio Hub")] {
+            let (_, base, folder, shell, http) = storySetup("own-recovery-\(own.app)", app: own.app, bundle: own.bundle,
+                                                            name: own.name, label: own.label, bytes: "\(own.app) installer bytes")
+            let target = makeApp(folder.appendingPathComponent(own.name), version: "1.0", id: own.bundle)
+            var cfg = base
+            cfg.apps[own.app] = AppConfig(bundlePath: target.path, recipe: own.app, automatic: false, bundleID: own.bundle)
             let journal = InstallJournal(phase: "staged", installed: target.path, staged: target.path + ".staged",
                                          rollback: URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("rollback-\(own.app)/\(own.name)").path,
                                          previousVersion: "1.0", wasRunning: false, version: "2.0")
@@ -420,11 +435,6 @@ func standaloneLauncherTests() {
             expect(recovered?.notes.contains(where: { $0.contains(own.app) && $0.contains("interrupted install was undone") }) == true
                    && !Recipe.isUnresolved(stateDir: cfg.stateDir, app: own.app) && marker(target) == "1.0",
                    "SL19 a killed \(own.app)-recipe install is undone by the same recovery loop")
-            let hand = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control },
-                                          requested: [own.app], appFolders: [folder])
-            expect(hand?.apps.first { $0.app == own.app }?.installed == "2.0" && marker(target) == "2.0" && http.downloads == 1,
-                   "SL19 the explicit choice installs through its own \(own.app) recipe, not an unknown-recipe refusal")
-            _ = rig
         }
         // The app coming up half way through the install is caught before anything is stopped:
         // the guard at the door only proved it was quiet before the download started.

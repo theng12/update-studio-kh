@@ -119,12 +119,14 @@ function plain(r){if(!r)return '';const t=r.toLowerCase();
  if(t.includes('not healthy')||t.includes('rolled back'))return 'The new version didn’t start properly, so the previous version is running again.';
  return r.split(/[;.]/)[0]+'.'}
 function installed(a){return a.installed!=null&&a.managed}
-function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Failed':['Failed','bad'],
- 'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
+function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Receiving update…':['Receiving update…','info'],
+ 'Failed':['Failed','bad'],'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
  if(!a.managed)return el('span',{class:'chip'},a.available?'Not installed':'Not available');return el('span',{class:'chip '+m[1]},m[0])}
 function versionLine(a){if(a.installed&&a.available&&a.installed!=a.available&&a.status!='Updates itself')return el('span',{class:'ver'},a.installed+' → ',el('b',{},a.available));
  const v=a.installed||a.available;return v?el('span',{class:'ver'},el('b',{},v)):null}
-function mainAction(a){if(a.status=='Updating…')return null;
+function mainAction(a){if(a.status=='Updating…'||a.status=='Receiving update…')return null;
+ // Nothing is offered when the agent has no recipe it would really run for this app.
+ if(!a.installable&&!a.statusOnly&&!a.managed)return null;
  if(a.statusOnly){
   // An app that updates itself is never installed by KH Updater on its own, but the person at
   // this Mac may install or update it here, by choosing it.
@@ -174,6 +176,8 @@ function ask(question,confirmLabel,done){
 }
 function buttons(a,big){const out=[],m=mainAction(a);
  if(a.status=='Updating…'&&!big)return [progress(a)];
+ // The click has been taken; the agent starts on it now. No counters exist yet, so say just this.
+ if(a.status=='Receiving update…')return [el('div',{class:'reason'},'Receiving update…')];
  if(m)out.push(el('button',{class:'btn main '+m[2],onclick:e=>{e.stopPropagation();
   // Nothing changes a Mac without being asked first. A webview confirm() is not reliable here,
   // so the dialog is an in-page one and the action waits for its answer.
@@ -215,7 +219,7 @@ function render(state){if(state)Object.assign(S,state);
  if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
  $('wnver').textContent=S.version?'v'+S.version:'';
  const u=S.apps.find(a=>a.id=='updater'&&a.status=='Update available'&&a.available&&!a.statusOnly);
- $('update').hidden=!u;if(u){$('update').title='Update Studio Launcher KH '+u.available;$('update').setAttribute('aria-label','Update Studio Launcher KH to '+u.available)}
+ $('update').hidden=!u;if(u){$('update').title='Update Studio Helper '+u.available;$('update').setAttribute('aria-label','Update Studio Helper to '+u.available)}
  paintStatus();
  const s=signature();
  if(s==sig){move();return}

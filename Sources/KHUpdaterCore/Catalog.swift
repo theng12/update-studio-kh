@@ -212,6 +212,8 @@ public enum Catalog {
 
     public static func build(feed: Feed?, ssd: [SSDSource], seen: [SSDApp] = [], icons: URL? = nil) -> [CatalogEntry] {
         var entries: [String: CatalogEntry] = [:]
+        // Every bundle the signed feed already offers as an installer.
+        let feedBundles = Set((feed?.apps ?? [:]).values.compactMap(\.bundleID))
         // What an SSD said before it was unplugged: names, "updates itself" and icons (cached
         // under `icons`), never anything to install.
         for app in seen where app.id != "updater" {
@@ -226,9 +228,11 @@ public enum Catalog {
         for (id, app) in feed?.apps ?? [:] where app.kind != "updater" {
             let key = entries.first { $0.value.bundleID != nil && $0.value.bundleID == app.bundleID }?.key ?? id
             let before = entries.removeValue(forKey: key)
+            // The signed feed decides whether a feed app is installable: an SSD or a remembered
+            // drive cannot keep an app self-updating that the feed now offers as an installer.
             entries[id] = CatalogEntry(id: id, name: app.name ?? before?.name ?? AppNames.display(id), bundleID: app.bundleID ?? before?.bundleID,
                                        bundleName: app.bundleName ?? before?.bundleName,
-                                       updatesItself: (before?.updatesItself ?? false) || Agent.statusOnly.contains(app.kind),
+                                       updatesItself: Agent.statusOnly.contains(app.kind),
                                        feedVersion: app.version, icon: before?.icon, notes: app.notes)
             let w = AppWords(tagline: app.tagline, description: app.description, features: app.features, accent: app.accent)
             entries[id]?.words = w.isEmpty ? (before?.words ?? w) : w
@@ -243,7 +247,9 @@ public enum Catalog {
                                                          updatesItself: app.updatesItself)
                 entry.bundleID = entry.bundleID ?? app.bundleID
                 entry.bundleName = entry.bundleName ?? app.bundleName
-                entry.updatesItself = entry.updatesItself || app.updatesItself
+                // An SSD marks an app self-updating only when the signed feed does not already
+                // offer it as an installer.
+                if !feedBundles.contains(app.bundleID) { entry.updatesItself = entry.updatesItself || app.updatesItself }
                 if entry.notes == nil { entry.notes = app.notes }
                 if entry.words.isEmpty { entry.words = app.words }
                 if app.mainMacOnly == true { entry.mainMacOnly = true }
@@ -285,7 +291,8 @@ public enum Catalog {
         var known: [String: (String, Bool)] = [:]
         for app in ssd { known[app.bundleID] = (app.id, app.updatesItself) }
         for (id, app) in feed?.apps ?? [:] {
-            if let b = app.bundleID { known[b] = (id, (known[b]?.1 ?? false) || Agent.statusOnly.contains(app.kind)) }
+            // The feed's own kind decides for an app it lists; the drive decides for one it does not.
+            if let b = app.bundleID { known[b] = (id, Agent.statusOnly.contains(app.kind)) }
         }
         return known
     }
@@ -321,6 +328,9 @@ public enum Catalog {
         var merged = apps
         for (id, found) in discovered {
             guard var existing = merged[id] else { merged[id] = found; continue }
+            // The helper is a binary the stub runs, not an app bundle: discovery never gives it a
+            // path (which would then collide with the Launcher app's own entry).
+            guard existing.recipe != "updater" else { continue }
             if !FileManager.default.fileExists(atPath: existing.bundlePath) {
                 existing.bundlePath = found.bundlePath
                 merged[id] = existing
@@ -348,13 +358,29 @@ public enum Catalog {
         let before = seen
         for (id, app) in feed?.apps ?? [:] where app.kind != "updater" {
             if let b = app.bundleID {
-                if seen[b] == nil { seen[b] = SSDApp(id: id, name: app.name ?? id, version: app.version, bundleID: b) }
+                // A bundle's app id and policy come from the signed feed: a remembered drive entry
+                // that named it differently (the Launcher app once arrived as `updater`) or still
+                // carries an old self-updating flag is corrected here, with no hand edit.
+                if seen[b]?.id != id {
+                    seen[b] = SSDApp(id: id, name: app.name ?? id, version: app.version, bundleID: b, bundleName: app.bundleName,
+                                     updatesItself: Agent.statusOnly.contains(app.kind))
+                } else if seen[b]?.updatesItself != Agent.statusOnly.contains(app.kind) {
+                    seen[b]?.updatesItself = Agent.statusOnly.contains(app.kind)
+                }
             }
         }
         let icons = stateDir.appendingPathComponent("icons")
         for source in ssd {
             for app in source.index.apps {
-                seen[app.bundleID] = app
+                var remembered = app
+                // The signed feed's own id and kind decide for an app it lists; a drive's older id
+                // or self-updating flag is not carried into the cache, so neither can come back
+                // when that drive is mounted.
+                if let named = feed?.apps.first(where: { $0.value.bundleID == app.bundleID }) {
+                    remembered.id = named.key
+                    remembered.updatesItself = Agent.statusOnly.contains(named.value.kind)
+                }
+                seen[app.bundleID] = remembered
                 guard let icon = app.icon else { continue }
                 try? FileManager.default.createDirectory(at: icons, withIntermediateDirectories: true)
                 let cached = icons.appendingPathComponent("\(app.bundleID).png")
@@ -412,11 +438,15 @@ public enum SSDIndexer {
                     icon = "\(iconsFolder)/\(meta.bundleID).png"
                     try png.write(to: root.appendingPathComponent(icon!), options: .atomic)
                 }
-                let selfUpdating = old?.updatesItself ?? hasScript
+                // A stale flag from an older index does not survive: the signed feed says whether an
+                // app it lists installs from here, and a hand edit is not needed to clear it.
+                let feedListsBundle = feed?.apps.values.contains { $0.bundleID == meta.bundleID } == true
+                let selfUpdating = feedListsBundle ? false : (old?.updatesItself ?? hasScript)
                 var app = SSDApp(id: old?.id ?? String(slug), name: old?.name ?? meta.name, version: meta.version,
                                              bundleID: meta.bundleID, bundleName: meta.bundleName, file: file, sha256: sha,
                                              updatesItself: selfUpdating,
-                                             setup: old?.setup ?? (selfUpdating ? "\(appsFolder)/\(folder)" : nil), icon: icon, notes: old?.notes)
+                                             setup: old?.setup ?? (selfUpdating ? "\(appsFolder)/\(folder)" : nil),
+                                             icon: icon, notes: old?.notes)
                 // Hand-written words survive; the date and size are the installer's own.
                 app.tagline = old?.tagline; app.description = old?.description; app.features = old?.features; app.accent = old?.accent
                 app.mainMacOnly = old?.mainMacOnly

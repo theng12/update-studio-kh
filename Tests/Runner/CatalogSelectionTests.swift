@@ -47,31 +47,56 @@ func catalogSelectionTests() {
     expect(row(itself)?.ssd == nil && row(itself)?.initialSSD?.version == "1.0",
            "CS14 an older SSD copy of an app that updates itself stays an explicit first-install choice")
     // The signed feed's own kind is the policy: no hard-coded app-id registry, no SSD needed.
-    for kind in ["story", "hub"] {
+    // `status` is the one kind that keeps an app out of the installer; Story and Hub publish as
+    // `app-dmg` and install like every other app now.
+    do {
         var own = server
-        own.kind = kind; own.bundleID = "com.fixture.\(kind)"; own.bundleName = "\(kind).app"
-        let ownFeed = Feed(published_at: feed.published_at, apps: [kind: own])
+        own.kind = "status"; own.bundleID = "com.fixture.status"; own.bundleName = "status.app"
+        let ownFeed = Feed(published_at: feed.published_at, apps: ["status": own])
         let catalog = Catalog.build(feed: ownFeed, ssd: [])
         expect(catalog.first?.updatesItself == true && catalog.first?.setupFolder == nil,
-               "CS15 \(kind) preserves its signed status-only policy without an SSD or invented setup")
+               "CS15 the feed's status kind preserves a status-only policy without an SSD or invented setup")
         let known = Catalog.knownBundles(feed: ownFeed, ssd: [])
-        let folder = root.appendingPathComponent(kind)
+        let folder = root.appendingPathComponent("status")
         try! fm.createDirectory(at: folder, withIntermediateDirectories: true)
         _ = makeApp(folder.appendingPathComponent(own.bundleName!), version: "1.0", id: own.bundleID!)
         let discovered = Catalog.discover(config: AgentConfig(feedURL: "http://127.0.0.1/release.json", publicKey: "fixture",
                                                              stateDir: folder.path, machine: "fixture", token: "fixture", apps: [:]),
                                           known: known, folders: [folder])
-        expect(discovered[kind]?.recipe == "status" && discovered[kind]?.automatic == false,
-               "CS16 hand-installed \(kind) remains observed, not automatically replaced")
+        expect(discovered["status"]?.recipe == "status" && discovered["status"]?.automatic == false,
+               "CS16 hand-installed status app remains observed, not automatically replaced")
         var config = AgentConfig(feedURL: "http://127.0.0.1/release.json", publicKey: "fixture", stateDir: folder.path,
                                  machine: "fixture", token: "fixture", apps: [:])
         let state = folder.appendingPathComponent("state")
-        let failures = try! Agent.registerLauncherApps([kind], catalog: catalog, config: &config, stateDir: state, folders: [folder])
-        expect(failures.isEmpty && config.apps[kind]?.recipe == "status" && config.apps[kind]?.automatic == false,
-               "CS17 a first-install request registers \(kind) under its own status recipe, never as an app it manages alone")
+        let failures = try! Agent.registerLauncherApps(["status"], catalog: catalog, config: &config, stateDir: state, folders: [folder])
+        expect(failures.isEmpty && config.apps["status"]?.recipe == "status" && config.apps["status"]?.automatic == false,
+               "CS17 a first-install request registers a status app under its own status recipe, never as an app it manages alone")
         try! fm.createDirectory(at: state, withIntermediateDirectories: true)
         Catalog.remember([], feed: ownFeed, in: state)
         expect(Catalog.seen(in: state).first?.updatesItself == true,
-               "CS18 \(kind)'s policy survives an offline or unplugged-source run")
+               "CS18 a status app's policy survives an offline or unplugged-source run")
+    }
+    // A drive or a remembered entry cannot keep Story or Hub self-updating once the signed feed
+    // offers them as installers: the live source wins, with no app id special-cased anywhere.
+    for id in ["story", "hub"] {
+        var live = server
+        live.kind = "app-dmg"
+        live.bundleID = "com.fixture.\(id)"; live.bundleName = "\(id).app"
+        let liveFeed = Feed(published_at: feed.published_at, apps: [id: live])
+        let driveCopy = SSDApp(id: id, name: id, version: "2.0", bundleID: live.bundleID!, bundleName: live.bundleName,
+                               file: nil, sha256: nil, updatesItself: true)
+        let drive = SSDSource(volume: "Fixture SSD", root: root, index: SSDIndex(apps: [driveCopy]))
+        let catalog = Catalog.build(feed: liveFeed, ssd: [drive], seen: [driveCopy])
+        expect(catalog.first?.updatesItself == false,
+               "CS19 \(id) is installable as soon as the signed feed offers it, though a remembered drive said otherwise")
+        expect(Catalog.knownBundles(feed: liveFeed, ssd: [driveCopy])[live.bundleID!]?.updatesItself == false,
+               "CS19 a hand-installed \(id) is discovered as managed, not as an app that updates itself")
+        // The stale flag in the remembered cache is cleared by the next run, with no hand edit.
+        let state = root.appendingPathComponent("policy-\(id)")
+        try! fm.createDirectory(at: state, withIntermediateDirectories: true)
+        try! AtomicFile.writeJSON([driveCopy.bundleID: driveCopy], to: Catalog.seenFile(in: state))
+        Catalog.remember([drive], feed: liveFeed, in: state)
+        expect(Catalog.seen(in: state).first { $0.bundleID == live.bundleID }?.updatesItself == false,
+               "CS19 the signed feed clears a stale self-updating flag in the remembered cache")
     }
 }

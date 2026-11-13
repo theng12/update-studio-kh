@@ -76,7 +76,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     func reload() {
         guard loaded else { return }
         helper.lock.lock()
-        let apps = helper.apps, busy = helper.installingApp, ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, attempt = helper.lastAttempt, serverKnown = helper.serverKnown
+        let apps = helper.apps, busy = helper.installingApp, pending = helper.active.union(helper.requested), ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, attempt = helper.lastAttempt, serverKnown = helper.serverKnown
         helper.lock.unlock()
         let settings = HelperSettings.load(from: helper.stateDir)
         let cleanup = try? HelperRetirementSettings.load(from: helper.stateDir)
@@ -84,9 +84,10 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         var rows: [[String: Any]] = []
         for app in apps {
             var row: [String: Any] = [
-                "id": app.app, "name": app.name.isEmpty ? AppNames.display(app.app) : app.name, "status": busy == app.app ? HelperApp.updating : app.status,
+                "id": app.app, "name": app.name.isEmpty ? AppNames.display(app.app) : app.name,
+                "status": busy == app.app ? HelperApp.updating : (pending.contains(app.app) ? HelperApp.receiving : app.status),
                 "managed": app.managed, "statusOnly": app.statusOnly, "automatic": app.automatic, "hidden": hidden.contains(app.app),
-                "manuallyInstallable": app.manuallyInstallable,
+                "manuallyInstallable": app.manuallyInstallable, "installable": app.installable,
                 "open": app.bundlePath != nil, "setup": app.setupFolder != nil, "canRollBack": app.canRollBack, "helper": app.app == "updater",
             ]
             row["installed"] = app.installed; row["available"] = app.available; row["reason"] = app.reason

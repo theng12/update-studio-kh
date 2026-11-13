@@ -141,10 +141,12 @@ public struct HelperApp: Sendable, Equatable {
     /// True when the person at this Mac may install or update this app by choosing it, even though
     /// the app updates itself: KH Updater never does that on its own, the Launcher does it on request.
     public var manuallyInstallable = false
+    /// True when a first Install or an Update has a recipe the agent will really run for this app.
+    public var installable = true
 
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
-                      failed = "Failed", updatesItself = "Updates itself", notInstalled = "Not installed",
-                      notInFeed = "Not in the feed"
+                      receiving = "Receiving update…", failed = "Failed", updatesItself = "Updates itself",
+                      notInstalled = "Not installed", notInFeed = "Not in the feed"
 
     /// One state per app, and nothing this Mac cannot vouch for reads as fine.
     public static func status(installed: String?, available: String?, statusOnly: Bool, manual: Bool = false,
@@ -170,7 +172,7 @@ public struct HelperApp: Sendable, Equatable {
 
 public enum AppNames {
     // shortcut: display names for the apps this fleet runs; any other id shows as itself. App ids and bundle IDs stay.
-    static let names = ["hub": "Hub Studio KH", "story": "Story Studio KH", "gateway": "Gateway Studio KH", "updater": "Studio Launcher KH",
+    static let names = ["hub": "Hub Studio KH", "story": "Story Studio KH", "gateway": "Gateway Studio KH", "updater": "Update Studio Helper",
                         "printer-studio": "Printer Studio KH", "media-studio": "Media Studio KH", "music-studio": "Music Studio KH",
                         "kh-updater-app": "Update Studio KH"]
     public static func display(_ app: String) -> String { names[app] ?? app }

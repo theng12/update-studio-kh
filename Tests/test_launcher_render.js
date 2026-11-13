@@ -437,4 +437,15 @@ assert.match(document.querySelector('.empty').textContent, /^Checking…$/, 'R11
 // R12 the appearance segment offers exactly System, Light and Dark — no Default.
 assert(!script.includes("'default','Default'"), 'R12 the appearance segment no longer offers Default');
 assert.match(script, /\['system','System'\],\['light','Light'\],\['dark','Dark'\]/, 'R12 exactly three appearance choices');
-console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group and the empty list’s reason');
+// R13 a click is acknowledged at once: the row says the update is being received and offers no
+// second action while it waits; an app with no recipe the agent would run draws no Install at all.
+render(state([row({ status: 'Receiving update…' })]));
+assert.match(document.querySelector('.card').textContent, /Receiving update…/, 'R13 a queued install says it is being received');
+assert.equal(document.querySelectorAll('.card .btn.main').length, 0, 'R13 …and offers no second action while it waits');
+render(state([row({ id: 'bad', name: 'Bad KH', status: 'Not installed', managed: false, installed: null,
+                    available: '1.0', installable: false })]));
+assert.equal(document.querySelectorAll('.card .btn.main').length, 0, 'R13 an app with no recipe the agent would run draws no Install');
+render(state([row({ id: 'new-kh', name: 'New KH', status: 'Not installed', managed: false, installed: null,
+                    available: '1.0', installable: true })]));
+assert.equal(document.querySelectorAll('.card .btn.main').length, 1, 'R13 an installable new app still offers Install');
+console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the click’s immediate feedback and the empty list’s reason');
