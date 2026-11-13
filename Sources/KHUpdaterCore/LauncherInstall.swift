@@ -6,16 +6,24 @@ extension Agent {
     /// memory and in `launcher-apps.json` — so Update really runs. The person's Automatic choice is
     /// kept as it was; nothing else about the registration changes.
     static func upgradeObservedOnlyRecipes(config: inout AgentConfig, catalog: [CatalogEntry], feed: Feed, stateDir: URL) {
+        func installableNow(_ app: String) -> Bool {
+            feed.apps[app] != nil && catalog.first(where: { $0.id == app }).map { !$0.updatesItself } == true
+        }
         let file = stateDir.appendingPathComponent("launcher-apps.json")
         var saved = (try? AtomicFile.readJSON([String: AppConfig].self, from: file)) ?? [:]
         var changed = false
-        for (app, cfg) in config.apps where cfg.recipe == "status" {
-            guard feed.apps[app] != nil,
-                  let entry = catalog.first(where: { $0.id == app }), !entry.updatesItself else { continue }
+        for (app, cfg) in config.apps where cfg.recipe == "status" && installableNow(app) {
             var upgraded = cfg
             upgraded.recipe = "app-dmg"
             config.apps[app] = upgraded
             if saved[app] != nil { saved[app] = upgraded; changed = true }
+        }
+        // The saved registration is repaired too: discovery may already run this app as managed
+        // (so the in-memory recipe is right while the file still says `status`), and an app that is
+        // moved or replaced later must not fall back to a recipe the feed no longer supports.
+        for (app, cfg) in saved where cfg.recipe == "status" && installableNow(app) {
+            saved[app]?.recipe = "app-dmg"
+            changed = true
         }
         // A known recipe replacing another known recipe cannot make the config invalid; the run's
         // own validation still runs after this.

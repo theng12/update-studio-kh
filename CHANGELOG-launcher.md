@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.32 — 2026-11-13
+
+- The saved app list is repaired as well: an app an older setup recorded as updating itself does not fall back to that after it is moved or replaced.
+
 ## 0.1.31 — 2026-11-13
 
 - An app an older setup recorded as "updates itself" is adopted the moment the signed feed offers it: its Update button now updates it, and the Mac keeps your Automatic choice.

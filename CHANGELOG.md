@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.34 — 2026-11-13
+
+- Includes Studio Launcher KH 0.1.32: the saved app list is repaired too, so an app an older setup recorded as updating itself does not fall back to that after it is moved or replaced.
+
 ## 1.0.33 — 2026-11-13
 
 - An app an older setup recorded as "updates itself" is adopted the moment the signed feed offers it: Update really runs, and the Mac keeps your Automatic choice.

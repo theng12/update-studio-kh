@@ -436,6 +436,24 @@ func standaloneLauncherTests() {
                    && saved?[appID]?.automatic == false,
                    "SL19b an old status registration is upgraded once the feed offers the app, and the update installs")
         }
+        // The same repair when discovery already adopted the app: the saved file is repaired even
+        // though the effective recipe for this run came from discovery.
+        do {
+            let (_, base, folder, shell, http) = storySetup("status-upgrade-saved", kind: "app-dmg")
+            _ = makeApp(folder.appendingPathComponent(storyName), version: "2.0", id: storyBundle)
+            let state = URL(fileURLWithPath: base.stateDir)
+            try! fm.createDirectory(at: state, withIntermediateDirectories: true)
+            let registered = AppConfig(bundlePath: folder.appendingPathComponent(storyName).path, recipe: "status",
+                                       automatic: false, bundleID: storyBundle)
+            try! AtomicFile.writeJSON([appID: registered], to: state.appendingPathComponent("launcher-apps.json"))
+            try! AtomicFile.writeJSON([storyBundle: SSDApp(id: appID, name: "Story Studio KH", version: "2.0",
+                                                           bundleID: storyBundle, bundleName: storyName)],
+                                      to: Catalog.seenFile(in: state))
+            _ = try? Agent.runOnce(config: base, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
+            let saved = try? AtomicFile.readJSON([String: AppConfig].self, from: state.appendingPathComponent("launcher-apps.json"))
+            expect(saved?[appID]?.recipe == "app-dmg" && saved?[appID]?.automatic == false,
+                   "SL19b a saved status registration is repaired even when discovery already manages the app")
+        }
         // A killed install under a legacy recipe name is undone by the same recovery loop.
         for own in [(app: "story", bundle: storyBundle, name: storyName, label: "Story Studio KH"),
                     (app: "hub", bundle: "com.fixture.hub", name: "Studio Hub.app", label: "Studio Hub")] {
