@@ -1,6 +1,28 @@
 import Foundation
 
 extension Agent {
+    /// An older registration wrote `status` for an app the sources then called self-updating. Once
+    /// the signed feed offers that app as an installer, the recipe is upgraded to `app-dmg` — in
+    /// memory and in `launcher-apps.json` — so Update really runs. The person's Automatic choice is
+    /// kept as it was; nothing else about the registration changes.
+    static func upgradeObservedOnlyRecipes(config: inout AgentConfig, catalog: [CatalogEntry], feed: Feed, stateDir: URL) {
+        let file = stateDir.appendingPathComponent("launcher-apps.json")
+        var saved = (try? AtomicFile.readJSON([String: AppConfig].self, from: file)) ?? [:]
+        var changed = false
+        for (app, cfg) in config.apps where cfg.recipe == "status" {
+            guard feed.apps[app] != nil,
+                  let entry = catalog.first(where: { $0.id == app }), !entry.updatesItself else { continue }
+            var upgraded = cfg
+            upgraded.recipe = "app-dmg"
+            config.apps[app] = upgraded
+            if saved[app] != nil { saved[app] = upgraded; changed = true }
+        }
+        // A known recipe replacing another known recipe cannot make the config invalid; the run's
+        // own validation still runs after this.
+        guard changed else { return }
+        try? AtomicFile.writeJSON(saved, to: file)
+    }
+
     /// Register before staging so recovery can find even an interrupted first installation.
     static func registerLauncherApps(_ requested: Set<String>, catalog: [CatalogEntry], config: inout AgentConfig,
                                      stateDir: URL, folders: [URL]) throws -> [String: String] {

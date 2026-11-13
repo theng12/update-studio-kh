@@ -554,6 +554,7 @@ public enum Agent {
         }
         Catalog.remember(ssd, feed: feed, in: stateDir)
         let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))
+        upgradeObservedOnlyRecipes(config: &config, catalog: catalog, feed: feed, stateDir: stateDir)
         let registrationErrors = try registerLauncherApps(requested, catalog: catalog, config: &config, stateDir: stateDir, folders: appFolders)
         // A self-update the stub rolled back is a failure this Mac has already seen: those bytes
         // must not be installed again on every run. A new artifact (a different SHA-256) or an

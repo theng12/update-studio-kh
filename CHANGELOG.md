@@ -5,6 +5,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.33 — 2026-11-13
+
+- An app an older setup recorded as "updates itself" is adopted the moment the signed feed offers it: Update really runs, and the Mac keeps your Automatic choice.
+- Includes Studio Launcher KH 0.1.31 with the same installer fixes.
+
 ## 1.0.32 — 2026-11-13
 
 - Every app in the signed feed can now be installed or updated from its card on any Mac, including this publisher Mac: the feed's offers are what an install uses, never this Mac's feed-hosting role.

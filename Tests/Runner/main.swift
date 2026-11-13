@@ -1827,14 +1827,28 @@ func ownerRollbackTests() {
         expect(retry?.updates == 1 && r.memory?.rejected["foo"] == nil && r6Version(r.installed) == "2.0.0",
                "R6-6 an explicit update order clears the rollback rejection")
     }
-    // 7. Status-only apps and the updater itself: refused, and the app is not touched.
-    for recipe in ["status", "updater"] {
-        let r = R6Rig("refuse-" + recipe, recipe: recipe)
+    // 7. An app the live sources mark as updating itself, and the updater itself: refused, and the
+    // app is not touched. A `status` recipe is only that while the feed's kind says so.
+    do {
+        let r = R6Rig("refuse-status", recipe: "status")
+        try! r.rig.publish("foo", "2.1.0", r.rig.artifact("foo-status.dmg", "status-artifact"), kind: "status")
+        r.order()
+        r.run()
+        expect(r.last?.status == "refused" && r.fake.events.isEmpty && r6Version(r.installed) == "2.0.0",
+               "R6-7 a status kind refuses an owner rollback (\(r.last?.reason ?? "none"))")
+        let upgraded = R6Rig("upgrade-status", recipe: "status")
+        upgraded.order()
+        upgraded.run()
+        expect(upgraded.last?.status == "rolled_back_by_owner" && r6Version(upgraded.installed) == "1.0.0",
+               "R6-7 a status recipe is upgraded when the feed offers the app, so its rollback really runs")
+    }
+    do {
+        let r = R6Rig("refuse-updater", recipe: "updater")
         r.order()
         r.run()
         expect(r.last?.status == "refused" && r.fake.events.isEmpty && r6Version(r.installed) == "2.0.0"
-               && (recipe != "updater" || r.last?.reason?.contains("stub") == true),
-               "R6-7 \(recipe) refuses an owner rollback (\(r.last?.reason ?? "none"))")
+               && r.last?.reason?.contains("stub") == true,
+               "R6-7 updater refuses an owner rollback (\(r.last?.reason ?? "none"))")
     }
     // 8. An app this Mac does not run, and an action this build does not know: both refused.
     do {

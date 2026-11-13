@@ -419,6 +419,23 @@ func standaloneLauncherTests() {
             expect(automatic?.commandsRun == 1 && automatic?.updates == 1 && http.downloads == 1 && marker(target) == "2.0",
                    "SL19 an existing \(own.app)-recipe config is managed: Automatic installs the feed's newer version")
         }
+        // A registration an older kit wrote as `status` for an app the feed now offers is upgraded,
+        // so the Update the page draws is one the agent will really run.
+        do {
+            let (_, base, folder, shell, http) = storySetup("status-upgrade", kind: "app-dmg")
+            let target = makeApp(folder.appendingPathComponent(storyName), version: "1.0", id: storyBundle)
+            var cfg = base
+            cfg.apps[appID] = AppConfig(bundlePath: target.path, recipe: "status", automatic: false, bundleID: storyBundle)
+            let state = URL(fileURLWithPath: cfg.stateDir)
+            try! fm.createDirectory(at: state, withIntermediateDirectories: true)
+            try! AtomicFile.writeJSON([appID: cfg.apps[appID]!], to: state.appendingPathComponent("launcher-apps.json"))
+            let run = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control },
+                                         requested: [appID], appFolders: [folder])
+            let saved = try? AtomicFile.readJSON([String: AppConfig].self, from: state.appendingPathComponent("launcher-apps.json"))
+            expect(run?.apps.first { $0.app == appID }?.installed == "2.0" && saved?[appID]?.recipe == "app-dmg"
+                   && saved?[appID]?.automatic == false,
+                   "SL19b an old status registration is upgraded once the feed offers the app, and the update installs")
+        }
         // A killed install under a legacy recipe name is undone by the same recovery loop.
         for own in [(app: "story", bundle: storyBundle, name: storyName, label: "Story Studio KH"),
                     (app: "hub", bundle: "com.fixture.hub", name: "Studio Hub.app", label: "Studio Hub")] {

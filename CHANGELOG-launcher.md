@@ -5,6 +5,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.31 — 2026-11-13
+
+- An app an older setup recorded as "updates itself" is adopted the moment the signed feed offers it: its Update button now updates it, and the Mac keeps your Automatic choice.
+- Includes every installer fix from 0.1.30 below.
+
 ## 0.1.30 — 2026-11-13
 
 - Every app in the signed feed can now be installed or updated from its card on any Mac, including the publisher's own Mac: a first Install no longer does nothing, and Storage Studio KH, Media, Music, Library, Printer and Relay all install from the feed.
