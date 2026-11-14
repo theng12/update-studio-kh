@@ -923,8 +923,9 @@ func agentAndServerTests() {
         expect(healed != nil && healed?.deliveryMismatches?["d"] == nil, "R5-1 a good install clears the mismatch count")
     }
 
-    // Failed transfers may have written bytes before refusing: preserve them in state/_trash now,
-    // not only when a later run happens to clear the downloads directory.
+    // A failed transfer never throws away the bytes it already has: the partial file stays where
+    // the next attempt will resume from it. Only bytes that cannot be the signed artifact (a size
+    // or SHA mismatch) are retired — recoverably, to state/_trash.
     for failure in ["transport", "http", "size", "sha"] {
         let rig = Rig("partial-\(failure)")
         let installed = makeApp(rig.root.appendingPathComponent("Foo.app"), version: "1.0.0")
@@ -942,13 +943,15 @@ func agentAndServerTests() {
         let state = URL(fileURLWithPath: config.stateDir)
         let downloads = state.appendingPathComponent("downloads/foo")
         let parts = (try? fm.contentsOfDirectory(atPath: downloads.path))?.filter { $0.hasSuffix(".part") }
+        let kept = parts?.first.flatMap { try? Data(contentsOf: downloads.appendingPathComponent($0)) }
         let trash = fm.enumerator(at: Trash.root(in: state), includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []
-        let saved = trash.first { $0.pathExtension == "part" }
-        let expected = failure == "sha" ? Data(repeating: 120, count: 8) : Data("partial".utf8)
         let report = (try? StateStore.load(from: rig.state))?.machines["mac1"]?.lastResults?["foo"]
-        expect(report?.status == "download_failed" && parts?.isEmpty == true && saved.flatMap { try? Data(contentsOf: $0) } == expected
+        let transportFailure = failure == "transport" || failure == "http"
+        expect(report?.status == "download_failed"
+               && (transportFailure ? kept == Data("partial".utf8)
+                                    : parts?.isEmpty == true && trash.contains { $0.pathExtension == "part" })
                && marker(installed) == "1.0.0" && app.events.isEmpty,
-               "R19/R5-1 \(failure) failure moves the partial file to state trash before returning")
+               "R19/R5-1 \(failure) failure keeps its partial, and retires only bytes that cannot be the artifact")
         client.downloadFailure = nil
         let retry = try? Agent.runOnce(config: config, http: client, shell: shell, control: control)
         expect(retry?.updates == 1 && marker(installed) == "2.0.0" && !app.running
@@ -3849,6 +3852,9 @@ struct RunnerMain {
         }
         if ProcessInfo.processInfo.environment["AGENT_CORE_ONLY"] == "1" {
             agentAndServerTests()
+            downloadResumeTests()
+            repairedPathTests()
+            oneShotLockTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -3907,6 +3913,7 @@ struct RunnerMain {
             enrolWindowTests()
             pairingTests()
             helperTests()
+            helperSwitchTests()
             launcherTests()
             connectionFlowTests()
             setupSourceTests()
@@ -3953,10 +3960,14 @@ r41HealthMustHold()
         enrolWindowTests()
         pairingTests()
         helperTests()
+        helperSwitchTests()
         launcherTests()
         connectionFlowTests()
         setupSourceTests()
         downloadProgressTests()
+        downloadResumeTests()
+        repairedPathTests()
+        oneShotLockTests()
         artifactDeltaTests()
         installedIdentityTests()
         publisherRetentionTests()

@@ -379,7 +379,7 @@ struct KHUMain {
                 repeat {
                     do {
                         let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))
-                        let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c))
+                        let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
                         print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
                         for note in r.notes { print("note: \(note)") }
                         menu?.finished(r, error: nil)

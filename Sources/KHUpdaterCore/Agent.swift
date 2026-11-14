@@ -84,17 +84,32 @@ public struct URLSessionHTTPClient: HTTPClient {
     }
 
     public func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64, phase: String) throws -> Int {
-        guard FileManager.default.createFile(atPath: file.path, contents: nil),
-              let handle = try? FileHandle(forWritingTo: file) else { throw khuFail("cannot write \(file.path)") }
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: file.path) {
+            guard fm.createFile(atPath: file.path, contents: nil) else { throw khuFail("cannot write \(file.path)") }
+        }
+        guard let handle = try? FileHandle(forWritingTo: file) else { throw khuFail("cannot write \(file.path)") }
         defer { try? handle.close() }
-        DownloadControl.updateProgress(phase, received: 0)
-        let status = try transfer("GET", url, headers: headers, body: nil, handle: handle, limit: limit, phase: phase).status
+        // The bytes already on disk are the transfer's own progress: a failed or stopped download
+        // keeps its partial file, and the next attempt asks the server only for what is missing.
+        // A partial the signed size cannot hold is not progress; that one starts over.
+        var start = Int64((try? handle.seekToEnd()) ?? 0)
+        var requestHeaders = headers
+        if start > 0, start < limit {
+            requestHeaders["Range"] = "bytes=\(start)-"
+        } else if start > 0 {
+            _ = try? handle.truncate(atOffset: 0); _ = try? handle.seek(toOffset: 0); start = 0
+        }
+        DownloadControl.updateProgress(phase, received: start, total: start > 0 ? limit : nil)
+        let status = try transfer("GET", url, headers: requestHeaders, body: nil, handle: handle, limit: limit,
+                                  phase: phase, resumeFrom: start).status
         DownloadControl.updateProgress("checking")
         return status
     }
 
     private func transfer(_ method: String, _ url: URL, headers: [String: String], body: Data?,
-                          handle: FileHandle?, limit: Int64, phase: String = "downloading") throws -> StreamSink {
+                          handle: FileHandle?, limit: Int64, phase: String = "downloading",
+                          resumeFrom: Int64 = 0) throws -> StreamSink {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = method
         request.httpBody = body
@@ -102,7 +117,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         if let officialHosts, !Self.officialURL(url, hosts: officialHosts) {
             throw khuFail("download refused: URL is outside the vendor's official HTTPS hosts")
         }
-        let sink = StreamSink(handle: handle, limit: limit, officialHosts: officialHosts, phase: phase)
+        let sink = StreamSink(handle: handle, limit: limit, officialHosts: officialHosts, phase: phase, resumeFrom: resumeFrom)
         let session = URLSession(configuration: .ephemeral, delegate: sink, delegateQueue: nil)
         let task = session.dataTask(with: request)
         task.resume()
@@ -162,12 +177,15 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
     var expected: Int64?
     var status = 0
     var error: Error?
+    /// Bytes already on disk when this transfer started; a Range reply appends after them.
+    var initial: Int64
 
     let officialHosts: [String]?
     /// What the Launcher is told is happening while these bytes arrive.
     let phase: String
-    init(handle: FileHandle?, limit: Int64, officialHosts: [String]?, phase: String = "downloading") {
+    init(handle: FileHandle?, limit: Int64, officialHosts: [String]?, phase: String = "downloading", resumeFrom: Int64 = 0) {
         self.handle = handle; self.limit = limit; self.officialHosts = officialHosts; self.phase = phase
+        self.initial = resumeFrom
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -183,19 +201,47 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        expected = response.expectedContentLength > 0 ? response.expectedContentLength : nil
-        if handle != nil { DownloadControl.updateProgress(phase, received: 0, total: expected) }
-        if response.expectedContentLength > limit {
-            error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
+        let length = response.expectedContentLength > 0 ? response.expectedContentLength : nil
+        if status == 206 {
+            // The rest of the file, after the bytes already on disk; the total is still the signed size.
+            expected = length.map { initial + $0 }
+            if let length, initial + length > limit {
+                error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
+                completionHandler(.cancel)
+                return
+            }
+        } else if status == 200 {
+            // A peer that does not honour Range sends the whole file: start the file over rather
+            // than appending a second copy to the bytes already there.
+            if initial > 0, let handle {
+                _ = try? handle.truncate(atOffset: 0)
+                _ = try? handle.seek(toOffset: 0)
+                initial = 0
+            }
+            expected = length
+            if response.expectedContentLength > limit {
+                error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
+                completionHandler(.cancel)
+                return
+            }
+        } else if status == 416 {
+            // The server cannot continue from what is here; the caller starts this one over.
             completionHandler(.cancel)
+            return
         } else {
-            completionHandler(.allow)
+            // Any other status carries an error message: it is never written onto a partial file.
+            expected = length
         }
+        if handle != nil { DownloadControl.updateProgress(phase, received: initial, total: expected) }
+        completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        // An error reply's body is not artifact bytes: it must never land on a partial file that
+        // a later attempt will resume from.
+        guard status == 200 || status == 206 else { return }
         received += Int64(data.count)
-        guard received <= limit else {
+        guard initial + received <= limit else {
             error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")
             dataTask.cancel()
             return
@@ -206,7 +252,7 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
         while DownloadControl.paused && !DownloadControl.cancelled { usleep(100_000) }
         do {
             try handle.write(contentsOf: data)
-            DownloadControl.updateProgress(phase, received: received, total: expected)
+            DownloadControl.updateProgress(phase, received: initial + received, total: expected)
         } catch { self.error = error; dataTask.cancel() }
     }
 
@@ -339,11 +385,13 @@ public enum Agent {
                                executable: String? = Bundle.main.executablePath, now: Date = Date(),
                                requested: Set<String> = [], installing: ((String?) -> Void)? = nil,
                                ssd: [SSDSource] = [], appFolders: [URL] = Catalog.applicationFolders,
-                               connectionFile: URL? = nil) throws -> AgentRunResult {
+                               connectionFile: URL? = nil, configFile: URL? = nil) throws -> AgentRunResult {
         // A config that names only the helper is a Mac that was just enrolled: it seeds itself from
         // the signed feed and what is installed here (see `adoptInstalledApps`). Read before this
         // run's own discovery adds anything, so "just enrolled" stays a fact about the saved file.
         let sparseConfig = config.apps.keys.allSatisfy { $0 == "updater" }
+        // The paths as the live config states them, so a repair can be written back to that file.
+        let loadedPaths = config.apps.mapValues(\.bundlePath)
         // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
         let stateURL = URL(fileURLWithPath: config.stateDir)
         var config = config
@@ -365,12 +413,16 @@ public enum Agent {
         try validate(config)
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
-        // One agent at a time per Mac: a second one (or a manual --once) refuses instead of racing.
-        return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"), wait: false) {
+        // One agent at a time per Mac. A second long-running agent refuses instead of racing; a
+        // one-shot local request (`--install`, `--once`, or a request handed to the loop) is bounded
+        // explicit work, so it waits for the run in progress instead of failing on its lock.
+        return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"),
+                                          wait: config.once || !requested.isEmpty) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
                           requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile,
-                          appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: startingNotes + repairNotes)
+                          appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: startingNotes + repairNotes,
+                          configFile: configFile, loadedPaths: loadedPaths)
         }
     }
 
@@ -397,12 +449,15 @@ public enum Agent {
                           control: @escaping (String, AppConfig) -> AppControl, executable: String?, now: Date,
                           requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = [],
                           connectionFile: URL? = nil, appFolders: [URL] = Catalog.applicationFolders,
-                          sparseConfig: Bool = false, startingNotes: [String] = []) throws -> AgentRunResult {
+                          sparseConfig: Bool = false, startingNotes: [String] = [],
+                          configFile: URL? = nil, loadedPaths: [String: String] = [:]) throws -> AgentRunResult {
         DownloadControl.reset()
         var config = config
         let mergedRegistrations = try mergeRegistrations(config: config, stateDir: stateDir)
         config = mergedRegistrations.config
         try validate(config)
+        // A path repair found during discovery is written back before anything else uses it.
+        persistRepairedPaths(loaded: loadedPaths, config: config, file: configFile)
         let registrationNotes = mergedRegistrations.notes
         let vendors = try AtomicFile.readJSON([String: AppConfig].self, from: stateDir.appendingPathComponent("vendor-apps.json")) ?? [:]
         config.apps.merge(vendors) { configured, _ in configured }
@@ -586,6 +641,7 @@ public enum Agent {
                                            stateDir: stateDir)
         result.notes += repairConfiguredPaths(config: &config, feed: feed, folders: appFolders, stateDir: stateDir,
                                               installed: &installed, build: &installedBuild, health: &health)
+        persistRepairedPaths(loaded: loadedPaths, config: config, file: configFile)
         let catalog = Catalog.build(feed: feed, ssd: ssd, seen: Catalog.seen(in: stateDir), icons: stateDir.appendingPathComponent("icons"))
         upgradeObservedOnlyRecipes(config: &config, catalog: catalog, feed: feed, stateDir: stateDir)
         let registrationErrors = try registerLauncherApps(requested, catalog: catalog, config: &config, stateDir: stateDir, folders: appFolders)
@@ -1114,7 +1170,9 @@ public enum Agent {
     }
 
     /// Stream the artifact to `downloads/<app>/`, checked against the signed size and SHA-256
-    /// before any recipe sees it. The previous download for the app goes to `_trash`.
+    /// before any recipe sees it. A finished artifact is reused (a failed install never downloads
+    /// it again); a failed transfer keeps its `.part` for the next attempt to resume; a superseded
+    /// version's bytes go to `_trash`.
     ///
     /// A signed patch is tried first, but only against the exact full artifact this Mac already
     /// has cached — never against the installed app, whose bytes are not the signed artifact. The
@@ -1145,9 +1203,30 @@ public enum Agent {
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         let fm = FileManager.default
         let trash = Trash.root(in: stateDir)
-        if fm.fileExists(atPath: dir.path) { try Trash.move(dir, into: trash) }
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let part = dir.appendingPathComponent(name + ".part")
+        let artifact = dir.appendingPathComponent(name)
+        // An artifact this Mac already finished stays: a failed install (an app that did not quit)
+        // is retried from it, never by downloading the same signed bytes again.
+        if let measured = try? Signing.sha256Hex(fileAt: artifact), measured.bytes == entry.bytes, measured.hex == entry.sha256 {
+            DownloadControl.updateProgress("checking")
+            return artifact
+        }
+        // Only this artifact's own partial may be resumed. Anything else in the folder is a
+        // superseded version's bytes: retired recoverably, never deleted.
+        for item in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where item != name + ".part" {
+            _ = try? Trash.move(dir.appendingPathComponent(item), into: trash)
+        }
+        // A partial that already reached the signed size (a run stopped between its last byte and
+        // the move) only needs verifying — the whole artifact is not fetched a second time.
+        if let size = (try? fm.attributesOfItem(atPath: part.path))?[.size] as? NSNumber, size.int64Value == entry.bytes {
+            DownloadControl.updateProgress("checking")
+            if let measured = try? Signing.sha256Hex(fileAt: part), measured.hex == entry.sha256 {
+                try fm.moveItem(at: part, to: artifact)
+                return artifact
+            }
+            _ = try? Trash.move(part, into: trash)
+        }
         let triedPatch = entry.delta != nil && base != nil
         if let delta = entry.delta, let base {
             do {
@@ -1163,22 +1242,35 @@ public enum Agent {
                 DownloadControl.updateProgress("full-fallback")
             }
         }
+        let phase = triedPatch ? "full-fallback" : "downloading"
+        func fetch() throws -> Int {
+            try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
+                              headers: [:], to: part, limit: entry.bytes, phase: phase)
+        }
         do {
-            let code = try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
-                                         headers: [:], to: part, limit: entry.bytes,
-                                         phase: triedPatch ? "full-fallback" : "downloading")
-            guard code == 200 else { throw khuFail("artifact download answered \(code); nothing was changed") }
+            var code = try fetch()
+            if code == 416 {
+                // This Mac's partial is not a range the source can continue from: this artifact
+                // starts over, and only this attempt's own bytes are given up.
+                _ = try? Trash.move(part, into: trash)
+                code = try fetch()
+            }
+            guard code == 200 || code == 206 else { throw khuFail("artifact download answered \(code); nothing was changed") }
+            DownloadControl.updateProgress("checking")
             let (sha, bytes) = try Signing.sha256Hex(fileAt: part)
-            guard bytes == entry.bytes else { throw DeliveryMismatch(description: "artifact size mismatch; nothing was changed") }
-            guard sha == entry.sha256 else { throw DeliveryMismatch(description: "artifact sha256 mismatch; nothing was changed") }
+            guard bytes == entry.bytes, sha == entry.sha256 else {
+                // Bytes that do not match the signed artifact are not progress any retry may
+                // resume onto; the next attempt starts this artifact from the beginning.
+                _ = try? Trash.move(part, into: trash)
+                throw DeliveryMismatch(description: "artifact size or sha256 mismatch; nothing was changed")
+            }
             guard !DownloadControl.cancelled else { throw khuFail("cancelled on this Mac; nothing was changed") }
-            let artifact = dir.appendingPathComponent(name)
             try fm.moveItem(at: part, to: artifact)
             return artifact
         } catch {
-            do { try Trash.move(part, into: trash) }
-            catch { throw khuFail("download failed and its partial file could not be moved to _trash: \(error)") }
-            if DownloadControl.cancelled { throw error }
+            // Cancel is the one failure that gives up the partial; a transport or server failure
+            // keeps it, and the next source or the next run resumes from where this one stopped.
+            if DownloadControl.cancelled { _ = try? Trash.move(part, into: trash); throw error }
             if let next = fallbacks.first {
                 return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http,
                                     fallbacks: Array(fallbacks.dropFirst()), base: base)
@@ -1231,7 +1323,7 @@ public enum Agent {
         defer { _ = try? Trash.move(patch, into: trash) }
         let code = try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
                                      headers: [:], to: patch, limit: delta.bytes, phase: "delta-downloading")
-        guard code == 200 else { throw khuFail("delta download answered \(code); nothing was changed") }
+        guard code == 200 || code == 206 else { throw khuFail("delta download answered \(code); nothing was changed") }
         let (sha, bytes) = try Signing.sha256Hex(fileAt: patch)
         guard bytes == delta.bytes, sha == delta.sha256 else {
             throw khuFail("the delta patch does not match its signed size or hash; nothing was changed")

@@ -405,8 +405,12 @@ did not land) instead of running it again; while it cannot be settled the order 
 the next run tries again.
 
 Artifacts stream to `downloads/<app>/`, refused past their signed size, then checked against
-the signed size and SHA-256. The previous download moves to `_trash`. Transport failures (no
-data, connection reset, deadline exceeded) are NOT artifact rejections — they retry next run. Bytes
+the signed size and SHA-256. A transfer that fails keeps its `.part`, and the next attempt resumes
+it with `Range: bytes=<have>-` (a publisher that answers 200 restarts it at zero instead); only
+Cancel gives a partial up. A finished artifact is reused by a retried install, so an app that did
+not quit costs no second download, and a superseded version's bytes move to `_trash`. Transport
+failures (no data, connection reset, deadline exceeded) are NOT artifact rejections — they retry
+next run and resume. Bytes
 that arrive but do not match the signed size or SHA (oversize, truncated, corrupt) are a delivery
 mismatch: retried on the next run, and rejected only after `Agent.maxDeliveryMismatches` (3) in a
 row for the same signed SHA, which bounds re-downloads when the server's copy itself is bad (a

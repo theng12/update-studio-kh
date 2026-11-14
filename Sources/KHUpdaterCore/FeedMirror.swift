@@ -58,7 +58,7 @@ public enum FeedMirror {
                         if try matches(destination, item: item) { continue }
                         let code = try http.download(sourceBase.appendingPathComponent("artifacts").appendingPathComponent(name),
                                                      headers: [:], to: partial, limit: item.limit)
-                        guard code == 200 else { throw khuFail("mirror artifact download answered \(code)") }
+                        guard code == 200 || code == 206 else { throw khuFail("mirror artifact download answered \(code)") }
                         try noSymlink(partial)
                         guard try matches(partial, item: item) else { throw khuFail("mirror artifact hash or size mismatch: \(name)") }
                     } catch {

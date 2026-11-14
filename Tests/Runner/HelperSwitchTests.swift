@@ -26,7 +26,7 @@ func helperSwitchTests() {
     let timed = load("{\"automatic\":{\"hub\":{\"on\":true,\"at\":\"\(now)\"}}}")
     let tie = timed.automaticDecision("hub", page: false, pageAt: now, config: true)
     let older = timed.automaticDecision("hub", page: false,
-                                        pageAt: ISO.string(Date(timeIntervalSince1970: 1_800_000_000)),
+                                        pageAt: ISO.string(Date().addingTimeInterval(-3600)),
                                         config: true)
     let later = timed.automaticDecision("hub", page: false,
                                         pageAt: ISO.string(Date().addingTimeInterval(3600)), config: true)

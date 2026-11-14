@@ -21,6 +21,8 @@ public struct HTTPRequest {
 public enum HTTPBody {
     case data(Data)
     case file(URL, Int64)
+    /// Bytes `from..<from+length` of a file: a `206 Partial Content` reply to a Range request.
+    case fileRange(URL, Int64, Int64)
 }
 
 public struct HTTPResponse {
@@ -34,6 +36,9 @@ public struct HTTPResponse {
     }
     public init(_ status: Int, _ contentType: String, data: Data) {
         self.status = status; self.contentType = contentType; self.body = .data(data)
+    }
+    public init(_ status: Int, _ contentType: String, body: HTTPBody) {
+        self.status = status; self.contentType = contentType; self.body = body
     }
     public var data: Data { if case .data(let d) = body { return d }; return Data() }
 }
@@ -117,9 +122,9 @@ public enum HTTP {
         }
     }
 
-    static let reasons = [200: "OK", 303: "See Other", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+    static let reasons = [200: "OK", 206: "Partial Content", 303: "See Other", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
                           404: "Not Found", 405: "Method Not Allowed", 409: "Conflict", 413: "Content Too Large",
-                          429: "Too Many Requests", 500: "Internal Server Error", 503: "Service Unavailable"]
+                          416: "Range Not Satisfiable", 429: "Too Many Requests", 500: "Internal Server Error", 503: "Service Unavailable"]
 
     public static func head(_ response: HTTPResponse, length: Int64) -> Data {
         var out = "HTTP/1.1 \(response.status) \(reasons[response.status] ?? "Error")\r\n"
@@ -139,11 +144,16 @@ public enum HTTP {
             var out = head(response, length: Int64(data.count))
             out.append(data)
             writeAll(fd, out)
-        case .file(let url, let size):
+        case .file(let url, let size), .fileRange(let url, let size, _):
+            let from: Int64
+            if case .fileRange(_, _, let start) = response.body { from = start } else { from = 0 }
             guard let handle = try? FileHandle(forReadingFrom: url) else {
                 send(fd, HTTPResponse(404, "text/plain; charset=utf-8", "not found")); return
             }
             defer { try? handle.close() }
+            if from > 0, (try? handle.seek(toOffset: UInt64(from))) == nil {
+                send(fd, HTTPResponse(416, "text/plain; charset=utf-8", "range not satisfiable")); return
+            }
             guard writeAll(fd, head(response, length: size)) else { return }
             var sent: Int64 = 0
             while sent < size, let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
@@ -276,6 +286,14 @@ public final class FeedServer: @unchecked Sendable {
 
     static func text(_ status: Int, _ message: String) -> HTTPResponse { HTTPResponse(status, "text/plain; charset=utf-8", message) }
     static let ok = HTTPResponse(200, "application/json", "{}")
+
+    /// The first byte a `Range: bytes=<start>-` header asks for. Only the agent's own open-ended
+    /// form is honoured; anything else is served whole, which every client already handles.
+    static func rangeStart(_ header: String?) -> Int64? {
+        guard let header = header?.lowercased(), header.hasPrefix("bytes="), !header.contains(","),
+              header.hasSuffix("-") else { return nil }
+        return Int64(header.dropFirst("bytes=".count).dropLast())
+    }
 
     /// A state transaction, answered honestly: an unreadable state file is a 503 that says so (the
     /// file is left as it is), and a change that could not be saved is a 500 — never a 200.
@@ -548,7 +566,23 @@ public final class FeedServer: @unchecked Sendable {
                 guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber else {
                     return Self.text(404, "not found")
                 }
-                return HTTPResponse(status: 200, contentType: "application/octet-stream", body: .file(url, size.int64Value))
+                let total = size.int64Value
+                // A failed download resumes where it stopped instead of starting over: the agent
+                // sends `Range: bytes=<have>-` and the signed size and SHA-256 still decide the end.
+                var response = HTTPResponse(200, "application/octet-stream", body: .file(url, total))
+                response.headers["Accept-Ranges"] = "bytes"
+                if let start = Self.rangeStart(req.headers["range"]), start > 0 {
+                    guard start < total else {
+                        response.status = 416
+                        response.body = .data(Data())
+                        response.headers["Content-Range"] = "bytes */\(total)"
+                        return response
+                    }
+                    response.status = 206
+                    response.body = .fileRange(url, total - start, start)
+                    response.headers["Content-Range"] = "bytes \(start)-\(total - 1)/\(total)"
+                }
+                return response
             }
         }
 

@@ -89,6 +89,30 @@ extension Agent {
         return notes
     }
 
+    /// A repaired path is written back into the live config file, so the next run starts from the
+    /// app that is really here instead of repairing — and naming — the old path again. Only paths
+    /// that changed are written; every other key and the file's own permissions stay as they were.
+    static func persistRepairedPaths(loaded: [String: String], config: AgentConfig, file: URL?) {
+        let fm = FileManager.default
+        guard let file, fm.fileExists(atPath: file.path),
+              let data = try? Data(contentsOf: file),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              var apps = root["apps"] as? [String: [String: Any]] else { return }
+        var changed = false
+        for (app, before) in loaded {
+            guard let now = config.apps[app]?.bundlePath, now != before,
+                  apps[app]?["bundlePath"] as? String != now else { continue }
+            apps[app]?["bundlePath"] = now
+            changed = true
+        }
+        guard changed else { return }
+        root["apps"] = apps
+        guard let out = try? JSONSerialization.data(withJSONObject: root,
+                                                    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return }
+        let mode = (try? fm.attributesOfItem(atPath: file.path))?[.posixPermissions] as? NSNumber
+        try? AtomicFile.write(out, to: file, permissions: mode?.uint16Value)
+    }
+
     /// A Mac that was only just enrolled has nothing but the helper configured. Every app the signed
     /// feed names and this Mac already has is adopted by its bundle ID — never by a path, never with
     /// a hand edit — so a Hub-only mini updates through the Launcher on its first run.
