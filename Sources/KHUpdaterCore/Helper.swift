@@ -7,7 +7,19 @@ public struct HelperSettings: Codable, Sendable, Equatable {
     public struct Switch: Codable, Sendable, Equatable {
         public var on: Bool
         public var at: String
-        public init(on: Bool, at: String) { self.on = on; self.at = at }
+        public init(on: Bool, at: String = "") { self.on = on; self.at = at }
+        enum CodingKeys: String, CodingKey { case on, at }
+        /// A hand-written helper.json may carry a bare `true`/`false` instead of `{on, at}`; it is
+        /// a valid Mac switch with no time rather than a reason to fail the whole file.
+        public init(from decoder: Decoder) throws {
+            if let keyed = try? decoder.container(keyedBy: CodingKeys.self) {
+                on = try keyed.decode(Bool.self, forKey: .on)
+                at = try keyed.decodeIfPresent(String.self, forKey: .at) ?? ""
+            } else {
+                on = try decoder.singleValueContainer().decode(Bool.self)
+                at = ""
+            }
+        }
     }
     public var automatic: [String: Switch]
     public var pausedUntil: String?
@@ -61,13 +73,16 @@ public struct HelperSettings: Codable, Sendable, Equatable {
     /// The Automatic setting to follow and where it comes from. `automatic(_:page:pageAt:config:)`
     /// is this same decision's value, so the explanation cannot drift from what the agent does.
     public func automaticDecision(_ app: String, page: Bool?, pageAt: String?, config: Bool) -> AutomaticDecision {
-        if let mine = automatic[app], let at = ISO.date(mine.at),
-           page == nil || pageAt.flatMap(ISO.date).map({ at >= $0 }) ?? true {
-            // A page value can only win by being provably later. A value stamped with this Mac's
-            // own switch time — the echo of the report, or a tie — is not later, so the person's
-            // switch at the Mac decides. This is the case that silently turned Hub and the Launcher
-            // off across the fleet while every Mac's own switch said on.
-            return AutomaticDecision(on: mine.on, origin: .mac)
+        if let mine = automatic[app] {
+            // A switch with no usable time (a bare bool, or a missing/unparseable `at`) has nothing
+            // to lose by, so it always wins. A timed one loses only to a page value provably later
+            // than it: a tie or a page with no time is not later, so the Mac's switch decides.
+            let pageLater = ISO.date(mine.at).map { mineAt in
+                pageAt.flatMap(ISO.date).map { $0 > mineAt } ?? false
+            } ?? false
+            if page == nil || !pageLater {
+                return AutomaticDecision(on: mine.on, origin: .mac)
+            }
         }
         return AutomaticDecision(on: page ?? config, origin: page == nil ? .config : .page)
     }
