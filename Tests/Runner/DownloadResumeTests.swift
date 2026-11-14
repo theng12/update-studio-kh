@@ -140,7 +140,7 @@ func downloadResumeTests() {
         let second = try? Agent.runOnce(config: cfg, http: client, shell: shell, control: control, requested: ["kept"])
         expect(second?.updates == 1 && marker(installed) == "2.0.0" && client.starts.count == 1,
                "RDL3 the retry installs from the finished artifact without downloading it again")
-    }
+    } catch { expect(false, "RDL3 resume-install: \(error)") }
 
     // RDL4: Cancel is the one outcome that gives up the partial.
     do {

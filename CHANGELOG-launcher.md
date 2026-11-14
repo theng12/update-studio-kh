@@ -5,6 +5,13 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.35 — 2026-11-14
+
+- A download that fails now resumes where it stopped instead of starting over: the partial installer is kept, only the missing part is fetched, and the signature is checked once the file is complete. An install that failed (an app that would not quit) retries from the finished installer without downloading it again.
+- A repaired app path is saved in this Mac's own config, so the "configured bundle path … is missing; using …" line appears once instead of on every run.
+- A one-shot local install waits for the agent's current run to finish instead of being refused while another run holds its lock.
+- An Automatic switch written by hand in helper.json as `"hub": true` is honoured, and this Mac's switch wins unless the update page's value is provably later.
+
 ## 0.1.34 — 2026-11-13
 
 - A Mac that has just been enrolled keeps the apps it found: each installed KH app the signed feed names is registered once, with a one-line "adopted this Mac's installed app" note, instead of being rediscovered silently on every cycle.

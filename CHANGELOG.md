@@ -5,6 +5,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.37 — 2026-11-14
+
+- Includes Studio Launcher KH 0.1.35: a failed installer download resumes where it stopped instead of starting over, and an install that failed retries from the finished installer without downloading it again.
+- Also in 0.1.35: a repaired app path is saved so the repair line appears once, a one-shot local install waits for the agent's run instead of being refused by its lock, and a hand-written `"app": true` Automatic switch in helper.json is honoured.
+
 ## 1.0.36 — 2026-11-13
 
 - Includes Studio Launcher KH 0.1.34: a newly enrolled Mac registers the KH apps it already has once, with a one-line "adopted" note, instead of rediscovering them silently every cycle.
