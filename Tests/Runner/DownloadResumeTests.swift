@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// A feed client that treats an existing partial file the way a Range-capable publisher does: it
 /// appends the missing bytes and answers 206. Everything that is not an artifact goes to the
@@ -55,6 +58,8 @@ private func resumeFixture(_ tag: String, app: [String: AppConfig], artifact: Da
 }
 
 func downloadResumeTests() {
+    // Pause/Cancel state belongs to the operation that set it; a suite starts from neither.
+    DownloadControl.reset()
     // RDL1: the real client and the publisher's own route resume from the bytes already on disk.
     do {
         let rig = Rig("resume-range")

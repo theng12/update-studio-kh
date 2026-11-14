@@ -27,11 +27,11 @@ func oneShotLockTests() {
         expectThrows("LK1 a second long-running agent refuses instead of racing", contains: "agent.lock") {
             _ = try Agent.runOnce(config: looping, http: client)
         }
-        Thread.detachNewThread { Thread.sleep(forTimeInterval: 0.6); released.signal() }
+        Thread.detachNewThread { Thread.sleep(forTimeInterval: 1.2); released.signal() }
         let started = Date()
         let result = try? Agent.runOnce(config: cfg, http: client, requested: ["demo"])
         let waited = Date().timeIntervalSince(started)
-        expect(result != nil && waited >= 0.5,
+        expect(result != nil && waited >= 0.9,
                "LK1 a one-shot local request waits for the agent's run to finish (waited \(String(format: "%.1f", waited)) s)")
     } catch { expect(false, "LK one-shot: \(error)") }
 }

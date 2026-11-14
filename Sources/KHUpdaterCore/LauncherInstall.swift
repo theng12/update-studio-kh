@@ -110,7 +110,9 @@ extension Agent {
         guard let out = try? JSONSerialization.data(withJSONObject: root,
                                                     options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return }
         let mode = (try? fm.attributesOfItem(atPath: file.path))?[.posixPermissions] as? NSNumber
-        try? AtomicFile.write(out, to: file, permissions: mode?.uint16Value)
+        // The file holds this Mac's enrolment token: when its mode cannot be read it is written
+        // 0600, never widened to the atomic writer's open default.
+        try? AtomicFile.write(out, to: file, permissions: mode?.uint16Value ?? 0o600)
     }
 
     /// A Mac that was only just enrolled has nothing but the helper configured. Every app the signed

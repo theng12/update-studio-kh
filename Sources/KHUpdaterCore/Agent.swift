@@ -225,8 +225,9 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
                 return
             }
         } else if status == 416 {
-            // The server cannot continue from what is here; the caller starts this one over.
-            completionHandler(.cancel)
+            // The server cannot continue from what is here; the caller starts this one over. The
+            // reply's own body is not artifact bytes and is dropped by the status guard below.
+            completionHandler(.allow)
             return
         } else {
             // Any other status carries an error message: it is never written onto a partial file.
@@ -238,8 +239,9 @@ private final class StreamSink: NSObject, URLSessionDataDelegate, @unchecked Sen
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         // An error reply's body is not artifact bytes: it must never land on a partial file that
-        // a later attempt will resume from.
-        guard status == 200 || status == 206 else { return }
+        // a later attempt will resume from. Small replies (get/post) keep their body: that is the
+        // publisher's own refusal sentence, which the person is shown.
+        guard status == 200 || status == 206 || handle == nil else { return }
         received += Int64(data.count)
         guard initial + received <= limit else {
             error = DeliveryMismatch(description: "\(dataTask.originalRequest?.url?.path ?? "response") is larger than expected")

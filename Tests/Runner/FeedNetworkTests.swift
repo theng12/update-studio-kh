@@ -87,6 +87,9 @@ func feedNetworkTests() {
         let received = try Data(contentsOf: downloaded)
         expect(received == bytes && http.downloads.count == 2, "FN corrupt mirrored bytes fall back and still match signed hash")
         http.downloadOffline = ["100.64.0.2"]
+        // The finished artifact above is reused by design; this case needs a Mac that has not
+        // downloaded it, so the unavailable source and the fallback are really reached.
+        _ = try? Trash.move(downloaded, into: Trash.root(in: root))
         let recovered = try Agent.download(entry, app: "fixture", serverBase: URL(string: "http://100.64.0.2")!, stateDir: root, http: http, fallbacks: [origin])
         let recoveredBytes = try Data(contentsOf: recovered)
         expect(recoveredBytes == bytes, "FN unavailable artifact source falls back even without a partial file")

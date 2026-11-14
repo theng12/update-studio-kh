@@ -993,8 +993,11 @@ func agentAndServerTests() {
             _ = try? FileLock.withExclusive(lockFile) { holding.signal(); release.wait() }
         }
         holding.wait()
+        // A long-running agent (not a one-shot request: those wait for the run in progress).
+        var refusing = cfg
+        refusing.once = false
         expectThrows("R3 a second agent run refuses while one holds the lock", contains: "another KH Updater process") {
-            _ = try Agent.runOnce(config: cfg, http: client)
+            _ = try Agent.runOnce(config: refusing, http: client)
         }
         release.signal()
         let twins = AgentConfig(feedURL: cfg.feedURL, publicKey: cfg.publicKey, stateDir: cfg.stateDir, machine: "mac1", token: token,
@@ -1491,8 +1494,8 @@ func round2Tests(only: Int? = nil) {
         let fake = FakeApp(installed: recipe.installed, healthy: ["1.2.3"])
         _ = try? Agent.runOnce(config: cfg2, http: client2, shell: recipe.shell, control: { _, _ in fake.control })
         let again = try? Agent.runOnce(config: cfg2, http: client2, shell: recipe.shell, control: { _, _ in fake.control })
-        expect(again?.commandsRun == 1 && client2.attempts == 2,
-               "R2-10 operational copy timeout does not reject valid artifact")
+        expect(again?.commandsRun == 1 && client2.attempts == 1,
+               "R2-10 operational copy timeout does not reject the valid artifact, and the retry reuses it without downloading again")
     }
     run(11) {
         let rig = Rig("r2-old-artifact")
