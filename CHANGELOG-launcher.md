@@ -5,6 +5,12 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.40 — 2026-11-15
+
+- Updating a running app now pauses its work first: the Launcher asks the app for an update gap (it waits up to 20 seconds; work already running gets up to 30 to settle), updates in that gap, then the app resumes by itself. Queued work is kept, and the result says how much work was held.
+- An app that cannot offer such a gap is left untouched: the update is refused with a plain reason instead of quitting it under its work. Quit it by hand and it updates normally. The updater's own engine and this Launcher are exempt — they hold no work queue.
+- An app whose gap expires while its installer downloads is asked again just before the swap; if it can no longer settle, the swap is refused and the app is resumed.
+
 ## 0.1.39 — 2026-11-15
 
 - A failure now shows its own words whole: the job name and exit code are no longer cut off at the first full stop, and the next step stays readable.

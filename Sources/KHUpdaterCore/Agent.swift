@@ -1087,8 +1087,9 @@ public enum Agent {
         var holdNote: String?
         func acquireHold() -> RecipeResult? {
             guard holdEndpoint == nil else { return nil }
-            // The updater restarts its own UI through installUpdater; it holds no work queue.
-            guard cfg.recipe != "updater" else { return nil }
+            // The updater's own engine and menu-bar UI hold no work queue: the engine switches itself
+            // through installUpdater, and the Launcher updates itself from its own Update click.
+            guard !["updater", "launcher"].contains(app), cfg.recipe != "updater" else { return nil }
             // nil is "unknown": treat it as running, so an unknown app is never swapped under its work.
             guard control(app, cfg).isRunning() != false else { return nil }
             guard let raw = feed.apps[app]?.holdURL, let endpoint = UpdateHold.trusted(raw) else {

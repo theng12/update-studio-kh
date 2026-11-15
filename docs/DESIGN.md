@@ -471,8 +471,9 @@ stopped taking work. A large installer can outlast the pause: `Recipe.appDmg` re
 the mutation boundary (just before the quit) with `timeout_s=0` and refuses the swap when the app
 can no longer settle. The page shows `held` and `resumed` phases, and an updated result carries the
 hold note ("held (2 jobs in flight; new work paused 120 s)"). Publishing takes `--hold-url`, and a
-remote or malformed URL is dropped when the feed is validated. The updater's own entry is exempt:
-`installUpdater` restarts its UI and it holds no work queue.
+remote or malformed URL is dropped when the feed is validated. The updater's own entries (the engine and
+the Launcher UI) are exempt: the engine switches itself through `installUpdater`, the Launcher updates from its
+own Update click, and neither holds a work queue.
 
 ## Recipes
 
