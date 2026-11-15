@@ -1177,7 +1177,7 @@ public enum LiveControl {
                 // An unconditional-KeepAlive job restarts after any signal, so only launchd's own unload
                 // stops it. Ownership is re-proven immediately before: a job that is no longer
                 // provably ours is never booted out.
-                for (label, job) in owned where job.restart == .always {
+                for (label, job) in owned.sorted(by: { $0.key < $1.key }) where job.restart == .always {
                     let again = serviceJobs(installedPath, shell: shell, agents: agents)
                     guard let current = again[label], current.restart == .always, current.plist == job.plist else { return false }
                     let result = try? shell.run("/bin/launchctl", arguments: ["bootout", "gui/\(getuid())/\(label)"], timeout: 15)

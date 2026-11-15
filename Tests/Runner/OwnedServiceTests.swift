@@ -376,6 +376,8 @@ func ownedServiceTests() {
                                         feedVersion: "2.0.0", expectedBundleID: "com.example.foo",
                                         stateDir: state, app: "fixture", control: control, relaunchAfterInstall: false)
         expect(result == nil, "OS13 a refused bootout on one job abandons the install")
+        expect(shell.launchd.count("bootout gui/") == 2,
+               "OS13 both jobs were attempted, so the first was really unloaded before the refusal")
         expect(!firstDown && !rig.list(unloaded: false).hasPrefix("- 0") && p2.isRunning,
                "OS13 the job the stop unloaded is running again; the refused one was never touched")
         expect(!fm.fileExists(atPath: Recipe.journalURL(stateDir: state, app: "fixture").path),

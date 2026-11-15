@@ -511,9 +511,11 @@ public enum Agent {
         // failure and the retry that has already happened.
         if !recoveredApps.isEmpty {
             for (app, note) in recoveredApps.sorted(by: { $0.key < $1.key }) {
-                memory.done["recovered-\(app)-\(UUID().uuidString)"] = .init(
+                // Delivered like any other automatic result: the fleet page must not keep the old
+                // failure after this Mac has recovered it.
+                memory.done["auto-recovered-\(app)-\(UUID().uuidString)"] = .init(
                     app: app, status: "updated", reason: "an interrupted install was finished on this run: \(note)",
-                    at: ISO.string(now), sent: true)
+                    at: ISO.string(now), sent: false)
             }
             try remember()
         }
