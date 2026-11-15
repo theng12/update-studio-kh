@@ -465,10 +465,11 @@ class AppServiceRecipeTests(unittest.TestCase):
         assert built.returncode == 0, built.stderr
         recipes = RECIPES.read_text()
         live = top_block(recipes, "public enum LiveControl {")
-        method = re.search(r"static func (service\w*)\(", live)
-        assert method, "LiveControl has no `static func service...` helper to test"
+        method = re.search(r"static func (serviceProcesses)\(", live)
+        assert method, "LiveControl has no `static func serviceProcesses` helper to test"
         core = ("import Foundation\n#if canImport(Darwin)\nimport Darwin\n#endif\n" + STUBS
                 + strip_imports(SHELL_SWIFT.read_text())
+                + top_block(recipes, "public struct ServiceResume")
                 + top_block(recipes, "public struct AppControl")
                 + top_block(recipes, "public struct BundleInfo")
                 + live
@@ -572,7 +573,9 @@ class AppServiceRecipeTests(unittest.TestCase):
         bundle.job("evil;rm -rf", ghost, **GRACEFUL)                        # never an identifier
         bundle.job("com.example.idle", idle, **GRACEFUL)                    # saved, loaded, not up
         rows = ["!com.example.nokeepalive=%d" % pids["plain"],
-                "!com.example.keeptrue=%d" % pids["keep"],
+                # Since 0.1.36 an unconditional keep-alive job is claimed: it is stopped by
+                # launchctl bootout (never a signal) and put back with bootstrap.
+                "com.example.keeptrue=%d" % pids["keep"],
                 "!com.example.keepfalse=%d" % pids["keepfalse"],
                 "!com.example.keepsuccess=%d" % pids["keepsuccess"],
                 "!com.example.scheduled=%d" % pids["sched"],
