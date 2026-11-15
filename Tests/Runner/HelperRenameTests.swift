@@ -35,7 +35,8 @@ func helperRenameTests() {
     // HR2: rolling back into the pre-rename version still starts from a path that exists. The Mac
     // starts on 0.1.35 (as installed before the rename), then updates to 0.1.36 and rolls back.
     let switcher = StubSwitcher(layout: layout)
-    try! fm.createSymbolicLink(atPath: layout.currentLink.path, withDestinationPath: "versions/0.1.35/khu")
+    // Absolute target, as StubSwitcher.point writes every link.
+    try! fm.createSymbolicLink(atPath: layout.currentLink.path, withDestinationPath: oldBinary.path)
     _ = try? switcher.install(version: "0.1.36")
     let back = try? switcher.switchBack()
     let restored = layout.currentBinary().map { layout.runnable(for: $0).path }
