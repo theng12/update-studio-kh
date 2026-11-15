@@ -3805,6 +3805,9 @@ func enrolWindowTests() {
 struct RunnerMain {
     static func main() {
         setvbuf(stdout, nil, _IOLBF, 0)  // a crash must not swallow the lines before it
+        if ProcessInfo.processInfo.environment["KHU_SERVICE_PROOF"] != nil {
+            runLiveServiceProof()
+        }
         if let record = ProcessInfo.processInfo.environment["KHU_NATIVE_UI_FIXTURE"] {
             serveNativePreview(record: record)
             return
