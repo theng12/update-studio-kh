@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.36 — 2026-11-15
+
+- An app whose own background helper keeps it running no longer blocks its update with "the app did not quit": the updater stops such a helper the way macOS expects (unloads its launchd job), swaps the app, and loads the job again. If the helper cannot be put back, the update says so and the next run retries it instead of reporting success.
+
 ## 0.1.35 — 2026-11-14
 
 - A download that fails now resumes where it stopped instead of starting over: the partial installer is kept, only the missing part is fetched, and the signature is checked once the file is complete. An install that failed (an app that would not quit) retries from the finished installer without downloading it again.

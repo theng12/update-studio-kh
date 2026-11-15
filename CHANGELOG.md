@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.38 — 2026-11-15
+
+- Includes Studio Launcher KH 0.1.36: an app whose background helper keeps it running now updates instead of failing with "the app did not quit". The helper is stopped through launchd, restored after the swap, a rollback or an interrupted install, and a service that cannot be restored is reported and retried.
+
 ## 1.0.37 — 2026-11-14
 
 - Includes Studio Launcher KH 0.1.35: a failed installer download resumes where it stopped instead of starting over, and an install that failed retries from the finished installer without downloading it again.
