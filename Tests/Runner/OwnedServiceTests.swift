@@ -13,22 +13,27 @@ private final class LaunchdShell: Shell, @unchecked Sendable {
     var bootoutExit: Int32 = 0
     var bootstrapExit: Int32 = 0
     var kickstartExit: Int32 = 0
-    var onBootout: (() -> Void)?
-    var onBootstrap: (() -> Void)?
-    var onKickstart: (() -> Void)?
+    var bootoutFails: Set<String> = []
+    var onBootout: ((String) -> Void)?
+    var onBootstrap: ((String) -> Void)?
+    var onKickstart: ((String) -> Void)?
     func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
         lock.lock(); calls.append(([executable] + arguments).joined(separator: " ")); lock.unlock()
         switch (executable, arguments.first) {
         case ("/bin/launchctl", "list"):
             return ShellResult(exitCode: listExit, stdout: list(), stderr: "")
         case ("/bin/launchctl", "bootout"):
-            if bootoutExit == 0 { onBootout?() }
-            return ShellResult(exitCode: bootoutExit, stdout: "", stderr: "")
+            let label = arguments.last.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? ""
+            if bootoutExit != 0 || bootoutFails.contains(label) { return ShellResult(exitCode: bootoutExit == 0 ? 5 : bootoutExit, stdout: "", stderr: "") }
+            onBootout?(label)
+            return ShellResult(exitCode: 0, stdout: "", stderr: "")
         case ("/bin/launchctl", "bootstrap"):
-            if bootstrapExit == 0 { onBootstrap?() }
+            let label = arguments.last.map { ($0 as NSString).lastPathComponent.replacingOccurrences(of: ".plist", with: "") } ?? ""
+            if bootstrapExit == 0 { onBootstrap?(label) }
             return ShellResult(exitCode: bootstrapExit, stdout: "", stderr: "")
         case ("/bin/launchctl", "kickstart"):
-            if kickstartExit == 0 { onKickstart?() }
+            let label = arguments.last.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? ""
+            if kickstartExit == 0 { onKickstart?(label) }
             return ShellResult(exitCode: kickstartExit, stdout: "", stderr: "")
         case ("/usr/bin/osascript", _):
             return ShellResult(exitCode: 1, stdout: "", stderr: "refused in tests")
@@ -106,8 +111,8 @@ func ownedServiceTests() {
         let shell = LaunchdShell()
         var unloaded = false
         shell.list = { rig.list(unloaded: unloaded) }
-        shell.onBootout = { unloaded = true; rig.stopHelper() }
-        shell.onBootstrap = { unloaded = false; rig.startHelper() }
+        shell.onBootout = { _ in unloaded = true; rig.stopHelper() }
+        shell.onBootstrap = { _ in unloaded = false; rig.startHelper() }
         let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 2)
         expect(control.isRunning() == true, "OS1 a helper that lives inside the bundle is running")
         expect(control.quit(), "OS1 the app's own service is not the app: quit returns without waiting on it")
@@ -167,7 +172,7 @@ func ownedServiceTests() {
         defer { rig.stopHelper() }
         let shell = LaunchdShell()
         shell.list = { rig.list(unloaded: false) }
-        shell.onKickstart = { rig.startHelper() }
+        shell.onKickstart = { _ in rig.startHelper() }
         let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 2)
         control.restoreServices([rig.label])
         expect(control.stopService(), "OS4 a restart-on-failure job is stopped")
@@ -186,8 +191,8 @@ func ownedServiceTests() {
         ServiceRig.installHelper(at: next.appendingPathComponent("Contents/Resources/Helper"))
         let shell = SwapShell(launchd: LaunchdShell(), mount: mounted)
         var unloaded = false
-        shell.launchd.onBootout = { unloaded = true; rig.stopHelper() }
-        shell.launchd.onBootstrap = { unloaded = false; rig.startHelper() }
+        shell.launchd.onBootout = { _ in unloaded = true; rig.stopHelper() }
+        shell.launchd.onBootstrap = { _ in unloaded = false; rig.startHelper() }
         rig.startHelper()
         shell.launchd.list = { rig.list(unloaded: unloaded) }
         defer { rig.stopHelper() }
@@ -214,8 +219,8 @@ func ownedServiceTests() {
         ServiceRig.installHelper(at: next.appendingPathComponent("Contents/Resources/Helper"))
         let shell = SwapShell(launchd: LaunchdShell(), mount: mounted)
         var unloaded = false
-        shell.launchd.onBootout = { unloaded = true; rig.stopHelper() }
-        shell.launchd.onBootstrap = { unloaded = false; rig.startHelper() }
+        shell.launchd.onBootout = { _ in unloaded = true; rig.stopHelper() }
+        shell.launchd.onBootstrap = { _ in unloaded = false; rig.startHelper() }
         rig.startHelper()
         shell.launchd.list = { rig.list(unloaded: unloaded) }
         shell.launchd.bootstrapExit = 5
@@ -306,6 +311,103 @@ func ownedServiceTests() {
         expect(!resumed.ok && (resumed.reason ?? "").contains("could not be read"),
                "OS10 a launchctl list that cannot be read is a reported failure (\(resumed.reason ?? "nil"))")
     }
+
+    // OS12: a rollback puts the previous version's service back and clears the journal.
+    do {
+        let rig = ServiceRig(policy: keepAlways)
+        let mounted = rig.root.appendingPathComponent("mount")
+        let next = makeApp(mounted.appendingPathComponent("Foo.app"), version: "2.0.0", id: "com.example.foo")
+        ServiceRig.installHelper(at: next.appendingPathComponent("Contents/Resources/Helper"))
+        let shell = SwapShell(launchd: LaunchdShell(), mount: mounted)
+        var unloaded = false
+        shell.launchd.onBootout = { _ in unloaded = true; rig.stopHelper() }
+        shell.launchd.onBootstrap = { _ in unloaded = false; rig.startHelper() }
+        rig.startHelper()
+        shell.launchd.list = { rig.list(unloaded: unloaded) }
+        defer { rig.stopHelper() }
+        var control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 3)
+        control.healthy = { $0 == "1.0.0" }   // the new version never settles; the previous one does
+        control.healthTimeout = 1
+        control.pollInterval = 0.05
+        control.healthSettle = 0
+        let state = rig.root.appendingPathComponent("state").path
+        let result = try? Recipe.appDmg(shell: shell, installedPath: rig.app.path,
+                                        artifactPath: rig.root.appendingPathComponent("fixture.dmg").path,
+                                        feedVersion: "2.0.0", expectedBundleID: "com.example.foo",
+                                        stateDir: state, app: "fixture", control: control, relaunchAfterInstall: true)
+        let journal = Recipe.journalURL(stateDir: state, app: "fixture")
+        expect(result?.status == "rolled_back" && (try? BundleInfo.read(rig.app.path))?.version == "1.0.0",
+               "OS12 an unhealthy new version is rolled back (\(result?.status ?? "nil"))")
+        expect(!fm.fileExists(atPath: journal.path) && !rig.list(unloaded: false).hasPrefix("- 0"),
+               "OS12 the previous version's service runs again and the journal is cleared")
+    }
+
+    // OS13: a stop that unloads one job and is refused on another restores the one it took down,
+    // and the abandoned install keeps no journal once the service is back.
+    do {
+        let rig = ServiceRig(policy: keepAlways)
+        let secondHelper = rig.app.appendingPathComponent("Contents/Resources/Helper2")
+        ServiceRig.installHelper(at: secondHelper)
+        let label2 = "com.example.foo.helper2"
+        let job2: [String: Any] = ["Label": label2, "RunAtLoad": true, "KeepAlive": true, "ProgramArguments": [secondHelper.path]]
+        try! PropertyListSerialization.data(fromPropertyList: job2, format: .xml, options: 0)
+            .write(to: rig.agents.appendingPathComponent("\(label2).plist"))
+        let p2 = Process(); p2.executableURL = secondHelper; p2.arguments = ["30"]
+        try! p2.run()
+        rig.startHelper()
+        Thread.sleep(forTimeInterval: 0.2)
+        defer { if p2.isRunning { p2.terminate() }; p2.waitUntilExit(); rig.stopHelper() }
+        let mounted = rig.root.appendingPathComponent("mount")
+        let next = makeApp(mounted.appendingPathComponent("Foo.app"), version: "2.0.0", id: "com.example.foo")
+        ServiceRig.installHelper(at: next.appendingPathComponent("Contents/Resources/Helper"))
+        let shell = SwapShell(launchd: LaunchdShell(), mount: mounted)
+        var firstDown = false
+        shell.launchd.list = {
+            (firstDown ? "" : rig.list(unloaded: false))
+                + "\n" + (p2.isRunning ? "\(p2.processIdentifier) 0 \(label2)" : "- 0 \(label2)")
+        }
+        shell.launchd.bootoutFails = [label2]
+        shell.launchd.onBootout = { _ in firstDown = true; rig.stopHelper() }
+        shell.launchd.onBootstrap = { _ in firstDown = false; rig.startHelper() }
+        let state = rig.root.appendingPathComponent("state").path
+        let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 2)
+        let result = try? Recipe.appDmg(shell: shell, installedPath: rig.app.path,
+                                        artifactPath: rig.root.appendingPathComponent("fixture.dmg").path,
+                                        feedVersion: "2.0.0", expectedBundleID: "com.example.foo",
+                                        stateDir: state, app: "fixture", control: control, relaunchAfterInstall: false)
+        expect(result == nil, "OS13 a refused bootout on one job abandons the install")
+        expect(!firstDown && !rig.list(unloaded: false).hasPrefix("- 0") && p2.isRunning,
+               "OS13 the job the stop unloaded is running again; the refused one was never touched")
+        expect(!fm.fileExists(atPath: Recipe.journalURL(stateDir: state, app: "fixture").path),
+               "OS13 the abandoned install keeps no journal once the service is back")
+    }
+
+    // OS14: a successful recovery stops the row repeating a failure that is no longer true.
+    do {
+        let rig = Rig("recovered-row")
+        let installed = makeApp(rig.root.appendingPathComponent("Foo.app"), version: "1.0.0", id: "com.example.foo")
+        try rig.publish("foo", "1.0.0", rig.artifact("foo.dmg", "bytes"), kind: "app-dmg")
+        let token = try Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        let cfg = agentConfig(rig, token: token, apps: ["foo": AppConfig(bundlePath: installed.path, recipe: "app-dmg", automatic: false)])
+        let state = URL(fileURLWithPath: cfg.stateDir)
+        try fm.createDirectory(at: state, withIntermediateDirectories: true)
+        var journal = InstallJournal(phase: "promoted", installed: installed.path, staged: "",
+                                     rollback: state.appendingPathComponent("rollback/foo").path,
+                                     previousVersion: "0.9.0", wasRunning: false)
+        journal.relaunchAfterwards = false
+        journal.version = "1.0.0"
+        try AtomicFile.writeJSON(journal, to: Recipe.journalURL(stateDir: state.path, app: "foo"))
+        var memory = AgentMemory()
+        memory.done["auto-foo-old"] = .init(app: "foo", status: "install_failed",
+                                            reason: "its background service did not restart",
+                                            at: ISO.string(Date().addingTimeInterval(-60)), sent: true)
+        try AtomicFile.writeJSON(memory, to: state.appendingPathComponent("agent-memory.json"))
+        let result = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server))
+        let row = result?.apps.first { $0.app == "foo" }
+        expect(!fm.fileExists(atPath: Recipe.journalURL(stateDir: state.path, app: "foo").path)
+               && row?.status == HelperApp.upToDate,
+               "OS14 a cleared recovery stops the row showing the old failure (\(row?.status ?? "nil"))")
+    } catch { expect(false, "OS14 fixture: \(error)") }
 
     // OS11: a row never reads "Up to date" while the install is unsettled.
     do {

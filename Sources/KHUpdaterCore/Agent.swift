@@ -484,22 +484,38 @@ public enum Agent {
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
+        /// Apps whose journal this run cleared: their old failure result is no longer true.
+        var recoveredApps: [String: String] = [:]
         // A hand install of an observed-only app is journaled like any other, so recovery reads
         // every recipe that can put a bundle in place.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
         where appDmgRecipes.contains(cfg.recipe) || statusOnly.contains(cfg.recipe) {
             let before = try? AtomicFile.readJSON(InstallJournal.self, from: Recipe.journalURL(stateDir: stateDir.path, app: app))
+            let wasUnresolved = Recipe.isUnresolved(stateDir: stateDir.path, app: app)
             let note = try Recipe.recover(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app,
                                           control: control(app, cfg), controlForPath: { path in
                 var original = cfg; original.bundlePath = path
                 return control(app, original)
             })
             if !note.isEmpty { result.notes.append("\(app): \(note)") }
+            if wasUnresolved, !note.isEmpty, !Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
+                recoveredApps[app] = note
+            }
             // A swap the owner ordered is the recovery's own business too: the order it belonged to
             // is answered from what is on disk, not run a second time.
             if let journal = before, journal.intent == "owner_rollback", let order = journal.order {
                 interruptedOrders[order] = (app, journal)
             }
+        }
+        // A recovery that cleared a journal settles the app: the row must stop repeating the old
+        // failure and the retry that has already happened.
+        if !recoveredApps.isEmpty {
+            for (app, note) in recoveredApps.sorted(by: { $0.key < $1.key }) {
+                memory.done["recovered-\(app)-\(UUID().uuidString)"] = .init(
+                    app: app, status: "updated", reason: "an interrupted install was finished on this run: \(note)",
+                    at: ISO.string(now), sent: true)
+            }
+            try remember()
         }
 
         // 1. What is installed and running here — none of this needs the feed. Beside each version,
