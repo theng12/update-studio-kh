@@ -6,3 +6,6 @@ dist/
 .release-dist.lock
 __pycache__/
 .test-tmp/
+
+# Local Claude Code session config (preview servers, permissions); never source.
+.claude/
