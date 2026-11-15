@@ -11,6 +11,7 @@ private final class LaunchdShell: Shell, @unchecked Sendable {
     var list: () -> String = { "" }
     var bootoutExit: Int32 = 0
     var bootstrapExit: Int32 = 0
+    var kickstartExit: Int32 = 0
     var onBootout: (() -> Void)?
     var onBootstrap: (() -> Void)?
     var onKickstart: (() -> Void)?
@@ -26,8 +27,8 @@ private final class LaunchdShell: Shell, @unchecked Sendable {
             if bootstrapExit == 0 { onBootstrap?() }
             return ShellResult(exitCode: bootstrapExit, stdout: "", stderr: "")
         case ("/bin/launchctl", "kickstart"):
-            onKickstart?()
-            return ShellResult(exitCode: 0, stdout: "", stderr: "")
+            if kickstartExit == 0 { onKickstart?() }
+            return ShellResult(exitCode: kickstartExit, stdout: "", stderr: "")
         case ("/usr/bin/osascript", _):
             return ShellResult(exitCode: 1, stdout: "", stderr: "refused in tests")
         case ("/usr/bin/open", _):
@@ -188,6 +189,77 @@ func ownedServiceTests() {
         expect(shell.launchd.count("bootout gui/") == 1 && shell.launchd.count("bootstrap gui/") == 1,
                "OS5 the swap unloads the job before the bundle exchange and bootstraps it after")
         expect(p.isRunning == false, "OS5 the old bundle's helper is not left running")
+    }
+
+    // OS6: a bootstrap launchd refuses is reported and the journal is kept; the next recovery puts
+    // the service back and clears the journal.
+    do {
+        let rig = ServiceRig(policy: keepAlways)
+        let mounted = rig.root.appendingPathComponent("mount")
+        makeApp(mounted.appendingPathComponent("Foo.app"), version: "2.0.0", id: "com.example.foo")
+        let shell = SwapShell(launchd: LaunchdShell(), mount: mounted)
+        var unloaded = false
+        let p = Process(); p.executableURL = rig.helper; p.arguments = ["30"]
+        shell.launchd.onBootout = { unloaded = true; if p.isRunning { p.terminate() } }
+        try! p.run()
+        Thread.sleep(forTimeInterval: 0.2)
+        shell.launchd.list = { unloaded ? "" : (p.isRunning ? "\(p.processIdentifier) 0 \(rig.label)" : "- 0 \(rig.label)") }
+        shell.launchd.onBootstrap = { unloaded = false }
+        shell.launchd.bootstrapExit = 5
+        defer { if p.isRunning { p.terminate() }; p.waitUntilExit() }
+        let state = rig.root.appendingPathComponent("state").path
+        let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 3)
+        let result = try? Recipe.appDmg(shell: shell, installedPath: rig.app.path,
+                                        artifactPath: rig.root.appendingPathComponent("fixture.dmg").path,
+                                        feedVersion: "2.0.0", expectedBundleID: "com.example.foo",
+                                        stateDir: state, app: "fixture", control: control, relaunchAfterInstall: false)
+        let journal = URL(fileURLWithPath: Recipe.journalURL(stateDir: state, app: "fixture").path)
+        expect(result?.status == "install_failed" && (result?.reason ?? "").contains("background service did not restart")
+               && (result?.reason ?? "").contains("bootstrap"),
+               "OS6 a refused bootstrap is reported in the install outcome, not swallowed (\(result?.reason ?? "nil"))")
+        expect(fm.fileExists(atPath: journal.path), "OS6 the journal is kept so the next run can retry the service")
+        expect((try? BundleInfo.read(rig.app.path))?.version == "2.0.0", "OS6 the app itself was installed")
+
+        shell.launchd.bootstrapExit = 0
+        let note = (try? Recipe.recover(installedPath: rig.app.path, stateDir: state, app: "fixture", control: control)) ?? ""
+        expect(!note.isEmpty && !fm.fileExists(atPath: journal.path),
+               "OS6 the next recovery puts the service back and clears the journal (\(note))")
+        expect(shell.launchd.count("bootstrap gui/") == 2 && !unloaded,
+               "OS6 the service is really loaded again on the retry")
+    }
+
+    // OS7: a refused kickstart is reported too.
+    do {
+        let rig = ServiceRig(policy: ["KeepAlive": ["SuccessfulExit": false]])
+        let shell = LaunchdShell()
+        shell.list = { "- 0 \(rig.label)" }
+        shell.kickstartExit = 5
+        let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 1)
+        control.restoreServices([rig.label])
+        let resumed = control.resumeServices()
+        expect(!resumed.ok && (resumed.reason ?? "").contains("kickstart"),
+               "OS7 a refused kickstart is a reported failure (\(resumed.reason ?? "nil"))")
+    }
+
+    // OS8: a saved plist rewritten with a scheduled policy is never started back from a journal.
+    do {
+        let rig = ServiceRig(policy: keepAlways)
+        var job: [String: Any] = ["Label": rig.label, "RunAtLoad": true, "StartInterval": 60,
+                                  "ProgramArguments": [rig.helper.path], "KeepAlive": true]
+        try! PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0)
+            .write(to: rig.agents.appendingPathComponent("\(rig.label).plist"))
+        let shell = LaunchdShell()
+        shell.list = { "" }
+        let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 1)
+        control.restoreServices([rig.label])
+        _ = control.resumeServices()
+        expect(shell.count("bootstrap") == 0, "OS8 a scheduled or unknown saved job is not bootstrapped back")
+        job["StartInterval"] = nil
+        job["KeepAlive"] = ["SuccessfulExit": true]
+        try! PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0)
+            .write(to: rig.agents.appendingPathComponent("\(rig.label).plist"))
+        _ = control.resumeServices()
+        expect(shell.count("bootstrap") == 0, "OS8 an unsupported policy in a saved job is not bootstrapped back")
     }
 }
 

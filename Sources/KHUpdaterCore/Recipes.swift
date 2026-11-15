@@ -14,6 +14,14 @@ public struct RecipeResult: Sendable, Equatable {
     }
 }
 
+/// What happened when the app's own services were put back: launchd's answer, read back.
+public struct ServiceResume: Equatable {
+    public var ok: Bool
+    public var reason: String?
+    public init(ok: Bool = true, reason: String? = nil) { self.ok = ok; self.reason = reason }
+    public static let none = ServiceResume()
+}
+
 /// What a recipe does to the outside world, injectable so tests never touch real apps.
 public struct AppControl {
     /// true/false, or nil when it cannot be told (treated as running: it must then quit).
@@ -33,7 +41,9 @@ public struct AppControl {
     public var restoreServices: ([String]) -> Void
     /// Put this app's own services back after a swap or a rollback, without opening the app. A job
     /// the install had to unload is bootstrapped again; a loaded-but-stopped job is kickstarted.
-    public var resumeServices: () -> Void
+    /// The result is read back from launchd: a refused or ineffective call is a failure the recipe
+    /// must report, never a silent success.
+    public var resumeServices: () -> ServiceResume
     /// Healthy *as this version*: the new one after an install, the previous one after a rollback.
     public var healthy: (_ expectedVersion: String) -> Bool
     public var healthTimeout: TimeInterval
@@ -45,7 +55,7 @@ public struct AppControl {
                 stopService: @escaping () -> Bool = { true }, healthy: @escaping (String) -> Bool,
                 healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10,
                 serviceLabels: @escaping () -> [String] = { [] }, restoreServices: @escaping ([String]) -> Void = { _ in },
-                resumeServices: @escaping () -> Void = {},
+                resumeServices: @escaping () -> ServiceResume = { .none },
                 isTestInstance: @escaping () -> Bool = { false }) {
         self.isRunning = isRunning; self.quit = quit; self.launch = launch; self.stopService = stopService
         self.serviceLabels = serviceLabels; self.restoreServices = restoreServices; self.resumeServices = resumeServices
@@ -411,11 +421,12 @@ public enum Recipe {
         func abandon(_ message: String) throws -> Never {
             // A stop that got as far as unloading a job is undone here: the old app keeps its own
             // services whether or not it is relaunched.
-            control.resumeServices()
+            let resumed = control.resumeServices()
             if wasRunning && mayRelaunch && (appQuit || control.isRunning() != true) { control.launch() }
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
-            throw khuFail(message)
+            throw khuFail(resumed.ok ? message
+                          : message + "; and its background service did not restart (\(resumed.reason ?? "launchd refused"))")
         }
         // The hand route never asks anything to stop: it proved no quiet point, so an app or service
         // that started after the last look is left running while the swap goes ahead without it.
@@ -444,15 +455,25 @@ public enum Recipe {
             }
             Self.repairLaunchAgents(installedPath: installedPath, fileManager: fm)
             // The app's own services belong to the bundle that is now installed — also when an
-            // unattended install leaves the app itself closed.
-            control.resumeServices()
+            // unattended install leaves the app itself closed. A job launchd would not take back is
+            // reported, and the journal stays so the next run retries instead of calling it settled.
+            let resumed = control.resumeServices()
+            guard resumed.ok else {
+                return RecipeResult(status: "install_failed", reason:
+                    "the app was installed but its background service did not restart "
+                    + "(\(resumed.reason ?? "launchd refused")); the install is kept and the next run tries again")
+            }
         } catch {
             let cause = error
             let restored: String
             do { restored = try restoreAfterFailure(journal, fileManager: fm) }
             catch { throw khuFail("installing failed (\(cause)); \(error); recovery journal kept at \(paths.journal.path)") }
-            control.resumeServices()
+            let resumed = control.resumeServices()
             if wasRunning && mayRelaunch { control.launch() }
+            if !resumed.ok {
+                throw khuFail("installing failed (\(cause)); \(restored); and its background service did not restart "
+                              + "(\(resumed.reason ?? "launchd refused"))")
+            }
             try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
             throw khuFail("installing failed (\(cause)); \(restored)")
         }
@@ -629,7 +650,12 @@ public enum Recipe {
         }
         // The app's own services come back on every recovery path: the bundle in place is the one
         // that should be running, and a job an interrupted run unloaded would otherwise stay down.
-        control.resumeServices()
+        // A service launchd would not take back keeps the journal, so the next run retries it.
+        let resumed = control.resumeServices()
+        if !resumed.ok {
+            note += "; the app's background service did not restart (\(resumed.reason ?? "launchd refused")); journal kept"
+            resolved = false
+        }
         if resolved {
             if !journal.staged.isEmpty, fm.fileExists(atPath: journal.staged) {
                 try Trash.move(URL(fileURLWithPath: journal.staged), into: paths.trash, fileManager: fm)
@@ -645,14 +671,23 @@ public enum Recipe {
     static func finishPromotion(_ paths: Paths, journal: InstallJournal, newVersion: String, control: AppControl,
                                 fileManager fm: FileManager) -> (note: String, resolved: Bool) {
         if journal.testInstance == true || journal.relaunchAfterwards == false {
-            control.resumeServices()
-            return ("an interrupted install had finished putting \(newVersion) in place without a "
-                    + "relaunch; it was left stopped", true)
+            let resumed = control.resumeServices()
+            return ("an interrupted install had finished putting \(newVersion) in place without a relaunch; "
+                    + (resumed.ok ? "it was left stopped"
+                                  : "its background service did not restart (\(resumed.reason ?? "launchd refused")); journal kept"),
+                    resumed.ok)
         }
         guard journal.wasRunning || journal.previousVersion == nil else {
-            control.resumeServices()
+            let resumed = control.resumeServices()
             return ("an interrupted install had finished putting \(newVersion) in place while the app was "
-                    + "not running; it was left stopped", true)
+                    + (resumed.ok ? "not running; it was left stopped"
+                                  : "not running; its background service did not restart (\(resumed.reason ?? "launchd refused")); journal kept"),
+                    resumed.ok)
+        }
+        let resumed = control.resumeServices()
+        guard resumed.ok else {
+            return ("\(newVersion) is in place but its background service did not restart "
+                    + "(\(resumed.reason ?? "launchd refused")); journal kept", false)
         }
         control.launch()
         if waitHealthy(control, version: newVersion) {
@@ -685,8 +720,16 @@ public enum Recipe {
         try AtomicFile.writeJSON(pending, to: paths.journal)
         try putBack(paths, journal: pending, expectedVersion: previousVersion, fileManager: fm)
         if journal.testInstance == true || journal.relaunchAfterwards == false {
-            control.resumeServices()
-            return RecipeResult(status: "rolled_back", reason: "the new version was not healthy; \(previousVersion) was put back and left stopped")
+            let resumed = control.resumeServices()
+            return resumed.ok
+                ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy; \(previousVersion) was put back and left stopped")
+                : RecipeResult(status: "rollback_unhealthy", reason: "the new version was not healthy; \(previousVersion) was put back, "
+                               + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); the install is kept and the next run tries again")
+        }
+        let resumed = control.resumeServices()
+        guard resumed.ok else {
+            return RecipeResult(status: "rollback_unhealthy", reason: "the new version was not healthy; \(previousVersion) was put back, "
+                               + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); the install is kept and the next run tries again")
         }
         control.launch()
         return waitHealthy(control, version: previousVersion)
@@ -988,12 +1031,48 @@ public enum LiveControl {
                   let job = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
                   job["Label"] as? String == label,
                   ["StartInterval", "StartCalendarInterval", "WatchPaths", "QueueDirectories", "StartOnMount", "Sockets", "MachServices"].allSatisfy({ job[$0] == nil }) else { continue }
+            // The saved plist must still carry a policy this updater owns: a job rewritten as
+            // scheduled or with an unknown policy is not started back from a stale journal.
+            let supported: Bool
+            if let always = job["KeepAlive"] as? Bool {
+                supported = always
+            } else if let rules = job["KeepAlive"] as? [String: Any], rules.count == 1,
+                      rules["SuccessfulExit"] as? Bool == false {
+                supported = true
+            } else {
+                supported = false
+            }
+            guard supported else { continue }
             let program = (job["Program"] as? String) ?? (job["ProgramArguments"] as? [String])?.first
             guard let program, program.hasPrefix("/"),
                   realPath(program).hasPrefix(prefix), realPath(program) != desktop else { continue }
             return file
         }
         return nil
+    }
+
+    /// The labels `launchctl list` knows, whether or not they currently have a pid.
+    static func launchdLoaded(_ labels: Set<String>, shell: Shell) -> Set<String> {
+        guard let result = try? shell.run("/bin/launchctl", arguments: ["list"], timeout: 15), result.exitCode == 0 else { return [] }
+        var present: Set<String> = []
+        for line in result.stdout.split(separator: "\n") {
+            let fields = line.split(whereSeparator: { $0.isWhitespace })
+            if fields.count == 3, labels.contains(String(fields[2])) { present.insert(String(fields[2])) }
+        }
+        return present
+    }
+
+    /// The labels `launchctl list` shows with a live pid.
+    static func launchdRunning(_ labels: Set<String>, shell: Shell) -> Set<String> {
+        guard let result = try? shell.run("/bin/launchctl", arguments: ["list"], timeout: 15), result.exitCode == 0 else { return [] }
+        var running: Set<String> = []
+        for line in result.stdout.split(separator: "\n") {
+            let fields = line.split(whereSeparator: { $0.isWhitespace })
+            if fields.count == 3, let pid = pid_t(fields[0]), pid > 1, labels.contains(String(fields[2])) {
+                running.insert(String(fields[2]))
+            }
+        }
+        return running
     }
 
     /// Every label is stopped: either loaded with no pid (`- 0`), or — for a job this install booted
@@ -1032,28 +1111,39 @@ public enum LiveControl {
             }
             return Set(all).subtracting(owned.filter { requiredServices.contains($0.key) }.values.map(\.pid)).isEmpty
         }
-        func resume() {
+        func resume() -> ServiceResume {
             // Put back only the jobs this install owns: one it unloaded is bootstrapped from its own
             // plist (or, after an interrupted run, the plan's own saved plist); a loaded job the stop
-            // left without a pid is kickstarted. Nothing else is touched.
-            var now = jobs()
-            for label in Set(unloaded.keys).union(requiredServices).sorted() where now[label] == nil {
+            // left without a pid is kickstarted. Every answer is read back from launchd, and the
+            // first failure is reported — a job that did not come back is never a silent success.
+            let wanted = Set(unloaded.keys).union(requiredServices)
+            var failure: String?
+            var loaded = launchdLoaded(wanted, shell: shell)
+            for label in wanted.sorted() where !loaded.contains(label) {
                 guard let plist = unloaded[label] ?? ownedPlist(label, installedPath: installedPath, agents: agents) else { continue }
-                if (try? shell.run("/bin/launchctl", arguments: ["bootstrap", "gui/\(getuid())", plist.path], timeout: 30))?.exitCode == 0 {
+                let answer = try? shell.run("/bin/launchctl", arguments: ["bootstrap", "gui/\(getuid())", plist.path], timeout: 30)
+                loaded = launchdLoaded(wanted, shell: shell)
+                if answer?.exitCode == 0, loaded.contains(label) {
                     unloaded[label] = nil
-                    now = jobs()
+                } else {
+                    failure = failure ?? "launchctl bootstrap \(label) \(answer.map { "exited \($0.exitCode)" } ?? "failed")"
                 }
             }
-            let after = jobs()
-            for label in requiredServices.sorted() where after[label]?.pid == 0 {
-                _ = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(label)"], timeout: 15)
+            let running = launchdRunning(requiredServices, shell: shell)
+            for label in requiredServices.sorted() where loaded.contains(label) && !running.contains(label) {
+                let answer = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(label)"], timeout: 15)
+                let nowRunning = launchdRunning([label], shell: shell)
+                if answer?.exitCode != 0 || !nowRunning.contains(label) {
+                    failure = failure ?? "launchctl kickstart \(label) \(answer.map { "exited \($0.exitCode)" } ?? "failed")"
+                }
             }
+            return ServiceResume(ok: failure == nil, reason: failure)
         }
         return AppControl(
             isRunning: { isRunning(installedPath) },
             quit: { quit(installedPath, shell: shell, wait: quitWait, gone: { appGone() }) },
             launch: {
-                resume()
+                _ = resume()
                 // Background and hidden: an install never brings an app or window to the desktop.
                 _ = try? shell.run("/usr/bin/open", arguments: ["-g", "-j", installedPath], timeout: 30)
             },
