@@ -526,12 +526,17 @@ quiet; health requires the same listener ownership check, the expected on-disk v
 and a running bundle process.
 
 Generic app hosts are discovered from the user's existing LaunchAgent metadata: the declared
-executable must be inside this bundle and match the live PID, with only `KeepAlive:
-{SuccessfulExit:false}` and no scheduled or socket activation. The journal captures active labels
-before desktop quit; service stop handles only those labels, sends SIGTERM and requires both an
-empty bundle process set and launchd's clean exit status. Unsupported or newly appearing processes
-block replacement. Relaunch and recovery revalidate saved labels before non-forcing `kickstart`,
-and health requires those hosts running again. Gateway keeps its separate PID/port protocol.
+executable must be inside this bundle and match the live PID, and its policy must be one of two:
+`KeepAlive: {SuccessfulExit:false}` (restart on failure; SIGTERM stops it and `kickstart`
+brings it back) or `KeepAlive: true` (restart on any exit, so a signal is not a stop:
+`launchctl bootout` unloads it and `launchctl bootstrap` from its own plist puts it back). Scheduled
+or socket activation and any other policy are refused, never guessed at. The journal captures active
+labels before desktop quit; service stop handles only those labels, re-proves ownership immediately
+before acting, and requires both an empty bundle process set and the jobs' stopped states. A job that
+was unloaded is put back on every exit path — after the swap, after a rollback, after an abandoned
+stop, and in recovery (an interrupted run's saved labels are bootstrapped from their plists) — with
+health requiring those hosts running again. Unsupported or newly appearing processes block
+replacement. Gateway keeps its separate PID/port protocol.
 
 `app-dmg` (also the legacy `story`/`hub` recipe names older kits wrote): the journaled install and
 rollback route. `status`: observed only — the app keeps its own updater. `updater`: self-update (below).
