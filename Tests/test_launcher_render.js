@@ -489,4 +489,30 @@ run('window.askAnswer=null; ask("Update Studio KH to 1.0.39?", "Update", r => { 
 askButtons()[1].fire('click');
 assert.equal(run('window.askAnswer'), true, 'R15 the confirm button answers yes');
 
+
+// R16 the card shows the whole reason: no line clamp on .reason, and a rendered failure card carries
+// the job label, the exit code and the next step. The CSS used to clamp it to two lines, so the text
+// existed but a person saw 86 of 204 characters.
+const reasonRule = (source.match(/\.reason\{[^}]*\}/) || [''])[0];
+assert(reasonRule && !/line-clamp|overflow:hidden/.test(reasonRule), 'R16 .reason is not line-clamped');
+assert(/\.tablewrap\{[^}]*overflow-x:auto/.test(source), 'R16 the list table scrolls inside its own box');
+assert(/header\{[^}]*flex-wrap:wrap/.test(source), 'R16 the header wraps instead of pushing controls off-screen');
+assert(/#hiddenNote\{display:none\}/.test(source), 'R16 the hidden-apps note is dropped at the narrow width');
+assert(/\.sheet\{[^}]*max-height:calc\(100dvh - 68px\)/.test(source), 'R16 a sheet cannot grow past the window');
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
+render(state([row({ status: 'Failed', reason: restartReason })]));
+const renderedReason = document.querySelector('.card .reason').textContent;
+assert.match(renderedReason, /com\.theng12\.printerstudio\.airprint/, 'R16 the card carries the whole job label');
+assert.match(renderedReason, /exited 5/, 'R16 the card carries the exit code');
+assert.match(renderedReason, /next run tries again/, 'R16 the card carries the next step');
+
+// R17 the confirmation returns focus to whatever opened it.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
+render(state([row({ status: 'Up to date' })]));
+document.getElementById('gear').focus();
+const opener = document.activeElement;
+run('ask("Update Studio KH to 1.0.39?", "Update", () => {})');
+for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Escape' });
+assert.equal(document.activeElement, opener, 'R17 closing the confirmation returns focus to its opener');
+
 console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the click’s immediate feedback and the empty list’s reason');

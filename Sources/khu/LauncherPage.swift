@@ -14,8 +14,8 @@ body{margin:0;min-height:100vh;display:flex;flex-direction:column}::selection{ba
 .menu .check svg{width:13px;height:13px}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 ::-webkit-scrollbar{width:11px;height:11px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:3px solid var(--bg)}::-webkit-scrollbar-track{background:transparent}
-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:10px;margin-right:auto}.brand svg{width:30px;height:30px;flex:none}.brand h1{font-size:16px;margin:0;letter-spacing:-.015em}.brand p{margin:0;font-size:12px;color:var(--sub)}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;min-width:0}
+.brand{display:flex;align-items:center;gap:10px;margin-right:auto;min-width:0;flex-wrap:wrap}.brand svg{width:30px;height:30px;flex:none}.brand h1{font-size:16px;margin:0;letter-spacing:-.015em}.brand p{margin:0;font-size:12px;color:var(--sub)}
 .btn{height:30px;padding:0 13px;border-radius:7px;border:1px solid var(--line);background:var(--panel);font-weight:550;white-space:nowrap}
 .btn:hover:not(:disabled){border-color:var(--field)}.btn:active:not(:disabled){transform:translateY(.5px)}.btn:disabled{opacity:.45}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.btn.primary:hover:not(:disabled){filter:brightness(1.07)}
@@ -37,14 +37,14 @@ h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-c
 .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .chip{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--muted-bg);color:var(--sub);white-space:nowrap}
 .chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--info-bg);color:var(--info)}
-.reason{color:var(--bad);font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.reason{color:var(--bad);font-size:12px;display:block;overflow-wrap:anywhere}
 .when{font-size:12px;color:var(--sub)}
 .foot{margin-top:auto;display:flex;gap:8px;align-items:center}.foot .main{flex:1}
 .prog{flex:1;display:flex;flex-direction:column;gap:6px}.prog .line{font-size:12px}.bar{height:4px;border-radius:4px;background:var(--line2);overflow:hidden}
 .bar i{display:block;height:100%;background:var(--app,var(--accent));border-radius:4px;transition:width .4s cubic-bezier(.16,1,.3,1)}
 .bar.loose i{width:35%;animation:loose 1.4s cubic-bezier(.45,0,.55,1) infinite}@keyframes loose{0%{transform:translateX(-100%)}100%{transform:translateX(290%)}}
 @media (prefers-reduced-motion:reduce){.bar.loose i{animation:none;width:100%;opacity:.5}}
-table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tablewrap{overflow-x:auto;max-width:100%}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 th{font-size:11.5px;font-weight:600;color:var(--sub);text-align:left;padding:9px 14px;border-bottom:1px solid var(--line)}
 td{padding:9px 14px;border-bottom:1px solid var(--line2);vertical-align:middle}tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--line2)}
 td .head img,td .ph{width:32px;height:32px;border-radius:8px}td .name{font-size:13.5px}td.act{width:1%;white-space:nowrap;text-align:right}td.act .btn+.btn{margin-left:6px}
@@ -57,7 +57,7 @@ header .link{background:none;border:0;color:var(--accent);padding:0 4px;cursor:p
 .empty{padding:40px 0;text-align:center;color:var(--sub)}
 .scrim{position:fixed;inset:0;background:rgba(10,18,15,.32);z-index:10;display:flex;justify-content:center;align-items:flex-start;padding:34px 24px;overflow:auto}
 @media (prefers-color-scheme:dark){.scrim{background:rgba(0,0,0,.5)}}
-.sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);width:min(920px,100%);animation:rise .22s cubic-bezier(.16,1,.3,1)}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);width:min(920px,100%);animation:rise .22s cubic-bezier(.16,1,.3,1);max-height:calc(100dvh - 68px);overflow:auto}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}}
 .sheet .top{display:flex;gap:18px;align-items:flex-start;padding:22px 24px;border-bottom:1px solid var(--line)}
 .sheet .top img,.sheet .top .ph{width:88px;height:88px;border-radius:20px}.sheet h3{font-size:23px;letter-spacing:-.025em;margin:2px 0 3px}
@@ -81,9 +81,9 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 .set h4{margin-bottom:12px}.row{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:8px 0}
 .row label{display:flex;gap:9px;align-items:flex-start}.row input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;margin:1px 0 0}
 .note{font-size:12px;color:var(--sub);margin:2px 0 0 24px}.dis{opacity:.5}
-.bottom{display:flex;justify-content:flex-end;padding:14px 24px;border-top:1px solid var(--line)}
+.bottom{display:flex;justify-content:flex-end;padding:14px 24px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel);z-index:1}
 .wn{width:min(460px,100%)}.wn .body{padding:16px 24px 4px}.wn .body .sub{margin:0}
-@media (max-width:820px){input[type=search]{width:130px}.cols{grid-template-columns:1fr}.brand p{display:none}}
+@media (max-width:820px){input[type=search]{width:130px}.cols{grid-template-columns:1fr}.brand p{display:none}#hiddenNote{display:none}footer{flex-wrap:wrap;min-width:0}}
 </style></head><body>
 <header>
  <div class=brand><svg viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill="var(--accent)"/><g fill="#fff"><rect x=8 y=8 width=7 height=7 rx=1.8 /><rect x=17 y=8 width=7 height=7 rx=1.8 /><rect x=8 y=17 width=7 height=7 rx=1.8 /><rect x=17 y=17 width=7 height=7 rx=1.8 /></g></svg>
@@ -176,6 +176,7 @@ function icon(a){return a.icon?el('img',{src:a.icon,alt:''}):el('div',{class:'ph
 // An in-page confirmation. window.confirm() does not work in the packaged webview, which made
 // Update/Install look dead: it returned false without showing anything.
 function ask(question,confirmLabel,done){
+ const restore=document.activeElement;
  const back=el('div',{role:'dialog','aria-modal':'true',style:'position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99'});
  const box=el('div',{style:'background:var(--panel,#fff);color:var(--text,#111);border-radius:14px;padding:20px 20px 16px;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:14px -apple-system,BlinkMacSystemFont,sans-serif'});
  box.append(el('p',{style:'margin:0 0 16px;line-height:1.4'},question));
@@ -186,7 +187,8 @@ function ask(question,confirmLabel,done){
  // A real modal: the confirm button takes focus, Escape cancels, Tab stays inside these two
  // buttons, and a click on the backdrop cancels. window.confirm() is a silent no-op in the
  // packaged webview, so this is the only confirmation a person ever sees.
- function close(result){if(back.parentNode)back.remove();document.removeEventListener('keydown',keys,true);done(result)}
+ function close(result){if(back.parentNode)back.remove();document.removeEventListener('keydown',keys,true);
+  if(restore&&restore.focus)restore.focus();done(result)}
  function keys(e){
   if(e.key==='Escape'){if(e.preventDefault)e.preventDefault();if(e.stopPropagation)e.stopPropagation();close(false);return}
   if(e.key==='Tab'){if(e.preventDefault)e.preventDefault();if(e.stopPropagation)e.stopPropagation();(document.activeElement===confirm?cancel:confirm).focus()}}
@@ -218,11 +220,11 @@ function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor
   a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
-function tableOf(list){return el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
+function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
  el('tbody',{},list.map(a=>el('tr',{onclick:()=>openDetail(a.id),style:(a.accent?'--app:'+a.accent+';':'')+'cursor:pointer'},
   el('td',{},el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),a.tagline?el('div',{class:'tag'},a.tagline):null))),
   el('td',{},chip(a)),el('td',{},versionLine(a)),el('td',{class:'when num'},day(installed(a)?a.installedAt:a.released)||'—'),
-  el('td',{class:'act'},a.status=='Updating…'?el('div',{style:'min-width:240px'},progress(a)):buttons(a))))))}
+  el('td',{class:'act'},a.status=='Updating…'?el('div',{style:'min-width:240px'},progress(a)):buttons(a)))))))}
 function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filter(a=>showHidden||!a.hidden);
  if(q)list=list.filter(a=>(a.name+' '+(a.tagline||'')).toLowerCase().includes(q));
  const key=a=>new Date(installed(a)?a.installedAt||0:a.released||0).getTime();

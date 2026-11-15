@@ -435,7 +435,7 @@ public enum Recipe {
         // The hand route never asks anything to stop: it proved no quiet point, so an app or service
         // that started after the last look is left running while the swap goes ahead without it.
         if !refuseIfRunning {
-            guard control.quit() else { try abandon("the app did not quit; the installed app was kept") }
+            guard control.quit() else { try abandon("the app did not quit; the installed app was kept; quit the app by hand, then choose Update") }
             appQuit = true
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
         }
