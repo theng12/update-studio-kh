@@ -7,7 +7,7 @@ import Foundation
 public enum HelperBundle {
     /// The executable's own file name is the product name: every process list shows it, even when
     /// the process never registers with LaunchServices.
-    public static let helperExecutable = "Update Studio KH Helper"
+    public static let helperExecutable = "Studio Launcher KH Helper"
     public static let publisherExecutable = "Update Studio KH Publisher"
 
     public struct Spec: Sendable {

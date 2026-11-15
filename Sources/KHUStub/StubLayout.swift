@@ -31,7 +31,7 @@ public struct StubLayout: Sendable {
     public func helperBundle(for version: String) throws -> URL {
         let safe = try SafeName.component(version, what: "version")
         return versionsDirectory.appendingPathComponent(safe, isDirectory: true)
-            .appendingPathComponent("Update Studio KH Helper.app", isDirectory: true)
+            .appendingPathComponent("Studio Launcher KH Helper.app", isDirectory: true)
     }
 
     /// What to launch for a version: its helper bundle's executable when that exists, else the
@@ -104,13 +104,13 @@ public struct StubSwitcher: @unchecked Sendable {
         return true
     }
 
-    /// Create (or repair) `versions/<version>/Update Studio KH Helper.app` around this version's
+    /// Create (or repair) `versions/<version>/Studio Launcher KH Helper.app` around this version's
     /// binary. The executable inside is a hard link to the same file, so it cannot drift.
     private func ensureHelperBundle(for version: String, binary: URL) throws {
         let executable: URL
         do {
             executable = try HelperBundle.ensure(
-                HelperBundle.Spec(name: "Update Studio KH Helper", bundleID: "com.khupdater.agent",
+                HelperBundle.Spec(name: "Studio Launcher KH Helper", bundleID: "com.khupdater.agent",
                                   executableName: HelperBundle.helperExecutable, version: version),
                 source: binary, out: try layout.helperBundle(for: version), fileManager: fileManager)
         } catch {

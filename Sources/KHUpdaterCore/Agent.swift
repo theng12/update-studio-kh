@@ -921,7 +921,7 @@ public enum Agent {
             // build or its executable cannot be read — a row reports "not checked", never a match.
             row.installedBuild = info?.build
             if let cfg, let info { row.installedExecutableSha256 = info.executableSha256(in: cfg.bundlePath) }
-            row.name = cfg?.recipe == "updater" ? "Update Studio Helper" : (entry?.name ?? feed.apps[app]?.name ?? AppNames.display(app))
+            row.name = cfg?.recipe == "updater" ? "Studio Launcher KH Helper" : (entry?.name ?? feed.apps[app]?.name ?? AppNames.display(app))
             row.source = entry?.source
             row.notes = entry?.notes ?? feed.apps[app]?.notes
             row.setupFolder = entry?.setupFolder

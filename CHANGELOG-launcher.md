@@ -8,6 +8,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 ## 0.1.36 — 2026-11-15
 
 - An app whose own background helper keeps it running no longer blocks its update with "the app did not quit": the updater stops such a helper the way macOS expects (unloads its launchd job), swaps the app, and loads the job again. If the helper cannot be put back, the update says so and the next run retries it instead of reporting success.
+- The Launcher's own background engine is now named **Studio Launcher KH Helper** everywhere you see it (menu, Update Studio page, process lists), instead of "Update Studio KH Helper". It is the same engine, with the same identity and the same one launchd job; a Mac upgraded from the older name keeps its old bundle in the installer's trash and is pointed at the new one the next time setup is repaired or installed.
 
 ## 0.1.35 — 2026-11-14
 

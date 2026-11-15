@@ -46,12 +46,12 @@ PROMOTED=false
 helper_bundle() {
     local out="$1" source="$2"
     if [[ -f "$KIT/AppIcon.icns" ]]; then
-        "$KIT/bin/khu" helper-bundle --out "$out" --name "Update Studio KH Helper" \
-            --id com.khupdater.agent --exec "$source" --executable "Update Studio KH Helper" \
+        "$KIT/bin/khu" helper-bundle --out "$out" --name "Studio Launcher KH Helper" \
+            --id com.khupdater.agent --exec "$source" --executable "Studio Launcher KH Helper" \
             --version "$VERSION" --icon "$KIT/AppIcon.icns" >/dev/null
     else
-        "$KIT/bin/khu" helper-bundle --out "$out" --name "Update Studio KH Helper" \
-            --id com.khupdater.agent --exec "$source" --executable "Update Studio KH Helper" \
+        "$KIT/bin/khu" helper-bundle --out "$out" --name "Studio Launcher KH Helper" \
+            --id com.khupdater.agent --exec "$source" --executable "Studio Launcher KH Helper" \
             --version "$VERSION" >/dev/null
     fi
 }
@@ -144,9 +144,9 @@ if [[ "$REPAIR" == false ]]; then
     chmod 755 "$STAGE/KHUpdater/bin/khu-stub" "$STAGE/KHUpdater/base/versions/$VERSION/khu"
     # The launchd job runs from a named helper bundle, so process lists show the product instead
     # of a bare khu-stub. The binary inside is a link to the same file as bin/khu-stub.
-    helper_bundle "$STAGE/KHUpdater/Update Studio KH Helper.app" "$STAGE/KHUpdater/bin/khu-stub"
+    helper_bundle "$STAGE/KHUpdater/Studio Launcher KH Helper.app" "$STAGE/KHUpdater/bin/khu-stub"
     # Every version folder carries its own helper bundle, built from that version's binary.
-    helper_bundle "$STAGE/KHUpdater/base/versions/$VERSION/Update Studio KH Helper.app" "$STAGE/KHUpdater/base/versions/$VERSION/khu"
+    helper_bundle "$STAGE/KHUpdater/base/versions/$VERSION/Studio Launcher KH Helper.app" "$STAGE/KHUpdater/base/versions/$VERSION/khu"
     ln -s "versions/$VERSION/khu" "$STAGE/KHUpdater/base/current"
     /usr/bin/plutil -convert json -o "$STAGE/KHUpdater/base/config.json" "$CONFIG"
     /usr/bin/plutil -replace stateDir -string "$K/state" "$STAGE/KHUpdater/base/config.json"
@@ -156,7 +156,7 @@ if [[ "$REPAIR" == false ]]; then
     cp "$KIT/com.khupdater.agent.plist" "$PLIST_STAGE"
     /usr/bin/plutil -remove ProgramArguments "$PLIST_STAGE"
     /usr/bin/plutil -insert ProgramArguments -array "$PLIST_STAGE"
-    /usr/bin/plutil -insert ProgramArguments.0 -string "$K/Update Studio KH Helper.app/Contents/MacOS/Update Studio KH Helper" "$PLIST_STAGE"
+    /usr/bin/plutil -insert ProgramArguments.0 -string "$K/Studio Launcher KH Helper.app/Contents/MacOS/Studio Launcher KH Helper" "$PLIST_STAGE"
     /usr/bin/plutil -insert ProgramArguments.1 -string '--base' "$PLIST_STAGE"
     /usr/bin/plutil -insert ProgramArguments.2 -string "$K/base" "$PLIST_STAGE"
     /usr/bin/plutil -replace StandardOutPath -string "$DEST_HOME/Library/Logs/khupdater-agent.log" "$PLIST_STAGE"
@@ -242,7 +242,7 @@ fi
 cp "$KIT/com.khupdater.agent.plist" "$STAGE/agent.plist"
 /usr/bin/plutil -remove ProgramArguments "$STAGE/agent.plist"
 /usr/bin/plutil -insert ProgramArguments -array "$STAGE/agent.plist"
-/usr/bin/plutil -insert ProgramArguments.0 -string "$K/Update Studio KH Helper.app/Contents/MacOS/Update Studio KH Helper" "$STAGE/agent.plist"
+/usr/bin/plutil -insert ProgramArguments.0 -string "$K/Studio Launcher KH Helper.app/Contents/MacOS/Studio Launcher KH Helper" "$STAGE/agent.plist"
 /usr/bin/plutil -insert ProgramArguments.1 -string '--base' "$STAGE/agent.plist"
 /usr/bin/plutil -insert ProgramArguments.2 -string "$K/base" "$STAGE/agent.plist"
 /usr/bin/plutil -replace StandardOutPath -string "$DEST_HOME/Library/Logs/khupdater-agent.log" "$STAGE/agent.plist"
@@ -267,15 +267,19 @@ archive "$K/bin/khu-stub" "bin-khu-stub"
 created "$K/bin/khu-stub"
 cp "$STAGE/KHUpdater/bin/khu-stub" "$K/bin/khu-stub"
 chmod 755 "$K/bin/khu-stub"
-archive "$K/Update Studio KH Helper.app" "helper-app"
-created "$K/Update Studio KH Helper.app"
-helper_bundle "$K/Update Studio KH Helper.app" "$K/bin/khu-stub"
+# Through 0.1.35 this Mac's client engine was named "Update Studio KH Helper". An upgrade keeps the
+# old bundle in this install's own trash (never deleted) and points the job at the new one below.
+archive "$K/Update Studio KH Helper.app" "legacy-helper-app"
+archive "$K/Studio Launcher KH Helper.app" "helper-app"
+created "$K/Studio Launcher KH Helper.app"
+helper_bundle "$K/Studio Launcher KH Helper.app" "$K/bin/khu-stub"
 archive "$K/base/versions/$VERSION/khu" "versions-$VERSION-khu"
 mkdir -p "$K/base/versions/$VERSION"
 created "$K/base/versions/$VERSION/khu"
 cp "$STAGE/KHUpdater/base/versions/$VERSION/khu" "$K/base/versions/$VERSION/khu"
 chmod 755 "$K/base/versions/$VERSION/khu"
-helper_bundle "$K/base/versions/$VERSION/Update Studio KH Helper.app" "$K/base/versions/$VERSION/khu"
+archive "$K/base/versions/$VERSION/Update Studio KH Helper.app" "legacy-versions-$VERSION-helper-app"
+helper_bundle "$K/base/versions/$VERSION/Studio Launcher KH Helper.app" "$K/base/versions/$VERSION/khu"
 # The version this Mac was running is kept as the fallback before `current` moves on. A `previous`
 # that is already there is kept as it is.
 OLD_CURRENT=""

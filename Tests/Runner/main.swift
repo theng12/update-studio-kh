@@ -634,7 +634,7 @@ func stubTests() {
         makeVersion(layout, "1.0.0", script: "exit 0"); makeVersion(layout, "2.0.0", script: "exit 0")
         let sw = StubSwitcher(layout: layout)
         _ = try? sw.install(version: "1.0.0")
-        let helper = (try! layout.helperBundle(for: "1.0.0")).appendingPathComponent("Contents/MacOS/Update Studio KH Helper")
+        let helper = (try! layout.helperBundle(for: "1.0.0")).appendingPathComponent("Contents/MacOS/Studio Launcher KH Helper")
         expect(fm.isExecutableFile(atPath: helper.path), "V1 every promoted version carries its helper bundle")
         makeVersion(layout, "3.0.0", script: "exit 0")
         try! Data("not a bundle".utf8).write(to: try! layout.helperBundle(for: "3.0.0"))
@@ -1014,7 +1014,7 @@ func agentAndServerTests() {
         var c = AgentConfig(feedURL: "", publicKey: "", stateDir: "", machine: "m", token: "")
         c.stubBase = base.path; c.updaterVersion = "1.0.0"
         expect(Agent.selfVersion(config: c, executable: exe.path) == "1.4.2", "R7 the running binary's version, not the static config")
-        let bundled = base.appendingPathComponent("versions/1.4.3/Update Studio KH Helper.app/Contents/MacOS/Update Studio KH Helper")
+        let bundled = base.appendingPathComponent("versions/1.4.3/Studio Launcher KH Helper.app/Contents/MacOS/Studio Launcher KH Helper")
         try! fm.createDirectory(at: bundled.deletingLastPathComponent(), withIntermediateDirectories: true)
         try! "#!/bin/sh\n".write(to: bundled, atomically: true, encoding: .utf8)
         expect(Agent.selfVersion(config: c, executable: bundled.path) == "1.4.3", "R7b the named helper bundle reports its own version, not the static config")
@@ -2233,7 +2233,7 @@ func launcherTests() {
                && AppNames.display("hub") == "Hub Studio KH"
                && AppNames.display("gateway") == "Gateway Studio KH"
                && AppNames.display("story") == "Story Studio KH"
-               && AppNames.display("updater") == "Update Studio Helper"
+               && AppNames.display("updater") == "Studio Launcher KH Helper"
                && AppNames.display("kh-updater-app") == "Update Studio KH"
                && AppNames.display("media-studio") == "Media Studio KH"
                && AppNames.display("printer-studio") == "Printer Studio KH"

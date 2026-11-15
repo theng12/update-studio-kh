@@ -140,7 +140,7 @@ public enum FeedPublisher {
                 // The `updater` entry is the `khu` helper binary, never an app bundle: an app's
                 // identity and icon here would make the Launcher app look like the helper (and the
                 // helper look like the app it is showing).
-                entry.name = "Update Studio Helper"
+                entry.name = "Studio Launcher KH Helper"
                 entry.bundleID = nil; entry.bundleName = nil; entry.icon = nil; entry.iconSha256 = nil
             }
             // The card's words are carried over unless this publish names new ones.

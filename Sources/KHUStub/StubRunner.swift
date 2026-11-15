@@ -274,7 +274,7 @@ public final class StubRunner: @unchecked Sendable {
         let version = StubLayout.version(of: binary)
         let icon = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/AppIcon.icns")
         do {
-            let spec = HelperBundle.Spec(name: "Update Studio KH Helper", bundleID: "com.khupdater.agent",
+            let spec = HelperBundle.Spec(name: "Studio Launcher KH Helper", bundleID: "com.khupdater.agent",
                                          executableName: HelperBundle.helperExecutable, version: version,
                                          icon: FileManager.default.fileExists(atPath: icon.path) ? icon : nil)
             return try HelperBundle.ensure(spec, source: binary, out: layout.helperBundle(for: version))

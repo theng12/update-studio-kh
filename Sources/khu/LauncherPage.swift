@@ -219,7 +219,7 @@ function render(state){if(state)Object.assign(S,state);
  if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
  $('wnver').textContent=S.version?'v'+S.version:'';
  const u=S.apps.find(a=>a.id=='updater'&&a.status=='Update available'&&a.available&&!a.statusOnly);
- $('update').hidden=!u;if(u){$('update').title='Update Studio Helper '+u.available;$('update').setAttribute('aria-label','Update Studio Helper to '+u.available)}
+ $('update').hidden=!u;if(u){$('update').title='Studio Launcher KH Helper '+u.available;$('update').setAttribute('aria-label','Studio Launcher KH Helper to '+u.available)}
  paintStatus();
  const s=signature();
  if(s==sig){move();return}

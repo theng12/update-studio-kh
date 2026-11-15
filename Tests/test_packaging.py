@@ -179,17 +179,17 @@ try:
           and os.access(base / "current", os.X_OK) and os.access(home / "Library/KHUpdater/bin/khu-stub", os.X_OK),
           "stub and current binary are executable and versioned")
     job = plistlib.loads(plist.read_bytes())
-    helper = home / "Library/KHUpdater/Update Studio KH Helper.app"
+    helper = home / "Library/KHUpdater/Studio Launcher KH Helper.app"
     helper_info = plistlib.loads((helper / "Contents/Info.plist").read_bytes())
-    check(job["ProgramArguments"] == [str(helper / "Contents/MacOS/Update Studio KH Helper"), "--base", str(base)]
+    check(job["ProgramArguments"] == [str(helper / "Contents/MacOS/Studio Launcher KH Helper"), "--base", str(base)]
           and str(home) in job["StandardOutPath"] and "__HOME__" not in str(job),
           "plist safely encodes paths with spaces and XML characters")
     check(helper_info.get("LSUIElement") is True
-          and helper_info.get("CFBundleDisplayName") == "Update Studio KH Helper"
+          and helper_info.get("CFBundleDisplayName") == "Studio Launcher KH Helper"
           and helper_info.get("CFBundleIdentifier") == "com.khupdater.agent"
-          and os.access(helper / "Contents/MacOS/Update Studio KH Helper", os.X_OK),
+          and os.access(helper / "Contents/MacOS/Studio Launcher KH Helper", os.X_OK),
           "the launchd job runs from a named, icon-carrying helper bundle instead of a bare binary")
-    check((helper / "Contents/MacOS/Update Studio KH Helper").read_bytes() == (home / "Library/KHUpdater/bin/khu-stub").read_bytes(),
+    check((helper / "Contents/MacOS/Studio Launcher KH Helper").read_bytes() == (home / "Library/KHUpdater/bin/khu-stub").read_bytes(),
           "the helper bundle wraps the supervisor stub, not the agent binary")
     ats = helper_info.get("NSAppTransportSecurity", {})
     domains = ats.get("NSExceptionDomains", {})
@@ -300,6 +300,27 @@ try:
           and "Open Studio Launcher again" in result.stderr
           and (k / "state/downloads/keep").read_text() == "saved-app-data",
           "failed repair start keeps completed setup and gives the reopen recovery step")
+
+    # A Mac installed by 0.1.35 carries the old-named client engine. A repair keeps it in its own
+    # trash, installs the renamed bundle and points the job at it — no duplicate job, no hand step.
+    reset_launchd("repair-legacy-name", running=True)
+    h, k, p = incomplete("repair-legacy-name")
+    legacy = k / "Update Studio KH Helper.app"
+    (legacy / "Contents/MacOS").mkdir(parents=True)
+    (legacy / "Contents/MacOS/Update Studio KH Helper").write_text("old-helper")
+    legacy_versioned = k / "base/versions/1.0.0/Update Studio KH Helper.app"
+    (legacy_versioned / "Contents/MacOS").mkdir(parents=True)
+    (legacy_versioned / "Contents/MacOS/Update Studio KH Helper").write_text("old-versioned-helper")
+    result = run(installer, config, h, "--repair")
+    renamed = k / "Studio Launcher KH Helper.app"
+    job = plistlib.loads(p.read_bytes())
+    trash = h / "Library/_trash"
+    check(result.returncode == 0 and (renamed / "Contents/MacOS/Studio Launcher KH Helper").is_file()
+          and job["ProgramArguments"][0] == str(renamed / "Contents/MacOS/Studio Launcher KH Helper")
+          and not legacy.exists() and not legacy_versioned.exists()
+          and any(x.name.startswith("legacy-helper-app") for x in trash.glob("repair-*/*"))
+          and any(x.name.startswith("legacy-versions-1.0.0-helper-app") for x in trash.glob("repair-*/*")),
+          "repair migrates the old helper name to Studio Launcher KH Helper and keeps the old bundles")
 
     for component in ["KHUpdater", "KHUpdater/base", "KHUpdater/bin", "KHUpdater/state"]:
         reset_launchd("symlink-" + component.replace("/", "-"))
