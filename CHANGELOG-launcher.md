@@ -5,6 +5,12 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.38 — 2026-11-15
+
+- A failure now shows its own words whole: the job name and exit code are no longer cut off at the first full stop, and the next step stays readable.
+- The in-page confirmation is a real dialog: it takes the keyboard focus, Escape cancels, Tab stays on its two buttons, and a click outside cancels.
+- One limit is stated plainly: if an app's helper runs as a child of the app itself rather than as a launchd job, the app can still refuse to quit. The update says so and keeps the app; quitting that app by hand then lets the update run.
+
 ## 0.1.37 — 2026-11-15
 
 - An app whose own background helper keeps it running no longer blocks its update with "the app did not quit": the updater stops such a helper the way macOS expects (unloads its launchd job), swaps the app, and loads the job again. If the helper cannot be put back, the update says so and the next run retries it instead of reporting success.

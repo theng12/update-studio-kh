@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.40 — 2026-11-15
+
+- Includes Studio Launcher KH 0.1.38: a failure's own words are shown whole (no cut-off job name or exit code), the in-page confirmation is a real dialog with focus, Escape and Tab handled, and the one limit is stated plainly — an app whose helper is a child process of the app can still refuse to quit, and the update then says so and keeps it.
+
 ## 1.0.39 — 2026-11-15
 
 - Includes Studio Launcher KH 0.1.37: an app whose background helper keeps it running now updates instead of failing with "the app did not quit". The helper is stopped through launchd, restored after the swap, a rollback or an interrupted install, and a service that cannot be restored is reported and retried.

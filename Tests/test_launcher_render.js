@@ -90,7 +90,7 @@ class El {
     if (part.startsWith('[')) {
       const eq = part.indexOf('=');
       if (eq < 0) return this.getAttribute(part.slice(1, -1)) !== null;
-      return this.getAttribute(part.slice(1, eq)) == part.slice(eq + 1).replace(/^["']|["']$/g, '');
+      return this.getAttribute(part.slice(1, eq)) == part.slice(eq + 1, -1).replace(/^["']|["']$/g, '');
     }
     return this.tag == part;
   }
@@ -132,6 +132,7 @@ const document = {
   querySelector(s) { return this.querySelectorAll(s)[0] || null; },
   querySelectorAll(s) { return this.body.querySelectorAll(s); },
   addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); },
+  removeEventListener(type, fn) { const list = this.handlers[type] || []; const at = list.indexOf(fn); if (at >= 0) list.splice(at, 1); },
 };
 document.documentElement.append(document.body);
 document.activeElement = document.body;
@@ -222,13 +223,13 @@ assert(!titles('.card button').includes('Cancel'), 'R4 …and does not offer to 
 
 // R5 a row being worked on shows its recorded failure as the attempt before, not as this one.
 render(state([row({ status: 'Updating…', reason: failed, retrying: true, progress: { phase: 'preparing', cancelled: false, paused: false } })]));
-assert.match(document.querySelector('.card .reason').textContent, /^Last attempt: the app did not quit\.$/,
-  'R5 a retried app says whose failure it is instead of pairing "Failed" with a live progress bar');
+assert.match(document.querySelector('.card .reason').textContent, /^Last attempt: the app did not quit; nothing was changed\.$/,
+  'R5 a retried app says whose failure it is, in full, instead of pairing "Failed" with a live progress bar');
 assert.equal(line(), 'Preparing installation…', 'R5 the live phase of this attempt is shown beside it');
 assert.match(document.querySelector('.card .chip').textContent, /^Updating$/, 'R5 the row itself reads as running, not as failed');
 render(state([row({ status: 'Failed', reason: failed })]));
-assert.equal(document.querySelector('.card .reason').textContent, 'the app did not quit.',
-  'R5 a row that is not being worked on shows its failure plainly, with no progress bar');
+assert.equal(document.querySelector('.card .reason').textContent, 'the app did not quit; nothing was changed.',
+  'R5 a row that is not being worked on shows its failure plainly and whole, with no progress bar');
 assert(!document.querySelector('[data-prog]'), 'R5 …and nothing about it looks like ongoing work');
 
 // R6 an indeterminate bar keeps its element, so its animation runs instead of restarting twice a second.
@@ -448,4 +449,44 @@ assert.equal(document.querySelectorAll('.card .btn.main').length, 0, 'R13 an app
 render(state([row({ id: 'new-kh', name: 'New KH', status: 'Not installed', managed: false, installed: null,
                     available: '1.0', installable: true })]));
 assert.equal(document.querySelectorAll('.card .btn.main').length, 1, 'R13 an installable new app still offers Install');
+
+// R14 the release's own failure reason is shown whole: the job label is never cut mid-identifier and
+// the next step is still there. plain() used to split on any '.', so "…launchctl bootstrap com."
+// was all a person saw.
+const restartReason = 'the app was installed but its background service did not restart (launchctl bootstrap com.theng12.printerstudio.airprint did not load the job (exited 5)); the install is kept and the next run tries again';
+const shownReason = run('plain(' + JSON.stringify(restartReason) + ')');
+assert.match(shownReason, /com\.theng12\.printerstudio\.airprint/, 'R14 the job label survives whole');
+assert.match(shownReason, /exited 5/, 'R14 the exit code is shown');
+assert.match(shownReason, /next run tries again/, 'R14 the next step is shown');
+assert.doesNotMatch(shownReason, /com\.$/, 'R14 the reason never ends on a cut identifier');
+const longReason = 'the app was installed but its background service did not restart (launchctl bootstrap com.example.a.very.long.job.label did not load the job (exited 7)); ' + 'x'.repeat(220);
+const cutReason = run('plain(' + JSON.stringify(longReason) + ')');
+assert.match(cutReason, /com\.example\.a\.very\.long\.job\.label/, 'R14 a long reason is cut only after a whole label');
+assert.match(cutReason, /exited 7/, 'R14 and keeps the exit code');
+
+// R15 the in-page confirmation is a real modal: the confirm button takes focus, Escape cancels,
+// Tab stays inside the two buttons, and a click on the backdrop cancels.
+const keyCountBefore = (document.handlers.keydown || []).length;
+run('window.askAnswer=null; ask("Update Studio KH to 1.0.39?", "Update", r => { window.askAnswer = r })');
+const askDialog = () => document.querySelector('[role=dialog]');
+assert.equal((document.handlers.keydown || []).length, keyCountBefore + 1, 'R15 the dialog adds one key handler while it is open');
+const askButtons = () => document.querySelectorAll('[role=dialog] button');
+assert(askDialog(), 'R15 the confirmation opens as a dialog');
+assert.equal(document.activeElement, askButtons()[1], 'R15 the confirm button takes focus on open');
+for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Tab' });
+assert.equal(document.activeElement, askButtons()[0], 'R15 Tab moves to Cancel, inside the dialog');
+for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Tab' });
+assert.equal(document.activeElement, askButtons()[1], 'R15 Tab wraps back to the confirm button');
+for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Escape' });
+assert.equal(askDialog(), null, 'R15 Escape closes it');
+assert.equal(run('window.askAnswer'), false, 'R15 Escape answers Cancel');
+assert.equal((document.handlers.keydown || []).length, keyCountBefore, 'R15 its key listener is removed with it');
+run('window.askAnswer=null; ask("Update Studio KH to 1.0.39?", "Update", r => { window.askAnswer = r })');
+askDialog().fire('click');
+assert.equal(askDialog(), null, 'R15 a click on the backdrop closes it');
+assert.equal(run('window.askAnswer'), false, 'R15 a backdrop click answers Cancel');
+run('window.askAnswer=null; ask("Update Studio KH to 1.0.39?", "Update", r => { window.askAnswer = r })');
+askButtons()[1].fire('click');
+assert.equal(run('window.askAnswer'), true, 'R15 the confirm button answers yes');
+
 console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the click’s immediate feedback and the empty list’s reason');

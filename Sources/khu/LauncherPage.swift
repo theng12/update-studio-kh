@@ -117,7 +117,17 @@ function plain(r){if(!r)return '';const t=r.toLowerCase();
  if(t.includes('cancelled on this mac'))return 'Cancelled. Nothing was changed.';
  if(t.includes('did not finish')||t.includes('download')||t.includes('could not connect')||t.includes('timed out'))return 'The download didn’t finish. Check the network and try Update again.';
  if(t.includes('not healthy')||t.includes('rolled back'))return 'The new version didn’t start properly, so the previous version is running again.';
- return r.split(/[;.]/)[0]+'.'}
+ // The Mac's own sentence, kept whole when it is short enough to read. Otherwise its first clause
+ // is kept, cut only at a real boundary — never inside parentheses (a job label such as
+ // com.example.helper) and never mid-word, so "what happened" stays answerable.
+ const text=String(r).trim();
+ if(text.length<=240)return /[.!?]$/.test(text)?text:text+'.';
+ let depth=0,end=text.length;
+ for(let i=0;i<text.length;i++){const ch=text[i];
+  if(ch==='(')depth++;else if(ch===')')depth=Math.max(0,depth-1);
+  else if(depth===0&&(ch===';'||ch==='.')&&(i+1===text.length||text[i+1]===' ')){end=i;break}}
+ const first=text.slice(0,end).trim();
+ return (first||text).replace(/[.;,]+$/,'')+'.'}
 function installed(a){return a.installed!=null&&a.managed}
 function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Receiving update…':['Receiving update…','info'],
  'Failed':['Failed','bad'],'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
@@ -170,9 +180,20 @@ function ask(question,confirmLabel,done){
  const box=el('div',{style:'background:var(--panel,#fff);color:var(--text,#111);border-radius:14px;padding:20px 20px 16px;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.35);font:14px -apple-system,BlinkMacSystemFont,sans-serif'});
  box.append(el('p',{style:'margin:0 0 16px;line-height:1.4'},question));
  const row=el('div',{style:'display:flex;gap:10px;justify-content:flex-end'});
- row.append(el('button',{class:'btn',onclick:()=>{back.remove();done(false)}},'Cancel'));
- row.append(el('button',{class:'btn main',onclick:()=>{back.remove();done(true)}},confirmLabel));
- box.append(row);back.append(box);document.body.append(back);
+ const cancel=el('button',{class:'btn',onclick:()=>close(false)},'Cancel');
+ const confirm=el('button',{class:'btn main',onclick:()=>close(true)},confirmLabel);
+ row.append(cancel,confirm);box.append(row);back.append(box);
+ // A real modal: the confirm button takes focus, Escape cancels, Tab stays inside these two
+ // buttons, and a click on the backdrop cancels. window.confirm() is a silent no-op in the
+ // packaged webview, so this is the only confirmation a person ever sees.
+ function close(result){if(back.parentNode)back.remove();document.removeEventListener('keydown',keys,true);done(result)}
+ function keys(e){
+  if(e.key==='Escape'){if(e.preventDefault)e.preventDefault();if(e.stopPropagation)e.stopPropagation();close(false);return}
+  if(e.key==='Tab'){if(e.preventDefault)e.preventDefault();if(e.stopPropagation)e.stopPropagation();(document.activeElement===confirm?cancel:confirm).focus()}}
+ back.addEventListener('click',e=>{if(e.target===back)close(false)});
+ document.addEventListener('keydown',keys,true);
+ document.body.append(back);
+ confirm.focus();
 }
 function buttons(a,big){const out=[],m=mainAction(a);
  if(a.status=='Updating…'&&!big)return [progress(a)];
