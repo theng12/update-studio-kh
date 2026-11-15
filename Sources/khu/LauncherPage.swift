@@ -188,7 +188,10 @@ function ask(question,confirmLabel,done){
  // buttons, and a click on the backdrop cancels. window.confirm() is a silent no-op in the
  // packaged webview, so this is the only confirmation a person ever sees.
  function close(result){if(back.parentNode)back.remove();document.removeEventListener('keydown',keys,true);
-  if(restore&&restore.focus)restore.focus();done(result)}
+  // A state push can redraw the row that opened this dialog, detaching it: focus then goes to the
+  // always-present Settings button, never to the window body.
+  const back2=restore&&restore.isConnected?restore:document.getElementById('gear');
+  if(back2&&back2.focus)back2.focus();done(result)}
  function keys(e){
   if(e.key==='Escape'){if(e.preventDefault)e.preventDefault();if(e.stopPropagation)e.stopPropagation();close(false);return}
   if(e.key==='Tab'){if(e.preventDefault)e.preventDefault();if(e.stopPropagation)e.stopPropagation();(document.activeElement===confirm?cancel:confirm).focus()}}

@@ -115,6 +115,7 @@ class El {
   getBoundingClientRect() { return { top: 0, left: 0, right: 12, bottom: 12 }; }
   scrollIntoView() {}
   focus() { document.activeElement = this; }
+  get isConnected() { let n = this; while (n) { if (n === document.documentElement || n === document.body) return true; n = n.parentNode; } return false; }
   addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); }
   fire(type, event) {
     const e = Object.assign({ target: this, currentTarget: this, stopPropagation() {} }, event);
@@ -515,4 +516,19 @@ run('ask("Update Studio KH to 1.0.39?", "Update", () => {})');
 for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Escape' });
 assert.equal(document.activeElement, opener, 'R17 closing the confirmation returns focus to its opener');
 
+
+// R17b a helper state push can redraw the row that opened the confirmation, detaching it; closing
+// must then land on the always-present Settings button, never on the window body.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
+render(state([row({ status: 'Update available', available: '2.0.0', installed: '1.0.0' })]));
+const rowOpener = document.querySelector('.card .btn.main');
+rowOpener.focus();
+run('ask("Update Studio KH to 1.0.41?", "Update", () => {})');
+render(state([row({ status: 'Update available', available: '2.0.0', installed: '1.0.0' }),
+             row({ id: 'second', name: 'Second KH', status: 'Up to date', installed: '1.0.0', available: '1.0.0' })]));
+assert.equal(rowOpener.isConnected, false, 'R17b the redraw detached the opening row button');
+for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Escape' });
+assert(document.activeElement && document.activeElement.id === 'gear',
+  'R17b focus falls back to the connected Settings button, never the body');
+assert.notEqual(document.activeElement, document.body, 'R17b focus is never left on the body');
 console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the click’s immediate feedback and the empty list’s reason');
