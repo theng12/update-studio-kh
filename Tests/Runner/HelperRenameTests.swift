@@ -32,8 +32,10 @@ func helperRenameTests() {
     expect(newRun.hasSuffix("Studio Launcher KH Helper.app/Contents/MacOS/Studio Launcher KH Helper"),
            "HR1 a renamed version runs from Studio Launcher KH Helper.app")
 
-    // HR2: rolling back into the pre-rename version still starts from a path that exists.
+    // HR2: rolling back into the pre-rename version still starts from a path that exists. The Mac
+    // starts on 0.1.35 (as installed before the rename), then updates to 0.1.36 and rolls back.
     let switcher = StubSwitcher(layout: layout)
+    try! fm.createSymbolicLink(atPath: layout.currentLink.path, withDestinationPath: "versions/0.1.35/khu")
     _ = try? switcher.install(version: "0.1.36")
     let back = try? switcher.switchBack()
     let restored = layout.currentBinary().map { layout.runnable(for: $0).path }
