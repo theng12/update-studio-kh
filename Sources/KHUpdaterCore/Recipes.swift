@@ -424,11 +424,13 @@ public enum Recipe {
             let resumed = control.resumeServices()
             if wasRunning && mayRelaunch && (appQuit || control.isRunning() != true) { control.launch() }
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
-            // A service that did not come back keeps the journal: the next run's recovery retries it.
-            if resumed.ok { _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm) }
+            // Only a stop that really began (the app was quit) can have left a service down; a
+            // refusal before that leaves nothing to recover, so no journal is kept for it.
+            let keepJournal = !resumed.ok && appQuit
+            if !keepJournal { _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm) }
             throw khuFail(resumed.ok ? message
-                          : message + "; and its background service did not restart (\(resumed.reason ?? "launchd refused")); "
-                          + "the install is kept and the next run tries again")
+                          : message + "; and its background service did not restart (\(resumed.reason ?? "launchd refused"))"
+                          + (keepJournal ? "; the install is kept and the next run tries again" : ""))
         }
         // The hand route never asks anything to stop: it proved no quiet point, so an app or service
         // that started after the last look is left running while the swap goes ahead without it.
@@ -719,12 +721,12 @@ public enum Recipe {
             return resumed.ok
                 ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy; \(previousVersion) was put back and left stopped")
                 : RecipeResult(status: "install_failed", reason: "the new version was not healthy; \(previousVersion) was put back, "
-                               + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); the install is kept and the next run tries again")
+                               + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); \(previousVersion) was put back and its journal is kept, so the next run tries again")
         }
         let resumed = control.resumeServices()
         guard resumed.ok else {
             return RecipeResult(status: "install_failed", reason: "the new version was not healthy; \(previousVersion) was put back, "
-                               + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); the install is kept and the next run tries again")
+                               + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); \(previousVersion) was put back and its journal is kept, so the next run tries again")
         }
         control.launch()
         return waitHealthy(control, version: previousVersion)

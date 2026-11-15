@@ -9,6 +9,7 @@ private final class LaunchdShell: Shell, @unchecked Sendable {
     let lock = NSLock()
     var calls: [String] = []
     var list: () -> String = { "" }
+    var listExit: Int32 = 0
     var bootoutExit: Int32 = 0
     var bootstrapExit: Int32 = 0
     var kickstartExit: Int32 = 0
@@ -19,7 +20,7 @@ private final class LaunchdShell: Shell, @unchecked Sendable {
         lock.lock(); calls.append(([executable] + arguments).joined(separator: " ")); lock.unlock()
         switch (executable, arguments.first) {
         case ("/bin/launchctl", "list"):
-            return ShellResult(exitCode: 0, stdout: list(), stderr: "")
+            return ShellResult(exitCode: listExit, stdout: list(), stderr: "")
         case ("/bin/launchctl", "bootout"):
             if bootoutExit == 0 { onBootout?() }
             return ShellResult(exitCode: bootoutExit, stdout: "", stderr: "")
@@ -130,6 +131,7 @@ func ownedServiceTests() {
         shell.list = { rig.list(unloaded: false) }
         shell.bootoutExit = 5
         let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 1)
+        control.restoreServices([rig.label])
         expect(control.stopService() == false && !rig.list(unloaded: false).hasPrefix("- 0"),
                "OS2 a refused bootout stops nothing and keeps the service running")
         expect(shell.count("bootstrap") == 0, "OS2 a refused bootout puts nothing back")
@@ -151,6 +153,7 @@ func ownedServiceTests() {
         let shell = LaunchdShell()
         shell.list = { rig.list(unloaded: false) }
         let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 0.2)
+        control.restoreServices([rig.label])
         expect(control.stopService() == false && shell.count("bootout") == 0,
                "OS3 \(what) is not an owned service: nothing is unloaded")
         expect(control.quit() == false && shell.count("bootout") == 0,
@@ -166,6 +169,7 @@ func ownedServiceTests() {
         shell.list = { rig.list(unloaded: false) }
         shell.onKickstart = { rig.startHelper() }
         let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 2)
+        control.restoreServices([rig.label])
         expect(control.stopService(), "OS4 a restart-on-failure job is stopped")
         expect(shell.count("bootout") == 0, "OS4 a restart-on-failure job is not unloaded")
         let resumed = control.resumeServices()
@@ -266,11 +270,53 @@ func ownedServiceTests() {
         let scheduled = control.resumeServices()
         expect(!scheduled.ok && shell.count("bootstrap") == 0,
                "OS8 a scheduled saved job is reported, never bootstrapped back (\(scheduled.reason ?? "nil"))")
+        rewrite(["Label": rig.label, "RunAtLoad": true, "PathState": ["/tmp": ["Exists": true]],
+                 "ProgramArguments": [rig.helper.path], "KeepAlive": true])
+        let pathState = control.resumeServices()
+        expect(!pathState.ok && shell.count("bootstrap") == 0,
+               "OS8 a path-state saved job is reported, never bootstrapped back (\(pathState.reason ?? "nil"))")
         rewrite(["Label": rig.label, "RunAtLoad": true,
                  "ProgramArguments": [rig.helper.path], "KeepAlive": ["SuccessfulExit": true]])
         let unknown = control.resumeServices()
         expect(!unknown.ok && shell.count("bootstrap") == 0,
                "OS8 an unsupported policy in a saved job is reported, never bootstrapped back (\(unknown.reason ?? "nil"))")
+    }
+
+    // OS9: a job the owner had already stopped is not in the plan, so the install never starts it.
+    do {
+        let rig = ServiceRig(policy: keepAlways)
+        let shell = LaunchdShell()
+        shell.list = { "- 0 \(rig.label)" }
+        let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 0.5)
+        expect(control.quit(), "OS9 an app with only a stopped service is not running")
+        expect(control.stopService() && shell.count("bootout") == 0,
+               "OS9 a stopped service is left alone, never unloaded")
+        expect(control.resumeServices().ok && shell.count("kickstart") == 0 && shell.count("bootstrap") == 0,
+               "OS9 and never started back")
+    }
+
+    // OS10: launchd's own list failing is a reported failure, not an empty list.
+    do {
+        let rig = ServiceRig(policy: keepAlways)
+        let shell = LaunchdShell()
+        shell.listExit = 1
+        let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 0.5)
+        control.restoreServices([rig.label])
+        let resumed = control.resumeServices()
+        expect(!resumed.ok && (resumed.reason ?? "").contains("could not be read"),
+               "OS10 a launchctl list that cannot be read is a reported failure (\(resumed.reason ?? "nil"))")
+    }
+
+    // OS11: a row never reads "Up to date" while the install is unsettled.
+    do {
+        let failed = HelperApp.status(installed: "2.0.0", available: "2.0.0", statusOnly: false,
+                                      last: (status: "install_failed", reason: "its background service did not restart"))
+        let unresolved = HelperApp.status(installed: "2.0.0", available: "2.0.0", statusOnly: false,
+                                          last: (status: "unresolved", reason: "an earlier install could not be finished"))
+        let fine = HelperApp.status(installed: "2.0.0", available: "2.0.0", statusOnly: false, last: nil)
+        expect(failed.0 == HelperApp.failed && failed.1 == "its background service did not restart"
+               && unresolved.0 == HelperApp.failed && fine.0 == HelperApp.upToDate,
+               "OS11 a failed or unresolved install is shown as failed even when the version matches")
     }
 }
 

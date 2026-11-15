@@ -169,12 +169,16 @@ public struct HelperApp: Sendable, Equatable {
             // An app that updates itself is still installed by hand when the person asks for it: the
             // state says what is true on this Mac, not who would do it.
             guard manual, let available else { return (updatesItself, nil) }
+            // A version already on disk can still be unsettled (its service did not come back).
+            if let last, ["install_failed", "unresolved"].contains(last.status) { return (failed, last.reason) }
             let behind = installed.map { VersionCompare.isNewer(available, than: $0) } ?? true
             if behind, let last, failures.contains(last.status) { return (failed, last.reason) }
             if installed == nil { return (notInstalled, nil) }
             return behind ? (updateAvailable, nil) : (updatesItself, nil)
         }
         guard let available else { return (installed == nil ? notInstalled : notInFeed, nil) }
+        // The new version may be on disk while its install is unresolved: never "Up to date" then.
+        if let last, ["install_failed", "unresolved"].contains(last.status) { return (failed, last.reason) }
         let behind = installed.map { VersionCompare.isNewer(available, than: $0) } ?? true
         if behind, let last, failures.contains(last.status) { return (failed, last.reason) }
         if installed == nil { return (notInstalled, nil) }
