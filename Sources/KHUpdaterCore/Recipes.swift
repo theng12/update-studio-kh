@@ -407,6 +407,14 @@ public enum Recipe {
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
             return RecipeResult(status: "refused", reason: Recipe.handKeepsRunningApp)
         }
+        // The replacement must be proven present and readable before anything is stopped or moved:
+        // a missing or corrupt staged app leaves the installed one exactly where it is, so a failed
+        // install can never leave the machine with no app. No journal exists yet for this path.
+        guard fm.fileExists(atPath: paths.staged.path), (try? BundleInfo.read(paths.staged.path)) != nil else {
+            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            return RecipeResult(status: "install_failed",
+                                reason: "the staged app is missing or unreadable; the installed app was kept; nothing was replaced")
+        }
         // The update hold is validated at the mutation boundary, before the journal exists: a
         // refusal here (or a hold that cannot be taken for an app opened mid-download) leaves no
         // journal and no staged copy behind. An app that exited needs no renewal: it cannot be

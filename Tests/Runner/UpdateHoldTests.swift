@@ -168,6 +168,27 @@ func updateHoldTests() {
                "UH8 the hold is renewed at the boundary and resumed after the abort (\(f.client.calls))")
     }
 
+    // UH16 a missing or corrupt staged app is refused before anything is stopped or moved: the
+    // installed app stays exactly where it is.
+    do {
+        let r = Rig("hold-corrupt-stage")
+        let installed = makeApp(r.root.appendingPathComponent("Demo.app"), version: "1.0.0", id: "com.example.demo")
+        let mount = r.root.appendingPathComponent("mount")
+        makeApp(mount.appendingPathComponent("Demo.app"), version: "2.0.0", id: "com.example.demo")
+        let state = r.root.appendingPathComponent("state")
+        try! fm.createDirectory(at: state, withIntermediateDirectories: true)
+        let app = FakeApp(installed: installed, running: false, healthy: ["2.0.0"])
+        let result = try? Recipe.appDmg(shell: RecordingShell(mount: mount), installedPath: installed.path,
+                                        artifactPath: mount.appendingPathComponent("Demo.app").path,
+                                        feedVersion: "2.0.0", expectedBundleID: "com.example.demo",
+                                        stateDir: state.path, app: "demo", control: app.control,
+                                        verifyStaged: { staged in try? fm.removeItem(atPath: staged) })
+        let journal = Recipe.journalURL(stateDir: state.path, app: "demo")
+        expect(result?.status == "install_failed" && (result?.reason ?? "").contains("missing or unreadable")
+               && (try? BundleInfo.read(installed.path))?.version == "1.0.0" && !fm.fileExists(atPath: journal.path),
+               "UH16 a missing staged app leaves the installed app untouched (\(result?.status ?? "nil"), \(result?.reason ?? ""))")
+    }
+
     // UH11 the hold request is bounded by the contract's 30 s window, not the client's 60 s.
     do {
         final class SlowClient: HTTPClient, @unchecked Sendable {
