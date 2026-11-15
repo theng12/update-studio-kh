@@ -49,3 +49,5 @@ mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Update Studio KH.app"; ln -s /Applicati
 hdiutil create -volname "Update Studio KH" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" >/dev/null
 echo "built $APP and $DMG"
 packaging/record-dist.sh copy "Update Studio KH" "$VERSION" "$DMG"
+# Build output is not an archive: keep the latest two per app, retire the rest recoverably.
+python3 -B -I packaging/rotate-build.py build

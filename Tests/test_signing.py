@@ -19,7 +19,7 @@ class SigningTests(unittest.TestCase):
         self.repo.mkdir()
         for name in ("build.sh", "CHANGELOG.md", "CHANGELOG-launcher.md",
                      "packaging/build-launcher.sh", "packaging/build-agent-kit.sh",
-                     "packaging/build-app.sh", "packaging/install-agent.sh",
+                     "packaging/build-app.sh", "packaging/install-agent.sh", "packaging/rotate-build.py",
                      "packaging/generate-ui.py", "packaging/shared-ui/whats-new.py",
                      "packaging/shared-ui/design-tokens.json", "packaging/shared-ui/UI-CONVENTIONS.md",
                      "packaging/com.khupdater.agent.plist", "examples/agent-config.json"):

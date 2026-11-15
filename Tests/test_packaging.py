@@ -455,6 +455,31 @@ try:
           and 'record-dist.sh copy "Studio Launcher KH"' in (packaging / "build-launcher.sh").read_text()
           and (packaging / "record-dist.sh").stat().st_mode & 0o111,
           "every packaged DMG is written into dist/ by the build itself, not by remembering")
+    rotation = work / "rotation"
+    rotation.mkdir()
+    for name in ["Studio-Launcher-KH-0.1.18.dmg", "Studio-Launcher-KH-0.1.39.dmg", "Studio-Launcher-KH-0.1.40.dmg",
+                 "Update-Studio-KH-1.0.21.dmg", "Update-Studio-KH-1.0.39.dmg", "Update-Studio-KH-1.0.41.dmg"]:
+        (rotation / name).write_text("dmg")
+    (rotation / "khu").write_text("binary")
+    (rotation / "launcher-kit").mkdir()
+    rotate = packaging / "rotate-build.py"
+    result = subprocess.run([sys.executable, "-I", str(rotate), "--dir", str(rotation),
+                             "--trash", str(work / "rotation-trash")], capture_output=True, text=True)
+    check(result.returncode == 0, "rotate-build runs on a build folder")
+    left = sorted(p.name for p in rotation.iterdir())
+    check(left == ["Studio-Launcher-KH-0.1.39.dmg", "Studio-Launcher-KH-0.1.40.dmg",
+                   "Update-Studio-KH-1.0.39.dmg", "Update-Studio-KH-1.0.41.dmg", "khu", "launcher-kit"],
+          "build keeps the latest two DMGs per app and nothing else is touched")
+    trash = sorted(p.name for p in (work / "rotation-trash").glob("build-history-*/*"))
+    check(trash == ["Studio-Launcher-KH-0.1.18.dmg", "Update-Studio-KH-1.0.21.dmg"],
+          "older installers are retired recoverably to _trash")
+    again = subprocess.run([sys.executable, "-I", str(rotate), "--dir", str(rotation),
+                            "--trash", str(work / "rotation-trash")], capture_output=True, text=True)
+    check(again.returncode == 0 and len(list((work / "rotation-trash").glob("build-history-*"))) == 1,
+          "a second rotation moves nothing and adds no folder")
+    check("rotate-build.py build" in (packaging / "build-launcher.sh").read_text()
+          and "rotate-build.py build" in (packaging / "build-app.sh").read_text(),
+          "every release build rotates its own build folder")
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

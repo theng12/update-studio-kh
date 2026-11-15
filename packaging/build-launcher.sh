@@ -41,3 +41,5 @@ hdiutil create -volname "Studio Launcher KH" -srcfolder "$TMP/dmg" -ov -format U
 mv "$TMP" "_trash/launcher-dmg-staging.$(date +%s)"
 echo "built $APP and $DMG (agent $(lipo -archs "$KIT/bin/khu"))"
 packaging/record-dist.sh copy "Studio Launcher KH" "$VERSION" "$DMG"
+# Build output is not an archive: keep the latest two per app, retire the rest recoverably.
+python3 -B -I packaging/rotate-build.py build
