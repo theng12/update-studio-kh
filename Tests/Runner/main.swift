@@ -3873,6 +3873,7 @@ struct RunnerMain {
         if ProcessInfo.processInfo.environment["STUB_ONLY"] == "1" {
             supportTests()
             stubTests()
+            helperRenameTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -3976,6 +3977,7 @@ r41HealthMustHold()
         repairedPathTests()
         oneShotLockTests()
         ownedServiceTests()
+        helperRenameTests()
         artifactDeltaTests()
         installedIdentityTests()
         publisherRetentionTests()

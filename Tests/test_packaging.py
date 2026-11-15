@@ -321,6 +321,9 @@ try:
           and any(x.name.startswith("legacy-helper-app") for x in trash.glob("repair-*/*"))
           and any(x.name.startswith("legacy-versions-1.0.0-helper-app") for x in trash.glob("repair-*/*")),
           "repair migrates the old helper name to Studio Launcher KH Helper and keeps the old bundles")
+    plists = sorted((h / "Library/LaunchAgents").glob("*.plist"))
+    check([x.name for x in plists] == ["com.khupdater.agent.plist"],
+          "the migration re-points the one existing job; no second launchd job is created")
 
     for component in ["KHUpdater", "KHUpdater/base", "KHUpdater/bin", "KHUpdater/state"]:
         reset_launchd("symlink-" + component.replace("/", "-"))
