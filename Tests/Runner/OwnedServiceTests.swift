@@ -407,9 +407,40 @@ func ownedServiceTests() {
         let result = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server))
         let row = result?.apps.first { $0.app == "foo" }
         expect(!fm.fileExists(atPath: Recipe.journalURL(stateDir: state.path, app: "foo").path)
-               && row?.status == HelperApp.upToDate,
-               "OS14 a cleared recovery stops the row showing the old failure (\(row?.status ?? "nil"))")
+               && row?.status == HelperApp.upToDate && row?.reason == nil,
+               "OS14 a cleared recovery stops the row showing the old failure or its reason (\(row?.status ?? "nil"))")
     } catch { expect(false, "OS14 fixture: \(error)") }
+
+    // OS15: the recovery result reaches the publisher, so the fleet page's last result for that
+    // app is no longer a failure.
+    do {
+        let rig = Rig("recovered-publisher")
+        let installed = makeApp(rig.root.appendingPathComponent("Foo.app"), version: "1.0.0", id: "com.example.foo")
+        try rig.publish("foo", "1.0.0", rig.artifact("foo.dmg", "bytes"), kind: "app-dmg")
+        let token = try Enrolment.enrol(stateDir: rig.state, machine: "mac1")
+        let cfg = agentConfig(rig, token: token, apps: ["foo": AppConfig(bundlePath: installed.path, recipe: "app-dmg", automatic: false)])
+        let state = URL(fileURLWithPath: cfg.stateDir)
+        try fm.createDirectory(at: state, withIntermediateDirectories: true)
+        var journal = InstallJournal(phase: "promoted", installed: installed.path, staged: "",
+                                     rollback: state.appendingPathComponent("rollback/foo").path,
+                                     previousVersion: "0.9.0", wasRunning: false)
+        journal.relaunchAfterwards = false
+        journal.version = "1.0.0"
+        try AtomicFile.writeJSON(journal, to: Recipe.journalURL(stateDir: state.path, app: "foo"))
+        var memory = AgentMemory()
+        memory.done["auto-foo-old"] = .init(app: "foo", status: "install_failed",
+                                            reason: "its background service did not restart",
+                                            at: ISO.string(Date().addingTimeInterval(-60)), sent: true)
+        try AtomicFile.writeJSON(memory, to: state.appendingPathComponent("agent-memory.json"))
+        try StateStore.update(in: rig.state) { store in
+            store.machines["mac1"]!.lastResults = ["foo": CommandResult(commandId: "auto-foo-old", status: "install_failed",
+                                                                       reason: "its background service did not restart")]
+        }
+        _ = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server))
+        let served = (try? StateStore.load(from: rig.state))?.machines["mac1"]?.lastResults?["foo"]
+        expect(served != nil && !FeedServer.failureStatuses.contains(served!.status),
+               "OS15 the recovery result reaches the publisher, so the fleet page is no longer failed (\(served?.status ?? "nil"))")
+    } catch { expect(false, "OS15 fixture: \(error)") }
 
     // OS11: a row never reads "Up to date" while the install is unsettled.
     do {
