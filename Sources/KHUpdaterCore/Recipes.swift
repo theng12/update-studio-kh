@@ -351,15 +351,24 @@ public enum Recipe {
     /// Retires every other bundle with the same identifier, in `/Applications` and `~/Applications`.
     /// A move that fails is ignored here: the install already succeeded and must not be undone by
     /// housekeeping.
-    static func retireDuplicateBundles(bundleID: String, keeping installedPath: String, trash: URL, fileManager fm: FileManager) {
-        let installed = URL(fileURLWithPath: installedPath).standardizedFileURL.path
-        let roots = [URL(fileURLWithPath: "/Applications"),
-                     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
+    static func retireDuplicateBundles(bundleID: String, keeping installedPath: String, trash: URL,
+                                       roots: [URL]? = nil, fileManager fm: FileManager = .default) {
+        // The target is never a candidate. Paths are resolved through symlinks before comparing, so a
+        // second spelling of the same bundle (a link, a root reached twice) can never retire the app
+        // that was just installed. If the target itself cannot be read as the expected bundle, nothing
+        // is retired at all: the safe state is "leave every copy alone".
+        let keep = URL(fileURLWithPath: installedPath).resolvingSymlinksInPath().standardizedFileURL.path
+        guard fm.fileExists(atPath: keep), Self.bundleIdentifier(at: keep) == bundleID else { return }
+        let roots = roots ?? [URL(fileURLWithPath: "/Applications"),
+                              FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
+        var visited = Set<String>()
         for root in roots {
+            let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+            guard visited.insert(rootPath).inserted else { continue }
             let entries = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
             for url in entries where url.pathExtension == "app" {
-                let candidate = url.standardizedFileURL.path
-                guard candidate != installed, Self.bundleIdentifier(at: candidate) == bundleID else { continue }
+                let candidate = url.resolvingSymlinksInPath().standardizedFileURL.path
+                guard candidate != keep, Self.bundleIdentifier(at: candidate) == bundleID else { continue }
                 _ = try? Trash.move(url, into: trash, fileManager: fm)
             }
         }

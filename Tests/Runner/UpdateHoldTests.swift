@@ -168,6 +168,44 @@ func updateHoldTests() {
                "UH8 the hold is renewed at the boundary and resumed after the abort (\(f.client.calls))")
     }
 
+    // UH17 a duplicate-bundle sweep never retires the app that was just installed, whatever path
+    // spelling or extra root it is reached through.
+    do {
+        let root = tmpDir("retire-target")
+        let apps = root.appendingPathComponent("Applications")
+        let userApps = root.appendingPathComponent("UserApplications")
+        try! fm.createDirectory(at: apps, withIntermediateDirectories: true)
+        try! fm.createDirectory(at: userApps, withIntermediateDirectories: true)
+        let installed = makeApp(apps.appendingPathComponent("Studio Launcher KH.app"), version: "0.1.37", id: "com.khupdater.launcher")
+        _ = makeApp(userApps.appendingPathComponent("Studio Launcher KH copy.app"), version: "0.1.37", id: "com.khupdater.launcher")
+        let link = root.appendingPathComponent("linked-Applications")
+        try! fm.createSymbolicLink(at: link, withDestinationURL: apps)
+        let trash = root.appendingPathComponent("trash")
+        try! fm.createDirectory(at: trash, withIntermediateDirectories: true)
+        Recipe.retireDuplicateBundles(bundleID: "com.khupdater.launcher", keeping: installed.path + "/", trash: trash,
+                                      roots: [apps, userApps, link])
+        expect(fm.fileExists(atPath: installed.path), "UH17 the installed app survives the duplicate sweep")
+        let trashed = (fm.enumerator(at: trash, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+        expect(trashed.contains { $0.lastPathComponent.contains("copy") }, "UH17 the real duplicate is retired")
+        let missing = root.appendingPathComponent("Gone.app")
+        Recipe.retireDuplicateBundles(bundleID: "com.khupdater.launcher", keeping: missing.path, trash: trash,
+                                      roots: [apps, userApps])
+        expect(fm.fileExists(atPath: installed.path), "UH17 an unreadable target retires nothing")
+    }
+
+    // UH18 an order already satisfied at the target path is not reinstalled.
+    do {
+        let f = rig("hold-current", hold: holdURL, recipe: "app-dmg", running: false)
+        _ = makeApp(URL(fileURLWithPath: f.cfg.apps["demo"]!.bundlePath), version: "2.0.0", id: "com.example.demo")
+        f.client.replies = [safeReply()]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "2.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        expect(result?.status == "current" && f.client.calls.isEmpty && !f.client.calls.contains("artifact"),
+               "UH18 an already-current target is not reinstalled (\(f.client.calls))")
+    }
+
     // UH16 a missing or corrupt staged app is refused before anything is stopped or moved: the
     // installed app stays exactly where it is.
     do {
