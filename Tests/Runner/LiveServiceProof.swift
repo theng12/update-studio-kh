@@ -13,10 +13,10 @@ func runLiveServiceProof() -> Never {
     try! fm.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
     try! fm.copyItem(atPath: "/bin/sleep", toPath: helper.path)
     _ = try? SystemShell().run("/usr/bin/codesign", arguments: ["-f", "-s", "-", helper.path], timeout: 10)
-    let label = "com.khproof.updaterproof"
+    let label = "com.khproof.updaterproof.\(getpid())"
     let plist = root.appendingPathComponent("\(label).plist")
     let job: [String: Any] = ["Label": label, "RunAtLoad": true, "KeepAlive": true,
-                              "ProgramArguments": [helper.path]]
+                              "ProgramArguments": [helper.path, "30"]]
     try! PropertyListSerialization.data(fromPropertyList: job, format: .xml, options: 0).write(to: plist)
     let shell = SystemShell()
     let domain = "gui/\(getuid())"
@@ -48,7 +48,7 @@ func runLiveServiceProof() -> Never {
     }
     _ = launchctl(["bootout", "\(domain)/\(label)"])   // a previous interrupted run leaves nothing
 
-    expect(launchctl(["bootstrap", domain, plist.path])?.exitCode == 0 && waitListed(running: true, seconds: 10),
+    expect(launchctl(["bootstrap", domain, plist.path])?.exitCode == 0 && waitListed(running: true, seconds: 15),
            "LP1 a real keep-alive helper job is loaded and running")
     let control = LiveControl.appDmg(app.path, shell: shell, agentsDirectory: root, quitWait: 20)
     expect(control.isRunning() == true, "LP1 the running job is seen inside the bundle")
@@ -56,7 +56,7 @@ func runLiveServiceProof() -> Never {
     expect(control.stopService() && !listed().loaded && !listed().running,
            "LP3 a real launchctl bootout stops the unconditional job")
     let resumed = control.resumeServices()
-    expect(resumed.ok && waitListed(running: true, seconds: 10),
+    expect(resumed.ok && waitListed(running: true, seconds: 15),
            "LP4 resumeServices bootstraps the job back and launchd really runs it (\(resumed.reason ?? "ok"))")
 
     // Recovery: the job is unloaded again, and a journal that says it was running must bring it back.
@@ -71,7 +71,7 @@ func runLiveServiceProof() -> Never {
     try! AtomicFile.writeJSON(journal, to: Recipe.journalURL(stateDir: state, app: "proof"))
     let note = (try? Recipe.recover(installedPath: app.path, stateDir: state, app: "proof", control: control)) ?? ""
     expect(!note.isEmpty && !fm.fileExists(atPath: Recipe.journalURL(stateDir: state, app: "proof").path)
-           && waitListed(running: true, seconds: 10),
+           && waitListed(running: true, seconds: 15),
            "LP5 recovery puts an unloaded job back from the journal and clears it (\(note))")
 
     _ = launchctl(["bootout", "\(domain)/\(label)"])

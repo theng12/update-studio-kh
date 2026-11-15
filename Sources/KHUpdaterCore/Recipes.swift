@@ -1092,7 +1092,12 @@ public enum LiveControl {
             // A signal/crash exit could be waiting for KeepAlive's restart throttle.
             if fields[0] == "-" && fields[1] == "0" { stopped.insert(label) }
         }
-        return labels.allSatisfy { stopped.contains($0) || (unloaded.contains($0) && !present.contains($0)) }
+        // A booted-out job is stopped only once launchd has dropped it from its list entirely; while
+        // it is still listed (`- 0` included) the unload is in progress and starting it back would
+        // race the teardown. A signalled job is stopped when it is listed with no pid.
+        return labels.allSatisfy { label in
+            unloaded.contains(label) ? !present.contains(label) : stopped.contains(label)
+        }
     }
 
     public static func appDmg(_ installedPath: String, shell: Shell, agentsDirectory: URL? = nil,
