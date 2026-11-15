@@ -239,7 +239,8 @@ public enum Recipe {
     /// anything running is touched, so a refusal costs the app nothing.
     public static func ownerRollback(shell: Shell, installedPath: String, stateDir: String, app: String,
                                      expectedBundleID: String?, order: String, control: AppControl,
-                                     fileManager fm: FileManager = .default) throws -> RecipeResult {
+                                     fileManager fm: FileManager = .default,
+                                     beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         if fm.fileExists(atPath: paths.journal.path) {
@@ -296,7 +297,8 @@ public enum Recipe {
                                + "\(keptIdentity); nothing was changed")
         }
         return try promoteAndSettle(paths: paths, targetVersion: kept.version, installedInfo: installedInfo,
-                                    order: order, control: control, fileManager: fm, notes: [recovered])
+                                    order: order, control: control, fileManager: fm, notes: [recovered],
+                                    beforeStop: beforeStop)
     }
 
     /// Copy a verified bundle into the staging path beside the installed one and check the copy —
@@ -390,6 +392,8 @@ public enum Recipe {
                                  relaunchAfterInstall: Bool = true,
                                  beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let installedPath = paths.installedPath
+        // The last read before anything would be stopped is the one that decides: the app may have
+        // been opened (or closed) while the installer was being prepared.
         let wasRunning = control.isRunning() ?? true
         // A test/hidden instance (extra launch arguments or an isolated HOME) is not the owner's
         // app: it may be replaced, but it is never relaunched into the owner's profile afterwards.
@@ -397,12 +401,21 @@ public enum Recipe {
         // would otherwise take the owner's desktop, whatever flags `open` was given.
         let testInstance = wasRunning && control.isTestInstance()
         let mayRelaunch = relaunchAfterInstall && !testInstance
-        // The last read before anything would be stopped is the one that decides. An app that
-        // updates itself came up between the staging look and here: this route proves no quiet
-        // point, so it is kept exactly as it is — no journal, no quit, no service stop, no relaunch.
+        // An app that updates itself came up between the staging look and here: this route proves no
+        // quiet point, so it is kept exactly as it is — no journal, no quit, no service stop.
         if refuseIfRunning, wasRunning {
             _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
             return RecipeResult(status: "refused", reason: Recipe.handKeepsRunningApp)
+        }
+        // The update hold is validated at the mutation boundary, before the journal exists: a
+        // refusal here (or a hold that cannot be taken for an app opened mid-download) leaves no
+        // journal and no staged copy behind. An app that exited needs no renewal: it cannot be
+        // interrupted, and its pause expires by itself.
+        if !refuseIfRunning, wasRunning, let beforeStop {
+            do { try beforeStop() } catch {
+                _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+                throw error
+            }
         }
         var journal = InstallJournal(phase: "staged", installed: installedPath, staged: paths.staged.path,
                                      rollback: paths.rollback.path,
@@ -438,10 +451,12 @@ public enum Recipe {
         // The hand route never asks anything to stop: it proved no quiet point, so an app or service
         // that started after the last look is left running while the swap goes ahead without it.
         if !refuseIfRunning {
-            // The update hold expires by itself; at the mutation boundary it must still be safe.
-            if let beforeStop { try beforeStop() }
-            guard control.quit() else { try abandon("the app did not quit; the installed app was kept; quit the app by hand, then choose Update") }
-            appQuit = true
+            // It was running at the boundary; if it exited on its own the hold is moot and there is
+            // nothing to quit, so the swap simply goes ahead (the pause expires by itself).
+            if wasRunning {
+                guard control.quit() else { try abandon("the app did not quit; the installed app was kept; quit the app by hand, then choose Update") }
+                appQuit = true
+            }
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
         }
 

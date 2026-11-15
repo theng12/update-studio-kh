@@ -22,7 +22,7 @@ func ssdUpdateTests() {
             try Data("private DMG fixture".utf8).write(to: image)
             let app = SSDApp(id: "foo", name: "Foo", version: "1.2.3", bundleID: "com.example.foo",
                              bundleName: "Foo.app", file: image.lastPathComponent, sha256: try Signing.sha256Hex(fileAt: image).hex)
-            let fake = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
+            let fake = FakeApp(installed: rig.installed, running: false, healthy: ["1.2.3"])
             let rows = try SSDUpdate.run(source: SSDSource(volume: "Fixture", root: rig.root, index: SSDIndex(apps: [app])),
                 stateDir: rig.state, folders: [rig.apps], shell: SSDSignatureShell(base: rig.shell, diagnostic: diagnostic),
                 control: { _, _ in fake.control })
@@ -88,6 +88,17 @@ func ssdUpdateTests() {
         let running: (SSDApp, String) -> AppControl = { _, _ in AppControl(isRunning: { true }, quit: { false }, launch: {}, healthy: { _ in true }) }
         calls = []
         expect(try run([hub], ctl: running)[0].status == "busy" && calls.isEmpty, "SSD refuses running production apps without a quiet point")
+        // No hardcoded app list: any running app is refused, not only hub/story/gateway.
+        let media = app("media-studio")
+        _ = makeApp(folder.appendingPathComponent("media-studio.app"), version: "1.0", id: media.bundleID)
+        calls = []
+        expect(try run([media], ctl: running)[0].status == "busy" && calls.isEmpty,
+               "SSD refuses any running app, not a hardcoded list")
+        // The updater's own Launcher is the one exception: it holds no queue and runs this action.
+        calls = []
+        expect(try run([launcher], ctl: running)[0].status == "updated" && calls == ["updater"],
+               "SSD still installs the Launcher while it runs this action")
+        calls = []
         var corrupt = foo; corrupt.sha256 = String(repeating: "0", count: 64)
         expect(try run([corrupt])[0].status == "refused" && calls.isEmpty, "SSD refuses checksum mismatch before install")
         expectThrows("SSD refuses duplicate identities before any install") { _ = try run([foo, foo]) }

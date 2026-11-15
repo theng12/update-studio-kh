@@ -168,6 +168,99 @@ func updateHoldTests() {
                "UH8 the hold is renewed at the boundary and resumed after the abort (\(f.client.calls))")
     }
 
+    // UH11 the hold request is bounded by the contract's 30 s window, not the client's 60 s.
+    do {
+        final class SlowClient: HTTPClient, @unchecked Sendable {
+            var seen: TimeInterval = 0
+            func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { (Data(), 200) }
+            func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) { (Data(), 500) }
+            func post(_ url: URL, headers: [String: String], body: Data, timeout: TimeInterval) throws -> (Data, Int) {
+                seen = timeout
+                return (Data(), 500)
+            }
+            func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) { (Data(), 200) }
+            func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int { 500 }
+        }
+        let client = SlowClient()
+        let endpoint = UpdateHold.trusted(holdURL)!
+        let started = Date()
+        _ = try? UpdateHold.begin(endpoint, http: client, deadline: Date().addingTimeInterval(UpdateHold.ceiling))
+        expect(client.seen > 0 && client.seen <= UpdateHold.ceiling && Date().timeIntervalSince(started) < 2,
+               "UH11 the hold POST carries a bounded deadline (\(client.seen) s)")
+        UpdateHold.resume(endpoint, http: client)
+    }
+
+    // UH12 an app opened while the installer was prepared is refused at the boundary when it has no
+    // endpoint: no byte, no quit, no journal and no staged copy.
+    do {
+        let f = rig("hold-flip-refuse", hold: nil, recipe: "app-dmg", running: false)
+        var calls = 0
+        let flips = AppControl(isRunning: { calls += 1; return calls > 1 }, quit: { false }, launch: {},
+                               stopService: { true }, healthy: { _ in true }, healthTimeout: 0.2, pollInterval: 0.02)
+        var failure = ""
+        do {
+            _ = try Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                  serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                  http: f.client, shell: RecordingShell(mount: f.mount), control: { _, _ in flips })
+        } catch { failure = "\(error)" }
+        let journal = Recipe.journalURL(stateDir: f.state.path, app: "demo")
+        let staged = f.cfg.apps["demo"]!.bundlePath + ".khu-staging"
+        expect(failure.contains("does not offer an update hold") && !fm.fileExists(atPath: journal.path)
+               && !fm.fileExists(atPath: staged),
+               "UH12 an app opened mid-update is refused before the journal (\(failure))")
+    }
+
+    // UH13 the same flip with an endpoint: the hold is taken at the boundary and the app is updated.
+    do {
+        let f = rig("hold-flip-hold", hold: holdURL, recipe: "app-dmg", running: false)
+        var calls = 0
+        let flips = AppControl(isRunning: { calls += 1; return calls > 1 }, quit: { true }, launch: {},
+                               stopService: { true }, healthy: { _ in true }, healthTimeout: 0.2, pollInterval: 0.02)
+        f.client.replies = [safeReply(), safeReply()]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount), control: { _, _ in flips })
+        expect(result?.status == "updated" && f.client.calls == ["artifact", "hold", "hold", "resume"],
+               "UH13 an app opened mid-update is held at the boundary (\(f.client.calls))")
+    }
+
+    // UH14 an app that exited while the installer downloaded needs no renewal: it cannot be
+    // interrupted, so the swap goes ahead with a single hold.
+    do {
+        let f = rig("hold-exit", hold: holdURL, recipe: "app-dmg", running: true)
+        var calls = 0
+        let exits = AppControl(isRunning: { calls += 1; return calls == 1 }, quit: { true }, launch: {},
+                               stopService: { true }, healthy: { _ in true }, healthTimeout: 0.2, pollInterval: 0.02)
+        f.client.replies = [safeReply()]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount), control: { _, _ in exits })
+        expect(result?.status == "updated" && f.client.calls == ["hold", "artifact", "resume"],
+               "UH14 an app that exited needs no boundary renewal (\(f.client.calls))")
+        expect(!f.app.events.contains("quit"), "UH14 a non-running app is not quit")
+    }
+
+    // UH15 an owner rollback is a swap too: a running app is held first, or refused without an endpoint.
+    do {
+        let r = R6Rig("hold-rollback")
+        let holdFeed = try? FeedPublisher.loadVerifiedFeed(from: r.rig.feed, publicKey: r.rig.pair.privateKey.publicKey)
+        let holdURL = holdFeed?.apps["foo"]?.holdURL
+        let client = HoldClient(InProcessClient(server: r.rig.server))
+        client.replies = [safeReply(), safeReply()]
+        let rolled = try? Agent.orderedRollback(app: "foo", order: "o1", installed: "2.0.0", config: r.config,
+                                                stateDir: URL(fileURLWithPath: r.config.stateDir),
+                                                shell: RecordingShell(mount: r.rig.root.appendingPathComponent("empty")),
+                                                control: { _, _ in r.control }, holdURL: holdURL, http: client)
+        expect(rolled?.status == "rolled_back_by_owner" && client.calls == ["hold", "hold", "resume"],
+               "UH15 a rollback holds the running app, renews at the boundary and resumes (\(client.calls))")
+        let refused = try? Agent.orderedRollback(app: "foo", order: "o2", installed: "2.0.0", config: r.config,
+                                                 stateDir: URL(fileURLWithPath: r.config.stateDir),
+                                                 shell: RecordingShell(mount: r.rig.root.appendingPathComponent("empty")),
+                                                 control: { _, _ in r.control }, holdURL: nil, http: client)
+        expect(refused?.status == "refused" && (refused?.reason ?? "").contains("does not offer an update hold"),
+               "UH15 a rollback without an endpoint is refused while the app runs")
+    }
+
     // UH10 the updater's own Launcher updates while running: it has no work queue to hold.
     do {
         let r = Rig("hold-self")

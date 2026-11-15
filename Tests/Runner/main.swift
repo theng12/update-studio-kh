@@ -3906,6 +3906,12 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["SSD_VENDOR_ONLY"] == "1" {
+            ssdUpdateTests()
+            vendorInstallerTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["SSD_UPDATE_ONLY"] == "1" {
             ssdUpdateTests()
             print("TESTS: \(passed) passed, \(failed) failed")

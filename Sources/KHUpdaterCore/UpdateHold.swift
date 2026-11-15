@@ -32,12 +32,19 @@ public enum UpdateHold {
         return url
     }
 
+    /// The contract's ceiling: no wait on an app may outlast one settle window.
+    public static let ceiling: TimeInterval = 30
+
     /// Pauses dispatch and waits for the app's bounded settle. `timeoutS` never exceeds the
-    /// contract's 30 s ceiling; 0 renews an existing hold without waiting.
-    public static func begin(_ endpoint: URL, http: HTTPClient, timeoutS: Int = 20, pauseS: Int = 120) throws -> Reply {
+    /// contract's 30 s ceiling; 0 renews an existing hold without waiting. The request itself is
+    /// bounded too: `deadline` caps how much of the window is left, so a silent endpoint fails
+    /// closed inside 30 s instead of inheriting the client's 60 s/600 s defaults.
+    public static func begin(_ endpoint: URL, http: HTTPClient, timeoutS: Int = 20, pauseS: Int = 120,
+                             deadline: Date? = nil) throws -> Reply {
         let timeout = max(0, min(30, timeoutS))
         let url = endpoint.appendingQuery("timeout_s", "\(timeout)").appendingQuery("pause_s", "\(max(1, pauseS))")
-        let (data, code) = try http.post(url, headers: [:], body: Data())
+        let wait = max(1, min(ceiling, deadline?.timeIntervalSinceNow ?? ceiling))
+        let (data, code) = try http.post(url, headers: [:], body: Data(), timeout: wait)
         guard code == 200 else { throw khuFail("the app's update hold answered \(code); nothing was changed") }
         guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
             throw khuFail("the app's update hold did not answer with the contract's reply; nothing was changed")
@@ -48,6 +55,6 @@ public enum UpdateHold {
     /// Best effort: the pause is in-memory and expires by itself, so a failed DELETE never leaves
     /// an app that has stopped taking work.
     public static func resume(_ endpoint: URL, http: HTTPClient) {
-        _ = try? http.delete(endpoint, headers: [:])
+        _ = try? http.delete(endpoint, headers: [:], timeout: ceiling)
     }
 }

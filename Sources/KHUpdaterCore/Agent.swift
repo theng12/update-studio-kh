@@ -20,8 +20,12 @@ public struct AgentRunResult: Sendable, Equatable {
 public protocol HTTPClient: Sendable {
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int)
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int)
+    /// The same POST with a caller's own deadline, for the update hold's 30 s contract window.
+    func post(_ url: URL, headers: [String: String], body: Data, timeout: TimeInterval) throws -> (Data, Int)
     /// DELETE, used to resume an app's update hold. A client without it simply lets the pause expire.
     func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int)
+    /// The same DELETE with a caller's own deadline.
+    func delete(_ url: URL, headers: [String: String], timeout: TimeInterval) throws -> (Data, Int)
     /// Stream a GET into `file`, refusing more than `limit` bytes. Returns the HTTP status.
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int
     /// The same download under a named phase, so the Launcher can say what is happening:
@@ -32,6 +36,12 @@ public protocol HTTPClient: Sendable {
 extension HTTPClient {
     public func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
         throw khuFail("this client cannot send DELETE")
+    }
+    public func post(_ url: URL, headers: [String: String], body: Data, timeout: TimeInterval) throws -> (Data, Int) {
+        try post(url, headers: headers, body: body)
+    }
+    public func delete(_ url: URL, headers: [String: String], timeout: TimeInterval) throws -> (Data, Int) {
+        try delete(url, headers: headers)
     }
     /// A client that does not name phases still downloads: the phase is set around the transfer.
     public func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64, phase: String) throws -> Int {
@@ -78,12 +88,20 @@ public struct URLSessionHTTPClient: HTTPClient {
     public func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
         try send("POST", url, headers: headers, body: body)
     }
+    public func post(_ url: URL, headers: [String: String], body: Data, timeout: TimeInterval) throws -> (Data, Int) {
+        try send("POST", url, headers: headers, body: body, timeout: timeout)
+    }
     public func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
         try send("DELETE", url, headers: headers, body: nil)
     }
+    public func delete(_ url: URL, headers: [String: String], timeout: TimeInterval) throws -> (Data, Int) {
+        try send("DELETE", url, headers: headers, body: nil, timeout: timeout)
+    }
 
-    private func send(_ method: String, _ url: URL, headers: [String: String], body: Data?) throws -> (Data, Int) {
-        let sink = try transfer(method, url, headers: headers, body: body, handle: nil, limit: Int64(smallLimit))
+    private func send(_ method: String, _ url: URL, headers: [String: String], body: Data?,
+                      timeout override: TimeInterval? = nil) throws -> (Data, Int) {
+        let sink = try transfer(method, url, headers: headers, body: body, handle: nil, limit: Int64(smallLimit),
+                                timeoutOverride: override)
         return (sink.buffer, sink.status)
     }
 
@@ -117,8 +135,12 @@ public struct URLSessionHTTPClient: HTTPClient {
 
     private func transfer(_ method: String, _ url: URL, headers: [String: String], body: Data?,
                           handle: FileHandle?, limit: Int64, phase: String = "downloading",
-                          resumeFrom: Int64 = 0) throws -> StreamSink {
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+                          resumeFrom: Int64 = 0, timeoutOverride: TimeInterval? = nil) throws -> StreamSink {
+        // A caller's deadline (the hold's 30 s window) caps both the request's own timeout and the
+        // operation loop below; it can only shorten the client's defaults, never extend them.
+        let deadline = min(totalTimeout, timeoutOverride ?? totalTimeout)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
+                                 timeoutInterval: min(timeout, timeoutOverride ?? timeout))
         request.httpMethod = method
         request.httpBody = body
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
@@ -134,7 +156,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         // The cancel state belongs to the operation, not to this transfer: it is reset once before
         // an install starts, so a Cancel is never erased by the next source a fallback tries.
         var finished = false, spent: TimeInterval = 0, suspended = false, cancelled = false
-        while spent < totalTimeout {
+        while spent < deadline {
             if sink.done.wait(timeout: .now() + 0.5) == .success { finished = true; break }
             if handle != nil {
                 if DownloadControl.cancelled { cancelled = true; break }
@@ -847,7 +869,8 @@ public enum Agent {
                     res = try installVendor(command, config: config, stateDir: stateDir, http: http, shell: shell, control: control)
                 case ServerCommand.rollback:
                     res = try orderedRollback(app: item.app, order: item.id, installed: installed[item.app], config: config,
-                                              stateDir: stateDir, shell: shell, control: control)
+                                              stateDir: stateDir, shell: shell, control: control,
+                                              holdURL: feed.apps[item.app]?.holdURL, http: http)
                 default:
                     res = RecipeResult(status: "refused", reason: "this Mac does not know the order action \"\(item.action)\"; refused")
                 }
@@ -1026,7 +1049,8 @@ public enum Agent {
     /// health-settled path an install uses. Nothing is downloaded and the feed is not consulted —
     /// what runs is the bundle already on this Mac, verified before anything is stopped.
     static func orderedRollback(app: String, order: String, installed: String?, config: AgentConfig, stateDir: URL,
-                                shell: Shell, control: (String, AppConfig) -> AppControl) throws -> RecipeResult {
+                                shell: Shell, control: (String, AppConfig) -> AppControl,
+                                holdURL: String? = nil, http: HTTPClient? = nil) throws -> RecipeResult {
         guard let cfg = config.apps[app] else {
             return RecipeResult(status: "refused", reason: "\(app) is not configured on this Mac")
         }
@@ -1038,8 +1062,33 @@ public enum Agent {
             guard installed != nil || FileManager.default.fileExists(atPath: cfg.bundlePath) else {
                 return RecipeResult(status: "refused", reason: "\(app) is not installed at \(cfg.bundlePath), so there is nothing to roll back from")
             }
+            // A rollback is a swap like any other: a running app is held or refused first, never quit
+            // under its work. The same endpoint is renewed at the boundary and resumed afterwards.
+            let ctl = control(app, cfg)
+            var endpoint: URL?
+            let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
+            if let http {
+                let hold = beginUpdateHold(app: app, holdURL: holdURL, http: http, control: ctl, exempt: exempt)
+                if let refusal = hold.refusal { return refusal }
+                endpoint = hold.endpoint
+            } else if ctl.isRunning() != false, !exempt {
+                return RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. Update it by hand.")
+            }
+            defer { if let endpoint, let http { UpdateHold.resume(endpoint, http: http) } }
+            let beforeStop: (() throws -> Void)? = endpoint.flatMap { url in
+                guard let http else { return nil }
+                return {
+                    guard ctl.isRunning() != false else { return }
+                    let renewed = try UpdateHold.begin(url, http: http, timeoutS: 0)
+                    guard renewed.safe else {
+                        let names = (renewed.unsettled ?? []).joined(separator: ", ")
+                        throw khuFail("\(app)'s update hold is no longer safe (still in flight: \(names)); nothing was changed")
+                    }
+                }
+            }
             return try Recipe.ownerRollback(shell: shell, installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app,
-                                            expectedBundleID: cfg.bundleID, order: order, control: control(app, cfg))
+                                            expectedBundleID: cfg.bundleID, order: order, control: ctl,
+                                            beforeStop: beforeStop)
         case "updater":
             // The stub is the updater's own fallback, and it only puts back a version it saw fail.
             return RecipeResult(status: "refused", reason: "KH Updater does not roll itself back in this version: "
@@ -1058,6 +1107,32 @@ public enum Agent {
         return sha
     }
 
+    /// Takes the app's update hold inside one settle window. Shared by the install and owner-rollback
+    /// paths so both hold before a swap and both refuse an app that cannot offer a gap. Returns the
+    /// endpoint even when the reply is unsafe, so the caller can resume it.
+    static func beginUpdateHold(app: String, holdURL: String?, http: HTTPClient, control: AppControl,
+                                exempt: Bool) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
+        guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }
+        guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
+            return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. Update it by hand."))
+        }
+        let window = Date().addingTimeInterval(UpdateHold.ceiling)
+        do {
+            var reply = try UpdateHold.begin(endpoint, http: http, deadline: window)
+            if !reply.safe, window.timeIntervalSinceNow > 3 {
+                Thread.sleep(forTimeInterval: 2)   // one retry, only with time left in the window
+                reply = try UpdateHold.begin(endpoint, http: http, deadline: window)
+            }
+            guard reply.safe else {
+                let names = (reply.unsettled ?? []).joined(separator: ", ")
+                return (endpoint, nil, RecipeResult(status: "refused", reason: "\(app) could not settle its work (still in flight: \(names)); nothing was changed and it keeps running."))
+            }
+            return (endpoint, reply.summary, nil)
+        } catch {
+            return (endpoint, nil, RecipeResult(status: "refused", reason: "\(error)"))
+        }
+    }
+
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = [],
@@ -1067,6 +1142,9 @@ public enum Agent {
         // remote order leave it alone. Only a choice made here, at this Mac, may install it.
         // The live catalog carries the policy as well as this Mac's recipe, so an existing `app-dmg`
         // config for an app its SSD marks as self-updating cannot be driven by a remote order.
+        // One value for the whole run: the boundary closure outlives the call and must not capture
+        // the non-escaping `control` parameter itself.
+        let appControl = control(app, cfg)
         let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
         if itself, !manual {
             return RecipeResult(status: "status_only", reason: "updated by its own updater")
@@ -1089,28 +1167,14 @@ public enum Agent {
             guard holdEndpoint == nil else { return nil }
             // The updater's own engine and menu-bar UI hold no work queue: the engine switches itself
             // through installUpdater, and the Launcher updates itself from its own Update click.
-            guard !["updater", "launcher"].contains(app), cfg.recipe != "updater" else { return nil }
-            // nil is "unknown": treat it as running, so an unknown app is never swapped under its work.
-            guard control(app, cfg).isRunning() != false else { return nil }
-            guard let raw = feed.apps[app]?.holdURL, let endpoint = UpdateHold.trusted(raw) else {
-                return RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. Update it by hand.")
-            }
+            let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
             DownloadControl.updateProgress("held")
+            let hold = beginUpdateHold(app: app, holdURL: feed.apps[app]?.holdURL, http: http,
+                                       control: appControl, exempt: exempt)
             // Resume is attempted even when the POST itself failed: it may have paused before failing.
-            holdEndpoint = endpoint
-            do {
-                var reply = try UpdateHold.begin(endpoint, http: http)
-                if !reply.safe {
-                    Thread.sleep(forTimeInterval: 2)   // one retry inside the contract's bounded settle
-                    reply = try UpdateHold.begin(endpoint, http: http)
-                }
-                guard reply.safe else {
-                    let names = (reply.unsettled ?? []).joined(separator: ", ")
-                    return RecipeResult(status: "refused", reason: "\(app) could not settle its work (still in flight: \(names)); nothing was changed and it keeps running.")
-                }
-                holdNote = reply.summary
-            } catch { return RecipeResult(status: "refused", reason: "\(error)") }
-            return nil
+            holdEndpoint = hold.endpoint
+            holdNote = hold.note
+            return hold.refusal
         }
         // Resume on success, abort and rollback; the pause expires by itself if this never runs.
         defer {
@@ -1119,9 +1183,16 @@ public enum Agent {
                 UpdateHold.resume(holdEndpoint, http: http)
             }
         }
-        // A hold can expire while a large installer downloads; the boundary renews it (no wait) and
-        // refuses the swap when the app can no longer settle, so an old hold never permits it.
+        // At the mutation boundary the app is sampled again: one opened while the installer was
+        // prepared is held now (or refused if it has no endpoint), one that exited needs nothing.
+        // A hold taken before the download is renewed here with no wait, so an expired pause never
+        // permits the swap.
         let beforeStop: () throws -> Void = {
+            guard appControl.isRunning() != false else { return }
+            if holdEndpoint == nil {
+                if let refusal = acquireHold() { throw khuFail(refusal.reason ?? "the update was refused") }
+                guard holdEndpoint != nil else { return }   // the updater's own apps hold no queue
+            }
             guard let endpoint = holdEndpoint else { return }
             let renewed = try UpdateHold.begin(endpoint, http: http, timeoutS: 0)
             guard renewed.safe else {
@@ -1194,6 +1265,9 @@ public enum Agent {
                              shell: Shell, control: (String, AppConfig) -> AppControl, force: Bool = false,
                              manual: Bool = false, catalogEntry: CatalogEntry? = nil,
                              beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
+        // One value for the whole run: the boundary closure outlives the call and must not capture
+        // the non-escaping `control` parameter itself.
+        let appControl = control(app, cfg)
         let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
             return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept.")

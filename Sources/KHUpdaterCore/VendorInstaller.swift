@@ -75,6 +75,12 @@ public enum VendorInstaller {
         let id: String
         do { id = try SafeName.component(entry.id, what: "vendor id") }
         catch { return Outcome(status: "blocked", reason: "\(error)") }
+        // A vendor app has no update-hold endpoint, so a running one is refused before any byte:
+        // quitting it under its work is exactly what the hold contract forbids.
+        if control.isRunning() != false {
+            return Outcome(status: "blocked",
+                           reason: "\(entry.name) is running; quit it and run this again. Nothing was downloaded or changed.")
+        }
 
         // 2. One owned folder per entry; the previous download moves to `_trash` so it stays restorable.
         let state = URL(fileURLWithPath: stateDir)

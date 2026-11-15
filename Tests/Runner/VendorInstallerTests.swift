@@ -102,7 +102,8 @@ final class VendorRig {
     let shell: VendorShell
     var quitCalls = 0
     var launchCalls = 0
-    var running = true
+    // A vendor app has no hold endpoint, so a running one is refused before any byte.
+    var running = false
 
     init(_ tag: String, dmgVersion: String = "1.2.3", dmgID: String = "com.example.foo", installedVersion: String? = "1.0.0") {
         root = tmpDir(tag)
@@ -159,16 +160,20 @@ final class VendorRig {
 
 func vendorInstallerTests() {
     do {
-        let rig = VendorRig("vendor-rollback-result")
-        let base = rig.control
-        let control = AppControl(isRunning: base.isRunning, quit: base.quit, launch: base.launch,
-            healthy: { expected in expected == "1.0.0" && base.healthy(expected) },
-            healthTimeout: 0.1, pollInterval: 0.01, healthSettle: 0)
-        let outcome = VendorInstaller.install(entry: rig.entry(), kind: .dmg, sourceURL: rig.resolved(rig.entry()),
-            stateDir: rig.state.path, destination: rig.installed.path, http: VendorHTTP(), shell: rig.shell,
-            control: control, byteCap: 1 << 20)
-        expect(outcome.status == "rolled_back" && outcome.version == "1.0.0" && marker(rig.installed) == "1.0.0",
-               "VI42 settled automatic rollback reports the actual fallback outcome")
+        let rig = VendorRig("vendor-running")
+        rig.running = true
+        let http = VendorHTTP()
+        let outcome = rig.install(rig.entry(), http: http)
+        expect(outcome.status == "blocked" && (outcome.reason ?? "").contains("running") && http.downloads == 0,
+               "VI1b a running vendor app is refused before any byte")
+    }
+    do {
+        // A vendor app is refused while it runs (VI1b), so an install reaches the recipe only while
+        // it is closed; a closed app's health is not asserted, and nothing is rolled back falsely.
+        let rig = VendorRig("vendor-closed-install")
+        let outcome = rig.install(rig.entry(), http: VendorHTTP())
+        expect(outcome.status == "installed" && outcome.version == "1.2.3" && marker(rig.installed) == "1.2.3",
+               "VI42 a closed vendor app installs without a false rollback (\(outcome.status))")
     }
     do {
         let rig = VendorRig("vendor-final-verification")

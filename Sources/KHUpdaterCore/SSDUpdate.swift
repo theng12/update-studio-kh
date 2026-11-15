@@ -109,7 +109,10 @@ public enum SSDUpdate {
                         }
                         let ctl = control?(app, path) ?? ((app.id == "gateway" || apps[app.id]?.recipe == "gateway")
                             ? LiveControl.gateway(path, shell: shell) : LiveControl.appDmg(path, shell: shell))
-                        if ["hub", "story", "gateway"].contains(app.id), ctl.isRunning() != false {
+                        // No hardcoded list: any running app is refused, because this local action has no
+                        // hold endpoint for it. The updater's own engine and Launcher are the only ones
+                        // that hold no work queue (the Launcher is running this very action).
+                        if !["updater", "launcher"].contains(app.id), ctl.isRunning() != false {
                             result = row("busy", "Quit this app when its work is finished, then run this SSD action again. No quiet point was proved.")
                         } else {
                             // Mount private verified bytes: the SSD can change after its first checksum.
