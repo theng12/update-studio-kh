@@ -5,6 +5,14 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.41 — 2026-11-15
+
+- Updating a running app now pauses its work first: the Launcher asks the app for an update gap inside one 30-second window (a silent app fails the request instead of stalling it), updates in that gap, and the app resumes by itself. Queued work is kept and the result says how much was held.
+- The app is checked again immediately before the swap: one opened while the installer downloads is held then, or refused if it offers no gap; one that has closed is never quit. A missing or unreadable replacement is refused before anything is stopped, so a failed update can never leave the Mac with no app.
+- An app that cannot offer a gap is left untouched and the update says why; quit it by hand and it updates normally. The updater's own engine and this Launcher are exempt — they hold no work queue.
+- A rollback and a local SSD update follow the same rule: a running app is held first or refused.
+- Fixed a defect that could retire the app that had just been installed: the duplicate-app sweep now resolves links before comparing, never treats the installed app as a candidate, and retires nothing when it cannot read the installed app.
+
 ## 0.1.40 — 2026-11-15
 
 - Updating a running app now pauses its work first: the Launcher asks the app for an update gap (it waits up to 20 seconds; work already running gets up to 30 to settle), updates in that gap, then the app resumes by itself. Queued work is kept, and the result says how much work was held.
