@@ -121,7 +121,8 @@ func downloadResumeTests() {
     do {
         let rig = Rig("resume-install")
         let installed = makeApp(rig.root.appendingPathComponent("Kept.app"), version: "1.0.0")
-        try rig.publish("kept", "2.0.0", rig.artifact("kept.dmg", "dmg bytes"), kind: "app-dmg")
+        try rig.publish("kept", "2.0.0", rig.artifact("kept.dmg", "dmg bytes"), kind: "app-dmg",
+                        hold: "http://127.0.0.1:8790/api/maintenance/hold")
         guard let feed = try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey),
               let entry = feed.apps["kept"] else { expect(false, "RDL3 fixture feed"); return }
         let token = (try? Enrolment.enrol(stateDir: rig.state, machine: "mac1")) ?? ""

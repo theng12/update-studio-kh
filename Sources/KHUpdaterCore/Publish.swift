@@ -93,7 +93,7 @@ public enum FeedPublisher {
     /// nothing is injected (`## Feed`), never the operator's Trash from a fixture feed in `Tests`.
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
-                               meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, now: Date = Date(),
+                               meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, now: Date = Date(),
                                retireArtifact: ((URL) throws -> Void)? = nil) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
@@ -148,6 +148,7 @@ public enum FeedPublisher {
             entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
             entry.released = ISO.string(now)
             entry.mainMacOnly = mainMacOnly ?? old?.mainMacOnly
+            entry.holdURL = holdURL ?? old?.holdURL
             // A DMG that installs an app carries that app's own name and identity whatever kind of
             // app it is — `status` included: the hand route still offers it, so it needs an identity.
             if ["app-dmg", "gateway", "status"].contains(kindNow), let read = meta {

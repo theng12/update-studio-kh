@@ -162,7 +162,7 @@ function phase(p){if(p.cancelled)return ['Stopping…',null];
   return [(p.paused?'Paused · ':label)+mb(p.done)+' of '+mb(p.total)+' · '+pct+'%',pct]}
  if(p.done!=null)return [(p.paused?'Paused · ':label)+mb(p.done),null];
  if(p.copying)return ['Copying from '+p.copying,null];
- const labels={'installing':'Installing…','checking':'Checking download…','checking-base':'Checking saved installer…','reconstructing':'Rebuilding and verifying installer…','full-fallback':'Changed data unavailable · using full installer…'};
+ const labels={'held':'Held new work · settling what is in flight…','resumed':'Resuming work…','installing':'Installing…','checking':'Checking download…','checking-base':'Checking saved installer…','reconstructing':'Rebuilding and verifying installer…','full-fallback':'Changed data unavailable · using full installer…'};
  return [labels[p.phase]||'Preparing installation…',null]}
 /// Counters only: the line's words, the loose or filled bar and its width. Never a new element, so
 /// an open dialog keeps its focus and an indeterminate bar keeps running instead of restarting.

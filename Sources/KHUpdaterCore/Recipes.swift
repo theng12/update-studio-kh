@@ -183,7 +183,8 @@ public enum Recipe {
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
                               refuseIfRunning: Bool = false, relaunchAfterInstall: Bool = true,
                               fileManager fm: FileManager = .default,
-                              verifyStaged: ((String) throws -> Void)? = nil) throws -> RecipeResult {
+                              verifyStaged: ((String) throws -> Void)? = nil,
+                              beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         guard !fm.fileExists(atPath: paths.journal.path) else {
@@ -227,7 +228,8 @@ public enum Recipe {
 
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
-                                    refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall)
+                                    refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall,
+                                    beforeStop: beforeStop)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -385,7 +387,8 @@ public enum Recipe {
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false,
-                                 relaunchAfterInstall: Bool = true) throws -> RecipeResult {
+                                 relaunchAfterInstall: Bool = true,
+                                 beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let installedPath = paths.installedPath
         let wasRunning = control.isRunning() ?? true
         // A test/hidden instance (extra launch arguments or an isolated HOME) is not the owner's
@@ -435,6 +438,8 @@ public enum Recipe {
         // The hand route never asks anything to stop: it proved no quiet point, so an app or service
         // that started after the last look is left running while the swap goes ahead without it.
         if !refuseIfRunning {
+            // The update hold expires by itself; at the mutation boundary it must still be safe.
+            if let beforeStop { try beforeStop() }
             guard control.quit() else { try abandon("the app did not quit; the installed app was kept; quit the app by hand, then choose Update") }
             appQuit = true
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }

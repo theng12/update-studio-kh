@@ -20,6 +20,8 @@ public struct AgentRunResult: Sendable, Equatable {
 public protocol HTTPClient: Sendable {
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int)
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int)
+    /// DELETE, used to resume an app's update hold. A client without it simply lets the pause expire.
+    func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int)
     /// Stream a GET into `file`, refusing more than `limit` bytes. Returns the HTTP status.
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int
     /// The same download under a named phase, so the Launcher can say what is happening:
@@ -28,6 +30,9 @@ public protocol HTTPClient: Sendable {
 }
 
 extension HTTPClient {
+    public func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
+        throw khuFail("this client cannot send DELETE")
+    }
     /// A client that does not name phases still downloads: the phase is set around the transfer.
     public func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64, phase: String) throws -> Int {
         DownloadControl.updateProgress(phase)
@@ -72,6 +77,9 @@ public struct URLSessionHTTPClient: HTTPClient {
     }
     public func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
         try send("POST", url, headers: headers, body: body)
+    }
+    public func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
+        try send("DELETE", url, headers: headers, body: nil)
     }
 
     private func send(_ method: String, _ url: URL, headers: [String: String], body: Data?) throws -> (Data, Int) {
@@ -1073,10 +1081,64 @@ public enum Agent {
             return RecipeResult(status: "unresolved", reason: "an earlier install of \(app) could not be finished or undone; "
                                + "\(Recipe.journalURL(stateDir: stateDir.path, app: app).path) is kept and the next run tries it again")
         }
+        // The update gap (CONTRACT.md): a running app's queue is held before a byte moves. An app
+        // with no trusted hold endpoint is refused rather than interrupted silently.
+        var holdEndpoint: URL?
+        var holdNote: String?
+        func acquireHold() -> RecipeResult? {
+            guard holdEndpoint == nil else { return nil }
+            // The updater restarts its own UI through installUpdater; it holds no work queue.
+            guard cfg.recipe != "updater" else { return nil }
+            // nil is "unknown": treat it as running, so an unknown app is never swapped under its work.
+            guard control(app, cfg).isRunning() != false else { return nil }
+            guard let raw = feed.apps[app]?.holdURL, let endpoint = UpdateHold.trusted(raw) else {
+                return RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. Update it by hand.")
+            }
+            DownloadControl.updateProgress("held")
+            // Resume is attempted even when the POST itself failed: it may have paused before failing.
+            holdEndpoint = endpoint
+            do {
+                var reply = try UpdateHold.begin(endpoint, http: http)
+                if !reply.safe {
+                    Thread.sleep(forTimeInterval: 2)   // one retry inside the contract's bounded settle
+                    reply = try UpdateHold.begin(endpoint, http: http)
+                }
+                guard reply.safe else {
+                    let names = (reply.unsettled ?? []).joined(separator: ", ")
+                    return RecipeResult(status: "refused", reason: "\(app) could not settle its work (still in flight: \(names)); nothing was changed and it keeps running.")
+                }
+                holdNote = reply.summary
+            } catch { return RecipeResult(status: "refused", reason: "\(error)") }
+            return nil
+        }
+        // Resume on success, abort and rollback; the pause expires by itself if this never runs.
+        defer {
+            if let holdEndpoint {
+                DownloadControl.updateProgress("resumed")
+                UpdateHold.resume(holdEndpoint, http: http)
+            }
+        }
+        // A hold can expire while a large installer downloads; the boundary renews it (no wait) and
+        // refuses the swap when the app can no longer settle, so an old hold never permits it.
+        let beforeStop: () throws -> Void = {
+            guard let endpoint = holdEndpoint else { return }
+            let renewed = try UpdateHold.begin(endpoint, http: http, timeoutS: 0)
+            guard renewed.safe else {
+                let names = (renewed.unsettled ?? []).joined(separator: ", ")
+                throw khuFail("\(app)'s update hold is no longer safe (still in flight: \(names)); nothing was changed")
+            }
+        }
+        func withHoldNote(_ result: RecipeResult) -> RecipeResult {
+            guard let holdNote else { return result }
+            var out = result
+            out.reason = (out.reason.map { $0 + " " } ?? "") + holdNote
+            return out
+        }
         if let local {
+            if let refusal = acquireHold() { return refusal }
             DownloadControl.updateProgress("copying")
-            return try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
-                                    force: force, manual: manual, catalogEntry: catalogEntry)
+            return withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
+                                                 force: force, manual: manual, catalogEntry: catalogEntry, beforeStop: beforeStop))
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
         // The report can lag the disk: a stale one re-downloaded and reinstalled media-studio 0.1.109
@@ -1091,6 +1153,7 @@ public enum Agent {
             if order < 0 { return RecipeResult(status: "refused", reason: "the feed has \(entry.version), older than \(current) here; no downgrade") }
         }
 
+        if let refusal = acquireHold() { return refusal }
         let artifact: URL
         do {
             artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http, fallbacks: artifactFallbacks)
@@ -1109,16 +1172,17 @@ public enum Agent {
         // A self-updating app is checked again before anything is stopped.
         switch cfg.recipe {
         case "updater":
-            return try installUpdater(entry, artifact: artifact, config: config)
+            return try withHoldNote(installUpdater(entry, artifact: artifact, config: config))
         case "fake-for-tests":
-            return RecipeResult(status: "updated")
+            return withHoldNote(RecipeResult(status: "updated"))
         default:
             guard appDmgRecipes.contains(cfg.recipe) || statusOnly.contains(cfg.recipe) else {
                 throw khuFail("unknown recipe \(cfg.recipe)")
             }
-            return try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
-                                     expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
-                                     refuseIfRunning: itself, relaunchAfterInstall: manual)
+            return try withHoldNote(Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
+                                                  expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
+                                                  refuseIfRunning: itself, relaunchAfterInstall: manual,
+                                                  beforeStop: beforeStop))
         }
     }
 
@@ -1127,7 +1191,8 @@ public enum Agent {
     /// download does.
     static func installLocal(_ local: CatalogEntry.Local, app: String, installed: String?, cfg: AppConfig, stateDir: URL,
                              shell: Shell, control: (String, AppConfig) -> AppControl, force: Bool = false,
-                             manual: Bool = false, catalogEntry: CatalogEntry? = nil) throws -> RecipeResult {
+                             manual: Bool = false, catalogEntry: CatalogEntry? = nil,
+                             beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
             return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept.")
@@ -1173,7 +1238,7 @@ public enum Agent {
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
                                      refuseIfRunning: itself, relaunchAfterInstall: manual, verifyStaged: { path in
                 guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
-            })
+            }, beforeStop: beforeStop)
         }
         // Keep the verified SSD installer in the normal cache so the next server patch can use it.
         if result.status == "updated" {

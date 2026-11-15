@@ -714,8 +714,8 @@ struct Rig {
         try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(name); try! text.write(to: url, atomically: true, encoding: .utf8); return url
     }
-    func publish(_ app: String, _ version: String, _ artifact: URL, kind: String = "fake-for-tests") throws {
-        try FeedPublisher.publish(feedDir: feed, keyFile: key, app: app, version: version, artifact: artifact, kind: kind, allowSame: false, meta: nil)
+    func publish(_ app: String, _ version: String, _ artifact: URL, kind: String = "fake-for-tests", hold: String? = nil) throws {
+        try FeedPublisher.publish(feedDir: feed, keyFile: key, app: app, version: version, artifact: artifact, kind: kind, allowSame: false, meta: nil, holdURL: hold)
     }
     var server: FeedServer { FeedServer(feedDir: feed, stateDir: state, bind: "127.0.0.1", port: 8790, commandKey: pair.privateKey) }
 }
@@ -812,7 +812,14 @@ final class InProcessClient: HTTPClient, @unchecked Sendable {
     }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
         if let resultStatus, url.path.hasSuffix("/result") { return (Data(), resultStatus) }
+        if url.host == "127.0.0.1", url.path.contains("/api/maintenance/") {
+            return (Data(#"{"safe":true,"unsettled":[],"dispatch_paused_s":120,"in_flight":0}"#.utf8), 200)
+        }
         let r = respond("POST", url, headers, body); return (r.data, r.status)
+    }
+    func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
+        if url.host == "127.0.0.1", url.path.contains("/api/maintenance/") { return (Data(), 200) }
+        return (Data(), 404)
     }
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
         downloads += 1
@@ -937,7 +944,7 @@ func agentAndServerTests() {
         let mount = rig.root.appendingPathComponent("mount")
         makeApp(mount.appendingPathComponent("Foo.app"), version: "2.0.0")
         let shell = RecordingShell(mount: mount)
-        let app = FakeApp(installed: installed, healthy: ["2.0.0"])
+        let app = FakeApp(installed: installed, running: false, healthy: ["2.0.0"])
         let control: (String, AppConfig) -> AppControl = { _, _ in app.control }
         _ = try? Agent.runOnce(config: config, http: client, shell: shell, control: control)
         let state = URL(fileURLWithPath: config.stateDir)
@@ -1491,7 +1498,7 @@ func round2Tests(only: Int? = nil) {
         try! operational.publish("demo", "1.2.3", operational.artifact("a.dmg", "abc"))
         let cfg2 = agentConfig(operational, token: tok, apps: ["demo": AppConfig(bundlePath: recipe.installed.path, automatic: true)])
         let client2 = R2Client(operational.server)
-        let fake = FakeApp(installed: recipe.installed, healthy: ["1.2.3"])
+        let fake = FakeApp(installed: recipe.installed, running: false, healthy: ["1.2.3"])
         _ = try? Agent.runOnce(config: cfg2, http: client2, shell: recipe.shell, control: { _, _ in fake.control })
         let again = try? Agent.runOnce(config: cfg2, http: client2, shell: recipe.shell, control: { _, _ in fake.control })
         expect(again?.commandsRun == 1 && client2.attempts == 1,
@@ -1732,7 +1739,8 @@ struct R6Rig {
                                                                         automatic: automatic, bundleID: "com.example.foo")])
         previous = URL(fileURLWithPath: config.stateDir).appendingPathComponent("rollback-foo/Foo.app")
         if let kept { r6App(previous, version: kept, id: id, sign: signed) }
-        try! rig.publish("foo", "2.0.0", rig.artifact("foo.dmg", "current-artifact"), kind: "app-dmg")
+        try! rig.publish("foo", "2.0.0", rig.artifact("foo.dmg", "current-artifact"), kind: "app-dmg",
+                         hold: "http://127.0.0.1:8790/api/maintenance/hold")
         client = InProcessClient(server: rig.server)
         fake = FakeApp(installed: installed, healthy: healthy)
     }
@@ -3856,12 +3864,23 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["HOLD_WORK_ONLY"] == "1" {
+            updateHoldWorkTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["HOLD_LIVE_ONLY"] == "1" {
+            updateHoldLiveTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["AGENT_CORE_ONLY"] == "1" {
             agentAndServerTests()
             downloadResumeTests()
             repairedPathTests()
             oneShotLockTests()
             ownedServiceTests()
+            updateHoldTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -3978,6 +3997,7 @@ r41HealthMustHold()
         oneShotLockTests()
         ownedServiceTests()
         helperRenameTests()
+        updateHoldTests()
         artifactDeltaTests()
         installedIdentityTests()
         publisherRetentionTests()

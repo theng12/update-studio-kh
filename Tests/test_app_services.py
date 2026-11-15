@@ -163,6 +163,8 @@ func stopPhase(wasRunning: Bool, control: AppControl,
         // This fixture exercises the owner's stop phase, where a relaunch is allowed; the shipped
         // rule that decides it (relaunchAfterInstall/testInstance) is covered by the Swift suite.
         let mayRelaunch = true
+        // The service scenarios have no update hold; the hook is exercised by the Swift suite.
+        let beforeStop: (() throws -> Void)? = nil
 STOP_BLOCK
 }
 

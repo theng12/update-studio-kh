@@ -271,6 +271,10 @@ render(state([row({ status:'Updating…', progress:{phase:'full-fallback',done:1
 assert.equal(line(),'Downloading full installer 100 KB of 1 MB · 10%','full fallback makes no savings claim');
 render(state([row({ status:'Updating…', progress:{phase:'reconstructing'} })]));
 assert.equal(line(),'Rebuilding and verifying installer…');
+render(state([row({ status:'Updating…', progress:{phase:'held'} })]));
+assert.equal(line(),'Held new work · settling what is in flight…','the hold gap says what it is doing, not a stall');
+render(state([row({ status:'Updating…', progress:{phase:'resumed'} })]));
+assert.equal(line(),'Resuming work…');
 render(state([row({ status:'Not installed',managed:false,installed:null,serverVersion:null,ssdVersion:'1.0' })],{error:'Update Studio is unreachable. Server versions are unknown.'}));
 run("openDetail('story')");
 assert.match(document.querySelector('.facts').textContent,/ServerUnknown/,'offline never claims a current server version');

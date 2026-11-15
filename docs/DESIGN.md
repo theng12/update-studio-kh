@@ -457,6 +457,23 @@ enforces (`smallLimit` per reply, each artifact refused past its signed size, on
 there is no storage quota, cache budget or resource claim, because none exists to show. Opening a
 dialog or reading any of this still submits nothing — no install, no pairing, no controller move.
 
+### Update hold (the gap before a swap)
+
+A running app is never replaced under its work. Before any byte moves, `Agent.install` reads the
+entry's `holdURL` from the signed feed and POSTs the app's contract endpoint
+(`/api/maintenance/hold`, or Gateway's `/drain`) with `timeout_s=20&pause_s=120`; an unsafe reply is
+retried once inside that window and is then refused, naming the work that was still in flight. The
+endpoint is trusted only when it is plain HTTP on this Mac's loopback with an explicit port, so a
+feed entry can never point the updater at another machine. A running app with no endpoint is
+refused before any byte — unsupported, not interrupted. `DELETE` resumes on success, abort and
+rollback, and the pause is in-memory and expiring, so an aborted install never leaves an app that
+stopped taking work. A large installer can outlast the pause: `Recipe.appDmg` renews the hold at
+the mutation boundary (just before the quit) with `timeout_s=0` and refuses the swap when the app
+can no longer settle. The page shows `held` and `resumed` phases, and an updated result carries the
+hold note ("held (2 jobs in flight; new work paused 120 s)"). Publishing takes `--hold-url`, and a
+remote or malformed URL is dropped when the feed is validated. The updater's own entry is exempt:
+`installUpdater` restarts its UI and it holds no work queue.
+
 ## Recipes
 
 Other apps require a pinned Apple Team ID with evidence and a valid vendor signature/notarization before install; a published checksum is auxiliary and cannot authorize installation. DMGs reuse the journal/staging/rollback app recipe, verify the staged copy's vendor signature before promotion or execution, and refuse an existing app with a different bundle identity. Vendor destinations are registered in agent-owned `vendor-apps.json` before any install and merged into every run's recovery pass; journal and rollback keys consistently use `vendor-<id>`. Settled automatic rollbacks retain the recipe's actual outcome. Auxiliary checksums hash the downloaded installer, while vendor signatures verify the mounted and staged app. Packages are verified and kept in the agent's owned download folder; they return `needs_admin` with their path and are never executed by the agent. Launcher opens the setup folder so the person can run the vendor's own Installer; refused, blocked or failed payloads are never offered back as something to open, and every vendor refusal or handoff status counts as a failure wherever the publisher styles results. No credential collection, sudo or new privilege mechanism is added. Optional app bundles use the signed-in user's existing configured path or the standard Applications name; lack of write access never triggers privilege escalation.

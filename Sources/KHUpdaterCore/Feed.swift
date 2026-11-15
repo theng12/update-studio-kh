@@ -28,6 +28,10 @@ public struct FeedApp: Codable, Sendable, Equatable {
     /// version's exact bytes into this one. A Mac that does not know it downloads the whole
     /// signed artifact, exactly as before.
     public var delta: ArtifactDelta?
+    /// Where a running copy of this app takes an update hold (`…/api/maintenance/hold` or
+    /// `…/api/maintenance/drain` on this Mac's loopback). Signed by the publisher; nil means the
+    /// app has no hold endpoint, so an install over a running copy is refused rather than silent.
+    public var holdURL: String?
 
     public init(version: String, file: String, sha256: String, bytes: Int64, kind: String, notes: String? = nil) {
         self.version = version; self.file = file; self.sha256 = sha256
@@ -86,6 +90,9 @@ public struct Feed: Codable, Sendable, Equatable {
                (try? delta.validated()) == nil || delta.file == entry.file || delta.bytes >= entry.bytes {
                 entry.delta = nil
             }
+            // An endpoint that is not this Mac's loopback hold path is no endpoint: the app is then
+            // "unsupported" and a running install over it is refused, never silently interrupted.
+            if let holdURL = entry.holdURL, UpdateHold.trusted(holdURL) == nil { entry.holdURL = nil }
         }
         for (app, var entry) in apps {
             try validate(app, &entry)
