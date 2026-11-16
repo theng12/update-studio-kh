@@ -74,14 +74,15 @@ func updateHoldTests() {
                      "http://127.0.0.1:8787/admin/api/maintenance/drain#frag"]
     expect(untrusted.allSatisfy { UpdateHold.trusted($0) == nil }, "UH1 a remote, wrong-path or credentialled URL is not trusted")
 
-    func rig(_ tag: String, hold: String?, recipe: String = "fake-for-tests", running: Bool = true)
+    // The installed 1.0.0 serves the hold unless a test says otherwise (holdSince: nil records it at 2.0.0).
+    func rig(_ tag: String, hold: String?, recipe: String = "fake-for-tests", running: Bool = true, holdSince: String? = "1.0.0")
         -> (rig: Rig, feed: Feed, entry: FeedApp, cfg: AgentConfig, client: HoldClient, app: FakeApp, state: URL, mount: URL) {
         let r = Rig(tag)
         let installed = makeApp(r.root.appendingPathComponent("Demo.app"), version: "1.0.0", id: "com.example.demo")
         try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: "demo", version: "2.0.0",
                                    artifact: r.artifact("demo.dmg", "dmg bytes"), kind: recipe == "fake-for-tests" ? "fake-for-tests" : "app-dmg",
                                    allowSame: false, meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.0", iconPNG: Data()) },
-                                   holdURL: hold)
+                                   holdURL: hold, holdSince: hold == nil ? nil : holdSince)
         let feed = try! FeedPublisher.loadVerifiedFeed(from: r.feed, publicKey: r.pair.privateKey.publicKey)!
         let state = r.root.appendingPathComponent("state")
         try! fm.createDirectory(at: state, withIntermediateDirectories: true)
@@ -379,7 +380,7 @@ func updateHoldTests() {
 
     // UH35 the feed records the first version that published a hold address and carries it on.
     do {
-        let f = rig("hold-since", hold: holdURL)
+        let f = rig("hold-since", hold: holdURL, holdSince: nil)
         try! FeedPublisher.publish(feedDir: f.rig.feed, keyFile: f.rig.key, app: "demo", version: "2.0.1",
                                    artifact: f.rig.artifact("demo2.dmg", "dmg bytes 2"), kind: "fake-for-tests", allowSame: false,
                                    meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.1", iconPNG: Data()) })
