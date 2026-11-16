@@ -500,6 +500,7 @@ func updateHoldTests() {
         f.client.postError = URLError(.cannotConnectToHost)
         var cfg = f.cfg
         cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        cfg.apps["demo"]?.idleProbe = "exit 0"   // Hub's owner: nothing running or queued
         _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
                                                    body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
         let notes = (try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
@@ -543,7 +544,9 @@ func updateHoldTests() {
         let f = rig("legacy-quit-refuses", hold: holdURL, recipe: "app-dmg", running: true)
         f.client.postError = URLError(.cannotConnectToHost)
         f.app.quits = [false]
-        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+        var idle = f.cfg
+        idle.apps["demo"]?.idleProbe = "exit 0"
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: idle,
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
@@ -551,6 +554,41 @@ func updateHoldTests() {
                && result?.quitWithoutHold == true && f.app.running
                && (try? BundleInfo.read(f.app.installed.path))?.version == "1.0.0" && !f.app.events.contains("launch"),
                "UH41 a build that will not quit is refused and left as it was (\(result?.reason ?? "nil"); events \(f.app.events))")
+    }
+
+    // UH42 the safety rule: with no idle check configured nothing is ever quit unattended. The
+    // order stays waiting for the app to close and says why, in one line.
+    do {
+        let f = rig("legacy-quit-no-probe", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        expect(result?.status == Agent.waitingForClose && result?.quitWithoutHold == false
+               && (result?.reason ?? "").contains("no idle check configured")
+               && !f.app.events.contains("quit") && !f.app.events.contains("launch")
+               && !f.client.calls.contains("artifact") && f.app.running,
+               "UH42 no idle check means no quit, ever (\(result?.status ?? "nil") \(result?.reason ?? "nil"))")
+    }
+
+    // UH43 an idle check that refuses, or one that never answers, skips the quit too and names what
+    // it saw. The app keeps running, nothing is downloaded, the order keeps waiting.
+    do {
+        let f = rig("legacy-quit-busy-probe", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        var busy = f.cfg
+        busy.apps["demo"]?.idleProbe = "echo '2 jobs queued'; exit 3"
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: busy,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        let silent = Agent.idleRefusal(app: "demo", probe: "sleep 5", shell: RecordingShell(mount: f.mount), timeout: 1)
+        expect(result?.status == Agent.waitingForClose
+               && (result?.reason ?? "").contains("idle check exited 3 (2 jobs queued)")
+               && !f.app.events.contains("quit") && f.app.running
+               && (silent ?? "").contains("did not answer within 1 s"),
+               "UH43 a refusing or silent idle check skips the quit and says what it saw (\(result?.reason ?? "nil"); \(silent ?? "nil"))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.

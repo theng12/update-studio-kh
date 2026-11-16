@@ -9,17 +9,23 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// The CFBundleIdentifier this app must have. When set, a DMG holding any other app is refused
     /// even with the right version; when unset, the installed app's own identifier is the rule.
     public var bundleID: String?
-    public init(bundlePath: String, recipe: String = "app-dmg", automatic: Bool = false, bundleID: String? = nil) {
+    /// One small command that answers exit 0 only when the app has nothing running or queued. It is
+    /// the only thing that lets an order quit the app unattended; unset or empty = never quit it.
+    public var idleProbe: String?
+    public init(bundlePath: String, recipe: String = "app-dmg", automatic: Bool = false, bundleID: String? = nil,
+                idleProbe: String? = nil) {
         self.bundlePath = bundlePath; self.recipe = recipe; self.automatic = automatic; self.bundleID = bundleID
+        self.idleProbe = idleProbe
     }
 
-    private enum CodingKeys: String, CodingKey { case bundlePath, recipe, automatic, bundleID }
+    private enum CodingKeys: String, CodingKey { case bundlePath, recipe, automatic, bundleID, idleProbe }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bundlePath = try c.decode(String.self, forKey: .bundlePath)
         recipe = try c.decodeIfPresent(String.self, forKey: .recipe) ?? "app-dmg"
         automatic = try c.decodeIfPresent(Bool.self, forKey: .automatic) ?? false
         bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID)
+        idleProbe = try c.decodeIfPresent(String.self, forKey: .idleProbe)
     }
 }
 

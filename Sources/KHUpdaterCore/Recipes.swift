@@ -162,6 +162,9 @@ public enum Recipe {
     /// is kept as it is, because nothing here proved a quiet point.
     static let handKeepsRunningApp = "This app is running now, so nothing was changed. "
         + "Quit it when its work is finished, then try again. No quiet point was proved."
+    /// An app that would not quit within the quit's own ceiling: nothing was swapped, so the caller
+    /// reports a refusal and the reason it failed, instead of a stalled row.
+    public static let didNotQuit = "the app did not quit; the installed app was kept"
     /// Install a DMG's app over `installedPath`. The order is the safety contract:
     ///
     /// 1. finish or undo any install a killed run left behind (`recover`);
@@ -969,9 +972,6 @@ public enum LiveControl {
     /// wait up to `wait` seconds until `gone()` says it has. By default that means no process of it
     /// is left; the Gateway passes a rule that ignores its own service process, which is stopped
     /// separately by the PID that owns the port.
-    /// The abandon sentence for an app that did not quit within its ceiling; nothing was swapped.
-    public static let didNotQuit = "the app did not quit; the installed app was kept"
-
     public static func quit(_ installedPath: String, shell: Shell, wait: TimeInterval = 60,
                             gone rule: (() -> Bool)? = nil) -> Bool {
         let gone = rule ?? { isRunning(installedPath) == false }

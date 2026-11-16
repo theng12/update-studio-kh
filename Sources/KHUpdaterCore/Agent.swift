@@ -1214,6 +1214,26 @@ public enum Agent {
         }
     }
 
+    /// The owner's rule before an old build is quit unattended: the app's own probe must answer that
+    /// it has nothing running or queued. No probe, a non-zero answer, output that names a job or a
+    /// probe that outlasts its own short ceiling all skip the quit. Returns why, or nil when it is safe.
+    static func idleRefusal(app: String, probe: String?, shell: Shell, timeout: TimeInterval = 15) -> String? {
+        let command = probe?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !command.isEmpty else {
+            return "\(app) has no idle check configured, so it was not asked to quit and nothing was interrupted."
+        }
+        do {
+            let answer = try shell.run("/bin/sh", arguments: ["-lc", command], timeout: timeout)
+            guard answer.exitCode != 0 else { return nil }
+            let said = (answer.stdout + "\n" + answer.stderr)
+                .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty } ?? "no output"
+            return "\(app)'s idle check exited \(answer.exitCode) (\(said)), so it was not asked to quit and nothing was interrupted."
+        } catch {
+            return "\(app)'s idle check did not answer within \(Int(timeout)) s, so it was not asked to quit and nothing was interrupted."
+        }
+    }
+
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = [],
@@ -1255,10 +1275,17 @@ public enum Agent {
                                        control: appControl, exempt: exempt, installed: installed,
                                        holdSince: feed.apps[app]?.holdSince)
             // A build that predates its hold is updated the way it was before holds existed: asked to
-            // quit (bounded by the quit's own ceiling, never killed), swapped, relaunched hidden.
-            if quitOldBuild, hold.refusal?.status == waitingForClose {
+            // quit (bounded by the quit's own ceiling, never killed), swapped, relaunched hidden —
+            // but only when the app's own probe says it has nothing running or queued.
+            if quitOldBuild, let refusal = hold.refusal, refusal.status == waitingForClose {
+                if let skipped = idleRefusal(app: app, probe: cfg.idleProbe, shell: shell) {
+                    holdEndpoint = hold.endpoint
+                    var out = refusal
+                    out.reason = (out.reason.map { $0 + " " } ?? "") + skipped
+                    return out
+                }
                 legacyQuit = true
-                holdNote = "\(app) \(installed ?? "") predates its update hold, so it was asked to quit without one (quitOldBuilds is on)."
+                holdNote = "\(app) \(installed ?? "") predates its update hold; its idle check passed, so it was asked to quit without one (quitOldBuilds is on)."
                 return nil
             }
             // Resume is attempted even when the POST itself failed: it may have paused before failing.
