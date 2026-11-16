@@ -466,6 +466,30 @@ func updateHoldTests() {
                "UH37 past its ceiling the wait ends refused with the reason (\(ended?.lastResults?["demo"]?.reason ?? "nil"))")
     }
 
+    // UH38 end to end: a feed entry published with holdSince, a running build below it answering
+    // 401. The order waits, this Mac's log and the owner page's row say "waiting for close", and
+    // nothing anywhere calls it a credential refusal.
+    do {
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        let f = rig("hold-since-e2e", hold: holdURL, recipe: "app-dmg", running: true, holdSince: "1.5.0")
+        f.client.replies = Array(repeating: (status: 401, data: Data(#"{"error":"unauthorized"}"#.utf8)), count: 4)
+        var cfg = f.cfg
+        cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                   body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
+        let run = { (try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, appFolders: []))?.notes ?? [] }
+        let notes = run() + run()
+        let machine = (try? StateStore.load(from: f.rig.state))?.machines["mac1"]
+        let page = String(decoding: f.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: owner), remote: "127.0.0.1").data, as: UTF8.self)
+        let waitNotes = notes.filter { $0.contains("waiting_for_close") && $0.contains("first in 1.5.0") }
+        expect(f.entry.holdSince == "1.5.0" && machine?.pending.count == 1 && machine?.lastResults?["demo"] == nil
+               && waitNotes.count == 1 && !notes.contains { $0.contains("(credential)") }
+               && page.contains("Waiting for demo to close</span>") && page.contains("predates its update hold (first in 1.5.0)")
+               && !page.contains("refused the update hold (credential)") && !f.client.calls.contains("artifact"),
+               "UH38 a build below the published holdSince answering 401 reads waiting for close on the Mac and the page, never credential (notes \(waitNotes.count), pending \(machine?.pending.count ?? -1))")
+    }
+
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
     do {
         let f = rig("hold-401", hold: holdURL, recipe: "app-dmg", running: true)
