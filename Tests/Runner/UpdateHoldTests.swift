@@ -721,9 +721,9 @@ func updateHoldTests() {
     // UH49 a pre-hold build with no idle check at all is still quit and updated — the force path is
     // the owner's order — and the log says plainly that no check existed and the path bypassed it.
     do {
-        let f = rig("force-no-probe", hold: holdURL, recipe: "app-dmg", running: true, id: "hub")
+        let f = rig("force-no-probe", hold: holdURL, recipe: "app-dmg", running: true)
         f.client.postError = URLError(.cannotConnectToHost)
-        let result = try? Agent.install(app: "hub", feed: f.feed, installed: "0.6.235", config: f.cfg,
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "0.6.235", config: f.cfg,
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
@@ -733,7 +733,7 @@ func updateHoldTests() {
                && (result?.reason ?? "").contains("temporary force path")
                && (result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") }
                && (try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
-               "UH49 a pre-hold build is force-quit with no idle check at all, and the log says so (\(result?.reason ?? "nil"))")
+               "UH49 a pre-hold build is force-quit with no idle check at all, and the log says so (\(result?.status ?? "nil"); trace \(result?.quitTrace ?? []))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
