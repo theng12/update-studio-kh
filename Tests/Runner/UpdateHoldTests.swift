@@ -14,13 +14,20 @@ private final class HoldClient: HTTPClient, @unchecked Sendable {
     /// When set, the hold POST fails like a transport error instead of answering from the script.
     var postError: URLError?
     var lastHeaders: [String: String] = [:]
+    /// When set, the endpoint checks the presented token like a gated app would; a mismatch is a 401.
+    var validator: ((String?) -> Bool)?
+    var seenTokens: [String?] = []
     let lock = NSLock()
     init(_ inner: InProcessClient) { self.inner = inner }
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { try inner.get(url, headers: headers) }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
         guard url.host == "127.0.0.1" else { return try inner.post(url, headers: headers, body: body) }
         if let postError { throw postError }
-        lock.lock(); lastHeaders = headers; calls.append("hold"); let reply = replies.isEmpty ? (status: 500, data: Data()) : replies.removeFirst(); lock.unlock()
+        if let validator, !validator(headers["X-Hub-Token"]) {
+            lock.lock(); lastHeaders = headers; seenTokens.append(headers["X-Hub-Token"]); calls.append("hold"); lock.unlock()
+            return (Data(#"{"error":"no credential"}"#.utf8), 401)
+        }
+        lock.lock(); lastHeaders = headers; seenTokens.append(headers["X-Hub-Token"]); calls.append("hold"); let reply = replies.isEmpty ? (status: 500, data: Data()) : replies.removeFirst(); lock.unlock()
         return (reply.data, reply.status)
     }
     func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
@@ -235,6 +242,87 @@ func updateHoldTests() {
         expect(result?.status == "install_failed" && (result?.reason ?? "").contains("missing or unreadable")
                && (try? BundleInfo.read(installed.path))?.version == "1.0.0" && !fm.fileExists(atPath: journal.path),
                "UH16 a missing staged app leaves the installed app untouched (\(result?.status ?? "nil"), \(result?.reason ?? ""))")
+    }
+
+    // UH25-UH29 the consumer side of a gated hold: no token, wrong token, rotation, refusal, positive.
+    func gated(_ tag: String, token: String?, accept: @escaping (String?) -> Bool) -> (rig: Rig, feed: Feed, entry: FeedApp, cfg: AgentConfig, client: HoldClient, app: FakeApp, state: URL, mount: URL) {
+        let f = rig(tag, hold: holdURL, recipe: "app-dmg", running: true)
+        if let token { try? Data(token.utf8).write(to: URL(fileURLWithPath: tokenPath), options: .atomic) }
+        else { try? fm.removeItem(atPath: tokenPath) }
+        f.client.validator = accept
+        return f
+    }
+    do { // UH25 no usable token file: creation fails, no header, the endpoint refuses, nothing moves.
+        let f = rig("hold-no-token", hold: holdURL, recipe: "app-dmg", running: true)
+        setenv("KHU_HOLD_TOKEN_FILE", "/tmp/khu-token-dir-is-a-file/token", 1)
+        try? Data("x".utf8).write(to: URL(fileURLWithPath: "/tmp/khu-token-dir-is-a-file"))
+        f.client.validator = { token in token != nil }
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        expect(result?.status == "refused" && (result?.reason ?? "").contains("credential")
+               && !f.client.calls.contains("artifact") && !f.app.events.contains("quit"),
+               "UH25 a missing token stops before download, quit or replace (\(result?.reason ?? "nil"))")
+        setenv("KHU_HOLD_TOKEN_FILE", tokenPath, 1)
+    }
+    do { // UH26 a wrong token is refused by the endpoint, before any byte.
+        let f = gated("hold-wrong-token", token: String(repeating: "a", count: 64), accept: { $0 == String(repeating: "b", count: 64) })
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        expect(result?.status == "refused" && !f.client.calls.contains("artifact") && f.app.events.isEmpty,
+               "UH26 a wrong token stops before any download or quit")
+    }
+    do { // UH27 rotation mid-run: the next request reads the new file value and is accepted.
+        let f = rig("hold-rotate-mid", hold: holdURL, recipe: "app-dmg", running: true)
+        try? Data(String(repeating: "a", count: 64).utf8).write(to: URL(fileURLWithPath: tokenPath), options: .atomic)
+        var posts = 0
+        f.client.validator = { token in
+            posts += 1
+            if posts == 1 {
+                _ = UpdateHold.rotateToken()   // rotates while the install is running
+                return token == String(repeating: "a", count: 64)
+            }
+            return token == UpdateHold.localToken()
+        }
+        f.client.replies = [safeReply(), safeReply()]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        expect(result?.status == "updated" && f.client.seenTokens.count == 2
+               && f.client.seenTokens[0] != f.client.seenTokens[1],
+               "UH27 rotation mid-run is picked up per request (\(f.client.seenTokens.map { $0?.prefix(4) }))")
+    }
+    do { // UH28 the old value stops being accepted after a rotation.
+        let f = rig("hold-old-token", hold: holdURL, recipe: "app-dmg", running: true)
+        try? Data(String(repeating: "a", count: 64).utf8).write(to: URL(fileURLWithPath: tokenPath), options: .atomic)
+        let old = String(repeating: "a", count: 64)
+        _ = UpdateHold.rotateToken()
+        f.client.validator = { $0 == old }
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        expect(result?.status == "refused" && !f.client.calls.contains("artifact") && f.app.events.isEmpty,
+               "UH28 a rotated-away token is no longer accepted, and the install stops")
+    }
+    do { // UH29 positive: the current token is accepted; safe, quit, replace, relaunch, resume.
+        let f = rig("hold-positive", hold: holdURL, recipe: "app-dmg", running: true)
+        _ = UpdateHold.localToken()
+        f.client.validator = { $0 == UpdateHold.localToken() }
+        f.client.replies = [safeReply(inFlight: 2), safeReply(inFlight: 2)]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, manual: true)
+        expect(result?.status == "updated" && f.app.events.contains("quit") && f.app.events.contains("launch")
+               && f.client.calls == ["hold", "artifact", "hold", "resume"],
+               "UH29 the held install quits, replaces and relaunches (\(f.client.calls), \(f.app.events))")
+        expect((result?.reason ?? "").contains("held (2 jobs in flight"),
+               "UH29 the reply's in-flight work is named (\(result?.reason ?? "nil"))")
     }
 
     // UH23 the Launcher's hold credential is its own 0600 file and is presented on every hold call.
