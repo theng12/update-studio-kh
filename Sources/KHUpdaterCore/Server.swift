@@ -264,6 +264,27 @@ public final class FeedServer: @unchecked Sendable {
     private let enrolLimiter: RateLimiter
     private let reportLimiter: RateLimiter
 
+    /// How long one order may block another for the same machine, app and action. Past this an order is
+    /// retired when the owner places a new one, so a Mac that never answered cannot make an app
+    /// undrivable for good (2026-11-16: 39 Macs held a dead order and every retry was swallowed).
+    static let orderRetryWindow: TimeInterval = 30 * 60
+
+    enum OrderQueue { case appended, replacedStale, skippedFreshDuplicate }
+
+    /// Queues one owner order for a machine. `now` is a parameter so a test can place an old order
+    /// without a fake clock anywhere else.
+    static func queueOrder(_ ms: inout MachineState, machine: String, app: String, action: String,
+                           now: Date = Date()) -> OrderQueue {
+        let hasYoung = ms.pending.contains { $0.app == app && $0.action == action &&
+            ISO.date($0.createdAt).map { now.timeIntervalSince($0) <= orderRetryWindow } ?? false }
+        if hasYoung { return .skippedFreshDuplicate }
+        // A corrupt timestamp counts as stale: a bad createdAt must not wedge an app for ever.
+        let hadStale = ms.pending.contains { $0.app == app && $0.action == action }
+        if hadStale { ms.pending.removeAll { $0.app == app && $0.action == action } }
+        ms.pending.append(ServerCommand(machine: machine, app: app, action: action))
+        return hadStale ? .replacedStale : .appended
+    }
+
     public init(feedDir: URL, stateDir: URL, bind: String, port: Int,
                 commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32,
                 maxEnrolmentsPerWindow: Int = EnrolPolicy.maxPerWindow,
@@ -716,10 +737,25 @@ public final class FeedServer: @unchecked Sendable {
                 }
                 // Signed with the key every agent is pinned to, and naming this Mac and the moment
                 // it was made: a forged or replayed reply is refused at the Mac.
+                let now = Date()
                 let body = JSON.encode(CommandsReply(machine: machine, commands: deliverable, automatic: ms.automatic,
                                                        automaticAt: ms.automaticSet?.mapValues(\.at)), pretty: false)
                 guard let signature = try? Signing.sign(body, with: commandKey) else {
                     return Self.text(500, "could not sign the orders")
+                }
+                // One line per handout so an operator can tell whether a Mac fetched its orders and
+                // how far the signed-at drifted from the server's clock (a large gap means the Mac
+                // will refuse the reply as stale). The gap is between now and the newest order's
+                // createdAt, since that is what the agent will compare against its own clock.
+                if !deliverable.isEmpty {
+                    let ids = deliverable.map(\.id).joined(separator: ",")
+                    let newestAt = deliverable.compactMap { ISO.date($0.createdAt) }.max() ?? now
+                    let gap = Int(abs(now.timeIntervalSince(newestAt)))
+                    let audit: [String: Any] = ["at": ISO.string(now), "machine": machine,
+                                                "ids": ids, "gap_s": gap]
+                    if let data = try? JSONSerialization.data(withJSONObject: audit, options: [.sortedKeys]) {
+                        FileHandle.standardError.write(Data("commands-handout ".utf8) + data + Data("\n".utf8))
+                    }
                 }
                 return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
             }
@@ -825,6 +861,7 @@ public final class FeedServer: @unchecked Sendable {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
                 var createdOrders = 0
+                var skippedOrders = 0
                 let response = transact { state -> HTTPResponse in
                     // Opening and closing the window, and removing a Mac, are decisions about this
                     // publisher rather than about one app on one Mac.
@@ -856,8 +893,11 @@ public final class FeedServer: @unchecked Sendable {
                         guard let app = f["app"], !app.isEmpty else { return Self.text(400, "send app") }
                         let feed = FeedPublisher.loadFeed(from: feedDir)
                         for (machine, var ms) in state.machines where Self.updateAvailable(ms, app: app, feed: feed, now: Date()) {
-                            ms.pending.append(ServerCommand(machine: machine, app: app, action: ServerCommand.update))
-                            createdOrders += 1
+                            switch Self.queueOrder(&ms, machine: machine, app: app, action: ServerCommand.update) {
+                            case .appended: createdOrders += 1
+                            case .replacedStale: createdOrders += 1; skippedOrders += 1
+                            case .skippedFreshDuplicate: skippedOrders += 1
+                            }
                             state.machines[machine] = ms
                         }
                         return Self.ok
@@ -907,17 +947,22 @@ public final class FeedServer: @unchecked Sendable {
                         ms.automaticSet = (ms.automaticSet ?? [:]).merging([app: AutomaticChange(at: ISO.string(Date()), byMac: false)]) { _, new in new }
                     } else {
                         let action = req.path == "/api/request-rollback" ? ServerCommand.rollback : ServerCommand.update
-                        if !ms.pending.contains(where: { $0.app == app && $0.action == action }) {
-                            ms.pending.append(ServerCommand(machine: machine, app: app, action: action))
-                            createdOrders += 1
+                        switch Self.queueOrder(&ms, machine: machine, app: app, action: action) {
+                        case .appended: createdOrders += 1
+                        case .replacedStale: createdOrders += 1; skippedOrders += 1
+                        case .skippedFreshDuplicate: skippedOrders += 1
                         }
                     }
                     state.machines[machine] = ms
                     return Self.ok
                 }
-                if response.status == 200, createdOrders > 0 {
-                    let audit: [String: Any] = ["at": ISO.string(Date()), "path": req.path,
-                                               "app": f["app"] ?? "", "created": createdOrders, "source": "owner-page"]
+                if response.status == 200, createdOrders > 0 || skippedOrders > 0 {
+                    var audit: [String: Any] = ["at": ISO.string(Date()), "path": req.path,
+                                                "app": f["app"] ?? "", "created": createdOrders,
+                                                "skipped": skippedOrders, "source": "owner-page"]
+                    if skippedOrders > 0 && createdOrders == 0 { audit["why"] = "fresh-duplicate" }
+                    else if createdOrders > 0 && skippedOrders == 0 { /* no why needed */ }
+                    else if createdOrders > 0 && skippedOrders > 0 { audit["why"] = "stale-replaced" }
                     if let data = try? JSONSerialization.data(withJSONObject: audit, options: [.sortedKeys]) {
                         FileHandle.standardError.write(Data("order-provenance ".utf8) + data + Data("\n".utf8))
                     }

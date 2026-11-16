@@ -63,11 +63,37 @@ struct DeliveryMismatch: Error, CustomStringConvertible {
 public struct URLSessionHTTPClient: HTTPClient {
     /// Feed, status and command replies are small; anything bigger is refused, not buffered.
     public var smallLimit = 8 << 20
-    /// No data for this long ends the transfer (URLRequest's own timeout).
+    /// No data for this long ends the transfer (URLRequest's own timeout). This is silence detection:
+    /// a peer that stops sending at all. The transfer deadline below is a different job — it bounds
+    /// a slow-but-alive link by the bytes that still have to move.
     public var timeout: TimeInterval = 60
-    /// ...and no transfer takes longer than this IN TOTAL, however steadily the peer drips: an
-    /// inactivity timeout alone lets a stalled or malicious peer hold a run open for ever.
+    /// ...and no small request (feed, status, hold) takes longer than this IN TOTAL, however steadily
+    /// the peer drips: an inactivity timeout alone lets a stalled or malicious peer hold a run open
+    /// for ever. Artifact downloads use a size-derived deadline instead; see transferDeadline.
     public var totalTimeout: TimeInterval = 600
+    /// The rate the deadline assumes, from what the fleet actually does: a 1.48 GB artifact has been
+    /// taking ~1,500 s, i.e. about 1 MB/s. It is a CONSTANT, never measured from the transfer — a
+    /// rate read off a stalled pull would divide by ~0 and hand back an unbounded deadline.
+    public var assumedBytesPerSecond: Double = 1_000_000
+    /// The old flat ceiling is now the FLOOR, not the bar to beat: no artifact may be given less time
+    /// than it had before, so this change can only ever lengthen an allowance.
+    static let transferFloor: TimeInterval = 600
+    /// Cap: four hours covers any artifact the signed feed will ever name (1.5 GB at 1 MB/s is
+    /// 1,500 s), and nothing may outlast it however the numbers move.
+    static let transferCap: TimeInterval = 14_400
+    /// The time `bytes` are allowed at `rate`, floored at the old ceiling and capped. `rate` is a
+    /// constant, so this can never be unbounded; a rate of zero or less answers the cap rather than
+    /// dividing by it. A dead link is ended by the 60 s inactivity timeout, not by this number.
+    static func transferDeadline(bytes: Int64, rate: Double) -> TimeInterval {
+        guard rate > 0 else { return transferCap }
+        return min(max(Double(bytes) / rate, transferFloor), transferCap)
+    }
+    /// Shorten-only timeout for non-download requests: the hold's window and small feed/status calls
+    /// cap at totalTimeout and may only be made shorter, never extended. Downloads use transferDeadline
+    /// instead; keeping them apart means nobody can merge the two paths by accident.
+    static func requestTimeout(total: TimeInterval, override: TimeInterval?) -> TimeInterval {
+        min(total, override ?? total)
+    }
     /// Vendor downloads and page lookups must stay on the catalog's official HTTPS hosts.
     public var officialHosts: [String]?
     public init() {}
@@ -136,9 +162,16 @@ public struct URLSessionHTTPClient: HTTPClient {
     private func transfer(_ method: String, _ url: URL, headers: [String: String], body: Data?,
                           handle: FileHandle?, limit: Int64, phase: String = "downloading",
                           resumeFrom: Int64 = 0, timeoutOverride: TimeInterval? = nil) throws -> StreamSink {
-        // A caller's deadline (the hold's 30 s window) caps both the request's own timeout and the
-        // operation loop below; it can only shorten the client's defaults, never extend them.
-        let deadline = min(totalTimeout, timeoutOverride ?? totalTimeout)
+        // Downloads get a deadline sized from the bytes still to move; everything else (hold POSTs,
+        // feed/status GETs) keeps the old shorten-only behaviour. Keeping them apart means nobody
+        // can merge the two paths by accident and silently cap a download at totalTimeout again.
+        let deadline: TimeInterval
+        if handle != nil {
+            let remaining = max(0, limit - resumeFrom)
+            deadline = Self.transferDeadline(bytes: remaining, rate: assumedBytesPerSecond)
+        } else {
+            deadline = Self.requestTimeout(total: totalTimeout, override: timeoutOverride)
+        }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
                                  timeoutInterval: min(timeout, timeoutOverride ?? timeout))
         request.httpMethod = method
@@ -172,7 +205,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         }
         session.finishTasksAndInvalidate()
         if cancelled { throw khuFail("cancelled on this Mac; nothing was changed") }
-        guard finished else { throw khuFail("\(url.path) did not finish within \(Int(totalTimeout)) s; it was stopped") }
+        guard finished else { throw khuFail("\(url.path) did not finish within \(Int(deadline)) s; it was stopped") }
         if let error = sink.error { throw error }
         return sink
     }

@@ -5,6 +5,12 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.48 — 2026-11-17
+
+- An owner's order can no longer become undrivable because one Mac never answered it. A new order for the same app on the same Mac now replaces an order older than 30 minutes instead of being silently swallowed, and a swallowed order is recorded in the publisher's own log, so a stuck order cannot sit invisible for an hour again.
+- A download is no longer stopped by a flat ten-minute clock. The time allowed now comes from the size of the artifact, with the clock only as a hard backstop: a stalled small file still fails fast, and a large artifact on a slow link is allowed to finish.
+- The publisher now records each order it hands to a Mac, with the order ids and the clock gap, so "the Mac is online and doing nothing" can be answered from the log.
+
 ## 0.1.47 — 2026-11-17
 
 - No change in what the helper does: this release carries the same behaviour as 0.1.46, with the checks behind the unattended quit split so that a failing one names itself instead of hiding behind a single combined line.
