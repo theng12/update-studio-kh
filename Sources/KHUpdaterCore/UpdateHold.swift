@@ -28,7 +28,11 @@ public enum UpdateHold {
         guard let url = URL(string: raw), url.scheme?.lowercased() == "http",
               let host = url.host?.lowercased(), ["127.0.0.1", "localhost", "::1"].contains(host),
               url.port != nil, url.user == nil, url.password == nil,
-              ["/api/maintenance/hold", "/api/maintenance/drain"].contains(url.path) else { return nil }
+              // Exact paths only, never a prefix: Gateway's real route is included, any other
+              // /admin/... path, a query or a fragment is not.
+              url.query == nil, url.fragment == nil,
+              ["/api/maintenance/hold", "/api/maintenance/drain",
+               "/admin/api/maintenance/drain"].contains(url.path) else { return nil }
         return url
     }
 

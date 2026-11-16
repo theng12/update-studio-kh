@@ -60,11 +60,18 @@ func updateHoldTests() {
     setenv("KHU_HOLD_TOKEN_FILE", tokenPath, 1)
 
     // UH1 the trusted endpoint is this Mac's loopback, the contract's two paths and nothing else.
-    expect(UpdateHold.trusted(holdURL) != nil && UpdateHold.trusted("http://127.0.0.1:8799/api/maintenance/drain") != nil,
-           "UH1 the contract's loopback hold and drain endpoints are trusted")
+    expect(UpdateHold.trusted(holdURL) != nil
+           && UpdateHold.trusted("http://127.0.0.1:8799/api/maintenance/drain") != nil
+           && UpdateHold.trusted("http://127.0.0.1:8787/admin/api/maintenance/drain") != nil,
+           "UH1 the contract's loopback hold and drain endpoints and Gateway's exact admin drain are trusted")
     let untrusted = ["https://127.0.0.1:8799/api/maintenance/hold", "http://10.0.0.5:8799/api/maintenance/hold",
                      "http://127.0.0.1/api/maintenance/hold", "http://127.0.0.1:8799/api/other",
-                     "http://user:pass@127.0.0.1:8799/api/maintenance/hold"]
+                     "http://user:pass@127.0.0.1:8799/api/maintenance/hold",
+                     "http://127.0.0.1:8787/admin/api/maintenance/hold",
+                     "http://127.0.0.1:8787/admin/api/maintenance/drain/extra",
+                     "http://127.0.0.1:8787/admin/drain",
+                     "http://127.0.0.1:8787/admin/api/maintenance/drain?x=1",
+                     "http://127.0.0.1:8787/admin/api/maintenance/drain#frag"]
     expect(untrusted.allSatisfy { UpdateHold.trusted($0) == nil }, "UH1 a remote, wrong-path or credentialled URL is not trusted")
 
     func rig(_ tag: String, hold: String?, recipe: String = "fake-for-tests", running: Bool = true)
@@ -357,6 +364,19 @@ func updateHoldTests() {
         expect(UpdateHold.localToken() == after, "UH24 the rotated token is the one presented next")
     }
 
+    // UH32 Gateway's exact admin drain is a real consumer flow, and a query on it is refused.
+    do {
+        let adminURL = "http://127.0.0.1:8787/admin/api/maintenance/drain"
+        let f = rig("hold-admin-drain", hold: adminURL, recipe: "app-dmg", running: true)
+        f.client.replies = [safeReply(inFlight: 1), safeReply(inFlight: 1)]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        expect(result?.status == "updated" && f.client.calls.first == "hold",
+               "UH32 the exact admin drain holds before the byte (\(f.client.calls))")
+    }
+
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
     do {
         let f = rig("hold-401", hold: holdURL, recipe: "app-dmg", running: true)
@@ -524,6 +544,24 @@ func updateHoldTests() {
                                         control: { _, _ in app.control })
         expect(result?.status == "updated" && !client.calls.contains("hold"),
                "UH10 the updater's own Launcher updates while running, with no hold (\(client.calls))")
+    }
+
+    // UH33 the signed feed keeps Gateway's exact admin drain and drops near-misses.
+    do {
+        func validatedHoldURL(_ raw: String) -> String? {
+            var feed = Feed(published_at: ISO.string(Date()), apps: [:])
+            var entry = FeedApp(version: "1.0.0", file: "a.dmg", sha256: String(repeating: "a", count: 64), bytes: 4, kind: "app-dmg")
+            entry.holdURL = raw
+            feed.apps["a"] = entry
+            return (try? feed.validated())?.apps["a"]?.holdURL
+        }
+        expect(validatedHoldURL("http://127.0.0.1:8787/admin/api/maintenance/drain")
+               == "http://127.0.0.1:8787/admin/api/maintenance/drain",
+               "UH33 the exact admin drain survives feed validation")
+        expect(validatedHoldURL("http://127.0.0.1:8787/admin/api/maintenance/drain?x=1") == nil
+               && validatedHoldURL("http://127.0.0.1:8787/admin/api/maintenance/hold") == nil
+               && validatedHoldURL("http://127.0.0.1:8787/admin/api/maintenance/drain/extra") == nil,
+               "UH33 a query, another admin path or a longer path is dropped")
     }
 
     // UH9 a feed that names a remote endpoint loses it: the app is unsupported, not interrupted.

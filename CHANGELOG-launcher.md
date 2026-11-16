@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.43 — 2026-11-16
+
+- Gateway's real hold route, `/admin/api/maintenance/drain`, is now a trusted endpoint: the exact path only, on loopback with an explicit port. Any other `/admin/…` path, a longer path, a query string or a fragment is rejected, both when the feed is validated and when the hold is taken.
+
 ## 0.1.42 — 2026-11-16
 
 - Apps whose update-hold route is gated now get the Launcher's own credential: a 0600 file at `~/Library/KHUpdater/state/hold-token`, reissued atomically every time the background engine starts, presented only on the loopback hold request. The Launcher never reads an app's own credential file.
