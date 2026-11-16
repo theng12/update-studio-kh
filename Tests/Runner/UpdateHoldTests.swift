@@ -591,6 +591,20 @@ func updateHoldTests() {
                "UH43 a refusing or silent idle check skips the quit and says what it saw (\(result?.reason ?? "nil"); \(silent ?? "nil"))")
     }
 
+    // UH44 Hub's idle command is a shell string with quotes and `$HOME` in it: it must survive a
+    // config round-trip untouched, and an app with no probe must still decode (old configs work).
+    do {
+        let hub = "test -r \"$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db\" && [ \"$(sqlite3 -readonly \"$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db\" \"select count(*) from batches\" 2>/dev/null)\" = 0 ]"
+        var cfg = AgentConfig(feedURL: "http://pub.test/release.json", publicKey: "k", stateDir: "/tmp/s",
+                              machine: "mac1", token: "t")
+        cfg.apps = ["hub": AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub",
+                                     automatic: true, bundleID: "local.studiohub.standalone", idleProbe: hub),
+                    "story": AppConfig(bundlePath: "/Applications/Story.app", recipe: "story")]
+        let back = try? JSON.decode(AgentConfig.self, from: JSON.encode(cfg))
+        expect(back?.apps["hub"]?.idleProbe == hub && back?.apps["story"]?.idleProbe == nil,
+               "UH44 an idle check survives a config round-trip byte for byte, and an app without one decodes to nil")
+    }
+
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
     do {
         let f = rig("hold-401", hold: holdURL, recipe: "app-dmg", running: true)
