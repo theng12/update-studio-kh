@@ -5,6 +5,12 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.42 — 2026-11-16
+
+- Apps whose update-hold route is gated now get the Launcher's own credential: a 0600 file at `~/Library/KHUpdater/state/hold-token`, reissued atomically every time the background engine starts, presented only on the loopback hold request. The Launcher never reads an app's own credential file.
+- The recorded reason now says exactly which step stopped an update: the installed build has no hold endpoint (one normal install while the app is closed will fix it), the app refused the credential, the feed's address does not match the build, or the endpoint answered another status. A failed download stays a separate reason.
+- Held → paused → updating → resumed is unchanged, and the reply's in-flight work is still named.
+
 ## 0.1.41 — 2026-11-15
 
 - Updating a running app now pauses its work first: the Launcher asks the app for an update gap inside one 30-second window (a silent app fails the request instead of stalling it), updates in that gap, and the app resumes by itself. Queued work is kept and the result says how much was held.
