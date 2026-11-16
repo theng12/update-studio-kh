@@ -12,3 +12,4 @@ __pycache__/
 
 # Browser-tool scratch (Playwright MCP page snapshots); never source.
 .playwright-mcp/
+/_trash
