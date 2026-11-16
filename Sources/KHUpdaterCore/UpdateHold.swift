@@ -58,6 +58,25 @@ public enum UpdateHold {
         return token
     }
 
+    /// Issues a fresh token and replaces the file atomically, so a reader sees either the old or the
+    /// new credential and never a partial one. Called when the agent starts; apps read it per request.
+    @discardableResult
+    public static func rotateToken() -> String? {
+        let url = tokenFile
+        let token = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        let fm = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o700])
+        let temp = url.deletingLastPathComponent().appendingPathComponent(".hold-token.\(UUID().uuidString)")
+        guard (try? Data(token.utf8).write(to: temp, options: .atomic)) != nil else { return nil }
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temp.path)
+        guard (try? fm.replaceItemAt(url, withItemAt: temp)) != nil else {
+            try? fm.removeItem(at: temp)
+            return nil
+        }
+        return token
+    }
+
     static func credentialHeaders() -> [String: String] {
         guard let token = localToken() else { return [:] }
         return ["X-Hub-Token": token, "Authorization": "Bearer \(token)"]

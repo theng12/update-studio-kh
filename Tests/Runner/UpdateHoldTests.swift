@@ -255,6 +255,20 @@ func updateHoldTests() {
                "UH23 the hold presents the Launcher token (\(f.client.lastHeaders.keys.sorted()))")
     }
 
+    // UH24 rotation replaces the credential atomically and leaves no temp file behind.
+    do {
+        let before = (try? String(contentsOfFile: tokenPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rotated = UpdateHold.rotateToken()
+        let after = (try? String(contentsOfFile: tokenPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mode = (try? fm.attributesOfItem(atPath: tokenPath))?[.posixPermissions] as? NSNumber
+        let temps = (try? fm.contentsOfDirectory(atPath: (tokenPath as NSString).deletingLastPathComponent))?
+            .filter { $0.hasPrefix(".hold-token.") } ?? []
+        expect(rotated != nil && rotated == after && after != before && (after?.count ?? 0) == 64
+               && mode?.intValue == 0o600 && temps.isEmpty,
+               "UH24 rotation is atomic, 0600 and leaves no temp (temps: \(temps))")
+        expect(UpdateHold.localToken() == after, "UH24 the rotated token is the one presented next")
+    }
+
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
     do {
         let f = rig("hold-401", hold: holdURL, recipe: "app-dmg", running: true)

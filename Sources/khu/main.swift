@@ -377,6 +377,8 @@ struct KHUMain {
                     }
                 }.start()
             }
+            // A fresh hold credential on every agent start; apps read the 0600 file per request.
+            _ = UpdateHold.rotateToken()
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
             let initialRequests = installs
             func loop() {
