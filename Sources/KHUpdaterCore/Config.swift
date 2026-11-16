@@ -10,7 +10,9 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// even with the right version; when unset, the installed app's own identifier is the rule.
     public var bundleID: String?
     /// One small command that answers exit 0 only when the app has nothing running or queued. It is
-    /// the only thing that lets an order quit the app unattended; unset or empty = never quit it.
+    /// the only thing that lets an order quit the app unattended. Set = this Mac's own command (even
+    /// empty, which turns the unattended quit off here); unset = the built-in check for that app, if
+    /// it ships with one (`Agent.builtInIdleProbes`); neither = never quit it.
     public var idleProbe: String?
     public init(bundlePath: String, recipe: String = "app-dmg", automatic: Bool = false, bundleID: String? = nil,
                 idleProbe: String? = nil) {

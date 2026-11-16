@@ -46,6 +46,18 @@ private final class HoldClient: HTTPClient, @unchecked Sendable {
     }
 }
 
+/// Answers an idle check as a scripted Mac would, without running it, and hands everything else to
+/// the real recording shell. Lets a test decide what the app's check says on this machine.
+private struct ProbeShell: Shell {
+    let inner: RecordingShell
+    let probeExit: Int32
+    let probeOut: String
+    func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+        if executable == "/bin/sh" { return ShellResult(exitCode: probeExit, stdout: probeOut, stderr: "") }
+        return try inner.run(executable, arguments: arguments, timeout: timeout)
+    }
+}
+
 private func safeReply(inFlight: Int = 2) -> (status: Int, data: Data) {
     (200, Data(#"{"safe":true,"unsettled":[],"dispatch_paused_s":120,"in_flight":\#(inFlight)}"#.utf8))
 }
@@ -75,11 +87,12 @@ func updateHoldTests() {
     expect(untrusted.allSatisfy { UpdateHold.trusted($0) == nil }, "UH1 a remote, wrong-path or credentialled URL is not trusted")
 
     // The installed 1.0.0 serves the hold unless a test says otherwise (holdSince: nil records it at 2.0.0).
-    func rig(_ tag: String, hold: String?, recipe: String = "fake-for-tests", running: Bool = true, holdSince: String? = "1.0.0")
+    func rig(_ tag: String, hold: String?, recipe: String = "fake-for-tests", running: Bool = true, holdSince: String? = "1.0.0",
+             id: String = "demo")
         -> (rig: Rig, feed: Feed, entry: FeedApp, cfg: AgentConfig, client: HoldClient, app: FakeApp, state: URL, mount: URL) {
         let r = Rig(tag)
         let installed = makeApp(r.root.appendingPathComponent("Demo.app"), version: "1.0.0", id: "com.example.demo")
-        try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: "demo", version: "2.0.0",
+        try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: id, version: "2.0.0",
                                    artifact: r.artifact("demo.dmg", "dmg bytes"), kind: recipe == "fake-for-tests" ? "fake-for-tests" : "app-dmg",
                                    allowSame: false, meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.0", iconPNG: Data()) },
                                    holdURL: hold, holdSince: hold == nil ? nil : holdSince)
@@ -87,13 +100,13 @@ func updateHoldTests() {
         let state = r.root.appendingPathComponent("state")
         try! fm.createDirectory(at: state, withIntermediateDirectories: true)
         let client = HoldClient(InProcessClient(server: r.server))
-        client.artifacts[feed.apps["demo"]!.file] = Data("dmg bytes".utf8)
-        var cfg = agentConfig(r, token: "unused", apps: ["demo": AppConfig(bundlePath: installed.path, recipe: recipe, automatic: true)])
+        client.artifacts[feed.apps[id]!.file] = Data("dmg bytes".utf8)
+        var cfg = agentConfig(r, token: "unused", apps: [id: AppConfig(bundlePath: installed.path, recipe: recipe, automatic: true)])
         cfg.stateDir = state.path
         let app = FakeApp(installed: installed, running: running, quits: [true], healthy: ["2.0.0"])
         let mount = r.root.appendingPathComponent("mount")
         makeApp(mount.appendingPathComponent("Demo.app"), version: "2.0.0", id: "com.example.demo")
-        return (r, feed, feed.apps["demo"]!, cfg, client, app, state, mount)
+        return (r, feed, feed.apps[id]!, cfg, client, app, state, mount)
     }
 
     // UH2 a safe hold is taken before the artifact and resumed after the install.
@@ -603,6 +616,54 @@ func updateHoldTests() {
         let back = try? JSON.decode(AgentConfig.self, from: JSON.encode(cfg))
         expect(back?.apps["hub"]?.idleProbe == hub && back?.apps["story"]?.idleProbe == nil,
                "UH44 an idle check survives a config round-trip byte for byte, and an app without one decodes to nil")
+    }
+
+    // UH45 Hub's check ships with the helper, so no Mac has to be visited to arm it. The Mac's own
+    // setting still wins, an explicit empty string turns it off there, and any other app with no
+    // setting gets no check at all.
+    do {
+        let bare = AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub")
+        let own = AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub", idleProbe: "exit 0")
+        let off = AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub", idleProbe: "  ")
+        let other = AppConfig(bundlePath: "/Applications/Story.app", recipe: "story")
+        let offSaid = Agent.idleRefusal(app: "hub", probe: Agent.idleProbe(app: "hub", cfg: off),
+                                        shell: RecordingShell(mount: tmpDir("uh45")))
+        expect(Agent.idleProbe(app: "hub", cfg: bare) == Agent.builtInIdleProbes["hub"]
+               && (Agent.builtInIdleProbes["hub"] ?? "").contains("hub.db")
+               && Agent.idleProbe(app: "hub", cfg: own) == "exit 0"
+               && Agent.idleProbe(app: "hub", cfg: off) == "  " && offSaid != nil
+               && Agent.idleProbe(app: "story", cfg: other) == nil
+               && Agent.idleRefusal(app: "story", probe: Agent.idleProbe(app: "story", cfg: other),
+                                    shell: RecordingShell(mount: tmpDir("uh45"))) != nil,
+               "UH45 Hub's idle check is built in, a Mac's own setting wins, an empty one turns it off (\(offSaid ?? "nil"))")
+    }
+
+    // UH46 the built-in check really decides Hub's legacy quit end to end, with no Mac setting at
+    // all: idle → quit, install, relaunch; not idle → the order keeps waiting and says what the
+    // check saw. The probe is never run here; only its answer is scripted.
+    do {
+        let idle = rig("builtin-probe-idle", hold: holdURL, recipe: "app-dmg", running: true, id: "hub")
+        idle.client.postError = URLError(.cannotConnectToHost)
+        let done = try? Agent.install(app: "hub", feed: idle.feed, installed: "1.0.0", config: idle.cfg,
+                                      serverBase: URL(string: "http://pub.test")!, stateDir: idle.state,
+                                      http: idle.client,
+                                      shell: ProbeShell(inner: RecordingShell(mount: idle.mount), probeExit: 0, probeOut: ""),
+                                      control: { _, _ in idle.app.control }, quitOldBuild: true)
+        let busy = rig("builtin-probe-busy", hold: holdURL, recipe: "app-dmg", running: true, id: "hub")
+        busy.client.postError = URLError(.cannotConnectToHost)
+        let waited = try? Agent.install(app: "hub", feed: busy.feed, installed: "1.0.0", config: busy.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: busy.state,
+                                        http: busy.client,
+                                        shell: ProbeShell(inner: RecordingShell(mount: busy.mount), probeExit: 3,
+                                                          probeOut: "7 items queued\n"),
+                                        control: { _, _ in busy.app.control }, quitOldBuild: true)
+        expect(done?.status == "updated" && done?.quitWithoutHold == true && idle.app.events.contains("quit")
+               && (try? BundleInfo.read(idle.app.installed.path))?.version == "2.0.0"
+               && waited?.status == Agent.waitingForClose
+               && (waited?.reason ?? "").contains("idle check exited 3 (7 items queued)")
+               && !busy.app.events.contains("quit") && busy.app.running
+               && (try? BundleInfo.read(busy.app.installed.path))?.version == "1.0.0",
+               "UH46 the built-in Hub check decides with no Mac setting (\(done?.status ?? "nil") / \(waited?.status ?? "nil"); events \(busy.app.events))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.

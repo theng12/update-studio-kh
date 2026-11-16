@@ -1214,6 +1214,22 @@ public enum Agent {
         }
     }
 
+    /// Idle checks that ship with the helper, so a Mac is armed without anyone editing its config.
+    /// Hub's is Hub's owner's own command, reviewed against fixture data from 0.6.235: it counts
+    /// queued *and* running items by their state, not the batch's flag, and fails closed — a missing,
+    /// unreadable or corrupt database, or an unknown table, exits non-zero. So a wrong guess about
+    /// its data folder makes that Mac wait, and never quits a working Hub.
+    /// It reads Hub's default data folder; on a Mac that moved it, the probe says "not idle".
+    public static let builtInIdleProbes: [String: String] = ["hub": #"test -r "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" && [ "$(sqlite3 -readonly "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" "select count(*) from batches, json_each(json_extract(batches.payload,'$.items')) i where (batches.finished=0 or batches.created_at > strftime('%s','now')-86400) and json_extract(i.value,'$.state') in ('queued','running','cancel_requested','cancelling','paused','uncertain','recovery_pending','draining','restart_requested')" 2>/dev/null)" = 0 ]"#]
+
+    /// Which idle check an app on this Mac gets, in the order the owner's rule asks for: the Mac's
+    /// own `idleProbe` wins, an explicit empty string turns the unattended quit off for that Mac, and
+    /// a missing one falls back to the built-in check for that app. Never a rule: rearrange it or
+    /// switch it off per Mac.
+    public static func idleProbe(app: String, cfg: AppConfig) -> String? {
+        cfg.idleProbe ?? builtInIdleProbes[app]
+    }
+
     /// The owner's rule before an old build is quit unattended: the app's own probe must answer that
     /// it has nothing running or queued. No probe, a non-zero answer, output that names a job or a
     /// probe that outlasts its own short ceiling all skip the quit. Returns why, or nil when it is safe.
@@ -1278,7 +1294,7 @@ public enum Agent {
             // quit (bounded by the quit's own ceiling, never killed), swapped, relaunched hidden —
             // but only when the app's own probe says it has nothing running or queued.
             if quitOldBuild, let refusal = hold.refusal, refusal.status == waitingForClose {
-                if let skipped = idleRefusal(app: app, probe: cfg.idleProbe, shell: shell) {
+                if let skipped = idleRefusal(app: app, probe: idleProbe(app: app, cfg: cfg), shell: shell) {
                     holdEndpoint = hold.endpoint
                     var out = refusal
                     out.reason = (out.reason.map { $0 + " " } ?? "") + skipped
