@@ -411,12 +411,58 @@ func updateHoldTests() {
         var memory = AgentMemory()
         let lines = [old, old].compactMap { $0.flatMap { Agent.refusalNote(app: "demo", version: "0.6.242", result: $0, memory: &memory) } }
         let oldReason = old?.reason ?? "", currentReason = current?.reason ?? ""
-        expect(old?.status == "refused" && oldReason.contains("0.6.235") && oldReason.contains("0.6.240")
+        expect(old?.status == Agent.waitingForClose && oldReason.contains("0.6.235") && oldReason.contains("0.6.240")
                && oldReason.contains("one normal install while demo is closed") && !oldReason.contains("credential")
                && lines.count == 1,
                "UH36 0.6.235 below holdSince 0.6.240 with a 401 takes the one-install path, logged once (\(oldReason); \(lines.count) lines)")
         expect(current?.status == "refused" && currentReason.contains("credential") && !currentReason.contains("predates"),
                "UH36 0.6.242 with a 401 is still a credential refusal (\(currentReason))")
+    }
+
+    // UH37 an owner's order for a running build with no hold waits: it stays pending, the page
+    // says why, and it installs on the first run that finds the app closed. One order is enough.
+    do {
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        func order(_ f: (rig: Rig, feed: Feed, entry: FeedApp, cfg: AgentConfig, client: HoldClient, app: FakeApp, state: URL, mount: URL),
+                   days: Int?) -> (AgentConfig, () -> [String: Any]?) {
+            f.client.postError = URLError(.cannotConnectToHost)
+            var cfg = f.cfg
+            cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+            cfg.waitForCloseDays = days
+            _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                       body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
+            return (cfg, { () -> [String: Any]? in
+                let r = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                           control: { _, _ in f.app.control }, appFolders: [])
+                return r.map { ["notes": $0.notes] }
+            })
+        }
+        let f = rig("hold-wait-order", hold: holdURL, recipe: "app-dmg", running: true)
+        let (_, run) = order(f, days: nil)
+        let machine = { (try? StateStore.load(from: f.rig.state))?.machines["mac1"] }
+        let notes1 = (run()?["notes"] as? [String] ?? []).filter { $0.contains("Waiting for demo to close") }
+        let pending1 = machine()?.pending.count
+        let notes2 = (run()?["notes"] as? [String] ?? []).filter { $0.contains("Waiting for demo to close") }
+        let page = String(decoding: f.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: owner), remote: "127.0.0.1").data, as: UTF8.self)
+        let shown = machine()?.waiting?["demo"] ?? ""
+        expect(notes1.count == 1 && notes2.isEmpty && pending1 == 1 && machine()?.pending.count == 1
+               && machine()?.lastResults?["demo"] == nil && shown.hasPrefix("Waiting for demo to close")
+               && page.contains("to close</span>") && page.contains(shown.prefix(40)),
+               "UH37 a waiting order stays pending, is logged once and the page says why (notes \(notes1.count)/\(notes2.count), pending \(pending1 ?? -1))")
+        f.app.running = false
+        _ = run()
+        let landed = machine()?.lastResults?["demo"]?.status ?? "none"
+        expect(machine()?.pending.isEmpty == true && landed != "refused" && landed != Agent.waitingForClose && f.client.calls.contains("artifact"),
+               "UH37 the same order installs once the app is closed (\(landed))")
+
+        // The wait has its own ceiling: past it the order is answered refused, terminal.
+        let g = rig("hold-wait-ceiling", hold: holdURL, recipe: "app-dmg", running: true)
+        let (_, runG) = order(g, days: 0)
+        _ = runG(); _ = runG()
+        let ended = (try? StateStore.load(from: g.rig.state))?.machines["mac1"]
+        expect(ended?.pending.isEmpty == true && ended?.lastResults?["demo"]?.status == "refused"
+               && (ended?.lastResults?["demo"]?.reason ?? "").contains("waited 0 days for demo to close"),
+               "UH37 past its ceiling the wait ends refused with the reason (\(ended?.lastResults?["demo"]?.reason ?? "nil"))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
@@ -463,7 +509,7 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
         let reason = result?.reason ?? ""
-        expect(result?.status == "refused" && reason.contains("no update-hold endpoint")
+        expect(result?.status == Agent.waitingForClose && reason.contains("no update-hold endpoint")
                && reason.contains("one normal install") && !f.client.calls.contains("artifact"),
                "UH19 an absent endpoint names the bootstrap install (\(reason))")
     }

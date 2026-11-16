@@ -37,6 +37,9 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     /// Fallback only: when this agent runs from `<stubBase>/versions/<v>/khu`, `<v>` is its version.
     public var updaterVersion: String?
     public var network: FeedNetwork?
+    /// How many days an owner's order waits for an app whose build predates its hold to close
+    /// before it is refused. nil = 14.
+    public var waitForCloseDays: Int?
     public init(feedURL: String, publicKey: String, stateDir: String, machine: String, token: String,
                 apps: [String: AppConfig] = [:], intervalMinutes: Int = 5, once: Bool = false) {
         self.feedURL = feedURL; self.publicKey = publicKey; self.stateDir = stateDir
@@ -59,7 +62,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network
+        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays
     }
     /// Optional fields really are optional: a hand-written config may leave them out.
     public init(from decoder: Decoder) throws {
@@ -75,6 +78,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         stubBase = try c.decodeIfPresent(String.self, forKey: .stubBase)
         updaterVersion = try c.decodeIfPresent(String.self, forKey: .updaterVersion)
         network = try c.decodeIfPresent(FeedNetwork.self, forKey: .network)
+        waitForCloseDays = try c.decodeIfPresent(Int.self, forKey: .waitForCloseDays)
     }
 }
 
@@ -104,6 +108,8 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var automaticSet: [String: AutomaticChange]?
     /// Automatic is paused from the Mac's menu until then (reported by the agent).
     public var pausedUntil: String?
+    /// app → why an update is waiting for that app to close (reported by the agent).
+    public var waiting: [String: String]?
     /// The capabilities the agent advertised on its most recent /commands fetch. Used by the
     /// status page to warn when a pending rollback order cannot be delivered to an older agent.
     public var capabilities: [String]?
@@ -146,7 +152,7 @@ public struct MachineState: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case machine, displayName, reportedName, tokenHash, installed, installedBuild, installedExecutableSha256, health, lastSeen, pending, lastResult, lastResults,
              automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
-             automaticSet, pausedUntil, inventory, site, tags, vendorAssignments
+             automaticSet, pausedUntil, inventory, site, tags, vendorAssignments, waiting
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -175,6 +181,7 @@ public struct MachineState: Codable, Sendable, Equatable {
         site = try c.decodeIfPresent(String.self, forKey: .site)
         tags = try c.decodeIfPresent([String].self, forKey: .tags)
         vendorAssignments = try c.decodeIfPresent([String: Bool].self, forKey: .vendorAssignments)
+        waiting = try c.decodeIfPresent([String: String].self, forKey: .waiting)
     }
 
     /// The setting the agent will actually follow.

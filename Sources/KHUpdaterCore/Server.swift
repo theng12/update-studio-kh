@@ -636,6 +636,10 @@ public final class FeedServer: @unchecked Sendable {
                 return Self.text(400, "send a valid Mac name (at most \(MacName.maxCharacters) characters)")
             }
             let pausedUntil = (body["paused_until"] as? String).flatMap(ISO.date).map(ISO.string)
+            // Bounded like every other report field; an oversized map is dropped, not stored.
+            let waiting = (body["waiting"] as? [String: String]).flatMap { w in
+                w.count <= ReportPolicy.maxApps && w.allSatisfy { $0.key.utf8.count <= 64 && $0.value.utf8.count <= ReportPolicy.maxReasonCharacters } ? w : nil
+            }
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
                 // Counted only for the Mac the token proves: a limit keyed on a machine id the
@@ -657,6 +661,7 @@ public final class FeedServer: @unchecked Sendable {
                     ms.automaticSet = (ms.automaticSet ?? [:]).merging([app: AutomaticChange(at: ISO.string(at), byMac: true)]) { _, new in new }
                 }
                 ms.pausedUntil = pausedUntil
+                ms.waiting = waiting
                 ms.lastSeen = ISO.string(Date())
                 state.machines[machine] = ms
                 return Self.ok
@@ -1026,7 +1031,8 @@ public final class FeedServer: @unchecked Sendable {
                 let same = installed.flatMap { i in feedApp.map { VersionCompare.compare(i, $0.version) == 0 } } ?? false
                 let st: (String, String)
                 if let order {
-                    st = order.action == ServerCommand.rollback ? (agentTooOld ? "Rollback requested (agent too old for rollback)" : "Rollback requested", "info") : ("Update requested", "info")
+                    st = order.action == ServerCommand.rollback ? (agentTooOld ? "Rollback requested (agent too old for rollback)" : "Rollback requested", "info")
+                        : ms.waiting?[app] != nil ? ("Waiting for \(name(app)) to close", "info") : ("Update requested", "info")
                     anyUpdating = true
                 } else if failed { st = ("Failed", "bad"); anyFailed = true }
                 else if !online { st = ("Not checked · no report for 10 min", "unknown") }
@@ -1053,8 +1059,9 @@ public final class FeedServer: @unchecked Sendable {
                     actions += form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Turn Automatic off" : "Turn Automatic on", "small")
                 }
                 let health = ms.health[app].flatMap { $0 == "running" ? nil : " <span class=warntext>\(h($0))</span>" } ?? ""
+                let waitLine = ms.waiting?[app].map { "<div class=sub>\(h($0))</div>" } ?? ""
                 rows += "<tr><td class=name>\(h(name(app)))</td><td class=num>\(h(installed ?? "—"))\(health)</td><td class=num>\(h(feedApp?.version ?? "—"))</td>"
-                    + "<td><span class=\"chip \(st.1)\">\(h(st.0))</span>\(auto && !ownUpdater && feedApp != nil ? " <span class=\"tag on\">Automatic: on</span>" : "")\(ms.automaticSet?[app]?.byMac == true && !ownUpdater ? " <span class=sub>changed on this Mac</span>" : "")</td><td class=actions>\(actions)</td></tr>"
+                    + "<td><span class=\"chip \(st.1)\">\(h(st.0))</span>\(auto && !ownUpdater && feedApp != nil ? " <span class=\"tag on\">Automatic: on</span>" : "")\(ms.automaticSet?[app]?.byMac == true && !ownUpdater ? " <span class=sub>changed on this Mac</span>" : "")\(waitLine)</td><td class=actions>\(actions)</td></tr>"
                 if failed, let result {
                     if failSummary.isEmpty { failSummary = "\(name(app)): \(words(result.status).lowercased())" }
                     let entry = ms.history?.first { $0.app == app && $0.at == result.at }

@@ -322,6 +322,10 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     /// app → "version|status|reason" of the last refused or failed attempt already written to the
     /// local log, so a refusal repeated every cycle is said once, not every 5 minutes.
     public var refusalsSaid: [String: String]?
+    /// app → since when an update has waited for the app to close (its build predates the hold),
+    /// and why. Reported on each status, so the page says the Mac is waiting, not failing.
+    public struct Waiting: Codable, Sendable, Equatable { public var since: String; public var reason: String }
+    public var waiting: [String: Waiting]?
     public init() {}
 
     /// `protected` is what the publisher still lists as an order for this Mac. Those id keep their
@@ -479,8 +483,11 @@ public enum Agent {
     /// A refused or failed attempt names its reason in this Mac's own log, not only in the
     /// publisher's record: once per app, version and reason. A success clears it, so the next
     /// refusal is said again.
+    /// The hold step's answer for a running build that predates its hold: not a refusal, a wait.
+    public static let waitingForClose = "waiting_for_close"
+
     static func refusalNote(app: String, version: String?, result: RecipeResult, memory: inout AgentMemory) -> String? {
-        let refusals: Set<String> = ["refused", "failed", "install_failed", "download_failed", "download_mismatch",
+        let refusals: Set<String> = [waitingForClose, "refused", "failed", "install_failed", "download_failed", "download_mismatch",
                                      "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"]
         guard refusals.contains(result.status) else { memory.refusalsSaid?[app] = nil; return nil }
         let shown = version ?? "the feed's version"
@@ -636,6 +643,7 @@ public enum Agent {
         if !installedExecutableSha256.isEmpty { report["installed_executable_sha256"] = installedExecutableSha256 }
         if let name = MacName.current(expectedMachine: config.machine) { report["display_name"] = name }
         if let until = helper.pausedUntil, helper.paused(at: now) { report["paused_until"] = until }
+        if let waiting = memory.waiting, !waiting.isEmpty { report["waiting"] = waiting.mapValues { $0.reason } }
         // A read-only snapshot of this Mac's own hardware, addresses and installed apps, bounded
         // like every other report. Fields that could not be read stay absent; the machine's name
         // is never used as hardware, and the installed managed-app maps above are untouched.
@@ -841,6 +849,8 @@ public enum Agent {
         try remember()
 
         // 6. One install at a time; a failure is reported and the next app still runs.
+        // An app no longer asked for is no longer waiting.
+        memory.waiting = memory.waiting?.filter { w in todo.contains { $0.app == w.key } }
         for item in todo {
             var res: RecipeResult
             // An order to update is the owner asking for that artifact again, so what failed here
@@ -896,6 +906,26 @@ public enum Agent {
             } catch {
                 res = RecipeResult(status: "install_failed", reason: "\(error)")
             }
+            // A build that predates its hold installs the first time the app is closed: the order
+            // stays pending and is tried again each run, up to its own ceiling (then it is refused,
+            // terminal). The person at this Mac can close the app now, so their request is answered.
+            if res.status == Agent.waitingForClose {
+                let days = config.waitForCloseDays ?? 14
+                let since = memory.waiting?[item.app]?.since ?? ISO.string(now)
+                if item.manual {
+                    res.status = "refused"
+                } else if item.explicit, let start = ISO.date(since), now.timeIntervalSince(start) > Double(days) * 86_400 {
+                    res = RecipeResult(status: "refused", reason: "\(res.reason ?? "") It waited \(days) days for \(item.app) to close; send the order again to keep waiting.")
+                } else {
+                    memory.waiting = (memory.waiting ?? [:]).merging([item.app: .init(since: since, reason: res.reason ?? "")]) { _, new in new }
+                    if let note = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory) {
+                        result.notes.append(note)
+                    }
+                    try remember()
+                    continue
+                }
+            }
+            memory.waiting?[item.app] = nil
             if res.status == "download_mismatch", let sha = feed.apps[item.app]?.sha256 {
                 let previous = memory.deliveryMismatches?[item.app]
                 let count = (previous?.sha256 == sha ? previous!.count : 0) + 1
@@ -1157,8 +1187,8 @@ public enum Agent {
                 // 401/403 (or a 404) is "needs one install while closed", not a credential refusal.
                 if [401, 403, 404].contains(refused.status), let installed, let since = holdSince,
                    VersionCompare.isNewer(since, than: installed) {
-                    return (endpoint, nil, RecipeResult(status: "refused",
-                        reason: "\(app) \(installed) predates its update hold (first in \(since)), so it answered \(refused.status); it needs one normal install while \(app) is closed. Nothing was changed."))
+                    return (endpoint, nil, RecipeResult(status: waitingForClose,
+                        reason: "Waiting for \(app) to close: \(app) \(installed) predates its update hold (first in \(since)), so it answered \(refused.status); it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed."))
                 }
                 let reason: String
                 switch refused.status {
@@ -1172,8 +1202,8 @@ public enum Agent {
                 return (endpoint, nil, RecipeResult(status: "refused", reason: reason))
             }
             if UpdateHold.endpointAbsent(error) {
-                return (endpoint, nil, RecipeResult(status: "refused",
-                    reason: "\(app) is running and its installed build has no update-hold endpoint; it needs one normal install while \(app) is closed. Nothing was changed."))
+                return (endpoint, nil, RecipeResult(status: waitingForClose,
+                    reason: "Waiting for \(app) to close: its installed build has no update-hold endpoint, so it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed."))
             }
             return (endpoint, nil, RecipeResult(status: "refused", reason: "\(error)"))
         }

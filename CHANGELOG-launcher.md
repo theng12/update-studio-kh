@@ -10,6 +10,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> â€
 - When an app refuses or fails an automatic update, this Mac's own log now says which app, which version and why. Each reason is logged once, not every 5 minutes, and is logged again after the next successful update.
 - The What's New dialog on the publisher page is bigger and shows more detail, the same as in the Update Studio KH window.
 - An app build older than its update hold (for example Hub 0.6.235, where the hold first shipped in 0.6.240) is no longer reported as "refused the update hold (credential)". It now says it needs one normal install while the app is closed, naming both versions. The feed records the first version of each app's hold (`holdSince`); `khu publish --hold-since <version>` sets it for an app published before this field existed.
+- An update for an app whose build has no update hold yet no longer fails once and is dropped. The owner's order stays pending and installs on the first run that finds the app closed, with nobody needed at the Mac. The Mac's row on the publisher page says "Waiting for <app> to close" and why. An order waits up to 14 days (`waitForCloseDays` in the agent config); after that it is refused with the reason, so the wait always ends.
 
 ## 0.1.43 â€” 2026-11-16
 
