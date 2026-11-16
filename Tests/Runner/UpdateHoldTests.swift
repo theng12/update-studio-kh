@@ -586,27 +586,27 @@ func updateHoldTests() {
                "UH41 a build that will not quit is refused and left as it was, and the log says the ceiling was reached (\(result?.quitTrace ?? []); events \(f.app.events))")
     }
 
-    // UH42 the safety rule: with no idle check configured nothing is ever quit unattended. The
-    // order stays waiting for the app to close and says why, in one line.
+    // UH42 the off switch: `quitOldBuilds: false` means this Mac's orders never quit an app, and
+    // the order keeps waiting for it to close. That is the only thing that stops the force path.
     do {
-        let f = rig("legacy-quit-no-probe", hold: holdURL, recipe: "app-dmg", running: true)
+        let f = rig("legacy-quit-switched-off", hold: holdURL, recipe: "app-dmg", running: true)
         f.client.postError = URLError(.cannotConnectToHost)
-        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+        var cfg = f.cfg
+        cfg.quitOldBuilds = false
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: cfg,
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
-                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+                                        control: { _, _ in f.app.control }, quitOldBuild: false)
         expect(result?.status == Agent.waitingForClose && result?.quitWithoutHold == false
-               && (result?.reason ?? "").contains("no idle check configured")
-               && (result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") }
                && !f.app.events.contains("quit") && !f.app.events.contains("launch")
                && !f.client.calls.contains("artifact") && f.app.running,
-               "UH42 no idle check means no quit, ever (\(result?.status ?? "nil") \(result?.reason ?? "nil"))")
+               "UH42 quitOldBuilds: false means no quit and the order keeps waiting (\(result?.status ?? "nil"))")
     }
 
-    // UH43 an idle check that refuses, or one that never answers, skips the quit too and names what
-    // it saw. The app keeps running, nothing is downloaded, the order keeps waiting.
+    // UH43 the check is logged, not obeyed: a pre-hold build whose check refuses (or never answers)
+    // is still quit and updated, and the log carries what the check said.
     do {
-        let f = rig("legacy-quit-busy-probe", hold: holdURL, recipe: "app-dmg", running: true)
+        let f = rig("legacy-force-busy-probe", hold: holdURL, recipe: "app-dmg", running: true)
         f.client.postError = URLError(.cannotConnectToHost)
         var busy = f.cfg
         busy.apps["demo"]?.idleProbe = "echo '2 jobs queued'; exit 3"
@@ -615,11 +615,12 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
         let silent = Agent.idleRefusal(app: "demo", probe: "sleep 5", shell: RecordingShell(mount: f.mount), timeout: 1).said
-        expect(result?.status == Agent.waitingForClose
-               && (result?.reason ?? "").contains("idle check exited 3 (2 jobs queued)")
-               && !f.app.events.contains("quit") && f.app.running
+        expect(result?.status == "updated" && result?.quitWithoutHold == true
+               && (result?.quitTrace ?? []).contains { $0.contains("exited 3 (2 jobs queued)") }
+               && (result?.reason ?? "").contains("temporary force path")
+               && f.app.events.contains("quit")
                && silent.contains("did not answer within 1 s"),
-               "UH43 a refusing or silent idle check skips the quit and says what it saw (\(result?.reason ?? "nil"); \(silent))")
+               "UH43 a refusing check is logged but does not stop a pre-hold build (\(result?.status ?? "nil"); \(silent))")
     }
 
     // UH44 Hub's idle command is a shell string with quotes and `$HOME` in it: it must survive a
@@ -677,11 +678,10 @@ func updateHoldTests() {
                                         control: { _, _ in busy.app.control }, quitOldBuild: true)
         expect(done?.status == "updated" && done?.quitWithoutHold == true && idle.app.events.contains("quit")
                && (try? BundleInfo.read(idle.app.installed.path))?.version == "2.0.0"
-               && waited?.status == Agent.waitingForClose
-               && (waited?.reason ?? "").contains("idle check exited 3 (7 items queued)")
-               && !busy.app.events.contains("quit") && busy.app.running
-               && (try? BundleInfo.read(busy.app.installed.path))?.version == "1.0.0",
-               "UH46 the built-in Hub check decides with no Mac setting (\(done?.status ?? "nil") / \(waited?.status ?? "nil"); events \(busy.app.events))")
+               && waited?.status == "updated" && busy.app.events.contains("quit")
+               && (waited?.quitTrace ?? []).contains { $0.contains("idle check exited 3 (7 items queued)") }
+               && (try? BundleInfo.read(busy.app.installed.path))?.version == "2.0.0",
+               "UH46 Hub's built-in check runs with no Mac setting and is recorded, force path or not (\(done?.status ?? "nil") / \(waited?.status ?? "nil"); events \(busy.app.events))")
     }
 
     // UH47 a launch agent's environment is not an interactive shell's: the check is run with the
@@ -716,6 +716,24 @@ func updateHoldTests() {
                && (foreign.skip ?? "").lowercased().contains("not a database")
                && !(missing.skip ?? "").contains("(no output)") && !(foreign.skip ?? "").contains("(no output)"),
                "UH48 a refusing Hub check says why (\(missing.said) | \(foreign.said))")
+    }
+
+    // UH49 a pre-hold build with no idle check at all is still quit and updated — the force path is
+    // the owner's order — and the log says plainly that no check existed and the path bypassed it.
+    do {
+        let f = rig("force-no-probe", hold: holdURL, recipe: "app-dmg", running: true, id: "hub")
+        f.client.postError = URLError(.cannotConnectToHost)
+        let result = try? Agent.install(app: "hub", feed: f.feed, installed: "0.6.235", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        expect(result?.status == "updated" && result?.quitWithoutHold == true
+               && f.app.events.contains("quit") && f.app.events.contains("launch")
+               && (result?.reason ?? "").contains("0.6.235") && (result?.reason ?? "").contains("2.0.0")
+               && (result?.reason ?? "").contains("temporary force path")
+               && (result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") }
+               && (try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
+               "UH49 a pre-hold build is force-quit with no idle check at all, and the log says so (\(result?.reason ?? "nil"))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.

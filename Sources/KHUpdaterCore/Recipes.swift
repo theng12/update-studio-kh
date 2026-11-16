@@ -11,6 +11,9 @@ public struct RecipeResult: Sendable, Equatable {
     public var version: String?
     /// True when the app was asked to quit without an update hold because its build predates one.
     public var quitWithoutHold = false
+    /// True when the installed build predates its app's update hold: it has no hold route, or it
+    /// answered 401/403/404 and the feed's `holdSince` is newer than what is installed.
+    public var predatesHold = false
     /// The unattended quit's own log lines: what the idle check answered, whether the app exited and
     /// how long it took, whether its services started, and whether it came back. Kept as separate
     /// lines so a Mac that stalls or half-restarts says which of the four failed.

@@ -7,6 +7,8 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 0.1.46 — 2026-11-16
 
+- An app whose build predates its update hold is now updated the way it was before holds existed: the Launcher quits it, swaps it and reopens it, so a Mac with an old build can be updated with nobody sitting at it. This is the owner's temporary order for this release, and it is removed once the fleet is past the hold: the app's idle check is now recorded rather than obeyed. A quit that the app does not complete within its own time limit fails that attempt with the reason, and nothing is replaced — an app is never killed.
+
 - Hub's idle check now says why it refused, in the words the operator needs: "no database at …", "file is not a database", "database is locked" or "unable to open database file", instead of a bare "exited 1 (no output)" that made a missing database, a missing `sqlite3`, a moved data folder and a genuinely busy Hub all look the same. The check itself is unchanged, and it still fails closed.
 - The check runs with the user's real home folder and a fixed `PATH` exported into it, and calls `/usr/bin/sqlite3` directly, so a launch agent's bare environment cannot change what it finds.
 

@@ -1193,8 +1193,10 @@ public enum Agent {
                 // 401/403 (or a 404) is "needs one install while closed", not a credential refusal.
                 if [401, 403, 404].contains(refused.status), let installed, let since = holdSince,
                    VersionCompare.isNewer(since, than: installed) {
-                    return (endpoint, nil, RecipeResult(status: waitingForClose,
-                        reason: "Waiting for \(app) to close: \(app) \(installed) predates its update hold (first in \(since)), so it answered \(refused.status); it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed."))
+                    var out = RecipeResult(status: waitingForClose,
+                        reason: "Waiting for \(app) to close: \(app) \(installed) predates its update hold (first in \(since)), so it answered \(refused.status); it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed.")
+                    out.predatesHold = true
+                    return (endpoint, nil, out)
                 }
                 let reason: String
                 switch refused.status {
@@ -1208,8 +1210,10 @@ public enum Agent {
                 return (endpoint, nil, RecipeResult(status: "refused", reason: reason))
             }
             if UpdateHold.endpointAbsent(error) {
-                return (endpoint, nil, RecipeResult(status: waitingForClose,
-                    reason: "Waiting for \(app) to close: its installed build has no update-hold endpoint, so it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed."))
+                var out = RecipeResult(status: waitingForClose,
+                    reason: "Waiting for \(app) to close: its installed build has no update-hold endpoint, so it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed.")
+                out.predatesHold = true
+                return (endpoint, nil, out)
             }
             return (endpoint, nil, RecipeResult(status: "refused", reason: "\(error)"))
         }
@@ -1378,6 +1382,19 @@ public enum Agent {
             if quitOldBuild, let refusal = hold.refusal, refusal.status == waitingForClose {
                 let answer = idleRefusal(app: app, probe: idleProbe(app: app, cfg: cfg), shell: shell)
                 probeSaid = answer.said
+                // The owner, 2026-11-16: "can we use the old force update first to add this guard.
+                // then next release we remove? like the old updater used to work?" A build that
+                // predates its hold is quit the way updates worked before holds existed: the idle
+                // check is logged, not obeyed. Hub's owner established a quit loses no work —
+                // queued items are written through to its database and reloaded, a running item is
+                // requeued. TEMPORARY: remove this force path once the fleet is past the hold.
+                if refusal.predatesHold {
+                    legacyQuit = true
+                    let feedVersion = feed.apps[app]?.version ?? "the feed's version"
+                    holdNote = "\(app) \(installed ?? "") predates its update hold (\(feed.apps[app]?.holdSince ?? "first hold version unknown")); "
+                        + "asked to quit without waiting for an idle check, the way updates worked before holds existed, to install \(feedVersion) (temporary force path)."
+                    return nil
+                }
                 if let skipped = answer.skip {
                     holdEndpoint = hold.endpoint
                     var out = refusal
