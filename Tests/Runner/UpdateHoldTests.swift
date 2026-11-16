@@ -727,13 +727,19 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
-        expect(result?.status == "updated" && result?.quitWithoutHold == true
-               && f.app.events.contains("quit") && f.app.events.contains("launch")
-               && (result?.reason ?? "").contains("0.6.235") && (result?.reason ?? "").contains("2.0.0")
-               && (result?.reason ?? "").contains("temporary force path")
-               && (result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") }
-               && (try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
-               "UH49 a pre-hold build is force-quit with no idle check at all, and the log says so (\(result?.status ?? "nil"); trace \(result?.quitTrace ?? []))")
+        // One expect per condition: the runner prints only the description of a red line, so an ANDed
+        // assertion hides which part failed. Keep every condition, and let each name itself.
+        expect(result?.status == "updated", "UH49a a pre-hold build is updated (\(result?.status ?? "nil") \(result?.reason ?? "nil"))")
+        expect(result?.quitWithoutHold == true, "UH49b the result says the quit went without an update hold")
+        expect(f.app.events.contains("quit"), "UH49c the app was asked to quit (events \(f.app.events))")
+        expect(f.app.events.contains("launch"), "UH49d the app was put back running (events \(f.app.events))")
+        expect((result?.reason ?? "").contains("0.6.235") && (result?.reason ?? "").contains("2.0.0")
+               && (result?.reason ?? "").contains("temporary force path"),
+               "UH49e the reason names the installed version, the target and the force path (\(result?.reason ?? "nil"))")
+        expect((result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") },
+               "UH49f with no check configured the trace says exactly that (trace \(result?.quitTrace ?? []))")
+        expect((try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
+               "UH49g the installed bundle is the new version (\((try? BundleInfo.read(f.app.installed.path))?.version ?? "nil"))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.

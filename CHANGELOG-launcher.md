@@ -5,6 +5,10 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.47 — 2026-11-17
+
+- No change in what the helper does: this release carries the same behaviour as 0.1.46, with the checks behind the unattended quit split so that a failing one names itself instead of hiding behind a single combined line.
+
 ## 0.1.46 — 2026-11-16
 
 - An app whose build predates its update hold is now updated the way it was before holds existed: the Launcher quits it, swaps it and reopens it, so a Mac with an old build can be updated with nobody sitting at it. This is the owner's temporary order for this release, and it is removed once the fleet is past the hold: the app's idle check is now recorded rather than obeyed. A quit that the app does not complete within its own time limit fails that attempt with the reason, and nothing is replaced — an app is never killed.
