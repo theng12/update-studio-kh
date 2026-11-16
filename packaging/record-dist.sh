@@ -33,12 +33,15 @@ case "$MODE" in
     if [ ! -f "$DIST/$APP-$VERSION.dmg" ]; then
       echo "dist has no $APP-$VERSION.dmg; run the copy step first" >&2; exit 2
     fi
-    TRASH_DIR="$ROOT/_trash/$(date +%Y-%m-%d) dist"
+    # The repo _trash may be the owner's unified Desktop trash behind a link. Resolve it once, on
+    # purpose, so the ledger names a real path and the move never runs through a symlink.
+    REAL_TRASH=$(/usr/bin/python3 -I -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$ROOT/_trash")
+    TRASH_DIR="$REAL_TRASH/$(date +%Y-%m-%d) dist"
 mkdir -p "$TRASH_DIR"
     PIN=$(mktemp -t khu-dist-pins)
-    /usr/bin/python3 -I - "$DIST" "$APP" "$VERSION" "$ROOT" "$PIN" <<'PY'
+    /usr/bin/python3 -I - "$DIST" "$APP" "$VERSION" "$ROOT" "$PIN" "$REAL_TRASH" <<'PY'
 import hashlib, json, os, re, sys
-dist, app, version, root, out = sys.argv[1:6]
+dist, app, version, root, out, real_trash = sys.argv[1:7]
 def parts(v):
     return tuple(int(x) for x in v.split("."))
 def fact(path):
@@ -71,7 +74,7 @@ if present:
     releases.append({"version": v, "source": path, "sha256": sha2, "bytes": size2,
                      "evidence": record.get("provenance") or "retained from the previous release"})
 pin = {"schema": 1, "apps": [{"app": app, "project": root,
-                              "retirement_trash": os.path.join(root, "_trash", __import__("datetime").date.today().isoformat() + " dist"),
+                              "retirement_trash": real_trash,
                               "releases": releases}]}
 json.dump(pin, open(out, "w"), indent=2)
 PY
