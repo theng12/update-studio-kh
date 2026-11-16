@@ -319,6 +319,9 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     public var feedPublishedAt: String?
     public var feedSHA256: String?
     public var feedNetwork: FeedNetwork?
+    /// app → "version|status|reason" of the last refused or failed attempt already written to the
+    /// local log, so a refusal repeated every cycle is said once, not every 5 minutes.
+    public var refusalsSaid: [String: String]?
     public init() {}
 
     /// `protected` is what the publisher still lists as an order for this Mac. Those id keep their
@@ -471,6 +474,20 @@ public enum Agent {
             catch { notes.append("\(app): saved Launcher registration was skipped: \(error)") }
         }
         return (merged, notes)
+    }
+
+    /// A refused or failed attempt names its reason in this Mac's own log, not only in the
+    /// publisher's record: once per app, version and reason. A success clears it, so the next
+    /// refusal is said again.
+    static func refusalNote(app: String, version: String?, result: RecipeResult, memory: inout AgentMemory) -> String? {
+        let refusals: Set<String> = ["refused", "failed", "install_failed", "download_failed", "download_mismatch",
+                                     "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"]
+        guard refusals.contains(result.status) else { memory.refusalsSaid?[app] = nil; return nil }
+        let shown = version ?? "the feed's version"
+        let said = "\(shown)|\(result.status)|\(result.reason ?? "")"
+        guard memory.refusalsSaid?[app] != said else { return nil }
+        memory.refusalsSaid = (memory.refusalsSaid ?? [:]).merging([app: said]) { _, new in new }
+        return "\(app) \(shown): \(result.status) — \(result.reason ?? "no reason was given")"
     }
 
     static func liveControl(_ cfg: AppConfig, shell: Shell) -> AppControl {
@@ -907,6 +924,9 @@ public enum Agent {
                ["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status),
                let sha = feed.apps[item.app]?.sha256 {
                 memory.rejected[item.app] = sha
+            }
+            if let note = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory) {
+                result.notes.append(note)
             }
             let done = AgentMemory.Done(app: item.app, status: res.status, reason: res.reason ?? "", at: ISO.string(Date()), sent: false)
             memory.done[item.id] = done

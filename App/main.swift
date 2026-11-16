@@ -15,6 +15,10 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
     var tunnel: Process?
     var tunnelInput: Pipe?
     var retryTimer: Timer?
+    /// Seconds before the next automatic try: 30 s, doubling to at most 10 minutes; reset on success.
+    var retryDelay: TimeInterval = 30
+    /// The fleet the window shows, named in the title bar so it is never mistaken for a local copy.
+    var fleetHost: String?
     let localPort: UInt16 = 8790
     /// `--snapshot <dir>`: render the window off screen to PNGs and exit; never shown, never activated.
     let snapshotDir: String? = CommandLine.arguments.firstIndex(of: "--snapshot").flatMap {
@@ -105,6 +109,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
         let old = tunnel; tunnel = nil; tunnelInput = nil; old?.terminate()
         let target: Publisher
         do { target = try publisher() } catch { return offline("The publisher's address is unknown", error.localizedDescription) }
+        window.subtitle = "Connecting · nothing shown is live yet"
         showStatus(title: "Connecting to the publisher", detail: "Reaching \(target.feedHost) through \(target.ssh)…", retry: false)
         let port = localPort
         DispatchQueue.global(qos: .userInitiated).async {
@@ -141,6 +146,9 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
                 if Self.portAnswers(port) {
                     return DispatchQueue.main.async {
                         guard self.tunnel === process else { return }
+                        self.retryDelay = 30
+                        self.fleetHost = target.feedHost
+                        self.window.subtitle = "Live fleet on \(target.feedHost) · actions here change those Macs"
                         // The page shows its own version (footer pill), so the running app names it.
                         var page = URLComponents(string: "http://127.0.0.1:\(port)/")!
                         page.queryItems = [URLQueryItem(name: "app", value: self.version)]
@@ -156,9 +164,12 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
     }
 
     func offline(_ title: String, _ detail: String) {
-        showStatus(title: title, detail: detail + " Trying again every 30 seconds.", retry: true)
+        let wait = retryDelay
+        retryDelay = min(retryDelay * 2, 600)
+        window.subtitle = "Not connected · nothing shown is live"
+        showStatus(title: title, detail: detail + " Trying again in \(wait >= 60 ? "\(Int(wait / 60)) minute\(wait >= 120 ? "s" : "")" : "\(Int(wait)) seconds").", retry: true)
         retryTimer?.invalidate()
-        retryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in self?.connect() }
+        retryTimer = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in self?.connect() }
         snapshotIfAsked()
     }
 
@@ -250,6 +261,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
         snapshotTaken = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             let name = self.web.url?.scheme == "about" ? "status" : "publisher"
+            print("window: \(self.window.title) — \(self.window.subtitle)")
             self.snap("\(dir)/\(name).png") {
                 self.web.evaluateJavaScript("var d=document.getElementById('whats-new');if(d&&!d.open)d.showModal();!!d") { _, _ in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
@@ -276,6 +288,7 @@ final class Delegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKScriptMes
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
         let alert = NSAlert()
         alert.messageText = message
+        alert.informativeText = "This acts on the live fleet on \(fleetHost ?? "the publisher"), not on a copy."
         // The button says what the page is asking for.
         alert.addButton(withTitle: ["Remove", "Update", "Roll back", "New code"].first { message.hasPrefix($0) } ?? "OK")
         alert.addButton(withTitle: "Cancel")

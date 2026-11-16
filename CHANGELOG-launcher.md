@@ -5,6 +5,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.44 — 2026-11-16
+
+- When an app refuses or fails an automatic update, this Mac's own log now says which app, which version and why. Each reason is logged once, not every 5 minutes, and is logged again after the next successful update.
+- The What's New dialog on the publisher page is bigger and shows more detail, the same as in the Update Studio KH window.
+
 ## 0.1.43 — 2026-11-16
 
 - Gateway's real hold route, `/admin/api/maintenance/drain`, is now a trusted endpoint: the exact path only, on loopback with an explicit port. Any other `/admin/…` path, a longer path, a query string or a fragment is rejected, both when the feed is validated and when the hold is taken.

@@ -388,6 +388,17 @@ func updateHoldTests() {
         let reason = result?.reason ?? ""
         expect(result?.status == "refused" && reason.contains("credential") && !reason.contains("no update-hold endpoint"),
                "UH21 a 401 names the credential, not a missing endpoint (\(reason))")
+        // UH34 that refusal reaches this Mac's own log once per app, version and reason.
+        var memory = AgentMemory()
+        let refused = result ?? RecipeResult(status: "missing")
+        let first = Agent.refusalNote(app: "demo", version: "1.1.0", result: refused, memory: &memory)
+        let again = Agent.refusalNote(app: "demo", version: "1.1.0", result: refused, memory: &memory)
+        let newer = Agent.refusalNote(app: "demo", version: "1.2.0", result: refused, memory: &memory)
+        _ = Agent.refusalNote(app: "demo", version: "1.2.0", result: RecipeResult(status: "updated"), memory: &memory)
+        let afterSuccess = Agent.refusalNote(app: "demo", version: "1.2.0", result: refused, memory: &memory)
+        expect(first?.hasPrefix("demo 1.1.0: refused — ") == true && first?.contains("credential") == true
+               && again == nil && newer != nil && afterSuccess != nil,
+               "UH34 a refused attempt is logged locally once per version and reason, and again after a success (\(first ?? "nil"))")
     }
     do {
         let f = rig("hold-404", hold: holdURL, recipe: "app-dmg", running: true)
