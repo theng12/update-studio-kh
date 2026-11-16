@@ -54,6 +54,7 @@ private final class ProofLog: @unchecked Sendable {
 /// HOLD_WORK_ONLY=1: the real caller against a real feed server and a stand-in app that is really
 /// dispatching work, with queued work behind it. No window, no app, temp data only.
 func updateHoldWorkTests() {
+    setenv("KHU_HOLD_TOKEN_FILE", tmpDir("hold-token-live").appendingPathComponent("hold-token").path, 1)
     let rig = Rig("hold-work")
     let installed = makeApp(rig.root.appendingPathComponent("Demo.app"), version: "1.0.0", id: "com.example.demo")
     let queue = WorkQueue()
@@ -164,7 +165,7 @@ func updateHoldWorkTests() {
     let nativeRow = (try? StateStore.load(from: rig.state))?.machines["mac1"]?.lastResults?["native"]
     let nativeDownload = stateDir.appendingPathComponent("downloads/native")
     expect(nativeResult?.updates == 0 && nativeRow?.status == "refused"
-           && (nativeRow?.reason ?? "").contains("does not offer an update hold"),
+           && (nativeRow?.reason ?? "").contains("does not name an update-hold endpoint"),
            "HW6 a running app with no endpoint is refused (\(nativeRow?.status ?? "nil"))")
     expect(!fm.fileExists(atPath: nativeDownload.path) && nativeApp.events.isEmpty,
            "HW6 nothing was downloaded and the app was never quit (\(nativeApp.events))")

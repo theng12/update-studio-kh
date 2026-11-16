@@ -1114,7 +1114,7 @@ public enum Agent {
                                 exempt: Bool) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
         guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }
         guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
-            return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. Update it by hand."))
+            return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. Update it by hand."))
         }
         let window = Date().addingTimeInterval(UpdateHold.ceiling)
         do {
@@ -1131,6 +1131,18 @@ public enum Agent {
         } catch {
             // The feed names an endpoint the installed build does not serve: a first hold-capable
             // release needs one normal install while the app is closed. Say that, not a bare -1004.
+            if let refused = error as? UpdateHold.Refused {
+                let reason: String
+                switch refused.status {
+                case 401, 403:
+                    reason = "\(app) refused the update hold (credential); nothing was changed. The app must publish a hold credential this Mac can present."
+                case 404:
+                    reason = "\(app) does not serve an update hold at the feed's address; nothing was changed. The feed's holdURL does not match this build."
+                default:
+                    reason = "\(app)'s update hold answered \(refused.status); nothing was changed."
+                }
+                return (endpoint, nil, RecipeResult(status: "refused", reason: reason))
+            }
             if UpdateHold.endpointAbsent(error) {
                 return (endpoint, nil, RecipeResult(status: "refused",
                     reason: "\(app) is running and its installed build has no update-hold endpoint; it needs one normal install while \(app) is closed. Nothing was changed."))

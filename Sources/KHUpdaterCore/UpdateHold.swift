@@ -32,6 +32,41 @@ public enum UpdateHold {
         return url
     }
 
+    /// The Launcher's own hold credential, 0600, created on first use. Apps that gate their hold
+    /// route read this same file; the Launcher never reads an app's own credential files.
+    public static var tokenFile: URL {
+        if let override = ProcessInfo.processInfo.environment["KHU_HOLD_TOKEN_FILE"] {
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/KHUpdater/state/hold-token")
+    }
+
+    public static func localToken() -> String? {
+        let url = tokenFile
+        if let data = try? Data(contentsOf: url),
+           let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty {
+            return text
+        }
+        let token = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+        let fm = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o700])
+        guard (try? Data(token.utf8).write(to: url, options: .atomic)) != nil else { return nil }
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return token
+    }
+
+    static func credentialHeaders() -> [String: String] {
+        guard let token = localToken() else { return [:] }
+        return ["X-Hub-Token": token, "Authorization": "Bearer \(token)"]
+    }
+
+    /// The endpoint answered but refused the request: kept typed so the caller can say whether the
+    /// credential or the address is wrong, instead of a generic answer.
+    public struct Refused: Error, Equatable { public let status: Int }
+
     /// The contract's ceiling: no wait on an app may outlast one settle window.
     public static let ceiling: TimeInterval = 30
 
@@ -44,8 +79,8 @@ public enum UpdateHold {
         let timeout = max(0, min(30, timeoutS))
         let url = endpoint.appendingQuery("timeout_s", "\(timeout)").appendingQuery("pause_s", "\(max(1, pauseS))")
         let wait = max(1, min(ceiling, deadline?.timeIntervalSinceNow ?? ceiling))
-        let (data, code) = try http.post(url, headers: [:], body: Data(), timeout: wait)
-        guard code == 200 else { throw khuFail("the app's update hold answered \(code); nothing was changed") }
+        let (data, code) = try http.post(url, headers: credentialHeaders(), body: Data(), timeout: wait)
+        guard code == 200 else { throw Refused(status: code) }
         guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
             throw khuFail("the app's update hold did not answer with the contract's reply; nothing was changed")
         }
@@ -65,6 +100,6 @@ public enum UpdateHold {
     /// Best effort: the pause is in-memory and expires by itself, so a failed DELETE never leaves
     /// an app that has stopped taking work.
     public static func resume(_ endpoint: URL, http: HTTPClient) {
-        _ = try? http.delete(endpoint, headers: [:], timeout: ceiling)
+        _ = try? http.delete(endpoint, headers: credentialHeaders(), timeout: ceiling)
     }
 }

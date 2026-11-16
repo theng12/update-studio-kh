@@ -65,6 +65,7 @@ final class LoopbackHTTPServer: @unchecked Sendable {
 
 /// HOLD_LIVE_ONLY=1: the real URLSession client, a real loopback socket, no window and no app.
 func updateHoldLiveTests() {
+    setenv("KHU_HOLD_TOKEN_FILE", tmpDir("hold-token-live").appendingPathComponent("hold-token").path, 1)
     guard let server = LoopbackHTTPServer() else { expect(false, "HL1 the loopback fixture could not listen"); return }
     server.handler = { method, _ in
         method == "POST"

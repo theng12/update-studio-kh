@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// A feed client that answers the app's update-hold endpoint from a script and records the order of
 /// hold, artifact and resume calls, so a test can prove the hold really precedes any byte.
@@ -10,13 +13,14 @@ private final class HoldClient: HTTPClient, @unchecked Sendable {
     var calls: [String] = []
     /// When set, the hold POST fails like a transport error instead of answering from the script.
     var postError: URLError?
+    var lastHeaders: [String: String] = [:]
     let lock = NSLock()
     init(_ inner: InProcessClient) { self.inner = inner }
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { try inner.get(url, headers: headers) }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
         guard url.host == "127.0.0.1" else { return try inner.post(url, headers: headers, body: body) }
         if let postError { throw postError }
-        lock.lock(); calls.append("hold"); let reply = replies.isEmpty ? (status: 500, data: Data()) : replies.removeFirst(); lock.unlock()
+        lock.lock(); lastHeaders = headers; calls.append("hold"); let reply = replies.isEmpty ? (status: 500, data: Data()) : replies.removeFirst(); lock.unlock()
         return (reply.data, reply.status)
     }
     func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
@@ -44,6 +48,9 @@ private func unsafeReply(_ names: [String]) -> (status: Int, data: Data) {
 
 func updateHoldTests() {
     let holdURL = "http://127.0.0.1:8799/api/maintenance/hold"
+    // Tests must never write the real helper state: point the Launcher token at a temp file.
+    let tokenPath = tmpDir("hold-token").appendingPathComponent("hold-token").path
+    setenv("KHU_HOLD_TOKEN_FILE", tokenPath, 1)
 
     // UH1 the trusted endpoint is this Mac's loopback, the contract's two paths and nothing else.
     expect(UpdateHold.trusted(holdURL) != nil && UpdateHold.trusted("http://127.0.0.1:8799/api/maintenance/drain") != nil,
@@ -120,9 +127,9 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
-        expect(result?.status == "refused" && (result?.reason ?? "").contains("does not offer an update hold")
+        expect(result?.status == "refused" && (result?.reason ?? "").contains("does not name an update-hold endpoint")
                && f.client.calls.isEmpty && !f.app.events.contains("quit"),
-               "UH5 an app with no hold endpoint is refused before any byte and never quit")
+               "UH5 an app the feed gives no endpoint is refused before any byte and never quit")
     }
 
     // UH6 an app that is not running needs no hold.
@@ -230,6 +237,48 @@ func updateHoldTests() {
                "UH16 a missing staged app leaves the installed app untouched (\(result?.status ?? "nil"), \(result?.reason ?? ""))")
     }
 
+    // UH23 the Launcher's hold credential is its own 0600 file and is presented on every hold call.
+    do {
+        let f = rig("hold-token", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.replies = [safeReply()]
+        _ = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                               serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                               http: f.client, shell: RecordingShell(mount: f.mount),
+                               control: { _, _ in f.app.control })
+        let attrs = try? fm.attributesOfItem(atPath: tokenPath)
+        let mode = (attrs?[.posixPermissions] as? NSNumber)?.intValue
+        let token = (try? String(contentsOfFile: tokenPath, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        expect(mode == 0o600 && (token?.count ?? 0) == 64,
+               "UH23 the Launcher hold token is a 64-hex 0600 file (\(mode ?? -1), \(token?.count ?? -1))")
+        expect(f.client.lastHeaders["X-Hub-Token"] == token
+               && f.client.lastHeaders["Authorization"] == "Bearer \(token ?? "")",
+               "UH23 the hold presents the Launcher token (\(f.client.lastHeaders.keys.sorted()))")
+    }
+
+    // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
+    do {
+        let f = rig("hold-401", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.replies = [(status: 401, data: Data(#"{"error":"no credential"}"#.utf8))]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        let reason = result?.reason ?? ""
+        expect(result?.status == "refused" && reason.contains("credential") && !reason.contains("no update-hold endpoint"),
+               "UH21 a 401 names the credential, not a missing endpoint (\(reason))")
+    }
+    do {
+        let f = rig("hold-404", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.replies = [(status: 404, data: Data())]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        let reason = result?.reason ?? ""
+        expect(result?.status == "refused" && reason.contains("feed's address") && !reason.contains("credential"),
+               "UH22 a 404 names the feed address, not a credential (\(reason))")
+    }
+
     // UH19 an installed build with no hold endpoint gets a named bootstrap step, not a bare -1004.
     do {
         let f = rig("hold-absent", hold: holdURL, recipe: "app-dmg", running: true)
@@ -294,7 +343,7 @@ func updateHoldTests() {
         } catch { failure = "\(error)" }
         let journal = Recipe.journalURL(stateDir: f.state.path, app: "demo")
         let staged = f.cfg.apps["demo"]!.bundlePath + ".khu-staging"
-        expect(failure.contains("does not offer an update hold") && !fm.fileExists(atPath: journal.path)
+        expect(failure.contains("does not name an update-hold endpoint") && !fm.fileExists(atPath: journal.path)
                && !fm.fileExists(atPath: staged),
                "UH12 an app opened mid-update is refused before the journal (\(failure))")
     }
@@ -346,7 +395,7 @@ func updateHoldTests() {
                                                  stateDir: URL(fileURLWithPath: r.config.stateDir),
                                                  shell: RecordingShell(mount: r.rig.root.appendingPathComponent("empty")),
                                                  control: { _, _ in r.control }, holdURL: nil, http: client)
-        expect(refused?.status == "refused" && (refused?.reason ?? "").contains("does not offer an update hold"),
+        expect(refused?.status == "refused" && (refused?.reason ?? "").contains("does not name an update-hold endpoint"),
                "UH15 a rollback without an endpoint is refused while the app runs")
     }
 
