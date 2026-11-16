@@ -960,6 +960,7 @@ public enum Agent {
                 let how = res.status == "refused" ? "did not quit within its time limit; nothing was changed"
                     : res.status == "updated" ? "quit cleanly and was updated" : "quit cleanly, then \(res.status)"
                 result.notes.append("\(item.app) \(installed[item.app] ?? "unknown version"): predates its update hold, asked to quit without one — \(how)")
+                for line in res.quitTrace { result.notes.append("\(item.app) \(line)") }
             } else if let refusal {
                 result.notes.append(refusal)
             }
@@ -1233,20 +1234,25 @@ public enum Agent {
     /// The owner's rule before an old build is quit unattended: the app's own probe must answer that
     /// it has nothing running or queued. No probe, a non-zero answer, output that names a job or a
     /// probe that outlasts its own short ceiling all skip the quit. Returns why, or nil when it is safe.
-    static func idleRefusal(app: String, probe: String?, shell: Shell, timeout: TimeInterval = 15) -> String? {
+    /// Returns what the check answered (`said`, always worth a log line) and why the quit must be
+    /// skipped (`skip`, nil when it is safe to go ahead and quit).
+    static func idleRefusal(app: String, probe: String?, shell: Shell,
+                            timeout: TimeInterval = 15) -> (said: String, skip: String?) {
         let command = probe?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !command.isEmpty else {
-            return "\(app) has no idle check configured, so it was not asked to quit and nothing was interrupted."
+            return ("idle check: none configured", "\(app) has no idle check configured, so it was not asked to quit and nothing was interrupted.")
         }
         do {
             let answer = try shell.run("/bin/sh", arguments: ["-lc", command], timeout: timeout)
-            guard answer.exitCode != 0 else { return nil }
+            guard answer.exitCode != 0 else { return ("idle check exited 0, so it is idle", nil) }
             let said = (answer.stdout + "\n" + answer.stderr)
                 .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
                 .first { !$0.isEmpty } ?? "no output"
-            return "\(app)'s idle check exited \(answer.exitCode) (\(said)), so it was not asked to quit and nothing was interrupted."
+            return ("idle check exited \(answer.exitCode) (\(said))",
+                    "\(app)'s idle check exited \(answer.exitCode) (\(said)), so it was not asked to quit and nothing was interrupted.")
         } catch {
-            return "\(app)'s idle check did not answer within \(Int(timeout)) s, so it was not asked to quit and nothing was interrupted."
+            return ("idle check did not answer within \(Int(timeout)) s",
+                    "\(app)'s idle check did not answer within \(Int(timeout)) s, so it was not asked to quit and nothing was interrupted.")
         }
     }
 
@@ -1281,6 +1287,42 @@ public enum Agent {
         var holdEndpoint: URL?
         var holdNote: String?
         var legacyQuit = false
+        // The three facts this Mac's log must carry for every unattended quit, whichever way it
+        // ends: what the idle check answered, whether the app exited and how long it took, and
+        // whether it came back with its services. Written where those things really happen, so a
+        // Mac that stalls, refuses or half-restarts still says which of the three failed.
+        var probeSaid: String?
+        var quitSaid: String?
+        var servicesSaid: String?
+        func traced(_ base: AppControl) -> AppControl {
+            guard legacyQuit else { return base }
+            var wrapped = base
+            wrapped.quit = {
+                let started = Date()
+                let gone = base.quit()
+                let took = String(format: "%.1f", Date().timeIntervalSince(started))
+                quitSaid = gone ? "quit: the app exited after \(took) s"
+                                : "quit: the app had not exited after \(took) s, so its own ceiling was reached"
+                return gone
+            }
+            wrapped.resumeServices = {
+                let resume = base.resumeServices()
+                servicesSaid = resume.ok ? "services: started"
+                                         : "services: did NOT start (\(resume.reason ?? "launchd refused"))"
+                return resume
+            }
+            return wrapped
+        }
+        /// The three lines plus what came back, attached to a result the moment it is known.
+        func withTrace(_ result: RecipeResult) -> RecipeResult {
+            guard legacyQuit else { return result }
+            var out = result
+            out.quitWithoutHold = true
+            let back = appControl.isRunning() == false ? "the app did NOT come back"
+                                                       : "the app came back as \((try? BundleInfo.read(cfg.bundlePath))?.version ?? "an unreadable version")"
+            out.quitTrace = [probeSaid, quitSaid, servicesSaid, back].compactMap { $0 }
+            return out
+        }
         func acquireHold() -> RecipeResult? {
             guard holdEndpoint == nil, !legacyQuit else { return nil }
             // The updater's own engine and menu-bar UI hold no work queue: the engine switches itself
@@ -1294,10 +1336,13 @@ public enum Agent {
             // quit (bounded by the quit's own ceiling, never killed), swapped, relaunched hidden —
             // but only when the app's own probe says it has nothing running or queued.
             if quitOldBuild, let refusal = hold.refusal, refusal.status == waitingForClose {
-                if let skipped = idleRefusal(app: app, probe: idleProbe(app: app, cfg: cfg), shell: shell) {
+                let answer = idleRefusal(app: app, probe: idleProbe(app: app, cfg: cfg), shell: shell)
+                probeSaid = answer.said
+                if let skipped = answer.skip {
                     holdEndpoint = hold.endpoint
                     var out = refusal
                     out.reason = (out.reason.map { $0 + " " } ?? "") + skipped
+                    out.quitTrace = ["\(app)'s \(answer.said)"]
                     return out
                 }
                 legacyQuit = true
@@ -1337,8 +1382,7 @@ public enum Agent {
             guard let holdNote else { return result }
             var out = result
             out.reason = (out.reason.map { $0 + " " } ?? "") + holdNote
-            out.quitWithoutHold = legacyQuit
-            return out
+            return withTrace(out)
         }
         // An old build that would not quit within its ceiling (busy, or a question on its screen)
         // is a refusal: nothing was swapped, so it is said plainly and nothing is retried.
@@ -1346,15 +1390,13 @@ public enum Agent {
             do { return try run() } catch {
                 let said = "\(error)"
                 guard legacyQuit && said.contains(Recipe.didNotQuit) && !said.contains("did not restart") else { throw error }
-                var out = RecipeResult(status: "refused", reason: "\(holdNote ?? "") It did not quit within its time limit, so nothing was changed and it keeps running.")
-                out.quitWithoutHold = true
-                return out
+                return withTrace(RecipeResult(status: "refused", reason: "\(holdNote ?? "") It did not quit within its time limit, so nothing was changed and it keeps running."))
             }
         }
         if let local {
             if let refusal = acquireHold() { return refusal }
             DownloadControl.updateProgress("copying")
-            return try refusedQuit { withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
+            return try refusedQuit { withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: { a, c in traced(control(a, c)) },
                                                  force: force, manual: manual || legacyQuit, catalogEntry: catalogEntry, beforeStop: beforeStop)) }
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
@@ -1398,7 +1440,7 @@ public enum Agent {
             }
             // An app this run asked to quit is put back running; other unattended installs leave it closed.
             return try refusedQuit { withHoldNote(try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
-                                                  expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
+                                                  expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: traced(control(app, cfg)),
                                                   refuseIfRunning: itself, relaunchAfterInstall: manual || legacyQuit,
                                                   beforeStop: beforeStop)) }
         }

@@ -5,6 +5,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.45 — 2026-11-16
+
+- Hub's idle check comes with the helper, so no Mac has to be visited to arm it: it is Hub's own condition, and it fails closed — a missing, unreadable or corrupt Hub database answers "not idle", so that Mac waits rather than quitting a working Hub. A Mac can overrule it: `idleProbe` in that Mac's `apps.hub` settings replaces the built-in check, and an empty `idleProbe` turns the unattended quit off there. No other app is affected.
+- Every unattended quit now says four things in that Mac's own log: what the idle check answered (its exit status, and the reason it gave when it refused), whether the app exited and how long it took or that its time limit was reached, whether its background services started, and whether it came back and as which version. So a Mac that stalls, refuses or half-restarts says which of the four failed, instead of looking like it worked.
+
 ## 0.1.44 — 2026-11-16
 
 - When an app refuses or fails an automatic update, this Mac's own log now says which app, which version and why. Each reason is logged once, not every 5 minutes, and is logged again after the next successful update.
@@ -12,7 +17,6 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - An app build older than its update hold (for example Hub 0.6.235, where the hold first shipped in 0.6.240) is no longer reported as "refused the update hold (credential)". It now says it needs one normal install while the app is closed, naming both versions. The feed records the first version of each app's hold (`holdSince`); `khu publish --hold-since <version>` sets it for an app published before this field existed.
 - An update for an app whose build has no update hold yet no longer fails once and is dropped. The owner's order stays pending and installs on the first run that finds the app closed, with nobody needed at the Mac. The Mac's row on the publisher page says "Waiting for <app> to close" and why. An order waits up to 14 days (`waitForCloseDays` in the agent config); after that it is refused with the reason, so the wait always ends.
 - An owner's order can now finish on a Mac nobody is sitting at: for a build older than its update hold, the Launcher quits the app, swaps it and reopens the new one, the way updates worked before holds existed. This happens only when that app's own idle check answers that nothing is running or queued — one small command per app, `idleProbe` in the agent config, exit 0 = safe. No idle check configured, a non-zero answer, an unreadable answer or one that takes longer than 15 seconds all mean the app is **not** quit: the order keeps waiting for it to close and the log says in one line what the check saw. An app that will not quit within its own time limit is left exactly as it was and reported as a refusal with the reason.
-- Hub's idle check comes with the helper, so no Mac has to be visited to arm it: it is Hub's own condition, and it fails closed — a missing, unreadable or corrupt Hub database answers "not idle", so that Mac waits rather than quitting a working Hub. A Mac can overrule it: `idleProbe` in that Mac's `apps.hub` settings replaces the built-in check, and an empty `idleProbe` turns the unattended quit off there. No other app is affected.
 - `quitOldBuilds` in the agent config turns this off for a Mac (`false` = never quit an old build; unset = on, for orders only — Automatic updates always wait).
 
 ## 0.1.43 — 2026-11-16

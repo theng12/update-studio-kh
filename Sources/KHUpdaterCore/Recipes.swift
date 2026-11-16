@@ -11,6 +11,10 @@ public struct RecipeResult: Sendable, Equatable {
     public var version: String?
     /// True when the app was asked to quit without an update hold because its build predates one.
     public var quitWithoutHold = false
+    /// The unattended quit's own log lines: what the idle check answered, whether the app exited and
+    /// how long it took, whether its services started, and whether it came back. Kept as separate
+    /// lines so a Mac that stalls or half-restarts says which of the four failed.
+    public var quitTrace: [String] = []
     public init(status: String, reason: String? = nil, version: String? = nil) {
         self.status = status; self.reason = reason; self.version = version
     }

@@ -524,8 +524,12 @@ func updateHoldTests() {
         expect(machine?.pending.isEmpty == true && machine?.lastResults?["demo"]?.status == "updated"
                && lines.count == 1 && lines[0].contains("quit cleanly and was updated")
                && quitAt != nil && launchAt != nil && quitAt! < launchAt! && f.client.calls.contains("artifact")
-               && (try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
-               "UH39 a build with no hold route is quit, installed and relaunched by one order, one line logged (\(lines); events \(f.app.events))")
+               && (try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0"
+               && notes.contains { $0.contains("idle check exited 0") }
+               && notes.contains { $0.contains("quit: the app exited after") }
+               && notes.contains { $0.contains("services: started") }
+               && notes.contains { $0.contains("the app came back as 2.0.0") },
+               "UH39 a build with no hold route is quit, installed and relaunched by one order, with the check, the quit, the services and the return all logged (\(lines); events \(f.app.events))")
     }
 
     // UH40 the hold path is unchanged for a build at or past holdSince: a 401 stays a credential
@@ -565,8 +569,10 @@ func updateHoldTests() {
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
         expect(result?.status == "refused" && (result?.reason ?? "").contains("did not quit within its time limit")
                && result?.quitWithoutHold == true && f.app.running
+               && (result?.quitTrace ?? []).contains { $0.contains("its own ceiling was reached") }
+               && (result?.quitTrace ?? []).contains { $0.contains("idle check exited 0") }
                && (try? BundleInfo.read(f.app.installed.path))?.version == "1.0.0" && !f.app.events.contains("launch"),
-               "UH41 a build that will not quit is refused and left as it was (\(result?.reason ?? "nil"); events \(f.app.events))")
+               "UH41 a build that will not quit is refused and left as it was, and the log says the ceiling was reached (\(result?.quitTrace ?? []); events \(f.app.events))")
     }
 
     // UH42 the safety rule: with no idle check configured nothing is ever quit unattended. The
@@ -580,6 +586,7 @@ func updateHoldTests() {
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
         expect(result?.status == Agent.waitingForClose && result?.quitWithoutHold == false
                && (result?.reason ?? "").contains("no idle check configured")
+               && (result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") }
                && !f.app.events.contains("quit") && !f.app.events.contains("launch")
                && !f.client.calls.contains("artifact") && f.app.running,
                "UH42 no idle check means no quit, ever (\(result?.status ?? "nil") \(result?.reason ?? "nil"))")
@@ -596,12 +603,12 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
-        let silent = Agent.idleRefusal(app: "demo", probe: "sleep 5", shell: RecordingShell(mount: f.mount), timeout: 1)
+        let silent = Agent.idleRefusal(app: "demo", probe: "sleep 5", shell: RecordingShell(mount: f.mount), timeout: 1).said
         expect(result?.status == Agent.waitingForClose
                && (result?.reason ?? "").contains("idle check exited 3 (2 jobs queued)")
                && !f.app.events.contains("quit") && f.app.running
-               && (silent ?? "").contains("did not answer within 1 s"),
-               "UH43 a refusing or silent idle check skips the quit and says what it saw (\(result?.reason ?? "nil"); \(silent ?? "nil"))")
+               && silent.contains("did not answer within 1 s"),
+               "UH43 a refusing or silent idle check skips the quit and says what it saw (\(result?.reason ?? "nil"); \(silent))")
     }
 
     // UH44 Hub's idle command is a shell string with quotes and `$HOME` in it: it must survive a
@@ -627,14 +634,14 @@ func updateHoldTests() {
         let off = AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub", idleProbe: "  ")
         let other = AppConfig(bundlePath: "/Applications/Story.app", recipe: "story")
         let offSaid = Agent.idleRefusal(app: "hub", probe: Agent.idleProbe(app: "hub", cfg: off),
-                                        shell: RecordingShell(mount: tmpDir("uh45")))
+                                        shell: RecordingShell(mount: tmpDir("uh45"))).skip
         expect(Agent.idleProbe(app: "hub", cfg: bare) == Agent.builtInIdleProbes["hub"]
                && (Agent.builtInIdleProbes["hub"] ?? "").contains("hub.db")
                && Agent.idleProbe(app: "hub", cfg: own) == "exit 0"
                && Agent.idleProbe(app: "hub", cfg: off) == "  " && offSaid != nil
                && Agent.idleProbe(app: "story", cfg: other) == nil
                && Agent.idleRefusal(app: "story", probe: Agent.idleProbe(app: "story", cfg: other),
-                                    shell: RecordingShell(mount: tmpDir("uh45"))) != nil,
+                                    shell: RecordingShell(mount: tmpDir("uh45"))).skip != nil,
                "UH45 Hub's idle check is built in, a Mac's own setting wins, an empty one turns it off (\(offSaid ?? "nil"))")
     }
 
