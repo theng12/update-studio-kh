@@ -40,6 +40,9 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     /// How many days an owner's order waits for an app whose build predates its hold to close
     /// before it is refused. nil = 14.
     public var waitForCloseDays: Int?
+    /// An owner's order for a running build that predates its update hold asks the app to quit,
+    /// swaps it and relaunches it, as before the hold existed. nil = on; false = wait for it to close.
+    public var quitOldBuilds: Bool?
     public init(feedURL: String, publicKey: String, stateDir: String, machine: String, token: String,
                 apps: [String: AppConfig] = [:], intervalMinutes: Int = 5, once: Bool = false) {
         self.feedURL = feedURL; self.publicKey = publicKey; self.stateDir = stateDir
@@ -62,7 +65,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays
+        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays, quitOldBuilds
     }
     /// Optional fields really are optional: a hand-written config may leave them out.
     public init(from decoder: Decoder) throws {
@@ -79,6 +82,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         updaterVersion = try c.decodeIfPresent(String.self, forKey: .updaterVersion)
         network = try c.decodeIfPresent(FeedNetwork.self, forKey: .network)
         waitForCloseDays = try c.decodeIfPresent(Int.self, forKey: .waitForCloseDays)
+        quitOldBuilds = try c.decodeIfPresent(Bool.self, forKey: .quitOldBuilds)
     }
 }
 

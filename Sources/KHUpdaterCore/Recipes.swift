@@ -9,6 +9,8 @@ public struct RecipeResult: Sendable, Equatable {
     /// The version the app was on *before* this result, when the recipe knows it: an owner rollback
     /// names the version it moved away from, so the agent can reject that exact artifact.
     public var version: String?
+    /// True when the app was asked to quit without an update hold because its build predates one.
+    public var quitWithoutHold = false
     public init(status: String, reason: String? = nil, version: String? = nil) {
         self.status = status; self.reason = reason; self.version = version
     }
@@ -471,7 +473,7 @@ public enum Recipe {
             // It was running at the boundary; if it exited on its own the hold is moot and there is
             // nothing to quit, so the swap simply goes ahead (the pause expires by itself).
             if wasRunning {
-                guard control.quit() else { try abandon("the app did not quit; the installed app was kept; quit the app by hand, then choose Update") }
+                guard control.quit() else { try abandon(Recipe.didNotQuit + "; quit the app by hand, then choose Update") }
                 appQuit = true
             }
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
@@ -967,6 +969,9 @@ public enum LiveControl {
     /// wait up to `wait` seconds until `gone()` says it has. By default that means no process of it
     /// is left; the Gateway passes a rule that ignores its own service process, which is stopped
     /// separately by the PID that owns the port.
+    /// The abandon sentence for an app that did not quit within its ceiling; nothing was swapped.
+    public static let didNotQuit = "the app did not quit; the installed app was kept"
+
     public static func quit(_ installedPath: String, shell: Shell, wait: TimeInterval = 60,
                             gone rule: (() -> Bool)? = nil) -> Bool {
         let gone = rule ?? { isRunning(installedPath) == false }

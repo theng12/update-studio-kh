@@ -888,7 +888,7 @@ public enum Agent {
                     res = try install(app: item.app, feed: feed, installed: current, config: config,
                                       serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
                                       force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual,
-                                      catalogEntry: entry)
+                                      catalogEntry: entry, quitOldBuild: item.explicit && config.quitOldBuilds != false)
                 case ServerCommand.vendorInstall:
                     guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
                         throw khuFail("vendor install requires an explicit signed order for this Mac")
@@ -955,8 +955,13 @@ public enum Agent {
                let sha = feed.apps[item.app]?.sha256 {
                 memory.rejected[item.app] = sha
             }
-            if let note = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory) {
-                result.notes.append(note)
+            let refusal = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory)
+            if res.quitWithoutHold {
+                let how = res.status == "refused" ? "did not quit within its time limit; nothing was changed"
+                    : res.status == "updated" ? "quit cleanly and was updated" : "quit cleanly, then \(res.status)"
+                result.notes.append("\(item.app) \(installed[item.app] ?? "unknown version"): predates its update hold, asked to quit without one — \(how)")
+            } else if let refusal {
+                result.notes.append(refusal)
             }
             let done = AgentMemory.Done(app: item.app, status: res.status, reason: res.reason ?? "", at: ISO.string(Date()), sent: false)
             memory.done[item.id] = done
@@ -1212,7 +1217,7 @@ public enum Agent {
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = [],
-                        manual: Bool = false, catalogEntry: CatalogEntry? = nil) throws -> RecipeResult {
+                        manual: Bool = false, catalogEntry: CatalogEntry? = nil, quitOldBuild: Bool = false) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         // An app that updates itself is never installed by KH Updater on its own: Automatic and a
         // remote order leave it alone. Only a choice made here, at this Mac, may install it.
@@ -1239,8 +1244,9 @@ public enum Agent {
         // with no trusted hold endpoint is refused rather than interrupted silently.
         var holdEndpoint: URL?
         var holdNote: String?
+        var legacyQuit = false
         func acquireHold() -> RecipeResult? {
-            guard holdEndpoint == nil else { return nil }
+            guard holdEndpoint == nil, !legacyQuit else { return nil }
             // The updater's own engine and menu-bar UI hold no work queue: the engine switches itself
             // through installUpdater, and the Launcher updates itself from its own Update click.
             let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
@@ -1248,6 +1254,13 @@ public enum Agent {
             let hold = beginUpdateHold(app: app, holdURL: feed.apps[app]?.holdURL, http: http,
                                        control: appControl, exempt: exempt, installed: installed,
                                        holdSince: feed.apps[app]?.holdSince)
+            // A build that predates its hold is updated the way it was before holds existed: asked to
+            // quit (bounded by the quit's own ceiling, never killed), swapped, relaunched hidden.
+            if quitOldBuild, hold.refusal?.status == waitingForClose {
+                legacyQuit = true
+                holdNote = "\(app) \(installed ?? "") predates its update hold, so it was asked to quit without one (quitOldBuilds is on)."
+                return nil
+            }
             // Resume is attempted even when the POST itself failed: it may have paused before failing.
             holdEndpoint = hold.endpoint
             holdNote = hold.note
@@ -1281,13 +1294,25 @@ public enum Agent {
             guard let holdNote else { return result }
             var out = result
             out.reason = (out.reason.map { $0 + " " } ?? "") + holdNote
+            out.quitWithoutHold = legacyQuit
             return out
+        }
+        // An old build that would not quit within its ceiling (busy, or a question on its screen)
+        // is a refusal: nothing was swapped, so it is said plainly and nothing is retried.
+        func refusedQuit(_ run: () throws -> RecipeResult) throws -> RecipeResult {
+            do { return try run() } catch {
+                let said = "\(error)"
+                guard legacyQuit && said.contains(Recipe.didNotQuit) && !said.contains("did not restart") else { throw error }
+                var out = RecipeResult(status: "refused", reason: "\(holdNote ?? "") It did not quit within its time limit, so nothing was changed and it keeps running.")
+                out.quitWithoutHold = true
+                return out
+            }
         }
         if let local {
             if let refusal = acquireHold() { return refusal }
             DownloadControl.updateProgress("copying")
-            return withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
-                                                 force: force, manual: manual, catalogEntry: catalogEntry, beforeStop: beforeStop))
+            return try refusedQuit { withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
+                                                 force: force, manual: manual || legacyQuit, catalogEntry: catalogEntry, beforeStop: beforeStop)) }
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
         // The report can lag the disk: a stale one re-downloaded and reinstalled media-studio 0.1.109
@@ -1328,10 +1353,11 @@ public enum Agent {
             guard appDmgRecipes.contains(cfg.recipe) || statusOnly.contains(cfg.recipe) else {
                 throw khuFail("unknown recipe \(cfg.recipe)")
             }
-            return try withHoldNote(Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
+            // An app this run asked to quit is put back running; other unattended installs leave it closed.
+            return try refusedQuit { withHoldNote(try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
                                                   expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
-                                                  refuseIfRunning: itself, relaunchAfterInstall: manual,
-                                                  beforeStop: beforeStop))
+                                                  refuseIfRunning: itself, relaunchAfterInstall: manual || legacyQuit,
+                                                  beforeStop: beforeStop)) }
         }
     }
 

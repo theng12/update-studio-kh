@@ -430,6 +430,7 @@ func updateHoldTests() {
             var cfg = f.cfg
             cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
             cfg.waitForCloseDays = days
+            cfg.quitOldBuilds = false   // the switch off: the order waits for the app to close
             _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
                                                        body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
             return (cfg, { () -> [String: Any]? in
@@ -475,6 +476,7 @@ func updateHoldTests() {
         f.client.replies = Array(repeating: (status: 401, data: Data(#"{"error":"unauthorized"}"#.utf8)), count: 4)
         var cfg = f.cfg
         cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        cfg.quitOldBuilds = false
         _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
                                                    body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
         let run = { (try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
@@ -488,6 +490,67 @@ func updateHoldTests() {
                && page.contains("Waiting for demo to close</span>") && page.contains("predates its update hold (first in 1.5.0)")
                && !page.contains("refused the update hold (credential)") && !f.client.calls.contains("artifact"),
                "UH38 a build below the published holdSince answering 401 reads waiting for close on the Mac and the page, never credential (notes \(waitNotes.count), pending \(machine?.pending.count ?? -1))")
+    }
+
+    // UH39 default on: an owner's order for a running build with no hold route quits it the way
+    // updates worked before holds, installs, relaunches it, and logs one line saying so.
+    do {
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        let f = rig("legacy-quit-order", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        var cfg = f.cfg
+        cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                   body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
+        let notes = (try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, appFolders: []))?.notes ?? []
+        let machine = (try? StateStore.load(from: f.rig.state))?.machines["mac1"]
+        let lines = notes.filter { $0.contains("predates its update hold, asked to quit without one") }
+        let quitAt = f.app.events.firstIndex(of: "quit"), launchAt = f.app.events.lastIndex(of: "launch")
+        expect(machine?.pending.isEmpty == true && machine?.lastResults?["demo"]?.status == "updated"
+               && lines.count == 1 && lines[0].contains("quit cleanly and was updated")
+               && quitAt != nil && launchAt != nil && quitAt! < launchAt! && f.client.calls.contains("artifact")
+               && (try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
+               "UH39 a build with no hold route is quit, installed and relaunched by one order, one line logged (\(lines); events \(f.app.events))")
+    }
+
+    // UH40 the hold path is unchanged for a build at or past holdSince: a 401 stays a credential
+    // refusal (nothing quit), and a safe hold is still taken before the byte.
+    do {
+        let f = rig("legacy-quit-current", hold: holdURL, recipe: "app-dmg", running: true)
+        var feed = f.feed
+        feed.apps["demo"]?.holdSince = "0.6.240"
+        f.client.replies = [(status: 401, data: Data(#"{"error":"unauthorized"}"#.utf8))]
+        let refused = try? Agent.install(app: "demo", feed: feed, installed: "0.6.242", config: f.cfg,
+                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                         http: f.client, shell: RecordingShell(mount: f.mount),
+                                         control: { _, _ in f.app.control }, quitOldBuild: true)
+        let g = rig("legacy-quit-held", hold: holdURL, recipe: "app-dmg", running: true)
+        g.client.replies = [safeReply(inFlight: 1), safeReply(inFlight: 1)]
+        let held = try? Agent.install(app: "demo", feed: g.feed, installed: "1.0.0", config: g.cfg,
+                                      serverBase: URL(string: "http://pub.test")!, stateDir: g.state,
+                                      http: g.client, shell: RecordingShell(mount: g.mount),
+                                      control: { _, _ in g.app.control }, quitOldBuild: true)
+        expect(refused?.status == "refused" && (refused?.reason ?? "").contains("credential") && refused?.quitWithoutHold == false
+               && !f.app.events.contains("quit") && !f.client.calls.contains("artifact")
+               && held?.status == "updated" && g.client.calls.first == "hold" && held?.quitWithoutHold == false,
+               "UH40 at or past holdSince the hold path is unchanged (\(refused?.reason ?? "nil"); \(g.client.calls))")
+    }
+
+    // UH41 an old build that will not quit within its ceiling is refused with the reason; nothing
+    // is swapped, it keeps running, and nothing is killed.
+    do {
+        let f = rig("legacy-quit-refuses", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        f.app.quits = [false]
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        expect(result?.status == "refused" && (result?.reason ?? "").contains("did not quit within its time limit")
+               && result?.quitWithoutHold == true && f.app.running
+               && (try? BundleInfo.read(f.app.installed.path))?.version == "1.0.0" && !f.app.events.contains("launch"),
+               "UH41 a build that will not quit is refused and left as it was (\(result?.reason ?? "nil"); events \(f.app.events))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
