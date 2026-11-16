@@ -208,4 +208,29 @@ public enum WhatsNew {
     public static func lines(for version: String) -> [String] {
         launcher.first { $0.version == version }?.items ?? []
     }
+
+    /// The What's New dialog's body: the version being shown, its date and change count, its
+    /// changes, then the four releases before it. Newest first; unknown versions say so.
+    public static func dialogBody(app: String, shown: String, entries: [Entry], escape h: (String) -> String) -> String {
+        // The changelog's Markdown marks (`**`, backticks) are not shown as characters.
+        func list(_ items: [String]) -> String {
+            "<ul class=newslist>" + items.map { "<li>\(h($0.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")))</li>" }.joined() + "</ul>"
+        }
+        guard let index = entries.firstIndex(where: { $0.version == shown }) ?? (entries.isEmpty ? nil : 0) else {
+            return "<p class=newshead><strong>\(h(app)) v\(h(shown))</strong></p><p class=newssum>Release notes are not available for this version.</p>"
+        }
+        let entry = entries[index]
+        let count = entry.items.count
+        let mismatch = entry.version == shown ? "" : " This window runs v\(h(shown)), which has no notes of its own; these are the newest."
+        var out = "<p class=newshead><strong>\(h(app)) v\(h(entry.version))</strong>"
+            + (entry.version == shown ? "<span class=tag>This version</span>" : "")
+            + (entry.date.map { "<span class=when>\(h($0))</span>" } ?? "") + "</p>"
+            + "<p class=newssum>\(count) change\(count == 1 ? "" : "s") in this release.\(mismatch)</p>"
+            + (count == 0 ? "<p>Release notes are not available for this version.</p>" : list(entry.items))
+        for earlier in entries.dropFirst(index + 1).prefix(4) {
+            out += "<section class=rel><h3>v\(h(earlier.version))" + (earlier.date.map { " <span class=when>\(h($0))</span>" } ?? "")
+                + "</h3>\(list(earlier.items))</section>"
+        }
+        return out
+    }
 }

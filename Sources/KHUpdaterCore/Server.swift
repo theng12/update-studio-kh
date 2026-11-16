@@ -1197,10 +1197,10 @@ public final class FeedServer: @unchecked Sendable {
         let removed = state.removed.isEmpty ? "<p class=sub>No Mac has been removed.</p>"
             : "<div class=tablewrap><table><thead><tr><th>Mac</th><th>Removed</th><th>Last seen then</th><th>Now</th></tr></thead>\(removedRows)</table></div>"
         let latest = WhatsNew.publisher.first
-        let news = (latest?.items ?? []).map { "<li>\(h($0))</li>" }.joined()
         let currentVersion = latest?.version ?? "unknown"
         // The Launcher names the version it is running; a browser without one sees the published one.
         let shownVersion = appVersion.flatMap { $0.range(of: #"^[0-9][0-9.]*$"#, options: .regularExpression) == nil ? nil : $0 } ?? currentVersion
+        let news = WhatsNew.dialogBody(app: "Update Studio KH", shown: shownVersion, entries: WhatsNew.publisher, escape: h)
         let ownEntry = feed?.apps["kh-updater-app"]
         // Only an offer some Mac is actually behind is shown: the same rule the feed table uses.
         let ownBehind = state.machines.filter { Self.updateAvailable($0.value, app: "kh-updater-app", feed: feed, now: now) }.count
@@ -1285,7 +1285,7 @@ public final class FeedServer: @unchecked Sendable {
         \(settings)
         \(support)
         <section data-view=apps><div class=pagehead><div><h2>Apps &amp; updates</h2><p class=sub>Published versions, release notes and updates for your connected Macs.</p></div></div><p class=sub>Update N Macs updates every connected Mac that is behind. Each Mac reports its result here.</p>\(feedSection)\(vendorHTML(state))</section>
-        <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main><dialog id=whats-new aria-labelledby=whats-new-title><div class=modalbar><h2 id=whats-new-title>What's New</h2><button type=button id=whats-new-close aria-label="Close What's New">Close</button></div><div class=body><p class=sub>Update Studio KH v\(h(shownVersion)) · built \(h(Changelog.buildDate))</p><ul class=newslist>\(news.isEmpty ? "<li>Release notes are not available for this version.</li>" : news)</ul></div></dialog>\(script)</body></html>
+        <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main><dialog id=whats-new aria-labelledby=whats-new-title><div class=modalbar><h2 id=whats-new-title>What's New</h2><button type=button id=whats-new-close aria-label="Close What's New">Close</button></div><div class=body>\(news)</div></dialog>\(script)</body></html>
         """
     }
 
@@ -1362,7 +1362,6 @@ public final class FeedServer: @unchecked Sendable {
     .themes{display:inline-flex;padding:2px;background:var(--muted-bg);border-radius:8px;gap:2px}
     .themes button{border:0;background:none;padding:4px 11px;border-radius:6px;color:var(--sub);min-height:26px}
     .themes button[aria-pressed=true]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
-    #whats-new{width:min(460px,calc(100vw - 32px))}#whats-new .body{padding:14px 24px 4px}#whats-new .newslist{margin:0;padding-left:18px}#whats-new .newslist li{margin-bottom:6px}
     [data-view][hidden]{display:none}.mark{width:34px;height:34px;flex:none}
     main{width:100%;padding:22px 28px 44px;max-width:1240px;min-width:0}section{margin-bottom:28px}
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
@@ -1448,7 +1447,7 @@ public final class FeedServer: @unchecked Sendable {
     @media(min-width:821px) and (max-width:1100px){.brand p{display:none}.stats{grid-template-columns:1fr 1fr}.connectlayout{gap:24px}.pairpanel{padding:24px}details.mac>summary{grid-template-columns:minmax(130px,1fr) minmax(0,1fr) auto 14px}.seen{grid-column:1/4;text-align:left}.chev{grid-column:4;grid-row:1}}
     @media(max-width:820px){.pagehead{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px}.pagehead h2{font-size:23px}.connectlayout{grid-template-columns:minmax(0,1fr);gap:24px}.pairpanel{order:-1;padding:24px}.paircode{font-size:48px}.pair{margin:20px 0}.connectfoot{flex-direction:column;gap:8px}.setting{grid-template-columns:1fr;gap:12px}.settingslist{padding:0 18px}.brand{min-width:0}.feed td{min-width:0}.feed .name{min-width:0}.feed .actions{white-space:normal}.feed .num{overflow-wrap:anywhere}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
-    """ + Changelog.layoutCSS
+    """ + Changelog.layoutCSS + Changelog.whatsNewCSS
 
     /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).
     public func listen() throws -> Int32 {

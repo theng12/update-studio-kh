@@ -1076,12 +1076,25 @@ func agentAndServerTests() {
         _ = s.handleRequest(HTTPRequest(method: "POST", path: "/status", headers: ["authorization": "Bearer \(tok)"],
                                         body: Data(#"{"machine":"mac2","installed":{"demo":"0.9.0"},"automatic_default":{"demo":true}}"#.utf8)), remote: "100.64.0.9")
         let publisherNotes = WhatsNew.publisher.first!
-        let firstItem = publisherNotes.items.first!.replacingOccurrences(of: "&", with: "&amp;")
+        let firstItem = publisherNotes.items.first!.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
         expect(s.statusHTML().contains("id=whats-new-pill title=\"What's New in Update Studio KH \(publisherNotes.version)\">")
                && s.statusHTML().contains("<dialog id=whats-new aria-labelledby=whats-new-title>")
                && s.statusHTML().contains(firstItem), "the pill opens What's New with the top CHANGELOG entry")
+        do {
+            let e = [WhatsNew.Entry(version: "2.0.0", date: "2026-11-16", items: ["a <b>", "**c** `d`"]),
+                     WhatsNew.Entry(version: "1.9.0", date: "2026-11-10", items: ["old"])]
+            let esc: (String) -> String = { $0.replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;") }
+            let shown = WhatsNew.dialogBody(app: "X", shown: "2.0.0", entries: e, escape: esc)
+            let other = WhatsNew.dialogBody(app: "X", shown: "3.0.0", entries: e, escape: esc)
+            expect(shown.contains("<strong>X v2.0.0</strong><span class=tag>This version</span><span class=when>2026-11-16</span>")
+                   && shown.contains("2 changes in this release.") && shown.contains("<li>a &lt;b&gt;</li>") && shown.contains("<li>c d</li>")
+                   && shown.contains("<section class=rel><h3>v1.9.0 <span class=when>2026-11-10</span></h3>"),
+                   "WN1 What's New shows version, date, count, its changes, then earlier releases")
+            expect(!other.contains("This version") && other.contains("runs v3.0.0, which has no notes"),
+                   "WN2 a version with no notes is said plainly, never labelled as this version")
+        }
         expect(s.statusHTML().contains("Automatic: on"), "R32 a Mac whose own config is Automatic shows Automatic: on")
         // 1.0.2 page: one state per app, Update N Macs, history, failure details, notes, offline.
         expect(s.statusHTML().contains("Update available") && s.statusHTML().contains("Update 1 Mac"),
