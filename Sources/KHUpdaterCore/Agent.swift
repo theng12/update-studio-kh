@@ -1221,7 +1221,43 @@ public enum Agent {
     /// unreadable or corrupt database, or an unknown table, exits non-zero. So a wrong guess about
     /// its data folder makes that Mac wait, and never quits a working Hub.
     /// It reads Hub's default data folder; on a Mac that moved it, the probe says "not idle".
-    public static let builtInIdleProbes: [String: String] = ["hub": #"test -r "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" && [ "$(sqlite3 -readonly "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" "select count(*) from batches, json_each(json_extract(batches.payload,'$.items')) i where (batches.finished=0 or batches.created_at > strftime('%s','now')-86400) and json_extract(i.value,'$.state') in ('queued','running','cancel_requested','cancelling','paused','uncertain','recovery_pending','draining','restart_requested')" 2>/dev/null)" = 0 ]"#]
+    public static let builtInIdleProbes: [String: String] = ["hub": #"test -r "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" && [ "$(/usr/bin/sqlite3 -readonly "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" "select count(*) from batches, json_each(json_extract(batches.payload,'$.items')) i where (batches.finished=0 or batches.created_at > strftime('%s','now')-86400) and json_extract(i.value,'$.state') in ('queued','running','cancel_requested','cancelling','paused','uncertain','recovery_pending','draining','restart_requested')" 2>/dev/null)" = 0 ]"#]
+
+    /// Hub's data folder under the user's real home. A launch agent's environment is not an
+    /// interactive shell's, so this is joined here and exported into the check, never inherited.
+    public static let hubDatabase = "Library/Application Support/StudioHub Standalone/hub/hub.db"
+
+    /// A shell word that survives any space or quote in a real home path.
+    static func shellWord(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// The check as it is actually run: an explicit HOME and PATH, then the app's own command.
+    static func idleScript(_ command: String, home: URL) -> String {
+        "HOME=\(shellWord(home.path))\nexport HOME\nPATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport PATH\n\(command)"
+    }
+
+    static func firstLine(_ answer: ShellResult) -> String? {
+        (answer.stdout + "\n" + answer.stderr)
+            .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+    }
+
+    /// Why Hub's check could not answer, in the operator's words. The check itself discards sqlite's
+    /// message, so a missing database, a missing sqlite3, a foreign or locked file all read as a bare
+    /// "exited 1 (no output)". This asks once more, keeping the words, and only after a refusal.
+    static func hubDiagnosis(home: URL, shell: Shell) -> String? {
+        let db = home.appendingPathComponent(hubDatabase).path
+        let script = """
+        db=\(shellWord(db))
+        [ -r "$db" ] || { printf 'no database at %s\n' "$db"; exit 0; }
+        /usr/bin/sqlite3 -readonly "$db" 'select count(*) from batches' 2>&1 || true
+        """
+        guard let answer = try? shell.run("/bin/sh", arguments: ["-lc", script], timeout: 5) else {
+            return "the database could not be read"
+        }
+        return firstLine(answer)
+    }
 
     /// Which idle check an app on this Mac gets, in the order the owner's rule asks for: the Mac's
     /// own `idleProbe` wins, an explicit empty string turns the unattended quit off for that Mac, and
@@ -1236,18 +1272,22 @@ public enum Agent {
     /// probe that outlasts its own short ceiling all skip the quit. Returns why, or nil when it is safe.
     /// Returns what the check answered (`said`, always worth a log line) and why the quit must be
     /// skipped (`skip`, nil when it is safe to go ahead and quit).
-    static func idleRefusal(app: String, probe: String?, shell: Shell,
-                            timeout: TimeInterval = 15) -> (said: String, skip: String?) {
+    static func idleRefusal(app: String, probe: String?, shell: Shell, timeout: TimeInterval = 15,
+                            home: URL = FileManager.default.homeDirectoryForCurrentUser) -> (said: String, skip: String?) {
         let command = probe?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !command.isEmpty else {
             return ("idle check: none configured", "\(app) has no idle check configured, so it was not asked to quit and nothing was interrupted.")
         }
         do {
-            let answer = try shell.run("/bin/sh", arguments: ["-lc", command], timeout: timeout)
+            let answer = try shell.run("/bin/sh", arguments: ["-lc", idleScript(command, home: home)], timeout: timeout)
             guard answer.exitCode != 0 else { return ("idle check exited 0, so it is idle", nil) }
-            let said = (answer.stdout + "\n" + answer.stderr)
-                .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
-                .first { !$0.isEmpty } ?? "no output"
+            // What the check said, and when it said nothing, why it could not: Hub's own check
+            // discards sqlite's message, and "exited 1 (no output)" tells an operator nothing.
+            var said = firstLine(answer) ?? ""
+            if said.isEmpty, builtInIdleProbes[app] != nil, let why = hubDiagnosis(home: home, shell: shell) {
+                said = why
+            }
+            if said.isEmpty { said = "no output" }
             return ("idle check exited \(answer.exitCode) (\(said))",
                     "\(app)'s idle check exited \(answer.exitCode) (\(said)), so it was not asked to quit and nothing was interrupted.")
         } catch {

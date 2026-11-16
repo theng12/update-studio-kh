@@ -5,6 +5,11 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.46 — 2026-11-16
+
+- Hub's idle check now says why it refused, in the words the operator needs: "no database at …", "file is not a database", "database is locked" or "unable to open database file", instead of a bare "exited 1 (no output)" that made a missing database, a missing `sqlite3`, a moved data folder and a genuinely busy Hub all look the same. The check itself is unchanged, and it still fails closed.
+- The check runs with the user's real home folder and a fixed `PATH` exported into it, and calls `/usr/bin/sqlite3` directly, so a launch agent's bare environment cannot change what it finds.
+
 ## 0.1.45 — 2026-11-16
 
 - Hub's idle check comes with the helper, so no Mac has to be visited to arm it: it is Hub's own condition, and it fails closed — a missing, unreadable or corrupt Hub database answers "not idle", so that Mac waits rather than quitting a working Hub. A Mac can overrule it: `idleProbe` in that Mac's `apps.hub` settings replaces the built-in check, and an empty `idleProbe` turns the unattended quit off there. No other app is affected.

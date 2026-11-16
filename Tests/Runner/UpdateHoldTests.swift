@@ -46,6 +46,17 @@ private final class HoldClient: HTTPClient, @unchecked Sendable {
     }
 }
 
+/// Records the exact script an idle check is run with, and answers it as a scripted Mac would.
+private final class ScriptSpy: Shell, @unchecked Sendable {
+    var scripts: [String] = []
+    let answer: ShellResult
+    init(answer: ShellResult) { self.answer = answer }
+    func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+        scripts.append(arguments.last ?? "")
+        return answer
+    }
+}
+
 /// Answers an idle check as a scripted Mac would, without running it, and hands everything else to
 /// the real recording shell. Lets a test decide what the app's check says on this machine.
 private struct ProbeShell: Shell {
@@ -671,6 +682,40 @@ func updateHoldTests() {
                && !busy.app.events.contains("quit") && busy.app.running
                && (try? BundleInfo.read(busy.app.installed.path))?.version == "1.0.0",
                "UH46 the built-in Hub check decides with no Mac setting (\(done?.status ?? "nil") / \(waited?.status ?? "nil"); events \(busy.app.events))")
+    }
+
+    // UH47 a launch agent's environment is not an interactive shell's: the check is run with the
+    // user's real HOME and a fixed PATH exported, quotes and spaces in the path intact, and Hub's
+    // check calls /usr/bin/sqlite3 rather than whatever a PATH happens to find.
+    do {
+        let spy = ScriptSpy(answer: ShellResult(exitCode: 0, stdout: "", stderr: ""))
+        _ = Agent.idleRefusal(app: "hub", probe: "true", shell: spy,
+                              home: URL(fileURLWithPath: "/Users/a b/Mac"))
+        let script = spy.scripts.first ?? ""
+        expect(script.contains("HOME='/Users/a b/Mac'\nexport HOME")
+               && script.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport PATH")
+               && Agent.shellWord("x'y") == "'x'\\''y'"
+               && (Agent.builtInIdleProbes["hub"] ?? "").contains("/usr/bin/sqlite3")
+               && !(Agent.builtInIdleProbes["hub"] ?? "").contains("$(sqlite3"),
+               "UH47 the check runs with an explicit HOME and PATH and an absolute sqlite3 (\(script.prefix(60)))")
+    }
+
+    // UH48 a refusing Hub check says why: a missing folder is named, and a file that is not a
+    // database gives sqlite's own words, instead of the bare "exited 1 (no output)" that hid the
+    // difference between an unreadable database, a missing sqlite3 and a genuinely busy Hub.
+    do {
+        let empty = tmpDir("uh48-home")
+        let missing = Agent.idleRefusal(app: "hub", probe: "exit 1", shell: RecordingShell(mount: tmpDir("uh48")),
+                                        home: empty)
+        let db = empty.appendingPathComponent(Agent.hubDatabase)
+        try? fm.createDirectory(at: db.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data("not a database".utf8).write(to: db)
+        let foreign = Agent.idleRefusal(app: "hub", probe: "exit 1", shell: RecordingShell(mount: tmpDir("uh48")),
+                                        home: empty)
+        expect((missing.skip ?? "").contains("no database at ")
+               && (foreign.skip ?? "").lowercased().contains("not a database")
+               && !(missing.skip ?? "").contains("(no output)") && !(foreign.skip ?? "").contains("(no output)"),
+               "UH48 a refusing Hub check says why (\(missing.said) | \(foreign.said))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
