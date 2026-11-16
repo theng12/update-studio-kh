@@ -7,8 +7,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 0.1.45 — 2026-11-16
 
-- Hub's idle check now ships inside the helper, so every Mac can update Hub with nobody sitting at it — no Mac's settings need editing. It is Hub's owner's own command, and it fails closed: a missing, unreadable or corrupt Hub database answers "not idle", so that Mac waits instead of quitting a working Hub.
-- A Mac can still overrule it. `idleProbe` in that Mac's `apps.hub` settings replaces the built-in check, and an empty `idleProbe` turns the unattended quit off on that Mac; no other app is affected.
+- Hub's idle check comes with the helper, so a Mac needs no setting edited to update Hub unattended: it is Hub's own condition, and it fails closed — a missing, unreadable or corrupt Hub database answers "not idle", so that Mac waits rather than quitting a working Hub. A Mac can overrule it: `idleProbe` in that Mac's `apps.hub` settings replaces the built-in check, and an empty `idleProbe` turns the unattended quit off there. No other app is affected.
 
 ## 0.1.44 — 2026-11-16
 
