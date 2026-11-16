@@ -52,6 +52,16 @@ public enum UpdateHold {
         return reply
     }
 
+    /// A refused connection to the feed's endpoint is not a generic failure: it means the installed
+    /// build predates the hold and needs one normal install while it is closed. Kept distinct from a
+    /// timeout (endpoint present but slow) so the recorded reason names the real next step.
+    public static func endpointAbsent(_ error: Error) -> Bool {
+        let codes: [Int] = [NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost]
+        if let urlError = error as? URLError { return codes.contains(urlError.code.rawValue) }
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && codes.contains(ns.code)
+    }
+
     /// Best effort: the pause is in-memory and expires by itself, so a failed DELETE never leaves
     /// an app that has stopped taking work.
     public static func resume(_ endpoint: URL, http: HTTPClient) {

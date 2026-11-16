@@ -1129,6 +1129,12 @@ public enum Agent {
             }
             return (endpoint, reply.summary, nil)
         } catch {
+            // The feed names an endpoint the installed build does not serve: a first hold-capable
+            // release needs one normal install while the app is closed. Say that, not a bare -1004.
+            if UpdateHold.endpointAbsent(error) {
+                return (endpoint, nil, RecipeResult(status: "refused",
+                    reason: "\(app) is running and its installed build has no update-hold endpoint; it needs one normal install while \(app) is closed. Nothing was changed."))
+            }
             return (endpoint, nil, RecipeResult(status: "refused", reason: "\(error)"))
         }
     }

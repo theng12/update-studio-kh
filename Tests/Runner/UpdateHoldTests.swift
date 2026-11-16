@@ -8,11 +8,14 @@ private final class HoldClient: HTTPClient, @unchecked Sendable {
     /// One reply per POST, consumed in order; an empty script answers 500.
     var replies: [(status: Int, data: Data)] = []
     var calls: [String] = []
+    /// When set, the hold POST fails like a transport error instead of answering from the script.
+    var postError: URLError?
     let lock = NSLock()
     init(_ inner: InProcessClient) { self.inner = inner }
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { try inner.get(url, headers: headers) }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
         guard url.host == "127.0.0.1" else { return try inner.post(url, headers: headers, body: body) }
+        if let postError { throw postError }
         lock.lock(); calls.append("hold"); let reply = replies.isEmpty ? (status: 500, data: Data()) : replies.removeFirst(); lock.unlock()
         return (reply.data, reply.status)
     }
@@ -225,6 +228,33 @@ func updateHoldTests() {
         expect(result?.status == "install_failed" && (result?.reason ?? "").contains("missing or unreadable")
                && (try? BundleInfo.read(installed.path))?.version == "1.0.0" && !fm.fileExists(atPath: journal.path),
                "UH16 a missing staged app leaves the installed app untouched (\(result?.status ?? "nil"), \(result?.reason ?? ""))")
+    }
+
+    // UH19 an installed build with no hold endpoint gets a named bootstrap step, not a bare -1004.
+    do {
+        let f = rig("hold-absent", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        let reason = result?.reason ?? ""
+        expect(result?.status == "refused" && reason.contains("no update-hold endpoint")
+               && reason.contains("one normal install") && !f.client.calls.contains("artifact"),
+               "UH19 an absent endpoint names the bootstrap install (\(reason))")
+    }
+
+    // UH20 a slow endpoint stays a timeout: the bootstrap wording is only for a refused connection.
+    do {
+        let f = rig("hold-timeout", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.timedOut)
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control })
+        let reason = result?.reason ?? ""
+        expect(result?.status == "refused" && !reason.contains("no update-hold endpoint"),
+               "UH20 a timeout is not reported as an absent endpoint (\(reason))")
     }
 
     // UH11 the hold request is bounded by the contract's 30 s window, not the client's 60 s.
