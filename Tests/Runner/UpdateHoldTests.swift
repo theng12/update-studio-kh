@@ -377,6 +377,48 @@ func updateHoldTests() {
                "UH32 the exact admin drain holds before the byte (\(f.client.calls))")
     }
 
+    // UH35 the feed records the first version that published a hold address and carries it on.
+    do {
+        let f = rig("hold-since", hold: holdURL)
+        try! FeedPublisher.publish(feedDir: f.rig.feed, keyFile: f.rig.key, app: "demo", version: "2.0.1",
+                                   artifact: f.rig.artifact("demo2.dmg", "dmg bytes 2"), kind: "fake-for-tests", allowSame: false,
+                                   meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.1", iconPNG: Data()) })
+        let carried = try! FeedPublisher.loadVerifiedFeed(from: f.rig.feed, publicKey: f.rig.pair.privateKey.publicKey)!.apps["demo"]
+        try! FeedPublisher.publish(feedDir: f.rig.feed, keyFile: f.rig.key, app: "demo", version: "2.0.2",
+                                   artifact: f.rig.artifact("demo3.dmg", "dmg bytes 3"), kind: "fake-for-tests", allowSame: false,
+                                   meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.2", iconPNG: Data()) },
+                                   holdSince: "1.5.0")
+        let named = try! FeedPublisher.loadVerifiedFeed(from: f.rig.feed, publicKey: f.rig.pair.privateKey.publicKey)!.apps["demo"]
+        expect(f.entry.holdSince == "2.0.0" && carried?.holdSince == "2.0.0" && named?.holdSince == "1.5.0",
+               "UH35 holdSince starts at the first hold publish, is carried, and --hold-since sets it (\(f.entry.holdSince ?? "nil"), \(carried?.holdSince ?? "nil"), \(named?.holdSince ?? "nil"))")
+    }
+
+    // UH36 a build older than holdSince answering 401 needs one install while closed, said once;
+    // a build at or past holdSince answering 401 is still a real credential refusal.
+    do {
+        func attempt(_ tag: String, installed: String) -> RecipeResult? {
+            let f = rig(tag, hold: holdURL, recipe: "app-dmg", running: true)
+            var feed = f.feed
+            feed.apps["demo"]?.holdSince = "0.6.240"
+            f.client.replies = [(status: 401, data: Data(#"{"error":"unauthorized"}"#.utf8))]
+            return try? Agent.install(app: "demo", feed: feed, installed: installed, config: f.cfg,
+                                      serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                      http: f.client, shell: RecordingShell(mount: f.mount),
+                                      control: { _, _ in f.app.control })
+        }
+        let old = attempt("hold-since-old", installed: "0.6.235")
+        let current = attempt("hold-since-current", installed: "0.6.242")
+        var memory = AgentMemory()
+        let lines = [old, old].compactMap { $0.flatMap { Agent.refusalNote(app: "demo", version: "0.6.242", result: $0, memory: &memory) } }
+        let oldReason = old?.reason ?? "", currentReason = current?.reason ?? ""
+        expect(old?.status == "refused" && oldReason.contains("0.6.235") && oldReason.contains("0.6.240")
+               && oldReason.contains("one normal install while demo is closed") && !oldReason.contains("credential")
+               && lines.count == 1,
+               "UH36 0.6.235 below holdSince 0.6.240 with a 401 takes the one-install path, logged once (\(oldReason); \(lines.count) lines)")
+        expect(current?.status == "refused" && currentReason.contains("credential") && !currentReason.contains("predates"),
+               "UH36 0.6.242 with a 401 is still a credential refusal (\(currentReason))")
+    }
+
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
     do {
         let f = rig("hold-401", hold: holdURL, recipe: "app-dmg", running: true)

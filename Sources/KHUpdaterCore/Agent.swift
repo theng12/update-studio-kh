@@ -887,7 +887,7 @@ public enum Agent {
                 case ServerCommand.rollback:
                     res = try orderedRollback(app: item.app, order: item.id, installed: installed[item.app], config: config,
                                               stateDir: stateDir, shell: shell, control: control,
-                                              holdURL: feed.apps[item.app]?.holdURL, http: http)
+                                              holdURL: feed.apps[item.app]?.holdURL, holdSince: feed.apps[item.app]?.holdSince, http: http)
                 default:
                     res = RecipeResult(status: "refused", reason: "this Mac does not know the order action \"\(item.action)\"; refused")
                 }
@@ -1070,7 +1070,7 @@ public enum Agent {
     /// what runs is the bundle already on this Mac, verified before anything is stopped.
     static func orderedRollback(app: String, order: String, installed: String?, config: AgentConfig, stateDir: URL,
                                 shell: Shell, control: (String, AppConfig) -> AppControl,
-                                holdURL: String? = nil, http: HTTPClient? = nil) throws -> RecipeResult {
+                                holdURL: String? = nil, holdSince: String? = nil, http: HTTPClient? = nil) throws -> RecipeResult {
         guard let cfg = config.apps[app] else {
             return RecipeResult(status: "refused", reason: "\(app) is not configured on this Mac")
         }
@@ -1088,7 +1088,8 @@ public enum Agent {
             var endpoint: URL?
             let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
             if let http {
-                let hold = beginUpdateHold(app: app, holdURL: holdURL, http: http, control: ctl, exempt: exempt)
+                let hold = beginUpdateHold(app: app, holdURL: holdURL, http: http, control: ctl, exempt: exempt,
+                                           installed: installed, holdSince: holdSince)
                 if let refusal = hold.refusal { return refusal }
                 endpoint = hold.endpoint
             } else if ctl.isRunning() != false, !exempt {
@@ -1131,7 +1132,7 @@ public enum Agent {
     /// paths so both hold before a swap and both refuse an app that cannot offer a gap. Returns the
     /// endpoint even when the reply is unsafe, so the caller can resume it.
     static func beginUpdateHold(app: String, holdURL: String?, http: HTTPClient, control: AppControl,
-                                exempt: Bool) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
+                                exempt: Bool, installed: String? = nil, holdSince: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
         guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }
         guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
             return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. Update it by hand."))
@@ -1152,6 +1153,13 @@ public enum Agent {
             // The feed names an endpoint the installed build does not serve: a first hold-capable
             // release needs one normal install while the app is closed. Say that, not a bare -1004.
             if let refused = error as? UpdateHold.Refused {
+                // A build older than the feed's holdSince has no hold route yet, so its auth layer's
+                // 401/403 (or a 404) is "needs one install while closed", not a credential refusal.
+                if [401, 403, 404].contains(refused.status), let installed, let since = holdSince,
+                   VersionCompare.isNewer(since, than: installed) {
+                    return (endpoint, nil, RecipeResult(status: "refused",
+                        reason: "\(app) \(installed) predates its update hold (first in \(since)), so it answered \(refused.status); it needs one normal install while \(app) is closed. Nothing was changed."))
+                }
                 let reason: String
                 switch refused.status {
                 case 401, 403:
@@ -1208,7 +1216,8 @@ public enum Agent {
             let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
             DownloadControl.updateProgress("held")
             let hold = beginUpdateHold(app: app, holdURL: feed.apps[app]?.holdURL, http: http,
-                                       control: appControl, exempt: exempt)
+                                       control: appControl, exempt: exempt, installed: installed,
+                                       holdSince: feed.apps[app]?.holdSince)
             // Resume is attempted even when the POST itself failed: it may have paused before failing.
             holdEndpoint = hold.endpoint
             holdNote = hold.note
