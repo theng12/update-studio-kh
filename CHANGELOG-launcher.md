@@ -4,7 +4,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 0.1.55 — 2026-11-17
 
-- The feed is fetched by its host name. A mirror named by a bare IP address can never work on macOS — plain HTTP to an address is refused by App Transport Security every time — so such an address is dropped instead of retried, and when the system does refuse one the reason says so instead of calling the publisher unreachable. A host-name blip is still retried.
+- When macOS refuses a feed address, the reason now says so. Plain HTTP to a bare IP address is refused by App Transport Security every time, and that used to read as "the publisher is unreachable" — a network problem when no network change could fix it. A host-name blip is still retried.
 - The Fleet window connects with the Mac's full host name, the one every other tool writes to `known_hosts`, and passes this user's `known_hosts` explicitly. A Mac that has not trusted the publisher yet is told the one command that trusts it, and retries after that — an unknown key is still never accepted quietly.
 - The background updater now keeps two versions: the one running and the one it replaced. Anything older moves to `~/Desktop/_trash/updater/` with a manifest, so nothing is deleted and nothing is left to grow; a version something is running from is skipped and said so, and with no recorded previous version nothing moves at all.
 - An idle agent no longer keeps connections it has stopped using: a transfer that is cancelled or past its deadline now releases its session immediately instead of leaving its sockets and ports behind.

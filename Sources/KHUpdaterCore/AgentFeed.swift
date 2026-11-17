@@ -33,11 +33,8 @@ extension Agent {
         let isHost = network?.hosts[config.machine] != nil
         let original = serverBase.appendingPathComponent("release.json")
         // A mirror whose address cannot work is dropped, not allowed to fail the whole check: one bad
-        // entry in a pushed list must not leave every Mac with no feed at all. A bare IP is dropped
-        // for a second reason: macOS refuses plain HTTP to an address (ATS -1022) every time, so it
-        // is not a slower fallback but one that can never answer.
+        // entry in a pushed list must not leave every Mac with no feed at all.
         var sources = (network?.feedURLs ?? []).compactMap { try? FeedNetwork.feedURL($0) }
-            .filter { !(FeedNetwork.isAddressLiteral($0.host ?? "")) }
         sources.removeAll { $0 == original }
         if isHost { sources.insert(original, at: 0) } else { sources.append(original) }
         return sources

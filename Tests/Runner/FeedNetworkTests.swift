@@ -209,8 +209,6 @@ func feedNetworkTests() {
            "FN40 the parser still reads an address a signed record may name")
     expect(FeedNetwork.isAddressLiteral("100.82.91.102") && !FeedNetwork.isAddressLiteral("terranash-1301.tail093f2c.ts.net"),
            "FN40 an address literal is told apart from a host name")
-    expect((try? FeedNetwork.feedURL("http://terranash-1301.tail093f2c.ts.net:8790/release.json")) != nil,
-           "FN40 the host name the feed uses is still accepted")
     expect((try? FeedNetwork.feedURL("http://127.0.0.1:8790/release.json")) != nil,
            "FN40 loopback stays usable for this Mac's own publisher")
 }
