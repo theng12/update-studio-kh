@@ -8,6 +8,9 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - Downloads and rollback copies no longer pile up. Only the newest installer is kept for each app, and each app keeps exactly one previous version to roll back to; a superseded one is removed instead of being moved into the trash.
 - An update is refused before its download starts when the disk has less free space than the installer plus 2 GB, and the result names the free space it found. Free space and it tries again.
 - Both limits are settings with these defaults: one copy kept, 2 GB kept free.
+- An update's health check now starts when the relaunched app's process appears, not when the quit began. The Gateway spends most of its gap draining and stopping (127 s measured on 1301), and 0.1.50 charged that to the app's start, so a version upgrade would have been rolled back with the app running.
+- The Gateway's health ceiling is 300 s from that moment — 2.3x the measurement — so a slow but successful start is not called a failure.
+- Every install now reports its own step timings in the result (gone, promoted, launched, appeared, healthy), so the next estimate is measured rather than guessed.
 
 ## 0.1.50 — 2026-11-17
 

@@ -502,7 +502,9 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
 5. put back what the install stopped, unattended included: an app it found running is relaunched
    — background and hidden (`open -g -j`; the Gateway through its own login job, so it keeps
    `--background` and does not come back as a windowed copy) — and required to be healthy as the
-   new version. This is the owner's rule: the app resumes by itself, because nobody is there to
+   new version, with the health clock starting when the relaunched process appears and the
+   Gateway's ceiling measured from there (300 s; 127 s was measured on 1301), so a slow quit-and-stop
+   is not charged to the app's own start. This is the owner's rule: the app resumes by itself, because nobody is there to
    open it after an Automatic install or a remote order. A running test/hidden instance is still
    never relaunched in the owner's profile, and a test run is one that says so (`--test-mode`,
    `--headless`, `--snapshot`) or carries its own data location (a path argument, an isolated

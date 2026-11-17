@@ -196,6 +196,7 @@ public enum Recipe {
                               refuseIfRunning: Bool = false, relaunchAfterInstall: Bool = true,
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil,
+                              clock: @escaping () -> TimeInterval = Mono.now,
                               beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
@@ -241,7 +242,7 @@ public enum Recipe {
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
                                     refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall,
-                                    beforeStop: beforeStop)
+                                    clock: clock, beforeStop: beforeStop)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -411,8 +412,15 @@ public enum Recipe {
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false,
                                  relaunchAfterInstall: Bool = true,
+                                 clock: @escaping () -> TimeInterval = Mono.now,
                                  beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let installedPath = paths.installedPath
+        // The gap's own timeline: each step's offset from the moment the install began, so the next
+        // estimate is measured rather than guessed. It travels in the result, so the helper's log
+        // and the fleet record carry it.
+        let started = Date()
+        var marks: [(String, TimeInterval)] = []
+        func mark(_ step: String) { marks.append((step, Date().timeIntervalSince(started))) }
         // The last read before anything would be stopped is the one that decides: the app may have
         // been opened (or closed) while the installer was being prepared.
         let wasRunning = control.isRunning() ?? true
@@ -488,6 +496,7 @@ public enum Recipe {
             }
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
         }
+        mark("gone")
 
         // 4. Promote. Every throw from here restores the previous bundle before it is reported.
         do {
@@ -516,6 +525,7 @@ public enum Recipe {
                     "the app was installed but its background service did not restart "
                     + "(\(resumed.reason ?? "launchd refused")); the install is kept and the next run tries again")
             }
+            mark("promoted")
         } catch {
             let cause = error
             let restored: String
@@ -533,7 +543,9 @@ public enum Recipe {
 
         func finish(_ result: RecipeResult) -> RecipeResult {
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
-            let all = notes.filter { !$0.isEmpty }
+            let timeline = marks.isEmpty ? "" : "timings: "
+                + marks.map { "\($0.0) \(String(format: "%.1f", $0.1))s" }.joined(separator: " · ")
+            let all = notes.filter { !$0.isEmpty } + [timeline]
             guard !all.isEmpty else { return result }
             return RecipeResult(status: result.status,
                                 reason: ([result.reason ?? ""] + all).filter { !$0.isEmpty }.joined(separator: "; "),
@@ -572,7 +584,18 @@ public enum Recipe {
             return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
         }
         control.launch()
-        if waitHealthy(control, version: targetVersion) { return finish(settled(RecipeResult(status: "updated"))) }
+        mark("launched")
+        // The health window starts when the new process is there, not when the quit began: Gateway
+        // spends most of its gap draining and stopping, and that time must not be charged to the
+        // app's own start (measured on 1301, 2026-11-17: 127 s quit-to-healthy, the health clock
+        // had already nearly expired).
+        let appeared = waitForRunning(control, clock: clock, ceiling: control.healthTimeout)
+        mark(appeared ? "appeared" : "did-not-appear")
+        mark("health-window \(Int(control.healthTimeout))s")
+        if appeared, waitHealthy(control, version: targetVersion, clock: clock) {
+            mark("healthy")
+            return finish(settled(RecipeResult(status: "updated")))
+        }
 
         // 6. Roll back — only once both the app and its service are really gone.
         guard control.quit(), control.stopService() else {
@@ -826,6 +849,17 @@ public enum Recipe {
             throw error
         }
         if fm.fileExists(atPath: displaced.path) { _ = Space.remove(displaced, shell: SystemShell(), fileManager: fm) }
+    }
+
+    /// The relaunched process is there. Bounded by the health ceiling, and the health clock starts
+    /// only after this returns: a slow quit-and-stop is the app draining, not its start failing.
+    static func waitForRunning(_ control: AppControl, clock: () -> TimeInterval, ceiling: TimeInterval) -> Bool {
+        let deadline = clock() + ceiling
+        repeat {
+            if control.isRunning() == true { return true }
+            Thread.sleep(forTimeInterval: control.pollInterval)
+        } while clock() < deadline
+        return control.isRunning() == true
     }
 
     static func waitHealthy(_ control: AppControl, version: String, clock: () -> TimeInterval = Mono.now) -> Bool {
@@ -1386,7 +1420,10 @@ public enum LiveControl {
             return answer.code == 200 && ours(answer.pid) && !owners.isEmpty
                 && owners.allSatisfy { $0 == answer.pid } && appHealthy(expected)
         }
-        control.healthTimeout = 120
+        // Measured on 1301 (2026-11-17): quit-to-server-healthy is 127 s, most of it the drain and
+        // stop. The clock now starts when the process appears, so this is the app's own start with
+        // margin — 300 s, 2.3x the measurement. It is written into every result's timings line.
+        control.healthTimeout = 300
         return control
     }
 }
