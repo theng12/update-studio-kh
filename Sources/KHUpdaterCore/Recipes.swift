@@ -55,6 +55,11 @@ public struct AppControl {
     public var resumeServices: () -> ServiceResume
     /// Healthy *as this version*: the new one after an install, the previous one after a rollback.
     public var healthy: (_ expectedVersion: String) -> Bool
+    /// Which requirement a failed health check is missing, in words — a version mismatch, the app
+    /// not running, or the name of the service that is not running — or nil when it is healthy or
+    /// cannot tell. A failure that says only "not healthy within 60 s" sends someone digging
+    /// through logs; the updater already knows the answer and must say it.
+    public var healthRequirement: (_ expectedVersion: String) -> String?
     public var healthTimeout: TimeInterval
     public var pollInterval: TimeInterval
     /// How long the app must stay healthy without a break before an install is accepted: an app that
@@ -62,13 +67,15 @@ public struct AppControl {
     public var healthSettle: TimeInterval
     public init(isRunning: @escaping () -> Bool?, quit: @escaping () -> Bool, launch: @escaping () -> Void,
                 stopService: @escaping () -> Bool = { true }, healthy: @escaping (String) -> Bool,
+                healthRequirement: @escaping (String) -> String? = { _ in nil },
                 healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10,
                 serviceLabels: @escaping () -> [String] = { [] }, restoreServices: @escaping ([String]) -> Void = { _ in },
                 resumeServices: @escaping () -> ServiceResume = { .none },
                 isTestInstance: @escaping () -> Bool = { false }) {
         self.isRunning = isRunning; self.quit = quit; self.launch = launch; self.stopService = stopService
         self.serviceLabels = serviceLabels; self.restoreServices = restoreServices; self.resumeServices = resumeServices
-        self.healthy = healthy; self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
+        self.healthy = healthy; self.healthRequirement = healthRequirement
+        self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
         self.healthSettle = healthSettle
         self.isTestInstance = isTestInstance
     }
@@ -563,8 +570,10 @@ public enum Recipe {
             }
             switch result.status {
             case "updated": return answered("rolled_back_by_owner", result.reason)
-            case "rolled_back": return answered("rollback_failed", "\(targetVersion) was not healthy within "
-                                                + "\(Int(control.healthTimeout)) s, so \(displaced ?? "the version this Mac was running") was put back")
+            case "rolled_back":
+                // Keep the install's own sentence: it names the requirement that was missing.
+                return answered("rollback_failed", result.reason ?? "\(targetVersion) was not healthy within "
+                                + "\(Int(control.healthTimeout)) s, so \(displaced ?? "the version this Mac was running") was put back")
             case "rollback_unhealthy": return answered("rollback_unhealthy", "\(targetVersion) was not healthy, and putting "
                                                        + "\(displaced ?? "the version this Mac was running") back did not come up healthy either")
             default: return result
@@ -604,8 +613,14 @@ public enum Recipe {
         // 6. Roll back — only once both the app and its service are really gone. The sentence names
         // what actually happened: a process that never existed did not fail a health check, and on
         // the fleet page "never started" is its own status, not a rollback.
+        // What the check was missing, not just how long it waited: the version on disk, the app
+        // process, or the name of the service that is not running. This sentence is the only
+        // diagnostic anyone at a site Mac has.
+        let healthGap = appeared ? (control.healthRequirement(targetVersion) ?? "health check did not pass") : nil
+        if let healthGap { mark("health \(healthGap)") }
         let why = appeared ? "the new version was not healthy within \(Int(control.healthTimeout)) s"
-                           : "the new version did not start within \(Int(appearCeiling)) s"
+            + (healthGap.map { " (health: \($0))" } ?? "")
+            : "the new version did not start within \(Int(appearCeiling)) s"
         guard control.quit(), control.stopService() else {
             // Both bundles stay, and so does the journal: the next run asks the bad version to stop
             // again instead of finding the new version in place and calling the app settled.
@@ -1339,6 +1354,17 @@ public enum LiveControl {
             healthy: { expected in
                 (try? BundleInfo.read(installedPath).version) == expected && isRunning(installedPath) == true
                     && (requiredServices.isEmpty || requiredServices.isSubset(of: Set(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)))
+            },
+            // The same three conditions `healthy` checks, said one at a time so a failed install
+            // names the one that was missing. Order = cheapest first, and the first failure is the
+            // one the person needs.
+            healthRequirement: { expected in
+                let onDisk = try? BundleInfo.read(installedPath).version
+                if onDisk != expected { return "version \(onDisk ?? "unknown") on disk, expected \(expected)" }
+                if isRunning(installedPath) != true { return "app not running" }
+                let running = Set(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)
+                if let missing = requiredServices.subtracting(running).sorted().first { return "service \(missing) not running" }
+                return nil
             },
             healthTimeout: 60,
             serviceLabels: { Array(requiredServices.union(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)).sorted() },

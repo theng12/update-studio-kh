@@ -113,6 +113,8 @@ final class FakeApp: @unchecked Sendable {
     /// version comes up at once, so a "never started" case can still restore and settle.
     var appearsOnlyFor: String?
     var clock: () -> TimeInterval = Mono.now
+    /// What a failed health check is missing, when a test sets it.
+    var healthRequirement: ((String) -> String?)?
     private var launchedAt: TimeInterval?
     let installed: URL
     init(installed: URL, running: Bool = true, quits: [Bool] = [true], stops: [Bool] = [true], healthy: Set<String>) {
@@ -137,6 +139,7 @@ final class FakeApp: @unchecked Sendable {
                 let onDisk = (try? BundleInfo.read(self.installed.path))?.version
                 return self.up && onDisk == expected && self.healthyVersions.contains(expected)
             },
+            healthRequirement: self.healthRequirement ?? { _ in nil },
             healthTimeout: self.healthTimeout, pollInterval: 0.05,
             isTestInstance: { self.testInstance })
     }
@@ -4138,6 +4141,7 @@ r41HealthMustHold()
         spaceFlowTests()
         spaceReclaimTests()
         launchOrderTests()
+        healthRequirementTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }
