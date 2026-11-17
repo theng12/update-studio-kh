@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.56 — 2026-11-17
+
+- The helper now starts itself again in place after 500 transfers or a day, whichever comes first, and writes one line saying so. Each completed transfer leaves about one port and a few tens of kilobytes behind in the system's HTTP stack — roughly 860 a day at a five-minute check — and nothing gives them back; this is the HTTP stack's own cost, measured with a bare URLSession, not a connection this app forgets to close. Restarting in place keeps the same process, the same launchd job and no supervision gap; it happens only between runs, never while a download, an install or an update hold is in progress, and it holds the helper near 500 ports and about 20 MB instead of climbing.
+
 ## 0.1.55 — 2026-11-17
 
 - When macOS refuses a feed address, the reason now says so. Plain HTTP to a bare IP address is refused by App Transport Security every time, and that used to read as "the publisher is unreachable" — a network problem when no network change could fix it. A host-name blip is still retried.

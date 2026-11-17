@@ -68,6 +68,7 @@ func transferLeakTests() {
     let before = leakSnapshot()
 
     let files = tmpDir("transfer-leak")
+    let meterBefore = TransferMeter.completed
     for i in 0..<25 {
         _ = try? client.get(base.appendingPathComponent("feed\(i).json"), headers: [:])
         _ = try? client.download(base.appendingPathComponent("artifact\(i)"), headers: [:],
@@ -78,6 +79,9 @@ func transferLeakTests() {
     let after = leakSnapshot()
 
     expect(server.seen.count == 51, "TR1 all 51 transfers reached the socket (\(server.seen.count))")
+    // The lifetime cap counts the same transfers the port cost comes from.
+    expect(TransferMeter.completed - meterBefore >= 50,
+           "TR1 the transfer meter counts every completed transfer (\(TransferMeter.completed - meterBefore) for 50)")
     expect(after.fds <= before.fds + 4,
            "TR1 50 transfers do not leak descriptors (\(before.fds) -> \(after.fds))")
     expect(after.threads <= before.threads + 3,

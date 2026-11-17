@@ -1,5 +1,28 @@
 import Foundation
 import CryptoKit
+#if canImport(Darwin)
+import Darwin
+#endif
+
+/// Starts this same binary again, with the same arguments, in the same process: same pid, same
+/// launchd job, no supervision gap, and a fresh heap, port set and HTTP stack. Called only between
+/// runs, so no download, install or update hold is ever in flight when it happens.
+private func recycleInPlace() -> Never {
+    let argv0 = CommandLine.arguments.first ?? ""
+    // launchd and the stub both use an absolute path; a person running it from a shell does not.
+    var path = argv0
+    if !argv0.hasPrefix("/"), let resolved = realpath(argv0, nil) {
+        path = String(cString: resolved)
+        free(resolved)
+    }
+    guard path.hasPrefix("/") else {
+        FileHandle.standardError.write(Data("cannot restart in place at \(argv0)\n".utf8))
+        exit(70)
+    }
+    execv(path, CommandLine.unsafeArgv)
+    FileHandle.standardError.write(Data("could not restart in place at \(path): \(String(cString: strerror(errno)))\n".utf8))
+    exit(70)
+}
 
 /// The launchd job's own log path; another plist or an isolated test home simply has no file here.
 private func rotateAgentLog() {
@@ -391,6 +414,7 @@ struct KHUMain {
             }
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
             let initialRequests = installs
+            let startedAt = Date()
             func loop() {
                 var requested = initialRequests
                 repeat {
@@ -406,6 +430,19 @@ struct KHUMain {
                         menu?.finished(nil, error: "\(error)")
                     }
                     if cfg.once { break }
+                    // Between runs, never inside one: nothing is downloading, installing or holding.
+                    // A requested install is one-shot setup, so those runs never recycle.
+                    let cap = ProcessInfo.processInfo.environment["KHU_RECYCLE_TRANSFERS"].flatMap(Int.init)
+                        ?? AgentRecycle.afterTransfers
+                    if initialRequests.isEmpty,
+                       let why = AgentRecycle.due(transfers: TransferMeter.completed,
+                                                  age: Date().timeIntervalSince(startedAt),
+                                                  afterTransfers: cap) {
+                        // Written straight to the pipe: a buffered `print` would be lost by the exec.
+                        FileHandle.standardError.write(
+                            Data("note: starting this helper again in place because \(why). Same process and job; no work was interrupted.\n".utf8))
+                        recycleInPlace()
+                    }
                     rotateAgentLog()
                     let seconds = Double(max(1, cfg.intervalMinutes) * 60)
                     if let menu { requested = menu.waitForNextRun(seconds: seconds) } else { Thread.sleep(forTimeInterval: seconds) }

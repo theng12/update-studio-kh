@@ -209,10 +209,42 @@ public struct URLSessionHTTPClient: HTTPClient {
         } else {
             session.finishTasksAndInvalidate()
         }
+        TransferMeter.record()
         if cancelled { throw khuFail("cancelled on this Mac; nothing was changed") }
         guard finished else { throw khuFail("\(url.path) did not finish within \(Int(deadline)) s; it was stopped") }
         if let error = sink.error { throw error }
         return sink
+    }
+}
+
+/// HTTP transfers this process has made. Each completed one costs the system's HTTP stack about one
+/// Mach port and 30-50 KB that are never given back — measured 2026-11-17 with a bare URLSession,
+/// independent of session lifetime and of how the session is invalidated — so the agent bounds its
+/// own lifetime by this count and starts again in place before the total can matter.
+public enum TransferMeter {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var count = 0
+    public static var completed: Int { lock.lock(); defer { lock.unlock() }; return count }
+    static func record() { lock.lock(); count += 1; lock.unlock() }
+}
+
+/// When this process should start again in place. Both bounds live here so the arithmetic is in one
+/// place: an idle run is the feed, the status report and the orders check — three transfers every
+/// five minutes, 864 a day — so 500 lasts about fourteen hours and caps the process at roughly 500
+/// ports and 20 MB, instead of the ~864 ports and ~35 MB a day it would otherwise add.
+public enum AgentRecycle {
+    public static let afterTransfers = 500
+    public static let afterSeconds: TimeInterval = 24 * 3600
+    public static func due(transfers: Int, age: TimeInterval,
+                           afterTransfers: Int = afterTransfers,
+                           afterSeconds: TimeInterval = afterSeconds) -> String? {
+        if transfers >= afterTransfers {
+            return "it has made \(transfers) transfers, and the system's HTTP stack keeps a port for each"
+        }
+        if age >= afterSeconds {
+            return "it has been running \(Int(age / 3600)) h, and the system's HTTP stack keeps a port for each transfer"
+        }
+        return nil
     }
 }
 

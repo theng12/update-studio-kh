@@ -4058,6 +4058,7 @@ struct RunnerMain {
             exit(failed == 0 ? 0 : 1)
         }
         if ProcessInfo.processInfo.environment["TRANSFER_ONLY"] == "1" {
+            recycleTests()
             transferLeakTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
@@ -4188,6 +4189,7 @@ r41HealthMustHold()
         updateHoldTests()
         orderQueueTests()
         downloadDeadlineTests()
+        recycleTests()
         transferLeakTests()
         artifactDeltaTests()
         installedIdentityTests()
