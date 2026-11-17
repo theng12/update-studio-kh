@@ -339,6 +339,12 @@ STUBS = """
 enum Signing {
     static func sha256Hex(fileAt url: URL) throws -> (hex: String, bytes: Int64) { ("", 0) }
 }
+
+/// Stub, not under test: the stop phase says this sentence when the app did not quit. `Recipe`
+/// itself is not part of this slice; the words are the real ones, read from the source.
+enum Recipe {
+    static let didNotQuit = "the app did not quit; the installed app was kept"
+}
 """
 
 GRACEFUL = {"KeepAlive": {"SuccessfulExit": False}}
