@@ -557,17 +557,16 @@ public enum Recipe {
             }
         }
 
-        // 5. Preserve stopped updates; a first install always needs a live health check.
-        // A test/hidden instance is never relaunched in the owner's profile: the install settles
-        // on the verified bytes, and the owner's next launch proves the app itself.
+        // 5. An install puts back what it stopped: the app is relaunched, hidden, and required to be
+        // healthy as the new version. Only a test/hidden instance is never relaunched in the
+        // owner's profile, and a caller may ask for no relaunch (tests do).
         if testInstance {
             return finish(settled(RecipeResult(status: "updated",
                 reason: "it was running as a test instance, so it was left stopped")))
         }
         if !relaunchAfterInstall {
             return finish(settled(RecipeResult(status: "updated",
-                reason: wasRunning ? "it was closed for the update and left closed; an unattended install never opens an app"
-                                   : "it was left stopped")))
+                reason: wasRunning ? "it was closed for the update and left closed" : "it was left stopped")))
         }
         guard wasRunning || journal.previousVersion == nil else {
             return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
@@ -954,8 +953,40 @@ public enum LiveControl {
         return (strings(limit: argc), strings(limit: 4096))
     }
 
-    /// A test/hidden run is the app's own desktop executable started with extra arguments, or with
-    /// an isolated HOME. The bundle's service processes are not the app and are ignored.
+    /// Whether these arguments are a test/hidden run's, not the owner's app. A flag alone is not
+    /// that: launchd starts the Gateway as `Gateway Studio KH --background`, which is how the
+    /// owner's app runs and must be put back by an install. A test says so (`--test-mode`, …) or
+    /// carries its own data location — any argument naming a path, absolute, relative or `~`.
+    /// Reading a path where there is none is the safe direction: the app is then left closed.
+    public static func isTestLaunch(_ arguments: [String]) -> Bool {
+        for argument in arguments.dropFirst() {
+            let parts = argument.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            let flag = String(parts[0]).lowercased()
+            if ["--test", "--test-mode", "--headless", "--snapshot"].contains(flag) { return true }
+            if argument.contains("/") || argument.hasPrefix("~") { return true }
+        }
+        return false
+    }
+
+    /// The login job that starts this bundle's own app (not one of its helpers), so an install can
+    /// put the app back exactly as launchd started it — the Gateway's job carries `--background`.
+    public static func owningJob(_ installedPath: String, agents: URL) -> (label: String, plist: URL)? {
+        guard let info = try? BundleInfo.read(installedPath) else { return nil }
+        let desktop = realPath(installedPath + "/Contents/MacOS/" + info.executable)
+        let entries = (try? FileManager.default.contentsOfDirectory(at: agents, includingPropertiesForKeys: nil)) ?? []
+        for url in entries where url.pathExtension == "plist" {
+            guard let data = try? Data(contentsOf: url),
+                  let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
+                  let label = plist["Label"] as? String,
+                  let first = (plist["ProgramArguments"] as? [String])?.first,
+                  realPath(first) == desktop else { continue }
+            return (label, url)
+        }
+        return nil
+    }
+
+    /// A test/hidden run says so, or was started with its own data location or an isolated HOME.
+    /// The bundle's service processes are not the app and are ignored.
     public static func isTestInstance(_ installedPath: String, shell: Shell, agents: URL) -> Bool {
         guard let info = try? BundleInfo.read(installedPath) else { return false }
         let desktop = realPath(installedPath + "/Contents/MacOS/" + info.executable)
@@ -964,7 +995,7 @@ public enum LiveControl {
         for pid in processes(inBundle: installedPath) ?? [] where !services.contains(pid) {
             guard let details = launchDetails(pid), let first = details.argv.first,
                   realPath(first) == desktop else { continue }
-            if details.argv.count > 1 { return true }
+            if isTestLaunch(details.argv) { return true }
             if let entry = details.environment.first(where: { $0.hasPrefix("HOME=") }),
                realPath(String(entry.dropFirst("HOME=".count))) != home { return true }
         }
@@ -1318,6 +1349,21 @@ public enum LiveControl {
         control.serviceLabels = { [] }
         control.restoreServices = { _ in }
         control.quit = { quit(installedPath, shell: shell, wait: quitWait, gone: { appGone() }) }
+        // Put the app back the way it was started: its login job carries `--background`, and
+        // launching the bundle bare would start a windowed copy. Hidden either way.
+        control.launch = {
+            let agents = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
+            guard let job = owningJob(installedPath, agents: agents) else {
+                _ = try? shell.run("/usr/bin/open", arguments: ["-g", "-j", installedPath], timeout: 30)
+                return
+            }
+            // A job the stop left unloaded is bootstrapped from its own plist first: starting the
+            // bundle bare would drop `--background` and run a windowed copy.
+            if launchdState([job.label], shell: shell)?.loaded.contains(job.label) != true {
+                _ = try? shell.run("/bin/launchctl", arguments: ["bootstrap", "gui/\(getuid())", job.plist.path], timeout: 30)
+            }
+            _ = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(job.label)"], timeout: 15)
+        }
         control.stopService = {
             let answer = probe()
             if answer.code == 0 { return quiet() }
