@@ -14,8 +14,11 @@ private final class NetworkClient: HTTPClient, @unchecked Sendable {
     var statusReports: [[String: Any]] = []
     var validateHealth = false
     var acceptedStatus = false
+    /// Hosts macOS refuses for plain HTTP: they answer the way ATS does, never with a body.
+    var atsHosts: Set<String> = []
     func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
         gets.append(url)
+        if let host = url.host, atsHosts.contains(host) { throw URLError(.appTransportSecurityRequiresSecureConnection) }
         if url.host == "100.64.0.2" && headers["Authorization"] != nil { credentialOnMirror = true }
         if url.path == "/commands" { return (commands, 200) }
         guard let data = releases[url.host ?? ""] else { throw URLError(.cannotConnectToHost) }
@@ -105,6 +108,52 @@ func feedNetworkTests() {
         offMemory.feedNetwork = FeedNetwork(feedURLs: [mirror, upstream], hosts: ["client": FeedHostRole(enabled: false, bind: "100.64.0.2")])
         let offSources = try Agent.feedSources(config: config, memory: offMemory, serverBase: origin)
         expect(offSources == sources, "FN a host with its hosting role off selects the configured feed exactly the same way")
+        // FN41 this Mac's own settings outrank the cached signed block: a stale memory entry that
+        // still names an address must never win over what the config file says (2026-11-17 was a
+        // live window showing a bare IP that the config had already stopped naming).
+        var stale = config
+        stale.network = FeedNetwork(feedURLs: [])
+        var staleMemory = AgentMemory()
+        staleMemory.feedNetwork = FeedNetwork(feedURLs: ["http://100.82.91.102:8790/release.json"])
+        let configured = try Agent.feedSources(config: stale, memory: staleMemory, serverBase: origin)
+        expect(configured == [URL(string: upstream)!],
+               "FN41 a config that names no mirror is not overridden by a cached one (\(configured))")
+        // FN42 an address macOS refuses on sight is dropped from the cached block by a check that
+        // succeeds elsewhere, so it is not retried for ever; with only that source, it is kept.
+        var noNetwork = config
+        noNetwork.network = nil
+        // FN41b a config that names its own addresses still takes the host roles from memory: the
+        // signed block is the only place they live, and dropping them would change who mirrors.
+        var mirrored = config
+        mirrored.network = FeedNetwork(feedURLs: [upstream])
+        var roleMemory = AgentMemory()
+        roleMemory.feedNetwork = FeedNetwork(feedURLs: [mirror], hosts: ["client": FeedHostRole(enabled: true, bind: "100.64.0.2")])
+        let whileMirroring = try Agent.feedSources(config: mirrored, memory: roleMemory, serverBase: origin)
+        expect(whileMirroring == [URL(string: upstream)!],
+               "FN41b config addresses win while the cached host role still applies (\(whileMirroring))")
+        var atsHttp = NetworkClient()
+        atsHttp.atsHosts = ["100.82.91.102"]
+        atsHttp.releases["100.64.0.1"] = try signed(feed, by: key)
+        var atsMemory = AgentMemory()
+        atsMemory.feedNetwork = FeedNetwork(feedURLs: ["http://100.82.91.102:8790/release.json"])
+        let atsSelected = try Agent.selectFeed(http: atsHttp, serverBase: origin, config: noNetwork, memory: &atsMemory, now: now)
+        expect(atsSelected.feed.published_at == feed.published_at
+               && atsMemory.feedNetwork?.feedURLs.isEmpty == true,
+               "FN42 a refused bare-IP mirror is forgotten once the check succeeds elsewhere (\(atsMemory.feedNetwork?.feedURLs ?? []))")
+        var refusal = NetworkClient()
+        refusal.atsHosts = ["100.82.91.102"]
+        var refusalMemory = AgentMemory()
+        refusalMemory.feedNetwork = FeedNetwork(feedURLs: ["http://100.82.91.102:8790/release.json"])
+        expectThrows("FN42 the refusal is one plain sentence naming the bare IP, never Foundation's text",
+                     contains: "bare IP") {
+            _ = try Agent.selectFeed(http: refusal, serverBase: URL(string: "http://100.82.91.102")!,
+                                     config: noNetwork, memory: &refusalMemory, now: now)
+        }
+        // FN43 the same sentence reaches the Launcher's connection check, which shows it verbatim.
+        let checkError = Connect.unreachable(URL(string: "http://100.82.91.102:8790/commands")!,
+                                             error: URLError(.appTransportSecurityRequiresSecureConnection))
+        expect("\(checkError)".contains("bare IP") && !"\(checkError)".contains("Code="),
+               "FN43 the connection check speaks the same sentence (\(checkError))")
     } catch { expect(false, "FN source verification: \(error)") }
     do {
         let http = NetworkClient(); http.statusOffline = true

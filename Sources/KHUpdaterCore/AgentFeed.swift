@@ -25,8 +25,38 @@ extension Agent {
             || (error as NSError).code == -1022 && (error as NSError).domain == NSURLErrorDomain
     }
 
+    /// One sentence a person can act on, for the window and the log. Never Foundation's own text:
+    /// an address macOS refuses is a setting to change, not a network failure to retry.
+    public static func plainUnreachable(_ url: URL, error: Error) -> String {
+        let host = url.host ?? url.absoluteString
+        guard blockedByTransportSecurity(error) else { return "Update Studio could not be reached at \(host)" }
+        return FeedNetwork.isAddressLiteral(host)
+            ? "the saved address \(host) is a bare IP, which macOS refuses for an unencrypted feed; use the publisher's host name instead"
+            : "macOS refused \(host) because it is not a secure address; use the publisher's host name instead"
+    }
+
+    /// An address macOS refuses on sight: plain HTTP to a bare IP (ATS). It is dropped from the
+    /// cached list only once a check has proved it and succeeded somewhere else, so a Mac with no
+    /// other source is never left with none.
+    static func isUnusable(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "http" && FeedNetwork.isAddressLiteral(url.host ?? "")
+    }
+
+    /// This Mac's own settings outrank a cached copy: `agent-memory.json` keeps the last *signed*
+    /// network block so an offline Mac still knows its mirrors, and a stale one must never override
+    /// what this Mac's config file names. Whatever the config does not name still comes from memory
+    /// — the host roles and a controller handoff live only in the signed block.
+    static func effectiveNetwork(config: AgentConfig, memory: AgentMemory) -> FeedNetwork? {
+        guard let saved = config.network else { return memory.feedNetwork }
+        var merged = memory.feedNetwork ?? saved
+        merged.feedURLs = saved.feedURLs
+        if !saved.hosts.isEmpty { merged.hosts = saved.hosts }
+        merged.controller = saved.controller ?? merged.controller
+        return merged
+    }
+
     static func feedSources(config: AgentConfig, memory: AgentMemory, serverBase: URL) throws -> [URL] {
-        let network = memory.feedNetwork ?? config.network
+        let network = effectiveNetwork(config: config, memory: memory)
         // A host mirrors *to* other Macs, never *from* its own mirror, so it reads its original
         // signer first — whether or not its hosting role is on. An install on the publisher's own
         // Mac therefore never depends on `FeedHostRuntime`; a client still prefers its mirrors.
@@ -44,15 +74,24 @@ extension Agent {
                            memory: inout AgentMemory, now: Date) throws -> SelectedFeed {
         var lastError: Error = FeedUnavailable()
         var refusal: Error?
+        var unusable: [String] = []
         for source in try feedSources(config: config, memory: memory, serverBase: serverBase) {
             let release: Data
             do { release = try get(http, source) }
             catch {
                 if blockedByTransportSecurity(error) {
-                    refusal = khuFail("macOS refused \(source.host ?? "the feed address") because it is not a secure address: the feed must be named by its host name, never by a bare IP. Nothing was changed.")
+                    // Proved unusable by this check: remembered only so a successful run can forget it.
+                    if isUnusable(source) { unusable.append(source.absoluteString) }
+                    refusal = khuFail(plainUnreachable(source, error: error))
                 } else if transportUnavailable(error) { lastError = FeedUnavailable() }
                 else { refusal = error }
                 continue
+            }
+            if !unusable.isEmpty, var network = memory.feedNetwork {
+                // A cached address macOS will always refuse is not worth retrying: the check that
+                // just succeeded elsewhere drops it, so the next run starts from what works.
+                network.feedURLs.removeAll { unusable.contains($0) }
+                memory.feedNetwork = network
             }
             do {
                 var candidate = memory

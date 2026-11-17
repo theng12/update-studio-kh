@@ -84,7 +84,7 @@ public enum Connect {
         let body = try JSONSerialization.data(withJSONObject: ["machine": machine, "nonce": nonce, "code": code])
         let (data, status): (Data, Int)
         do { (data, status) = try http.post(enrolURL, headers: ["Content-Type": "application/json"], body: body) }
-        catch { throw khuFail("Update Studio could not be reached at \(pub.enrolURL) (\(error.localizedDescription))") }
+        catch { throw unreachable(enrolURL, error: error) }
         guard status == 200 else {
             // The publisher's own sentence: wrong code, locked, or a name already taken.
             let reason = String(decoding: data.prefix(512), as: UTF8.self).filter { !$0.isNewline }
@@ -362,13 +362,29 @@ public enum Connect {
     /// carries no `capabilities`, so the publisher's record is not even touched (`## Server`);
     /// nothing here writes anything, and a Mac whose sign-in has stopped working is told so in a
     /// sentence — it is never re-enrolled by a check.
+    /// One sentence for an address that did not answer. A refused address (ATS) is named as the
+    /// setting it is; anything else says where it tried, in plain words — Foundation's own text
+    /// ("Code=-1022 … requires a secure connection") tells a person nothing they can act on.
+    static func unreachable(_ url: URL, error: Error) -> KHUError {
+        Agent.blockedByTransportSecurity(error)
+            ? khuFail(Agent.plainUnreachable(url, error: error))
+            : khuFail("Update Studio could not be reached at \(url.host ?? url.absoluteString)")
+    }
+
     public static func check(config: AgentConfig, http: HTTPClient = URLSessionHTTPClient(), now: Date = Date()) throws {
         guard let feed = URL(string: config.feedURL) else { throw khuFail("this Mac's update address is not a URL") }
         let url = feed.deletingLastPathComponent().appendingPathComponent("commands")
             .appendingQuery("machine", config.machine)
         let data: Data, status: Int
         do { (data, status) = try http.get(url, headers: ["Authorization": "Bearer \(config.token)"]) }
-        catch { throw khuFail("Update Studio could not be reached at \(config.feedURL) (\(error.localizedDescription))") }
+        catch {
+            // A refused address is a setting to change, said in one sentence; Foundation's own text
+            // ("Code=-1022 … requires a secure connection") is not something a person can act on.
+            guard Agent.blockedByTransportSecurity(error) else {
+                throw khuFail("Update Studio could not be reached at \(feed.host ?? config.feedURL)")
+            }
+            throw khuFail(Agent.plainUnreachable(feed, error: error))
+        }
         guard status == 200 else {
             if status == 401 || status == 403 {
                 // Its own type, so Settings can offer Pair again for exactly this and nothing else.
@@ -453,7 +469,7 @@ public enum Connect {
         guard let url = URL(string: feedURL) else { throw khuFail("that address is not a URL") }
         let data: Data, status: Int
         do { (data, status) = try http.get(url, headers: [:]) }
-        catch { throw khuFail("Update Studio could not be reached at \(feedURL) (\(error.localizedDescription))") }
+        catch { throw unreachable(url, error: error) }
         guard status == 200 else { throw khuFail("that address did not serve an update feed (HTTP \(status))") }
         let release: Release
         do { release = try JSON.decode(Release.self, from: data) }
@@ -562,7 +578,7 @@ public enum Connect {
         let data: Data, status: Int
         do { (data, status) = try http.post(enrolURL, headers: ["Content-Type": "application/json"],
                                             body: try JSONSerialization.data(withJSONObject: body)) }
-        catch { throw khuFail("Update Studio could not be reached at \(plan.feedURL) (\(error.localizedDescription))") }
+        catch { throw unreachable(enrolURL, error: error) }
         guard status == 200 else {
             // The publisher's own sentence, with the address that answered: a wrong code, a lock,
             // or a different publisher at this address must be told apart, never guessed at.

@@ -724,6 +724,11 @@ public enum Agent {
         let statusCode: Int?
         do { statusCode = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody).1 }
         catch {
+            // A refused address is a sentence for the person, never Foundation's own text: this one
+            // reaches the Launcher window unchanged, and "Code=-1022 … /status" told nobody anything.
+            if blockedByTransportSecurity(error) {
+                throw khuFail(plainUnreachable(serverBase.appendingPathComponent("status"), error: error))
+            }
             guard transportUnavailable(error) else { throw error }
             statusCode = nil; publisherAvailable = false
             result.notes.append("publisher unavailable; local requests may use a verified source, remote orders and Automatic wait")
@@ -843,6 +848,9 @@ public enum Agent {
                     .appendingQuery("capabilities", [AgentCapability.ownerRollback, AgentCapability.vendorInstall,
                                                      AgentCapability.launch].joined(separator: ",")), headers: headers)
             } catch {
+                if blockedByTransportSecurity(error) {
+                    throw khuFail(plainUnreachable(serverBase.appendingPathComponent("commands"), error: error))
+                }
                 guard memory.feedNetwork?.feedURLs.isEmpty == false else { throw error }
                 response = nil; publisherAvailable = false
                 result.notes.append("publisher orders unavailable; only local requests can run")

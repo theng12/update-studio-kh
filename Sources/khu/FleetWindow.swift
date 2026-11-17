@@ -118,8 +118,10 @@ final class FleetWindow: NSObject, WKUIDelegate, WKScriptMessageHandler,
                     guard self.tunnel === ended else { return }
                     self.tunnel = nil
                     if said.contains("host key") || said.contains("known_hosts") {
+                        // The command carries the same full name the window connects to: a short name
+                        // here would trust an entry this window never reads.
                         self.offline("This Mac has not been told to trust \(target.ssh)",
-                                     "ssh refused the connection because no key for \(target.ssh) is on file: \(said). Trust it once by running ssh \(target.ssh) in Terminal and answering yes, then choose Try again. Strict checking stays on; an unknown key is never accepted quietly.")
+                                     "ssh refused the connection because no key for \(target.ssh) is on file: \(said). Trust it once by running this in Terminal and answering yes, then choose Try again: ssh \(target.ssh). Strict checking stays on; an unknown key is never accepted quietly.")
                     } else {
                         self.offline("The publisher on \(target.feedHost) is not reachable",
                                      "The connection through \(target.ssh) ended: \(said). No fleet data is shown until it works again.")
