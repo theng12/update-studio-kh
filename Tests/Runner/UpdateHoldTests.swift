@@ -389,6 +389,16 @@ func updateHoldTests() {
         expect(UpdateHold.localToken() == after, "UH24 the rotated token is the one presented next")
     }
 
+    // UH24b a token already on disk as 0644 must come out 0600: `replaceItemAt` keeps the replaced
+    // file's own mode and throws the temp's away, so the mode has to be set on the final path.
+    // Library 0.7.25 refuses a hold whose token file is not 0600 (`maintenance.go:237`) — 401.
+    do {
+        try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: tokenPath)
+        _ = UpdateHold.rotateToken()
+        let mode = (try? fm.attributesOfItem(atPath: tokenPath))?[.posixPermissions] as? NSNumber
+        expect(mode?.intValue == 0o600, "UH24b rotation turns an inherited 0644 token into 0600 (\(mode?.intValue ?? -1))")
+    }
+
     // UH32 Gateway's exact admin drain is a real consumer flow, and a query on it is refused.
     do {
         let adminURL = "http://127.0.0.1:8787/admin/api/maintenance/drain"

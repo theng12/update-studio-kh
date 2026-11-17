@@ -48,13 +48,17 @@ public enum UpdateHold {
 
     public static func localToken() -> String? {
         let url = tokenFile
+        let fm = FileManager.default
         if let data = try? Data(contentsOf: url),
            let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !text.isEmpty {
+            // A file an older rotation left 0644 is refused by an app that gates its hold on the
+            // mode, so the mode is corrected where the credential is read as well as where it is written.
+            let mode = (try? fm.attributesOfItem(atPath: url.path))?[.posixPermissions] as? NSNumber
+            if mode?.intValue != 0o600 { try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
             return text
         }
         let token = (0..<32).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
-        let fm = FileManager.default
         try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
                                 attributes: [.posixPermissions: 0o700])
         guard (try? Data(token.utf8).write(to: url, options: .atomic)) != nil else { return nil }
@@ -74,10 +78,20 @@ public enum UpdateHold {
         let temp = url.deletingLastPathComponent().appendingPathComponent(".hold-token.\(UUID().uuidString)")
         guard (try? Data(token.utf8).write(to: temp, options: .atomic)) != nil else { return nil }
         try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temp.path)
-        guard (try? fm.replaceItemAt(url, withItemAt: temp)) != nil else {
-            try? fm.removeItem(at: temp)
-            return nil
+        if fm.fileExists(atPath: url.path) {
+            guard (try? fm.replaceItemAt(url, withItemAt: temp)) != nil else {
+                try? fm.removeItem(at: temp)
+                return nil
+            }
+        } else {
+            guard (try? fm.moveItem(at: temp, to: url)) != nil else {
+                try? fm.removeItem(at: temp)
+                return nil
+            }
         }
+        // `replaceItemAt` keeps the *replaced* file's mode, so the temp's 0600 is discarded and an
+        // old 0644 token stayed 0644 — which an app that gates its hold on the mode refuses with 401.
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return token
     }
 
