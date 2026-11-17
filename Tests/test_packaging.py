@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -480,6 +481,29 @@ try:
           "a second rotation moves nothing and adds no folder")
     check("rotate-build.py build" in (packaging / "build-launcher.sh").read_text(),
           "every release build rotates its own build folder")
+
+    # The `updater` feed entry is the helper sealed in the Launcher: publishing a path someone built
+    # at another time once offered a binary no build produced (2026-11-17), so the path is resolved.
+    sealed_tool = packaging / "sealed-helper.sh"
+    check(sealed_tool.stat().st_mode & 0o111
+          and 'sealed-helper.sh "$VERSION"' in (packaging / "release-push.sh").read_text(),
+          "release-push resolves the updater helper from the sealed launcher instead of trusting a path")
+    sealed_repo = work / "sealed-repo"
+    (sealed_repo / "packaging").mkdir(parents=True)
+    shutil.copyfile(sealed_tool, sealed_repo / "packaging/sealed-helper.sh")
+    (sealed_repo / "packaging/sealed-helper.sh").chmod(0o755)
+    missing = subprocess.run(["bash", str(sealed_repo / "packaging/sealed-helper.sh"), "0.1.54"],
+                             capture_output=True, text=True)
+    check(missing.returncode == 2 and "no sealed helper" in missing.stderr,
+          "with no built bundle and no DMG it refuses instead of guessing (rc=%d)" % missing.returncode)
+    helper = sealed_repo / "build/Studio Launcher KH.app/Contents/Resources/khu-agent/bin/khu"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("sealed helper")
+    helper.chmod(0o755)
+    found = subprocess.run(["bash", str(sealed_repo / "packaging/sealed-helper.sh"), "0.1.54"],
+                           capture_output=True, text=True)
+    check(found.returncode == 0 and found.stdout.strip() == "build/Studio Launcher KH.app/Contents/Resources/khu-agent/bin/khu",
+          "inside a built tree it names the helper the DMG ships (%s)" % (found.stdout.strip() or found.stderr.strip()))
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

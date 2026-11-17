@@ -14,6 +14,15 @@ STAGE="${KHU_RELEASE_STAGE:-Library/KHUpdater/feed-incoming-$(date +%Y%m%d)}"
 APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; KIND="${5:-}"
 [ -f "$DMG" ] || { echo "no such DMG: $DMG" >&2; exit 2; }
 [ -f "$LOG" ] || { echo "no such changelog: $LOG" >&2; exit 2; }
+# The `updater` entry is the raw helper, and a stale build/khu is not it: publish the bytes sealed
+# inside the Launcher that this version ships. Refusing beats publishing an unbuilt binary.
+if [ "$KIND" = "updater" ]; then
+  SEALED=$(packaging/sealed-helper.sh "$VERSION") || exit 2
+  if ! cmp -s "$DMG" "$SEALED"; then
+    echo "release-push: $DMG is not the helper sealed in the Launcher; publishing $SEALED instead"
+    DMG="$SEALED"
+  fi
+fi
 BASE=$(basename "$DMG")
 SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "$HOST")
 
