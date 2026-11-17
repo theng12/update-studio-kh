@@ -1004,7 +1004,10 @@ public enum Agent {
             result.commandsRun += 1
             if ["updated", "switched"].contains(res.status) { result.updates += 1 }
             // Said where a person at this Mac can see it: the fleet page is not in front of them.
-            result.notes.append("\(item.app): \(res.status)" + (res.reason.map { " — \($0)" } ?? ""))
+            // A refusal note already said it (and only once, so it is not repeated every run).
+            if res.quitWithoutHold == false, refusal == nil {
+                result.notes.append("\(item.app): \(res.status)" + (res.reason.map { " — \($0)" } ?? ""))
+            }
             if res.status == "switched" {
                 result.restartRequested = true; break
             }  // the rest wait for the new version
