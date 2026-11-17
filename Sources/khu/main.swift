@@ -381,6 +381,14 @@ struct KHUMain {
             }
             // A fresh hold credential on every agent start; apps read the 0600 file per request.
             _ = UpdateHold.rotateToken()
+            // A version that has just settled means the tree can keep two: this one and the one it
+            // replaced. Older ones move to the Desktop trash — never away, never while they run.
+            if let base = cfg.stubBase {
+                let pruned = try? StubLayout(base: URL(fileURLWithPath: base)).pruneVersions()
+                if let pruned, !pruned.moved.isEmpty || !pruned.skipped.isEmpty || pruned.note != nil {
+                    print("note: versions: \(pruned.summary)")
+                }
+            }
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
             let initialRequests = installs
             func loop() {

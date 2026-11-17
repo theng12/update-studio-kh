@@ -18,6 +18,13 @@ extension Agent {
                 .callIsActive, .dataNotAllowed].contains(error.code)
     }
 
+    /// macOS refused a cleartext address (ATS). It is not a network blip: retrying the same address
+    /// can never succeed, and the reason must say so rather than read as "unreachable".
+    static func blockedByTransportSecurity(_ error: Error) -> Bool {
+        (error as? URLError)?.code == .appTransportSecurityRequiresSecureConnection
+            || (error as NSError).code == -1022 && (error as NSError).domain == NSURLErrorDomain
+    }
+
     static func feedSources(config: AgentConfig, memory: AgentMemory, serverBase: URL) throws -> [URL] {
         let network = memory.feedNetwork ?? config.network
         // A host mirrors *to* other Macs, never *from* its own mirror, so it reads its original
@@ -25,7 +32,9 @@ extension Agent {
         // Mac therefore never depends on `FeedHostRuntime`; a client still prefers its mirrors.
         let isHost = network?.hosts[config.machine] != nil
         let original = serverBase.appendingPathComponent("release.json")
-        var sources = try (network?.feedURLs ?? []).map { try FeedNetwork.feedURL($0) }
+        // A mirror whose address cannot work is dropped, not allowed to fail the whole check: one bad
+        // entry in a pushed list must not leave every Mac with no feed at all.
+        var sources = (network?.feedURLs ?? []).compactMap { try? FeedNetwork.feedURL($0) }
         sources.removeAll { $0 == original }
         if isHost { sources.insert(original, at: 0) } else { sources.append(original) }
         return sources
@@ -39,7 +48,9 @@ extension Agent {
             let release: Data
             do { release = try get(http, source) }
             catch {
-                if transportUnavailable(error) { lastError = FeedUnavailable() }
+                if blockedByTransportSecurity(error) {
+                    refusal = khuFail("macOS refused \(source.host ?? "the feed address") because it is not a secure address: the feed must be named by its host name, never by a bare IP. Nothing was changed.")
+                } else if transportUnavailable(error) { lastError = FeedUnavailable() }
                 else { refusal = error }
                 continue
             }

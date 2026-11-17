@@ -203,3 +203,124 @@ public func readHeartbeat(from url: URL, fileManager: FileManager = .default) ->
     guard let data = try? Data(contentsOf: url) else { return nil }
     return try? JSONDecoder().decode(Heartbeat.self, from: data)
 }
+
+/// What a prune kept, moved and skipped, so the run says it out loud instead of tidying in silence.
+public struct StubPrune: Sendable, Equatable {
+    public var kept: [String] = []
+    public var moved: [String: Int64] = [:]
+    public var skipped: [String] = []
+    /// Why nothing was moved at all, when that is the answer (a missing fallback, an unreadable link).
+    public var note: String?
+    public var trashFolder: URL?
+    public var movedBytes: Int64 { moved.values.reduce(0, +) }
+    public var summary: String {
+        if let note { return "kept \(kept.joined(separator: ", ")); \(note)" }
+        guard !moved.isEmpty || !skipped.isEmpty else {
+            return "kept \(kept.joined(separator: ", ")); nothing older to move"
+        }
+        let freed = ByteCountFormatter.string(fromByteCount: movedBytes, countStyle: .file)
+        let skippedText = skipped.isEmpty ? "" : "; skipped \(skipped.joined(separator: ", "))"
+        return "kept \(kept.joined(separator: ", ")); moved \(moved.count) older version\(moved.count == 1 ? "" : "s") (\(freed)) to the trash\(skippedText)"
+    }
+}
+
+extension StubLayout {
+    /// True when a process is running out of this version directory. When that cannot be told, the
+    /// answer is "in use": a version something might be running from is never moved.
+    public static func inUse(_ directory: URL) -> Bool {
+        let path = directory.standardizedFileURL.path
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-axo", "args="]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        ps.standardError = FileHandle.nullDevice
+        guard (try? ps.run()) != nil else { return true }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).contains(path)
+    }
+
+    /// The owner's one trash on the Desktop: `~/Desktop/_trash/updater/<date> updater versions`.
+    public static func desktopTrashRoot(at date: Date, fileManager: FileManager = .default) -> URL {
+        let day = ISO.string(date).prefix(10)
+        return fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/_trash/updater", isDirectory: true)
+            .appendingPathComponent("\(day) updater versions", isDirectory: true)
+    }
+
+    /// Keep the version `current` runs and the one before it, and move every older version folder to
+    /// the Desktop trash with a manifest. Called once the new version has settled, so the tree grows
+    /// by one and shrinks by one instead of growing forever.
+    ///
+    /// Nothing moves when the fallback is unknown: a Mac with no `previous` keeps every version it
+    /// has, because the point of keeping two is that one of them can still be started.
+    @discardableResult
+    public func pruneVersions(at date: Date = Date(),
+                              trashRoot: URL? = nil,
+                              running: (URL) -> Bool = StubLayout.inUse,
+                              fileManager: FileManager = .default) throws -> StubPrune {
+        var outcome = StubPrune()
+        guard let current = currentBinary(fileManager: fileManager) else {
+            outcome.note = "current points at nothing that can run; nothing was moved"
+            return outcome
+        }
+        guard let previous = previousBinary(fileManager: fileManager) else {
+            outcome.note = "no recorded previous version, so nothing was moved: every version stays until a fallback exists"
+            return outcome
+        }
+        let keep = [StubLayout.version(of: current), StubLayout.version(of: previous)]
+        outcome.kept = keep
+        guard keep[0] != keep[1] else {
+            outcome.note = "current and previous name the same version, so nothing was moved"
+            return outcome
+        }
+        let dirs = ((try? fileManager.contentsOfDirectory(at: versionsDirectory, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+            .filter { url in (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        let older = dirs.map(\.lastPathComponent).filter { !keep.contains($0) }.sorted()
+        guard !older.isEmpty else { return outcome }
+
+        var manifest: [String] = []
+        for version in older {
+            let dir = versionsDirectory.appendingPathComponent(version, isDirectory: true)
+            guard !running(dir) else {
+                outcome.skipped.append("\(version) (in use)")
+                continue
+            }
+            let bytes = Self.byteCount(dir, fileManager: fileManager)
+            let root = trashRoot ?? Self.desktopTrashRoot(at: date, fileManager: fileManager)
+            outcome.trashFolder = root
+            var destination = root.appendingPathComponent(version, isDirectory: true)
+            var suffix = 1
+            while fileManager.fileExists(atPath: destination.path) {
+                destination = root.appendingPathComponent("\(version)-\(suffix)", isDirectory: true)
+                suffix += 1
+            }
+            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+            try fileManager.moveItem(at: dir, to: destination)
+            outcome.moved[version] = bytes
+            manifest.append("- \(version)  \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))  → \(destination.path)")
+        }
+        if !manifest.isEmpty, let root = outcome.trashFolder {
+            let text = (try? String(contentsOf: root.appendingPathComponent("MANIFEST.txt"), encoding: .utf8)) ?? ""
+            let head = text.isEmpty
+                ? "Update Studio versions moved here by Studio Launcher KH. Recoverable: move a folder back into ~/Library/KHUpdater/base/versions/ and point current at it.\n"
+                : text
+            try? (head + manifest.joined(separator: "\n") + "\n")
+                .write(to: root.appendingPathComponent("MANIFEST.txt"), atomically: true, encoding: .utf8)
+        }
+        return outcome
+    }
+
+    /// Bytes of every regular file under a folder, without following links out of it.
+    static func byteCount(_ dir: URL, fileManager: FileManager = .default) -> Int64 {
+        guard let walk = fileManager.enumerator(at: dir, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                                                options: [.skipsHiddenFiles]) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in walk {
+            let values = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            if values?.isRegularFile == true { total += Int64(values?.fileSize ?? 0) }
+        }
+        return total
+    }
+}

@@ -635,6 +635,51 @@ func makeVersion(_ layout: StubLayout, _ version: String, script: String) {
     chmod(binary.path, 0o755)
 }
 
+/// PR1–PR3: the version tree keeps two and says what it did with the rest (owner, 2026-11-17).
+func stubPruneTests() {
+    // PR1: three installs in a row leave the running version and the one before it.
+    do {
+        let layout = StubLayout(base: tmpDir("prune-three"))
+        let switcher = StubSwitcher(layout: layout)
+        let trash = tmpDir("prune-three-trash")
+        for version in ["1.0.0", "2.0.0", "3.0.0"] {
+            makeVersion(layout, version, script: "exit 0")
+            _ = try? switcher.install(version: version)
+            _ = try? layout.pruneVersions(trashRoot: trash, running: { _ in false })
+        }
+        let left = (try? fm.contentsOfDirectory(atPath: layout.versionsDirectory.path).sorted()) ?? []
+        expect(left == ["2.0.0", "3.0.0"], "PR1 three installs in a row leave two versions (\(left))")
+        let manifest = (try? String(contentsOf: trash.appendingPathComponent("MANIFEST.txt"), encoding: .utf8)) ?? ""
+        expect(manifest.contains("1.0.0") && manifest.contains("→"),
+               "PR1 what moved is written in the trash manifest with where it went")
+    }
+    // PR2: a version something is running from is never moved, and the run says it was skipped.
+    do {
+        let layout = StubLayout(base: tmpDir("prune-running"))
+        let switcher = StubSwitcher(layout: layout)
+        for version in ["1.0.0", "2.0.0", "3.0.0"] {
+            makeVersion(layout, version, script: "exit 0"); _ = try? switcher.install(version: version)
+        }
+        makeVersion(layout, "0.9.0", script: "exit 0")
+        let trash = tmpDir("prune-running-trash")
+        let outcome = (try? layout.pruneVersions(trashRoot: trash, running: { $0.lastPathComponent == "0.9.0" })) ?? StubPrune()
+        let left = (try? fm.contentsOfDirectory(atPath: layout.versionsDirectory.path).sorted()) ?? []
+        expect(left.contains("0.9.0") && outcome.skipped.contains { $0.hasPrefix("0.9.0") }
+               && !left.contains("1.0.0") && outcome.moved["1.0.0"] != nil,
+               "PR2 an in-use version stays with a reason while the rest moves (\(left), \(outcome.skipped))")
+    }
+    // PR3: with no recorded fallback nothing moves and the run says why.
+    do {
+        let layout = StubLayout(base: tmpDir("prune-nofallback"))
+        makeVersion(layout, "1.0.0", script: "exit 0"); makeVersion(layout, "0.9.0", script: "exit 0")
+        try! fm.createSymbolicLink(atPath: layout.currentLink.path, withDestinationPath: (try! layout.binary(for: "1.0.0")).path)
+        let outcome = (try? layout.pruneVersions(trashRoot: tmpDir("prune-nofallback-trash"), running: { _ in false })) ?? StubPrune()
+        let left = (try? fm.contentsOfDirectory(atPath: layout.versionsDirectory.path).sorted()) ?? []
+        expect(outcome.note != nil && left == ["0.9.0", "1.0.0"],
+               "PR3 no previous version means nothing moves and the reason is given (\(outcome.note ?? "nil"))")
+    }
+}
+
 func stubTests() {
     // S8 / R7: installing the running version again is a no-op that keeps the real fallback.
     do {
@@ -4015,6 +4060,7 @@ struct RunnerMain {
         if ProcessInfo.processInfo.environment["STUB_ONLY"] == "1" {
             supportTests()
             stubTests()
+            stubPruneTests()
             helperRenameTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
@@ -4113,6 +4159,7 @@ struct RunnerMain {
         supportTests()
         gatewayIdentityTests()
         stubTests()
+        stubPruneTests()
         publisherTests()
         agentAndServerTests()
         socketTests()

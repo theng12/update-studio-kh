@@ -50,7 +50,7 @@ final class FleetWindow: NSObject, WKUIDelegate, WKScriptMessageHandler,
 
     // MARK: Reaching the publisher
 
-    struct Publisher { var feedHost: String; var ssh: String; var key: String? }
+    struct Publisher { var feedHost: String; var ssh: String; var key: String?; var knownHosts: String }
 
     /// Where the fleet lives, read from this Mac's Launcher config; each part can be overridden with
     /// `defaults write com.khupdater.launcher fleetSSHHost|fleetSSHUser|fleetSSHKey <value>`.
@@ -63,12 +63,14 @@ final class FleetWindow: NSObject, WKUIDelegate, WKScriptMessageHandler,
             throw copyError("This Mac has no Launcher connection, so the publisher's address is unknown (\(config.path) has no feed address).")
         }
         let defaults = UserDefaults.standard
-        // The SSH host key on file is under the Mac's short name; an unknown key is never accepted.
-        let sshHost = defaults.string(forKey: "fleetSSHHost") ?? String(host.split(separator: ".").first ?? Substring(host))
+        // The full host name, exactly as the feed names it: `known_hosts` is written with that name
+        // by every other tool, and a short name is a different entry that strict checking refuses.
+        let sshHost = defaults.string(forKey: "fleetSSHHost") ?? host
         let user = defaults.string(forKey: "fleetSSHUser") ?? NSUserName()
         let standardKey = home.appendingPathComponent(".ssh/id_ed25519_gateway1301").path
         let key = defaults.string(forKey: "fleetSSHKey") ?? (FileManager.default.fileExists(atPath: standardKey) ? standardKey : nil)
-        return Publisher(feedHost: host, ssh: "\(user)@\(sshHost)", key: key)
+        let knownHosts = defaults.string(forKey: "fleetSSHKnownHosts") ?? home.appendingPathComponent(".ssh/known_hosts").path
+        return Publisher(feedHost: host, ssh: "\(user)@\(sshHost)", key: key, knownHosts: knownHosts)
     }
 
     private static func portAnswers(_ port: UInt16) -> Bool {
@@ -101,7 +103,8 @@ final class FleetWindow: NSObject, WKUIDelegate, WKScriptMessageHandler,
             }
             let process = Process(), errors = Pipe()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            process.arguments = ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10",
+            process.arguments = ["-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+                                 "-o", "UserKnownHostsFile=\(target.knownHosts)", "-o", "ConnectTimeout=10",
                                  "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2",
                                  "-L", "127.0.0.1:\(port):127.0.0.1:8790"] + (target.key.map { ["-i", $0] } ?? []) + [target.ssh, "cat >/dev/null"]
             process.standardInput = FileHandle.nullDevice
@@ -114,8 +117,13 @@ final class FleetWindow: NSObject, WKUIDelegate, WKScriptMessageHandler,
                 DispatchQueue.main.async {
                     guard self.tunnel === ended else { return }
                     self.tunnel = nil
-                    self.offline("The publisher on \(target.feedHost) is not reachable",
-                                 "The connection through \(target.ssh) ended: \(said). No fleet data is shown until it works again.")
+                    if said.contains("host key") || said.contains("known_hosts") {
+                        self.offline("This Mac has not been told to trust \(target.ssh)",
+                                     "ssh refused the connection because no key for \(target.ssh) is on file: \(said). Trust it once by running ssh \(target.ssh) in Terminal and answering yes, then choose Try again. Strict checking stays on; an unknown key is never accepted quietly.")
+                    } else {
+                        self.offline("The publisher on \(target.feedHost) is not reachable",
+                                     "The connection through \(target.ssh) ended: \(said). No fleet data is shown until it works again.")
+                    }
                 }
             }
             DispatchQueue.main.sync { self.tunnel = process }

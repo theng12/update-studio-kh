@@ -202,8 +202,13 @@ public struct URLSessionHTTPClient: HTTPClient {
         if !finished {
             task.cancel()
             _ = sink.done.wait(timeout: .now() + 5)
+            // A cancelled transfer's session must go now, not wait for tasks that will never finish:
+            // `finishTasksAndInvalidate` leaves it — and its delegate, its sockets and its Mach ports —
+            // alive, and one of these per timed-out check is what grew an idle agent to 16k ports.
+            session.invalidateAndCancel()
+        } else {
+            session.finishTasksAndInvalidate()
         }
-        session.finishTasksAndInvalidate()
         if cancelled { throw khuFail("cancelled on this Mac; nothing was changed") }
         guard finished else { throw khuFail("\(url.path) did not finish within \(Int(deadline)) s; it was stopped") }
         if let error = sink.error { throw error }

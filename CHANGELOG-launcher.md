@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.55 — 2026-11-17
+
+- The feed is only ever fetched by its host name. A bare IP address can never work on macOS — plain HTTP to an address is refused by App Transport Security every time — so an address like that is no longer tried, and when the system refuses one the reason says so instead of calling the publisher unreachable. A host-name blip is retried; an address that cannot work is not.
+- The Fleet window connects with the Mac's full host name, the one every other tool writes to `known_hosts`, and passes this user's `known_hosts` explicitly. A Mac that has not trusted the publisher yet is told the one command that trusts it, and retries after that — an unknown key is still never accepted quietly.
+- The background updater now keeps two versions: the one running and the one it replaced. Anything older moves to `~/Desktop/_trash/updater/` with a manifest, so nothing is deleted and nothing is left to grow; a version something is running from is skipped and said so, and with no recorded previous version nothing moves at all.
+- An idle agent no longer keeps connections it has stopped using: a transfer that is cancelled or past its deadline now releases its session immediately instead of leaving its sockets and ports behind.
+
 ## 0.1.54 — 2026-11-17
 
 - The hold credential is now written owner-only (0600) whenever it is rotated or read. It was meant to be, but the file kept whatever mode it already had, so an app that checks — Library refuses a hold whose token file is not 0600 — answered 401 and could never be held. A Mac that already has a wrong-mode token heals on its next hold check. (0.1.53 carried the fix; this release says it in the notes.)
