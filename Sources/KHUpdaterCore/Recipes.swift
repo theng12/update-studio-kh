@@ -944,21 +944,21 @@ public enum LiveControl {
     /// Whether these arguments are a test/hidden run's, not the owner's app. A flag alone is not
     /// that: launchd starts the Gateway as `Gateway Studio KH --background`, which is how the
     /// owner's app runs and must be put back by an install. A test says so (`--test-mode`, …) or
-    /// carries its own data location (an absolute path argument or `--flag=/path`).
+    /// carries its own data location — any argument naming a path, absolute, relative or `~`.
+    /// Reading a path where there is none is the safe direction: the app is then left closed.
     public static func isTestLaunch(_ arguments: [String]) -> Bool {
         for argument in arguments.dropFirst() {
             let parts = argument.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             let flag = String(parts[0]).lowercased()
             if ["--test", "--test-mode", "--headless", "--snapshot"].contains(flag) { return true }
-            if parts.count > 1, parts[1].hasPrefix("/") { return true }
-            if argument.hasPrefix("/") { return true }
+            if argument.contains("/") || argument.hasPrefix("~") { return true }
         }
         return false
     }
 
     /// The login job that starts this bundle's own app (not one of its helpers), so an install can
     /// put the app back exactly as launchd started it — the Gateway's job carries `--background`.
-    public static func owningJob(_ installedPath: String, agents: URL) -> String? {
+    public static func owningJob(_ installedPath: String, agents: URL) -> (label: String, plist: URL)? {
         guard let info = try? BundleInfo.read(installedPath) else { return nil }
         let desktop = realPath(installedPath + "/Contents/MacOS/" + info.executable)
         let entries = (try? FileManager.default.contentsOfDirectory(at: agents, includingPropertiesForKeys: nil)) ?? []
@@ -968,7 +968,7 @@ public enum LiveControl {
                   let label = plist["Label"] as? String,
                   let first = (plist["ProgramArguments"] as? [String])?.first,
                   realPath(first) == desktop else { continue }
-            return label
+            return (label, url)
         }
         return nil
     }
@@ -1341,11 +1341,16 @@ public enum LiveControl {
         // launching the bundle bare would start a windowed copy. Hidden either way.
         control.launch = {
             let agents = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents")
-            if let label = owningJob(installedPath, agents: agents) {
-                _ = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(label)"], timeout: 15)
-            } else {
+            guard let job = owningJob(installedPath, agents: agents) else {
                 _ = try? shell.run("/usr/bin/open", arguments: ["-g", "-j", installedPath], timeout: 30)
+                return
             }
+            // A job the stop left unloaded is bootstrapped from its own plist first: starting the
+            // bundle bare would drop `--background` and run a windowed copy.
+            if launchdState([job.label], shell: shell)?.loaded.contains(job.label) != true {
+                _ = try? shell.run("/bin/launchctl", arguments: ["bootstrap", "gui/\(getuid())", job.plist.path], timeout: 30)
+            }
+            _ = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(job.label)"], timeout: 15)
         }
         control.stopService = {
             let answer = probe()

@@ -217,6 +217,10 @@ func recipeTests() {
         expect(LiveControl.isTestLaunch(["/x/X", "--data-dir", "/tmp/run-1"]), "its own data directory is a test instance")
         expect(LiveControl.isTestLaunch(["/x/X", "--user-data-dir=/tmp/run-1"]),
                "an own-data-directory flag with a value is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "--data-dir", "./tmp/run-1"]),
+               "a relative data directory is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "--data-dir", "~/run-1"]), "a home-relative data directory is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "./tmp/run-1"]), "a relative positional path is a test instance")
     }
     // A caller that asks for no relaunch leaves the app closed; the agent itself always relaunches.
     do {

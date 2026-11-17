@@ -5,6 +5,13 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.49 — 2026-11-17
+
+- An update now puts the app back. An install that found an app running relaunches it, hidden, and requires it healthy as the new version — unattended included, because nobody is there to open it after an automatic update or an order. An install that found the app closed still leaves it closed.
+- The Gateway restarts through its own login job, so it comes back with `--background` instead of as a windowed copy.
+- A launchd launch with a fixed flag is no longer mistaken for a test run. The Gateway starts as `--background`, and every install used to read that as a test instance and leave the Gateway stopped. A test run is one that says so (`--test-mode`, `--headless`, `--snapshot`) or carries its own data location.
+- Each install's outcome now appears in the helper's own log, so a person at the Mac sees what happened instead of only the fleet page.
+
 ## 0.1.43 — 2026-11-16
 
 - Gateway's real hold route, `/admin/api/maintenance/drain`, is now a trusted endpoint: the exact path only, on loopback with an explicit port. Any other `/admin/…` path, a longer path, a query string or a fragment is rejected, both when the feed is validated and when the hold is taken.
