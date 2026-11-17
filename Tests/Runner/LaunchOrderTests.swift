@@ -137,6 +137,8 @@ func launchOrderTests() {
         var state = try! StateStore.load(from: r.rig.state)
         state.machines["mac1"]?.installed = ["foo": "2.0.0"]
         state.machines["mac1"]?.pending = []
+        // A Mac that has never reported shows only its orders: the page lists what it reported.
+        state.machines["mac1"]?.lastSeen = ISO.string(Date())
         try! StateStore.save(state, to: r.rig.state)
         let page = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": "127.0.0.1:8790"]), remote: "127.0.0.1")
         let html = String(data: page.data, encoding: .utf8) ?? ""
