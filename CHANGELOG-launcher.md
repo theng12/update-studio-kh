@@ -2,7 +2,7 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
-## 0.1.50 — 2026-11-17
+## 0.1.51 — 2026-11-17
 
 - The updater's own trash is emptied after every update it finishes: only the newest copy stays (the one that update just retired), the rest go, and the run says how many copies and how much space were cleared. The copy's locked file flag is cleared first — that flag is why the old cleanup answered "Permission denied" and the folder grew to 130 GB on the publisher.
 - Downloads and rollback copies no longer pile up. Only the newest installer is kept for each app, and each app keeps exactly one previous version to roll back to; a superseded one is removed instead of being moved into the trash.
