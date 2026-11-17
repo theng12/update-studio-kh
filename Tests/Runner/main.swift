@@ -4057,6 +4057,11 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["TRANSFER_ONLY"] == "1" {
+            transferLeakTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["STUB_ONLY"] == "1" {
             supportTests()
             stubTests()
@@ -4183,6 +4188,7 @@ r41HealthMustHold()
         updateHoldTests()
         orderQueueTests()
         downloadDeadlineTests()
+        transferLeakTests()
         artifactDeltaTests()
         installedIdentityTests()
         publisherRetentionTests()
