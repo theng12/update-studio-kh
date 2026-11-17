@@ -37,7 +37,18 @@ for name, pin in manifest["files"].items():
         raise SystemExit("Signing changed a pinned kit file: " + name)
 ' "$APP"
 TMP="$(mktemp -d)"; mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Studio Launcher KH.app"; ln -s /Applications "$TMP/dmg/Applications"
-hdiutil create -volname "Studio Launcher KH" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" >/dev/null 2>&1
+# Loud on purpose: a failed DMG step once exited 1 with its output discarded, so the build
+# looked like it had produced nothing for no stated reason (2026-11-17).
+if ! out=$(hdiutil create -volname "Studio Launcher KH" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" 2>&1); then
+  echo "hdiutil create failed for $DMG: ${out##*$'\n'}" >&2
+  exit 1
+fi
+# Exit 0 from `create` is not proof the image is whole: a truncated one would be recorded and
+# published as if it were good. The image itself is verified before anything records it.
+if ! out=$(hdiutil verify "$DMG" 2>&1); then
+  echo "hdiutil verify failed for $DMG: ${out##*$'\n'}" >&2
+  exit 1
+fi
 mv "$TMP" "_trash/launcher-dmg-staging.$(date +%s)"
 echo "built $APP and $DMG (agent $(lipo -archs "$KIT/bin/khu"))"
 packaging/record-dist.sh copy "Studio Launcher KH" "$VERSION" "$DMG"

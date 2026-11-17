@@ -13,6 +13,7 @@ mkdir -p build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 python3 -B -I packaging/generate-ui.py
 cp build/whats-new.json "$APP/Contents/Resources/whats-new.json"
+cp build/whats-new-dialog.css "$APP/Contents/Resources/whats-new-dialog.css"
 for arch in arm64 x86_64; do
   swiftc -O -target "$arch-apple-macos13.0" -o "$TMP/KHUpdater-$arch" App/main.swift -framework AppKit -framework WebKit
 done

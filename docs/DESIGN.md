@@ -154,19 +154,33 @@ one slow or stalled Mac never holds up the others.
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
   defaults to `update` when absent, so an order signed before the field existed decodes unchanged
   and still means what it meant when the owner gave it.
-- `vendor-install` orders are delivered only to agents advertising `vendor-install-v1`. Other unknown actions retain the existing rollback-capable agent refusal path; legacy agents receive neither. The signed order carries the vendor entry, signature pins, payload kind and visible byte cap. Vendor IDs use `vendor-<id>` to keep results separate from KH releases.
+- `vendor-install` orders are delivered only to agents advertising `vendor-install-v1`. A
+  **launch** order is delivered only to agents advertising `launch-v1`: it starts an app on the Mac,
+  which an older agent would refuse, leaving the order pending for ever. The Mac opens the installed
+  bundle with `/usr/bin/open -g -j` (never brought forward, never activating), proves the app is
+  running by finding a process whose executable is inside the bundle — the exit status of `open`
+  proves nothing — and answers `launched` with the pid (or `already running (pid N)`), or `failed`
+  naming why: no configured path, not installed, the bundle does not pass its signature check, or
+  no process appeared within its own ceiling (`launchWaitSeconds`, default 30 s). Nothing is quit,
+  stopped, installed or downloaded by a launch. Only the owner's page creates one; no automatic or
+  background path ever launches an app.
+- Other unknown actions retain the existing rollback-capable agent refusal path; legacy agents receive neither. The signed order carries the vendor entry, signature pins, payload kind and visible byte cap. Vendor IDs use `vendor-<id>` to keep results separate from KH releases.
 - Other apps adds owner-only `POST /api/vendor-edit`, `/api/vendor-assign`, `/api/vendor-retire` and `/api/vendor-restore`, under the same loopback/Host/Origin checks. The six catalog entries and all per-Mac assignments start off. Bulk assignment requires explicit confirmation. Turning off cancels waiting installs, preserving installed apps; retirement keeps the entry/history, turns assignments off and cancels pending installs. Restore leaves assignments off. Editing sources refreshes only waiting vendor orders, including the shared download limit; it never creates a new install. Catalog source type, page-link match, official hosts, Team ID/evidence and bundle ID are editable; every editable field, the page-link match included, is capped at 4096 bytes before it can enter the catalog or a signed order. A refused owner form answers as a styled page carrying the reason and a link back, never as bare text.
 - `/status` may also report optional `installed_build` and `installed_executable_sha256` maps. Each has the same app/name/value bounds as `installed`; builds are nonempty single lines and executable hashes are exactly 64 lowercase hexadecimal characters. The publisher retains only the latest maps for readback; a later report without them clears previous identity to unknown. These are reported installed-bundle bytes, not proof of a release archive, and older state files remain readable.
 - `/status` may report a bounded `display_name`. The helper reads the installed Hub’s current Machine ID, else the macOS computer name. The publisher stores the last reported name separately: a manual label survives unchanged reports, and the next actual Mac name change follows automatically. Older helpers omit the field and leave the label alone.
 - A Mac has a separate optional display label. Renaming changes that label and adds one history entry; the enrolment ID, token hash, pending orders and enrolment date stay unchanged. Duplicate labels remain separate records and show “same name” on the page.
-- Owner-only: `GET /`, `POST /api/rename-machine`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic`,
+- Owner-only: `GET /`, `POST /api/rename-machine`, `POST /api/request-update`, `POST /api/request-rollback`,
+  `POST /api/request-launch`, `POST /api/automatic`,
   `POST /api/enrol-window`, `POST /api/remove-machine` — loopback peer, a Host of
   127.0.0.1/localhost/[::1] with this port (no DNS rebinding), and for changes an Origin or
   Referer from this page (neither is refused). The page sends CSP, `X-Frame-Options: DENY`,
   `Cache-Control: no-store`. It shows each Mac's effective Automatic setting (the owner's
   override, else what the Mac's own config says). Each row with an app of its own has an Update
   button, a Roll back button and its Automatic toggle; the rollback route needs no feed entry
-  for that app, because it puts back a version the Mac already keeps.
+  for that app, because it puts back a version the Mac already keeps. A Mac whose agent advertises
+  `launch-v1` also gets one Launch button per installed app: it shows "Launch requested" while the
+  order waits (a sleeping Mac keeps it queued and visible), then "Running" when the Mac reports
+  `launched`, or the failure and its plain reason.
 
 **Enrolment is closed until the owner opens a window.** `POST /enrol` is the one route with no
 token, and it is the only way a Mac gets a token without the owner touching the publisher:
@@ -408,7 +422,11 @@ Artifacts stream to `downloads/<app>/`, refused past their signed size, then che
 the signed size and SHA-256. A transfer that fails keeps its `.part`, and the next attempt resumes
 it with `Range: bytes=<have>-` (a publisher that answers 200 restarts it at zero instead); only
 Cancel gives a partial up. A finished artifact is reused by a retried install, so an app that did
-not quit costs no second download, and a superseded version's bytes move to `_trash`. Transport
+not quit costs no second download, and a superseded version's bytes are removed: only the newest
+artifact per app stays (it is the patch base and the retry source), because moving whole installers
+into `_trash` is what filled a publisher's disk. A download is refused before any network work when
+the volume has less free space than the artifact plus the reserve (`reserveGB`, default 2 GB), and
+that refusal names the free space it found. Transport
 failures (no data, connection reset, deadline exceeded) are NOT artifact rejections — they retry
 next run and resume. Bytes
 that arrive but do not match the signed size or SHA (oversize, truncated, corrupt) are a delivery
@@ -489,7 +507,8 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
 3. write the install journal (naming both paths, the target version and any active owned service
    labels, so recovery can prove which side it found); quit the app and stop its service, in that
    order. A refusal keeps the installed bundle and requests restart of what was stopped;
-4. installed → rollback (the earlier rollback moves to `_trash`), staging → installed, the
+4. installed → rollback (the earlier rollback is removed: one kept bundle per app, replaced and
+   never accumulated), staging → installed, the
    journal moving forward at each step. Any failure restores
    the previous bundle, relaunches it and says exactly what was restored — or, loudly, that it
    could not be, **and keeps the journal** so the next run retries instead of reporting a Mac
@@ -497,7 +516,11 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
 5. put back what the install stopped, unattended included: an app it found running is relaunched
    — background and hidden (`open -g -j`; the Gateway through its own login job, so it keeps
    `--background` and does not come back as a windowed copy) — and required to be healthy as the
-   new version. This is the owner's rule: the app resumes by itself, because nobody is there to
+   new version. How long the app has to appear at all is its own per-app setting
+   (`appearCeilingSeconds`, default 120 s, twice what the Gateway's relaunch took on 1301), and the
+   health clock starts only once the process appears; an app that never appears is reported as
+   `did_not_start`, with the previous version put back, and the value used is in the result's
+   timings line. A slow quit-and-stop is therefore never charged to the app's own start. This is the owner's rule: the app resumes by itself, because nobody is there to
    open it after an Automatic install or a remote order. A running test/hidden instance is still
    never relaunched in the owner's profile, and a test run is one that says so (`--test-mode`,
    `--headless`, `--snapshot`) or carries its own data location (a path argument, an isolated
@@ -589,7 +612,10 @@ Helpers run with absolute paths and hard deadlines: both pipes are drained while
 deadline they get SIGTERM, then SIGKILL, and are reaped before the error is raised. The HTTP
 client has BOTH an inactivity timeout (`timeout`) and a total transfer deadline (`totalTimeout`)
 — an inactivity deadline alone lets a stalled or malicious peer hold a run open for ever. No
-`sudo`. Nothing is deleted: superseded files go to `_trash/`. `SafeName` caps components at 196
+`sudo`. Nothing of the owner's is deleted: superseded files go to `_trash/`. The one exception is
+the updater's own working space — its `state/_trash`, superseded downloads and replaced rollback
+bundles, described under `## Recipes` — which holds no owner file and is reclaimed instead.
+`SafeName` caps components at 196
 bytes so the longest derived name (`.<sha12-><name>.khu-tmp-<uuid>`) fits inside 255.
 The reviewed base `6c47e36` already restricted names to 128 ASCII characters; the round-2
 claim that it accepted overflowing names could not be reproduced. The explicit 196-byte
@@ -633,7 +659,9 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
 - Persisted timestamps use wall-clock time, but each stub process restarts an open probation
   and measures live deadlines with a monotonic clock. Crash timestamps remain wall-clock
   records, so a wall-clock jump can affect which exits belong to the crash window.
-- `_trash` grows with each install (previous downloads and bundles) until the owner empties it.
+- The updater's state trash is pruned at the end of every agent run to its newest entry
+  (`trashKept`, default 1), so it no longer grows with each install. A copy that cannot be removed
+  even after its immutable flag is cleared stays and is counted in the run note, never hidden.
 - The signature check tells one signed app from another, not who published it: two bundles can be
   ad-hoc signed locally under the same identifier, so it proves "this is the same app this Mac is
   running, unaltered", which is the question a rollback has to answer. The feed's own signed SHA-256

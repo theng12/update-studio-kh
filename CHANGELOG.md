@@ -5,6 +5,14 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 1.0.42 — 2026-11-16
+
+- The window now shows the live fleet on 1301, reached through a private SSH link that closes with the app. The title bar says so: "Live fleet on … · actions here change those Macs".
+- When 1301 cannot be reached, the window says "Not connected · nothing shown is live" and shows no old data. It tries again after 30 seconds, then waits longer each time, up to 10 minutes.
+- Every confirmation in the window names the fleet it acts on.
+- What's New is bigger and easier to read: the version, its date, how many changes it has, and the four releases before it.
+- Includes Studio Launcher KH 0.1.44.
+
 ## 1.0.41 — 2026-11-15
 
 - Includes Studio Launcher KH 0.1.39: a failure's own words are shown whole (no cut-off job name or exit code), the in-page confirmation is a real dialog with focus, Escape and Tab handled, and the one limit is stated plainly — an app whose helper is a child process of the app can still refuse to quit, and the update then says so and keeps it.

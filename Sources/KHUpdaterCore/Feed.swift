@@ -32,6 +32,9 @@ public struct FeedApp: Codable, Sendable, Equatable {
     /// `…/api/maintenance/drain` on this Mac's loopback). Signed by the publisher; nil means the
     /// app has no hold endpoint, so an install over a running copy is refused rather than silent.
     public var holdURL: String?
+    /// The first version published with this `holdURL`. A build older than it predates the hold, so
+    /// its 401/403/404 there means "no endpoint yet", not a refused credential. nil when unknown.
+    public var holdSince: String?
 
     public init(version: String, file: String, sha256: String, bytes: Int64, kind: String, notes: String? = nil) {
         self.version = version; self.file = file; self.sha256 = sha256
@@ -93,6 +96,7 @@ public struct Feed: Codable, Sendable, Equatable {
             // An endpoint that is not this Mac's loopback hold path is no endpoint: the app is then
             // "unsupported" and a running install over it is refused, never silently interrupted.
             if let holdURL = entry.holdURL, UpdateHold.trusted(holdURL) == nil { entry.holdURL = nil }
+            if entry.holdURL == nil || !VersionCompare.isValid(entry.holdSince ?? "") { entry.holdSince = nil }
         }
         for (app, var entry) in apps {
             try validate(app, &entry)

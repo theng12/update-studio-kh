@@ -23,6 +23,7 @@ import uuid
 
 REPO = Path(__file__).resolve().parents[1]
 RECIPES = REPO / "Sources/KHUpdaterCore/Recipes.swift"
+SPACE = REPO / "Sources/KHUpdaterCore/Space.swift"
 SHELL_SWIFT = REPO / "Sources/KHUpdaterCore/Shell.swift"
 SUPPORT = REPO / "Sources/KHUStub/Support.swift"
 CONFIG = REPO / "Sources/KHUpdaterCore/Config.swift"
@@ -302,8 +303,12 @@ case "caller-partial", "caller-refused", "caller-dead":
            "a refusal must say the installed bundle was kept: " + reason)
     verify(!fm.fileExists(atPath: staged.path) && !fm.fileExists(atPath: journal.path),
            "the staged bundle and its journal must be out of the way, never left to promote")
-    verify(trashed(trash, fm).sorted() == ["journal.json", "staged.app"],
-           "both must still be in the trash, restorable")
+    // The journal is the owner's record and stays restorable. The staged copy is the updater's own
+    // duplicate of an installer whose app was kept, and since 0.1.51 it is cleared through Space
+    // instead of piling up in the trash — the assertion here said "both" only because this suite
+    // stopped compiling when that changed and nobody saw it.
+    verify(trashed(trash, fm).sorted() == ["journal.json"],
+           "the journal must still be in the trash, restorable")
     switch mode {
     case "caller-partial":
         // The gap this fix closes: the app quit gracefully, its service refused to stop, and another
@@ -338,6 +343,12 @@ STUBS = """
 /// mentions it in `executableSha256`, which no case here calls.
 enum Signing {
     static func sha256Hex(fileAt url: URL) throws -> (hex: String, bytes: Int64) { ("", 0) }
+}
+
+/// Stub, not under test: the stop phase says this sentence when the app did not quit. `Recipe`
+/// itself is not part of this slice; the words are the real ones, read from the source.
+enum Recipe {
+    static let didNotQuit = "the app did not quit; the installed app was kept"
 }
 """
 
@@ -481,6 +492,12 @@ class AppServiceRecipeTests(unittest.TestCase):
                 + top_block(SUPPORT, "public enum Mono")
                 + top_block(SUPPORT, "public enum ISO")
                 + top_block(SUPPORT, "public enum Trash")
+                # The stop phase retires the staged copy through Space, and records a timing through
+                # the enclosing install's `mark`. Neither is a block the extractor keeps, so both are
+                # supplied here: without them this suite stopped compiling when the stop phase moved
+                # to Space.remove (0.1.50), and the whole packaging suite went red unnoticed.
+                + top_block(SPACE.read_text(), "public enum Space")
+                + "\nfunc mark(_ step: String) {}\n"
                 + top_block(CONFIG, "public enum ReportPolicy"))
         (cls.build / "core.swift").write_text(core)
         harness = HARNESS.replace("SERVICE_METHOD", method.group(1))

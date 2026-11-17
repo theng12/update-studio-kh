@@ -9,6 +9,15 @@ public struct RecipeResult: Sendable, Equatable {
     /// The version the app was on *before* this result, when the recipe knows it: an owner rollback
     /// names the version it moved away from, so the agent can reject that exact artifact.
     public var version: String?
+    /// True when the app was asked to quit without an update hold because its build predates one.
+    public var quitWithoutHold = false
+    /// True when the installed build predates its app's update hold: it has no hold route, or it
+    /// answered 401/403/404 and the feed's `holdSince` is newer than what is installed.
+    public var predatesHold = false
+    /// The unattended quit's own log lines: what the idle check answered, whether the app exited and
+    /// how long it took, whether its services started, and whether it came back. Kept as separate
+    /// lines so a Mac that stalls or half-restarts says which of the four failed.
+    public var quitTrace: [String] = []
     public init(status: String, reason: String? = nil, version: String? = nil) {
         self.status = status; self.reason = reason; self.version = version
     }
@@ -46,6 +55,11 @@ public struct AppControl {
     public var resumeServices: () -> ServiceResume
     /// Healthy *as this version*: the new one after an install, the previous one after a rollback.
     public var healthy: (_ expectedVersion: String) -> Bool
+    /// Which requirement a failed health check is missing, in words — a version mismatch, the app
+    /// not running, or the name of the service that is not running — or nil when it is healthy or
+    /// cannot tell. A failure that says only "not healthy within 60 s" sends someone digging
+    /// through logs; the updater already knows the answer and must say it.
+    public var healthRequirement: (_ expectedVersion: String) -> String?
     public var healthTimeout: TimeInterval
     public var pollInterval: TimeInterval
     /// How long the app must stay healthy without a break before an install is accepted: an app that
@@ -53,13 +67,15 @@ public struct AppControl {
     public var healthSettle: TimeInterval
     public init(isRunning: @escaping () -> Bool?, quit: @escaping () -> Bool, launch: @escaping () -> Void,
                 stopService: @escaping () -> Bool = { true }, healthy: @escaping (String) -> Bool,
+                healthRequirement: @escaping (String) -> String? = { _ in nil },
                 healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10,
                 serviceLabels: @escaping () -> [String] = { [] }, restoreServices: @escaping ([String]) -> Void = { _ in },
                 resumeServices: @escaping () -> ServiceResume = { .none },
                 isTestInstance: @escaping () -> Bool = { false }) {
         self.isRunning = isRunning; self.quit = quit; self.launch = launch; self.stopService = stopService
         self.serviceLabels = serviceLabels; self.restoreServices = restoreServices; self.resumeServices = resumeServices
-        self.healthy = healthy; self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
+        self.healthy = healthy; self.healthRequirement = healthRequirement
+        self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
         self.healthSettle = healthSettle
         self.isTestInstance = isTestInstance
     }
@@ -160,6 +176,9 @@ public enum Recipe {
     /// is kept as it is, because nothing here proved a quiet point.
     static let handKeepsRunningApp = "This app is running now, so nothing was changed. "
         + "Quit it when its work is finished, then try again. No quiet point was proved."
+    /// An app that would not quit within the quit's own ceiling: nothing was swapped, so the caller
+    /// reports a refusal and the reason it failed, instead of a stalled row.
+    public static let didNotQuit = "the app did not quit; the installed app was kept"
     /// Install a DMG's app over `installedPath`. The order is the safety contract:
     ///
     /// 1. finish or undo any install a killed run left behind (`recover`);
@@ -182,8 +201,10 @@ public enum Recipe {
     public static func appDmg(shell: Shell, installedPath: String, artifactPath: String, feedVersion: String,
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
                               refuseIfRunning: Bool = false, relaunchAfterInstall: Bool = true,
+                              appearCeiling: TimeInterval = Recipe.appearCeiling,
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil,
+                              clock: @escaping () -> TimeInterval = Mono.now,
                               beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
@@ -211,7 +232,7 @@ public enum Recipe {
         try stage(paths, from: source, info: info, shell: shell, fileManager: fm)
         do { try verifyStaged?(paths.staged.path) }
         catch {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             throw error
         }
         mounted = false
@@ -222,14 +243,14 @@ public enum Recipe {
         // happens here — before the journal exists and before anything is quit: the staged copy goes
         // back to `_trash`, the installed bundle is untouched and nothing is stopped or started.
         if refuseIfRunning, control.isRunning() != false {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             return RecipeResult(status: "refused", reason: handKeepsRunningApp)
         }
 
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
                                     refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall,
-                                    beforeStop: beforeStop)
+                                    clock: clock, appearCeiling: appearCeiling, beforeStop: beforeStop)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -292,7 +313,7 @@ public enum Recipe {
         try stage(paths, from: paths.rollback.path, info: kept, shell: shell, fileManager: fm)
         guard signingIdentity(paths.staged.path, shell: shell) == keptIdentity,
               signatureVerifies(paths.staged.path, shell: shell) else {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             return RecipeResult(status: "refused", reason: "the staged copy of \(kept.version) at \(paths.staged.path) does not verify as "
                                + "\(keptIdentity); nothing was changed")
         }
@@ -304,11 +325,11 @@ public enum Recipe {
     /// Copy a verified bundle into the staging path beside the installed one and check the copy —
     /// always before anything running is stopped. `ditto` carries the bundle's own signature over.
     static func stage(_ paths: Paths, from source: String, info: BundleInfo, shell: Shell, fileManager fm: FileManager) throws {
-        if fm.fileExists(atPath: paths.staged.path) { try Trash.move(paths.staged, into: paths.trash, fileManager: fm) }
+        if fm.fileExists(atPath: paths.staged.path) { _ = Space.remove(paths.staged, shell: shell, fileManager: fm) }
         let copy = try shell.run("/usr/bin/ditto", arguments: [source, paths.staged.path], timeout: 900)
         guard copy.exitCode == 0, let stagedInfo = try? BundleInfo.read(paths.staged.path), stagedInfo == info,
               stagedInfo.executableIsRunnable(in: paths.staged.path) else {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             throw khuFail("copying the new app failed (\(copy.stderr.prefix(200))); nothing was changed")
         }
     }
@@ -399,8 +420,16 @@ public enum Recipe {
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false,
                                  relaunchAfterInstall: Bool = true,
+                                 clock: @escaping () -> TimeInterval = Mono.now,
+                                 appearCeiling: TimeInterval = Recipe.appearCeiling,
                                  beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let installedPath = paths.installedPath
+        // The gap's own timeline: each step's offset from the moment the install began, so the next
+        // estimate is measured rather than guessed. It travels in the result, so the helper's log
+        // and the fleet record carry it.
+        let started = Date()
+        var marks: [(String, TimeInterval)] = []
+        func mark(_ step: String) { marks.append((step, Date().timeIntervalSince(started))) }
         // The last read before anything would be stopped is the one that decides: the app may have
         // been opened (or closed) while the installer was being prepared.
         let wasRunning = control.isRunning() ?? true
@@ -413,14 +442,14 @@ public enum Recipe {
         // An app that updates itself came up between the staging look and here: this route proves no
         // quiet point, so it is kept exactly as it is — no journal, no quit, no service stop.
         if refuseIfRunning, wasRunning {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
             return RecipeResult(status: "refused", reason: Recipe.handKeepsRunningApp)
         }
         // The replacement must be proven present and readable before anything is stopped or moved:
         // a missing or corrupt staged app leaves the installed one exactly where it is, so a failed
         // install can never leave the machine with no app. No journal exists yet for this path.
         guard fm.fileExists(atPath: paths.staged.path), (try? BundleInfo.read(paths.staged.path)) != nil else {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
             return RecipeResult(status: "install_failed",
                                 reason: "the staged app is missing or unreadable; the installed app was kept; nothing was replaced")
         }
@@ -430,7 +459,7 @@ public enum Recipe {
         // interrupted, and its pause expires by itself.
         if !refuseIfRunning, wasRunning, let beforeStop {
             do { try beforeStop() } catch {
-                _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+                _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
                 throw error
             }
         }
@@ -456,7 +485,7 @@ public enum Recipe {
             // services whether or not it is relaunched.
             let resumed = control.resumeServices()
             if wasRunning && mayRelaunch && (appQuit || control.isRunning() != true) { control.launch() }
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
             // Only a stop that really began (the app was quit) can have left a service down; a
             // refusal before that leaves nothing to recover, so no journal is kept for it.
             let keepJournal = !resumed.ok && appQuit
@@ -471,17 +500,18 @@ public enum Recipe {
             // It was running at the boundary; if it exited on its own the hold is moot and there is
             // nothing to quit, so the swap simply goes ahead (the pause expires by itself).
             if wasRunning {
-                guard control.quit() else { try abandon("the app did not quit; the installed app was kept; quit the app by hand, then choose Update") }
+                guard control.quit() else { try abandon(Recipe.didNotQuit + "; quit the app by hand, then choose Update") }
                 appQuit = true
             }
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
         }
+        mark("gone")
 
         // 4. Promote. Every throw from here restores the previous bundle before it is reported.
         do {
             if fm.fileExists(atPath: installedPath) {
                 try fm.createDirectory(at: paths.rollback.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if fm.fileExists(atPath: paths.rollback.path) { try Trash.move(paths.rollback, into: paths.trash, fileManager: fm) }
+                if fm.fileExists(atPath: paths.rollback.path) { _ = Space.remove(paths.rollback, shell: SystemShell(), fileManager: fm) }
                 journal.phase = "moving"; try AtomicFile.writeJSON(journal, to: paths.journal)
                 try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path)
             }
@@ -504,6 +534,7 @@ public enum Recipe {
                     "the app was installed but its background service did not restart "
                     + "(\(resumed.reason ?? "launchd refused")); the install is kept and the next run tries again")
             }
+            mark("promoted")
         } catch {
             let cause = error
             let restored: String
@@ -521,7 +552,9 @@ public enum Recipe {
 
         func finish(_ result: RecipeResult) -> RecipeResult {
             _ = try? Trash.move(paths.journal, into: paths.trash, fileManager: fm)
-            let all = notes.filter { !$0.isEmpty }
+            let timeline = marks.isEmpty ? "" : "timings: "
+                + marks.map { "\($0.0) \(String(format: "%.1f", $0.1))s" }.joined(separator: " · ")
+            let all = notes.filter { !$0.isEmpty } + [timeline]
             guard !all.isEmpty else { return result }
             return RecipeResult(status: result.status,
                                 reason: ([result.reason ?? ""] + all).filter { !$0.isEmpty }.joined(separator: "; "),
@@ -537,8 +570,10 @@ public enum Recipe {
             }
             switch result.status {
             case "updated": return answered("rolled_back_by_owner", result.reason)
-            case "rolled_back": return answered("rollback_failed", "\(targetVersion) was not healthy within "
-                                                + "\(Int(control.healthTimeout)) s, so \(displaced ?? "the version this Mac was running") was put back")
+            case "rolled_back":
+                // Keep the install's own sentence: it names the requirement that was missing.
+                return answered("rollback_failed", result.reason ?? "\(targetVersion) was not healthy within "
+                                + "\(Int(control.healthTimeout)) s, so \(displaced ?? "the version this Mac was running") was put back")
             case "rollback_unhealthy": return answered("rollback_unhealthy", "\(targetVersion) was not healthy, and putting "
                                                        + "\(displaced ?? "the version this Mac was running") back did not come up healthy either")
             default: return result
@@ -560,24 +595,53 @@ public enum Recipe {
             return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
         }
         control.launch()
-        if waitHealthy(control, version: targetVersion) { return finish(settled(RecipeResult(status: "updated"))) }
+        mark("launched")
+        // The health window starts when the new process is there, not when the quit began: Gateway
+        // spends most of its gap draining and stopping, and that time must not be charged to the
+        // app's own start (measured on 1301, 2026-11-17: 127 s quit-to-healthy, the health clock
+        // had already nearly expired).
+        mark("appear-ceiling \(Int(appearCeiling))s")
+        // Only a process this install stopped has to come back; a first install has none to wait for.
+        let appeared = !wasRunning || waitForRunning(control, clock: clock, ceiling: appearCeiling)
+        mark(appeared ? "appeared" : "did-not-appear")
+        mark("health-window \(Int(control.healthTimeout))s")
+        if appeared, waitHealthy(control, version: targetVersion, clock: clock) {
+            mark("healthy")
+            return finish(settled(RecipeResult(status: "updated")))
+        }
 
-        // 6. Roll back — only once both the app and its service are really gone.
+        // 6. Roll back — only once both the app and its service are really gone. The sentence names
+        // what actually happened: a process that never existed did not fail a health check, and on
+        // the fleet page "never started" is its own status, not a rollback.
+        // What the check was missing, not just how long it waited: the version on disk, the app
+        // process, or the name of the service that is not running. This sentence is the only
+        // diagnostic anyone at a site Mac has.
+        let healthGap = appeared ? (control.healthRequirement(targetVersion) ?? "health check did not pass") : nil
+        if let healthGap { mark("health \(healthGap)") }
+        let why = appeared ? "the new version was not healthy within \(Int(control.healthTimeout)) s"
+            + (healthGap.map { " (health: \($0))" } ?? "")
+            : "the new version did not start within \(Int(appearCeiling)) s"
         guard control.quit(), control.stopService() else {
             // Both bundles stay, and so does the journal: the next run asks the bad version to stop
             // again instead of finding the new version in place and calling the app settled.
             return settled(RecipeResult(status: "rollback_blocked", reason:
-                "\(targetVersion) was unhealthy and would not stop; both versions were kept (previous at "
+                "\(targetVersion) \(why) and it would not stop; both versions were kept (previous at "
                 + "\(paths.rollback.path)) and \(paths.journal.path) with them — the next run tries again"))
         }
         do {
-            let result = try rollBack(paths, journal: journal, control: control, fileManager: fm)
+            let result = try rollBack(paths, journal: journal, control: control, fileManager: fm, why: why)
+            guard appeared else {
+                var out = result
+                out.status = "did_not_start"
+                out.reason = result.reason.map { $0.hasPrefix(why) ? $0 : "\(why); \($0)" } ?? why
+                return finish(settled(out))
+            }
             return result.status == "rolled_back" ? finish(settled(result)) : settled(result)
         } catch {
             // Nothing was written away: the journal stays exactly as it is, and a later run picks
             // the rollback up again rather than reporting a Mac whose app is simply the new version.
             return settled(RecipeResult(status: "rollback_failed", reason:
-                "\(targetVersion) was unhealthy and \(displaced ?? "the version this Mac was running") could not be put back (\(error)); "
+                "\(targetVersion) \(why) and \(displaced ?? "the version this Mac was running") could not be put back (\(error)); "
                 + "nothing was reported as settled and \(paths.journal.path) is kept — the next run tries again"))
         }
     }
@@ -698,7 +762,7 @@ public enum Recipe {
         }
         if resolved {
             if !journal.staged.isEmpty, fm.fileExists(atPath: journal.staged) {
-                try Trash.move(URL(fileURLWithPath: journal.staged), into: paths.trash, fileManager: fm)
+                _ = Space.remove(URL(fileURLWithPath: journal.staged), shell: SystemShell(), fileManager: fm)
             }
             try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
         } else { note += "; unresolved, journal kept for the next run" }
@@ -742,7 +806,7 @@ public enum Recipe {
     /// up healthy as that version. Throws when the previous bundle could not be put back, and in
     /// that case nothing was written away: the caller keeps the journal.
     static func rollBack(_ paths: Paths, journal: InstallJournal, control: AppControl,
-                         fileManager fm: FileManager) throws -> RecipeResult {
+                         fileManager fm: FileManager, why: String = "the new version was not healthy") throws -> RecipeResult {
         guard let previousVersion = journal.previousVersion else {
             throw khuFail("nothing was installed here before, so there is no previous version to put back")
         }
@@ -755,19 +819,19 @@ public enum Recipe {
             // A service that did not come back is not an artifact judgement: the previous version
             // was put back, so the feed's artifact is not marked rejected by this.
             return resumed.ok
-                ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy; \(previousVersion) was put back and left stopped")
-                : RecipeResult(status: "install_failed", reason: "the new version was not healthy; \(previousVersion) was put back, "
+                ? RecipeResult(status: "rolled_back", reason: "\(why); \(previousVersion) was put back and left stopped")
+                : RecipeResult(status: "install_failed", reason: "\(why); \(previousVersion) was put back, "
                                + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); \(previousVersion) was put back and its journal is kept, so the next run tries again")
         }
         let resumed = control.resumeServices()
         guard resumed.ok else {
-            return RecipeResult(status: "install_failed", reason: "the new version was not healthy; \(previousVersion) was put back, "
+            return RecipeResult(status: "install_failed", reason: "\(why); \(previousVersion) was put back, "
                                + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); \(previousVersion) was put back and its journal is kept, so the next run tries again")
         }
         control.launch()
         return waitHealthy(control, version: previousVersion)
-            ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy within \(Int(control.healthTimeout)) s; \(previousVersion) is running again")
-            : RecipeResult(status: "rollback_unhealthy", reason: "the new version was unhealthy, and the restored \(previousVersion) is not healthy either")
+            ? RecipeResult(status: "rolled_back", reason: "\(why); \(previousVersion) is running again")
+            : RecipeResult(status: "rollback_unhealthy", reason: "\(why), and the restored \(previousVersion) is not healthy either")
     }
 
     /// The installed path is empty or wrong: put the rollback bundle back if there is one.
@@ -799,11 +863,11 @@ public enum Recipe {
         let displaced = installed.deletingLastPathComponent().appendingPathComponent(".\(installed.lastPathComponent).khu-unhealthy")
         guard let info = try? BundleInfo.read(rollback.path), info.version == expectedVersion,
               info.executableIsRunnable(in: rollback.path) else { throw khuFail("rollback is not runnable version \(expectedVersion)") }
-        if fm.fileExists(atPath: prepared.path) { try Trash.move(prepared, into: paths.trash, fileManager: fm) }
+        if fm.fileExists(atPath: prepared.path) { _ = Space.remove(prepared, shell: SystemShell(), fileManager: fm) }
         try fm.copyItem(at: rollback, to: prepared)
         guard (try? BundleInfo.read(prepared.path)) == info else { throw khuFail("the prepared rollback does not match") }
         if fm.fileExists(atPath: installed.path) {
-            if fm.fileExists(atPath: displaced.path) { try Trash.move(displaced, into: paths.trash, fileManager: fm) }
+            if fm.fileExists(atPath: displaced.path) { _ = Space.remove(displaced, shell: SystemShell(), fileManager: fm) }
             try fm.moveItem(at: installed, to: displaced)
         }
         do { try fm.moveItem(at: prepared, to: installed) }
@@ -813,7 +877,25 @@ public enum Recipe {
             }
             throw error
         }
-        if fm.fileExists(atPath: displaced.path) { try Trash.move(displaced, into: paths.trash, fileManager: fm) }
+        if fm.fileExists(atPath: displaced.path) { _ = Space.remove(displaced, shell: SystemShell(), fileManager: fm) }
+    }
+
+    /// The default for how long a relaunched app has to exist at all — its own ceiling, not the
+    /// health one: a launch that never produces a process is a different fault from one that starts
+    /// and stays unhealthy, and it must not consume the health budget. 120 s is twice what the
+    /// Gateway's relaunch took on 1301 (about 60 s from launch to process, 2026-11-17). A Mac may
+    /// raise or lower it per app with `appearCeilingSeconds`; the value used is in every timings line.
+    public static let appearCeiling: TimeInterval = 120
+
+    /// The relaunched process is there. Bounded by its own ceiling, and the health clock starts
+    /// only after this returns: a slow quit-and-stop is the app draining, not its start failing.
+    static func waitForRunning(_ control: AppControl, clock: () -> TimeInterval, ceiling: TimeInterval) -> Bool {
+        let deadline = clock() + ceiling
+        repeat {
+            if control.isRunning() == true { return true }
+            Thread.sleep(forTimeInterval: control.pollInterval)
+        } while clock() < deadline
+        return control.isRunning() == true
     }
 
     static func waitHealthy(_ control: AppControl, version: String, clock: () -> TimeInterval = Mono.now) -> Bool {
@@ -1273,6 +1355,17 @@ public enum LiveControl {
                 (try? BundleInfo.read(installedPath).version) == expected && isRunning(installedPath) == true
                     && (requiredServices.isEmpty || requiredServices.isSubset(of: Set(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)))
             },
+            // The same three conditions `healthy` checks, said one at a time so a failed install
+            // names the one that was missing. Order = cheapest first, and the first failure is the
+            // one the person needs.
+            healthRequirement: { expected in
+                let onDisk = try? BundleInfo.read(installedPath).version
+                if onDisk != expected { return "version \(onDisk ?? "unknown") on disk, expected \(expected)" }
+                if isRunning(installedPath) != true { return "app not running" }
+                let running = Set(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)
+                if let missing = requiredServices.subtracting(running).sorted().first { return "service \(missing) not running" }
+                return nil
+            },
             healthTimeout: 60,
             serviceLabels: { Array(requiredServices.union(serviceProcesses(installedPath, shell: shell, agents: agents).filter { $0.value > 1 }.keys)).sorted() },
             restoreServices: { requiredServices = Set($0.filter(BundleInfo.isBundleID)); servicePlanFrozen = true },
@@ -1374,7 +1467,10 @@ public enum LiveControl {
             return answer.code == 200 && ours(answer.pid) && !owners.isEmpty
                 && owners.allSatisfy { $0 == answer.pid } && appHealthy(expected)
         }
-        control.healthTimeout = 120
+        // Measured on 1301 (2026-11-17): quit-to-server-healthy is 127 s, most of it the drain and
+        // stop. The clock now starts when the process appears, so this is the app's own start with
+        // margin — 300 s, 2.3x the measurement. It is written into every result's timings line.
+        control.healthTimeout = 300
         return control
     }
 }

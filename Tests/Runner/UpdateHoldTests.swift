@@ -46,6 +46,29 @@ private final class HoldClient: HTTPClient, @unchecked Sendable {
     }
 }
 
+/// Records the exact script an idle check is run with, and answers it as a scripted Mac would.
+private final class ScriptSpy: Shell, @unchecked Sendable {
+    var scripts: [String] = []
+    let answer: ShellResult
+    init(answer: ShellResult) { self.answer = answer }
+    func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+        scripts.append(arguments.last ?? "")
+        return answer
+    }
+}
+
+/// Answers an idle check as a scripted Mac would, without running it, and hands everything else to
+/// the real recording shell. Lets a test decide what the app's check says on this machine.
+private struct ProbeShell: Shell {
+    let inner: RecordingShell
+    let probeExit: Int32
+    let probeOut: String
+    func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+        if executable == "/bin/sh" { return ShellResult(exitCode: probeExit, stdout: probeOut, stderr: "") }
+        return try inner.run(executable, arguments: arguments, timeout: timeout)
+    }
+}
+
 private func safeReply(inFlight: Int = 2) -> (status: Int, data: Data) {
     (200, Data(#"{"safe":true,"unsettled":[],"dispatch_paused_s":120,"in_flight":\#(inFlight)}"#.utf8))
 }
@@ -74,25 +97,27 @@ func updateHoldTests() {
                      "http://127.0.0.1:8787/admin/api/maintenance/drain#frag"]
     expect(untrusted.allSatisfy { UpdateHold.trusted($0) == nil }, "UH1 a remote, wrong-path or credentialled URL is not trusted")
 
-    func rig(_ tag: String, hold: String?, recipe: String = "fake-for-tests", running: Bool = true)
+    // The installed 1.0.0 serves the hold unless a test says otherwise (holdSince: nil records it at 2.0.0).
+    func rig(_ tag: String, hold: String?, recipe: String = "fake-for-tests", running: Bool = true, holdSince: String? = "1.0.0",
+             id: String = "demo")
         -> (rig: Rig, feed: Feed, entry: FeedApp, cfg: AgentConfig, client: HoldClient, app: FakeApp, state: URL, mount: URL) {
         let r = Rig(tag)
         let installed = makeApp(r.root.appendingPathComponent("Demo.app"), version: "1.0.0", id: "com.example.demo")
-        try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: "demo", version: "2.0.0",
+        try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: id, version: "2.0.0",
                                    artifact: r.artifact("demo.dmg", "dmg bytes"), kind: recipe == "fake-for-tests" ? "fake-for-tests" : "app-dmg",
                                    allowSame: false, meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.0", iconPNG: Data()) },
-                                   holdURL: hold)
+                                   holdURL: hold, holdSince: hold == nil ? nil : holdSince)
         let feed = try! FeedPublisher.loadVerifiedFeed(from: r.feed, publicKey: r.pair.privateKey.publicKey)!
         let state = r.root.appendingPathComponent("state")
         try! fm.createDirectory(at: state, withIntermediateDirectories: true)
         let client = HoldClient(InProcessClient(server: r.server))
-        client.artifacts[feed.apps["demo"]!.file] = Data("dmg bytes".utf8)
-        var cfg = agentConfig(r, token: "unused", apps: ["demo": AppConfig(bundlePath: installed.path, recipe: recipe, automatic: true)])
+        client.artifacts[feed.apps[id]!.file] = Data("dmg bytes".utf8)
+        var cfg = agentConfig(r, token: "unused", apps: [id: AppConfig(bundlePath: installed.path, recipe: recipe, automatic: true)])
         cfg.stateDir = state.path
         let app = FakeApp(installed: installed, running: running, quits: [true], healthy: ["2.0.0"])
         let mount = r.root.appendingPathComponent("mount")
         makeApp(mount.appendingPathComponent("Demo.app"), version: "2.0.0", id: "com.example.demo")
-        return (r, feed, feed.apps["demo"]!, cfg, client, app, state, mount)
+        return (r, feed, feed.apps[id]!, cfg, client, app, state, mount)
     }
 
     // UH2 a safe hold is taken before the artifact and resumed after the install.
@@ -377,6 +402,346 @@ func updateHoldTests() {
                "UH32 the exact admin drain holds before the byte (\(f.client.calls))")
     }
 
+    // UH35 the feed records the first version that published a hold address and carries it on.
+    do {
+        let f = rig("hold-since", hold: holdURL, holdSince: nil)
+        try! FeedPublisher.publish(feedDir: f.rig.feed, keyFile: f.rig.key, app: "demo", version: "2.0.1",
+                                   artifact: f.rig.artifact("demo2.dmg", "dmg bytes 2"), kind: "fake-for-tests", allowSame: false,
+                                   meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.1", iconPNG: Data()) })
+        let carried = try! FeedPublisher.loadVerifiedFeed(from: f.rig.feed, publicKey: f.rig.pair.privateKey.publicKey)!.apps["demo"]
+        try! FeedPublisher.publish(feedDir: f.rig.feed, keyFile: f.rig.key, app: "demo", version: "2.0.2",
+                                   artifact: f.rig.artifact("demo3.dmg", "dmg bytes 3"), kind: "fake-for-tests", allowSame: false,
+                                   meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.2", iconPNG: Data()) },
+                                   holdSince: "1.5.0")
+        let named = try! FeedPublisher.loadVerifiedFeed(from: f.rig.feed, publicKey: f.rig.pair.privateKey.publicKey)!.apps["demo"]
+        expect(f.entry.holdSince == "2.0.0" && carried?.holdSince == "2.0.0" && named?.holdSince == "1.5.0",
+               "UH35 holdSince starts at the first hold publish, is carried, and --hold-since sets it (\(f.entry.holdSince ?? "nil"), \(carried?.holdSince ?? "nil"), \(named?.holdSince ?? "nil"))")
+    }
+
+    // UH36 a build older than holdSince answering 401 needs one install while closed, said once;
+    // a build at or past holdSince answering 401 is still a real credential refusal.
+    do {
+        func attempt(_ tag: String, installed: String) -> RecipeResult? {
+            let f = rig(tag, hold: holdURL, recipe: "app-dmg", running: true)
+            var feed = f.feed
+            feed.apps["demo"]?.holdSince = "0.6.240"
+            f.client.replies = [(status: 401, data: Data(#"{"error":"unauthorized"}"#.utf8))]
+            return try? Agent.install(app: "demo", feed: feed, installed: installed, config: f.cfg,
+                                      serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                      http: f.client, shell: RecordingShell(mount: f.mount),
+                                      control: { _, _ in f.app.control })
+        }
+        let old = attempt("hold-since-old", installed: "0.6.235")
+        let current = attempt("hold-since-current", installed: "0.6.242")
+        var memory = AgentMemory()
+        let lines = [old, old].compactMap { $0.flatMap { Agent.refusalNote(app: "demo", version: "0.6.242", result: $0, memory: &memory) } }
+        let oldReason = old?.reason ?? "", currentReason = current?.reason ?? ""
+        expect(old?.status == Agent.waitingForClose && oldReason.contains("0.6.235") && oldReason.contains("0.6.240")
+               && oldReason.contains("one normal install while demo is closed") && !oldReason.contains("credential")
+               && lines.count == 1,
+               "UH36 0.6.235 below holdSince 0.6.240 with a 401 takes the one-install path, logged once (\(oldReason); \(lines.count) lines)")
+        expect(current?.status == "refused" && currentReason.contains("credential") && !currentReason.contains("predates"),
+               "UH36 0.6.242 with a 401 is still a credential refusal (\(currentReason))")
+    }
+
+    // UH37 an owner's order for a running build with no hold waits: it stays pending, the page
+    // says why, and it installs on the first run that finds the app closed. One order is enough.
+    do {
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        func order(_ f: (rig: Rig, feed: Feed, entry: FeedApp, cfg: AgentConfig, client: HoldClient, app: FakeApp, state: URL, mount: URL),
+                   days: Int?) -> (AgentConfig, () -> [String: Any]?) {
+            f.client.postError = URLError(.cannotConnectToHost)
+            var cfg = f.cfg
+            cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+            cfg.waitForCloseDays = days
+            cfg.quitOldBuilds = false   // the switch off: the order waits for the app to close
+            _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                       body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
+            return (cfg, { () -> [String: Any]? in
+                let r = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                           control: { _, _ in f.app.control }, appFolders: [])
+                return r.map { ["notes": $0.notes] }
+            })
+        }
+        let f = rig("hold-wait-order", hold: holdURL, recipe: "app-dmg", running: true)
+        let (_, run) = order(f, days: nil)
+        let machine = { (try? StateStore.load(from: f.rig.state))?.machines["mac1"] }
+        let notes1 = (run()?["notes"] as? [String] ?? []).filter { $0.contains("Waiting for demo to close") }
+        let pending1 = machine()?.pending.count
+        let notes2 = (run()?["notes"] as? [String] ?? []).filter { $0.contains("Waiting for demo to close") }
+        let page = String(decoding: f.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: owner), remote: "127.0.0.1").data, as: UTF8.self)
+        let shown = machine()?.waiting?["demo"] ?? ""
+        expect(notes1.count == 1 && notes2.isEmpty && pending1 == 1 && machine()?.pending.count == 1
+               && machine()?.lastResults?["demo"] == nil && shown.hasPrefix("Waiting for demo to close")
+               && page.contains("to close</span>") && page.contains(shown.prefix(40)),
+               "UH37 a waiting order stays pending, is logged once and the page says why (notes \(notes1.count)/\(notes2.count), pending \(pending1 ?? -1))")
+        f.app.running = false
+        _ = run()
+        let landed = machine()?.lastResults?["demo"]?.status ?? "none"
+        expect(machine()?.pending.isEmpty == true && landed != "refused" && landed != Agent.waitingForClose && f.client.calls.contains("artifact"),
+               "UH37 the same order installs once the app is closed (\(landed))")
+
+        // The wait has its own ceiling: past it the order is answered refused, terminal.
+        let g = rig("hold-wait-ceiling", hold: holdURL, recipe: "app-dmg", running: true)
+        let (_, runG) = order(g, days: 0)
+        _ = runG(); _ = runG()
+        let ended = (try? StateStore.load(from: g.rig.state))?.machines["mac1"]
+        expect(ended?.pending.isEmpty == true && ended?.lastResults?["demo"]?.status == "refused"
+               && (ended?.lastResults?["demo"]?.reason ?? "").contains("waited 0 days for demo to close"),
+               "UH37 past its ceiling the wait ends refused with the reason (\(ended?.lastResults?["demo"]?.reason ?? "nil"))")
+    }
+
+    // UH38 end to end: a feed entry published with holdSince, a running build below it answering
+    // 401. The order waits, this Mac's log and the owner page's row say "waiting for close", and
+    // nothing anywhere calls it a credential refusal.
+    do {
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        let f = rig("hold-since-e2e", hold: holdURL, recipe: "app-dmg", running: true, holdSince: "1.5.0")
+        f.client.replies = Array(repeating: (status: 401, data: Data(#"{"error":"unauthorized"}"#.utf8)), count: 4)
+        var cfg = f.cfg
+        cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        cfg.quitOldBuilds = false
+        _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                   body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
+        let run = { (try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, appFolders: []))?.notes ?? [] }
+        let notes = run() + run()
+        let machine = (try? StateStore.load(from: f.rig.state))?.machines["mac1"]
+        let page = String(decoding: f.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: owner), remote: "127.0.0.1").data, as: UTF8.self)
+        let waitNotes = notes.filter { $0.contains("waiting_for_close") && $0.contains("first in 1.5.0") }
+        expect(f.entry.holdSince == "1.5.0" && machine?.pending.count == 1 && machine?.lastResults?["demo"] == nil
+               && waitNotes.count == 1 && !notes.contains { $0.contains("(credential)") }
+               && page.contains("Waiting for demo to close</span>") && page.contains("predates its update hold (first in 1.5.0)")
+               && !page.contains("refused the update hold (credential)") && !f.client.calls.contains("artifact"),
+               "UH38 a build below the published holdSince answering 401 reads waiting for close on the Mac and the page, never credential (notes \(waitNotes.count), pending \(machine?.pending.count ?? -1))")
+    }
+
+    // UH39 default on: an owner's order for a running build with no hold route quits it the way
+    // updates worked before holds, installs, relaunches it, and logs one line saying so.
+    do {
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        let f = rig("legacy-quit-order", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        var cfg = f.cfg
+        cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        cfg.apps["demo"]?.idleProbe = "exit 0"   // Hub's owner: nothing running or queued
+        _ = f.rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/request-update", headers: owner,
+                                                   body: Data(#"{"machine":"mac1","app":"demo"}"#.utf8)), remote: "127.0.0.1")
+        let notes = (try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, appFolders: []))?.notes ?? []
+        let machine = (try? StateStore.load(from: f.rig.state))?.machines["mac1"]
+        let lines = notes.filter { $0.contains("predates its update hold, asked to quit without one") }
+        let quitAt = f.app.events.firstIndex(of: "quit"), launchAt = f.app.events.lastIndex(of: "launch")
+        expect(machine?.pending.isEmpty == true && machine?.lastResults?["demo"]?.status == "updated"
+               && lines.count == 1 && lines[0].contains("quit cleanly and was updated")
+               && quitAt != nil && launchAt != nil && quitAt! < launchAt! && f.client.calls.contains("artifact")
+               && (try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0"
+               && notes.contains { $0.contains("idle check exited 0") }
+               && notes.contains { $0.contains("quit: the app exited after") }
+               && notes.contains { $0.contains("services: started") }
+               && notes.contains { $0.contains("the app came back as 2.0.0") },
+               "UH39 a build with no hold route is quit, installed and relaunched by one order, with the check, the quit, the services and the return all logged (\(lines); events \(f.app.events))")
+    }
+
+    // UH40 the hold path is unchanged for a build at or past holdSince: a 401 stays a credential
+    // refusal (nothing quit), and a safe hold is still taken before the byte.
+    do {
+        let f = rig("legacy-quit-current", hold: holdURL, recipe: "app-dmg", running: true)
+        var feed = f.feed
+        feed.apps["demo"]?.holdSince = "0.6.240"
+        f.client.replies = [(status: 401, data: Data(#"{"error":"unauthorized"}"#.utf8))]
+        let refused = try? Agent.install(app: "demo", feed: feed, installed: "0.6.242", config: f.cfg,
+                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                         http: f.client, shell: RecordingShell(mount: f.mount),
+                                         control: { _, _ in f.app.control }, quitOldBuild: true)
+        let g = rig("legacy-quit-held", hold: holdURL, recipe: "app-dmg", running: true)
+        g.client.replies = [safeReply(inFlight: 1), safeReply(inFlight: 1)]
+        let held = try? Agent.install(app: "demo", feed: g.feed, installed: "1.0.0", config: g.cfg,
+                                      serverBase: URL(string: "http://pub.test")!, stateDir: g.state,
+                                      http: g.client, shell: RecordingShell(mount: g.mount),
+                                      control: { _, _ in g.app.control }, quitOldBuild: true)
+        expect(refused?.status == "refused" && (refused?.reason ?? "").contains("credential") && refused?.quitWithoutHold == false
+               && !f.app.events.contains("quit") && !f.client.calls.contains("artifact")
+               && held?.status == "updated" && g.client.calls.first == "hold" && held?.quitWithoutHold == false,
+               "UH40 at or past holdSince the hold path is unchanged (\(refused?.reason ?? "nil"); \(g.client.calls))")
+    }
+
+    // UH41 an old build that will not quit within its ceiling is refused with the reason; nothing
+    // is swapped, it keeps running, and nothing is killed.
+    do {
+        let f = rig("legacy-quit-refuses", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        f.app.quits = [false]
+        var idle = f.cfg
+        idle.apps["demo"]?.idleProbe = "exit 0"
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: idle,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        expect(result?.status == "refused" && (result?.reason ?? "").contains("did not quit within its time limit")
+               && result?.quitWithoutHold == true && f.app.running
+               && (result?.quitTrace ?? []).contains { $0.contains("its own ceiling was reached") }
+               && (result?.quitTrace ?? []).contains { $0.contains("idle check exited 0") }
+               && (try? BundleInfo.read(f.app.installed.path))?.version == "1.0.0" && !f.app.events.contains("launch"),
+               "UH41 a build that will not quit is refused and left as it was, and the log says the ceiling was reached (\(result?.quitTrace ?? []); events \(f.app.events))")
+    }
+
+    // UH42 the off switch: `quitOldBuilds: false` means this Mac's orders never quit an app, and
+    // the order keeps waiting for it to close. That is the only thing that stops the force path.
+    do {
+        let f = rig("legacy-quit-switched-off", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        var cfg = f.cfg
+        cfg.quitOldBuilds = false
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: false)
+        expect(result?.status == Agent.waitingForClose && result?.quitWithoutHold == false
+               && !f.app.events.contains("quit") && !f.app.events.contains("launch")
+               && !f.client.calls.contains("artifact") && f.app.running,
+               "UH42 quitOldBuilds: false means no quit and the order keeps waiting (\(result?.status ?? "nil"))")
+    }
+
+    // UH43 the check is logged, not obeyed: a pre-hold build whose check refuses (or never answers)
+    // is still quit and updated, and the log carries what the check said.
+    do {
+        let f = rig("legacy-force-busy-probe", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        var busy = f.cfg
+        busy.apps["demo"]?.idleProbe = "echo '2 jobs queued'; exit 3"
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: busy,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        let silent = Agent.idleRefusal(app: "demo", probe: "sleep 5", shell: RecordingShell(mount: f.mount), timeout: 1).said
+        expect(result?.status == "updated" && result?.quitWithoutHold == true
+               && (result?.quitTrace ?? []).contains { $0.contains("exited 3 (2 jobs queued)") }
+               && (result?.reason ?? "").contains("temporary force path")
+               && f.app.events.contains("quit")
+               && silent.contains("did not answer within 1 s"),
+               "UH43 a refusing check is logged but does not stop a pre-hold build (\(result?.status ?? "nil"); \(silent))")
+    }
+
+    // UH44 Hub's idle command is a shell string with quotes and `$HOME` in it: it must survive a
+    // config round-trip untouched, and an app with no probe must still decode (old configs work).
+    do {
+        let hub = "test -r \"$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db\" && [ \"$(sqlite3 -readonly \"$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db\" \"select count(*) from batches\" 2>/dev/null)\" = 0 ]"
+        var cfg = AgentConfig(feedURL: "http://pub.test/release.json", publicKey: "k", stateDir: "/tmp/s",
+                              machine: "mac1", token: "t")
+        cfg.apps = ["hub": AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub",
+                                     automatic: true, bundleID: "local.studiohub.standalone", idleProbe: hub),
+                    "story": AppConfig(bundlePath: "/Applications/Story.app", recipe: "story")]
+        let back = try? JSON.decode(AgentConfig.self, from: JSON.encode(cfg))
+        expect(back?.apps["hub"]?.idleProbe == hub && back?.apps["story"]?.idleProbe == nil,
+               "UH44 an idle check survives a config round-trip byte for byte, and an app without one decodes to nil")
+    }
+
+    // UH45 Hub's check ships with the helper, so no Mac has to be visited to arm it. The Mac's own
+    // setting still wins, an explicit empty string turns it off there, and any other app with no
+    // setting gets no check at all.
+    do {
+        let bare = AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub")
+        let own = AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub", idleProbe: "exit 0")
+        let off = AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub", idleProbe: "  ")
+        let other = AppConfig(bundlePath: "/Applications/Story.app", recipe: "story")
+        let offSaid = Agent.idleRefusal(app: "hub", probe: Agent.idleProbe(app: "hub", cfg: off),
+                                        shell: RecordingShell(mount: tmpDir("uh45"))).skip
+        expect(Agent.idleProbe(app: "hub", cfg: bare) == Agent.builtInIdleProbes["hub"]
+               && (Agent.builtInIdleProbes["hub"] ?? "").contains("hub.db")
+               && Agent.idleProbe(app: "hub", cfg: own) == "exit 0"
+               && Agent.idleProbe(app: "hub", cfg: off) == "  " && offSaid != nil
+               && Agent.idleProbe(app: "story", cfg: other) == nil
+               && Agent.idleRefusal(app: "story", probe: Agent.idleProbe(app: "story", cfg: other),
+                                    shell: RecordingShell(mount: tmpDir("uh45"))).skip != nil,
+               "UH45 Hub's idle check is built in, a Mac's own setting wins, an empty one turns it off (\(offSaid ?? "nil"))")
+    }
+
+    // UH46 the built-in check really decides Hub's legacy quit end to end, with no Mac setting at
+    // all: idle → quit, install, relaunch; not idle → the order keeps waiting and says what the
+    // check saw. The probe is never run here; only its answer is scripted.
+    do {
+        let idle = rig("builtin-probe-idle", hold: holdURL, recipe: "app-dmg", running: true, id: "hub")
+        idle.client.postError = URLError(.cannotConnectToHost)
+        let done = try? Agent.install(app: "hub", feed: idle.feed, installed: "1.0.0", config: idle.cfg,
+                                      serverBase: URL(string: "http://pub.test")!, stateDir: idle.state,
+                                      http: idle.client,
+                                      shell: ProbeShell(inner: RecordingShell(mount: idle.mount), probeExit: 0, probeOut: ""),
+                                      control: { _, _ in idle.app.control }, quitOldBuild: true)
+        let busy = rig("builtin-probe-busy", hold: holdURL, recipe: "app-dmg", running: true, id: "hub")
+        busy.client.postError = URLError(.cannotConnectToHost)
+        let waited = try? Agent.install(app: "hub", feed: busy.feed, installed: "1.0.0", config: busy.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: busy.state,
+                                        http: busy.client,
+                                        shell: ProbeShell(inner: RecordingShell(mount: busy.mount), probeExit: 3,
+                                                          probeOut: "7 items queued\n"),
+                                        control: { _, _ in busy.app.control }, quitOldBuild: true)
+        expect(done?.status == "updated" && done?.quitWithoutHold == true && idle.app.events.contains("quit")
+               && (try? BundleInfo.read(idle.app.installed.path))?.version == "2.0.0"
+               && waited?.status == "updated" && busy.app.events.contains("quit")
+               && (waited?.quitTrace ?? []).contains { $0.contains("idle check exited 3 (7 items queued)") }
+               && (try? BundleInfo.read(busy.app.installed.path))?.version == "2.0.0",
+               "UH46 Hub's built-in check runs with no Mac setting and is recorded, force path or not (\(done?.status ?? "nil") / \(waited?.status ?? "nil"); events \(busy.app.events))")
+    }
+
+    // UH47 a launch agent's environment is not an interactive shell's: the check is run with the
+    // user's real HOME and a fixed PATH exported, quotes and spaces in the path intact, and Hub's
+    // check calls /usr/bin/sqlite3 rather than whatever a PATH happens to find.
+    do {
+        let spy = ScriptSpy(answer: ShellResult(exitCode: 0, stdout: "", stderr: ""))
+        _ = Agent.idleRefusal(app: "hub", probe: "true", shell: spy,
+                              home: URL(fileURLWithPath: "/Users/a b/Mac"))
+        let script = spy.scripts.first ?? ""
+        expect(script.contains("HOME='/Users/a b/Mac'\nexport HOME")
+               && script.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport PATH")
+               && Agent.shellWord("x'y") == "'x'\\''y'"
+               && (Agent.builtInIdleProbes["hub"] ?? "").contains("/usr/bin/sqlite3")
+               && !(Agent.builtInIdleProbes["hub"] ?? "").contains("$(sqlite3"),
+               "UH47 the check runs with an explicit HOME and PATH and an absolute sqlite3 (\(script.prefix(60)))")
+    }
+
+    // UH48 a refusing Hub check says why: a missing folder is named, and a file that is not a
+    // database gives sqlite's own words, instead of the bare "exited 1 (no output)" that hid the
+    // difference between an unreadable database, a missing sqlite3 and a genuinely busy Hub.
+    do {
+        let empty = tmpDir("uh48-home")
+        let missing = Agent.idleRefusal(app: "hub", probe: "exit 1", shell: RecordingShell(mount: tmpDir("uh48")),
+                                        home: empty)
+        let db = empty.appendingPathComponent(Agent.hubDatabase)
+        try? fm.createDirectory(at: db.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? Data("not a database".utf8).write(to: db)
+        let foreign = Agent.idleRefusal(app: "hub", probe: "exit 1", shell: RecordingShell(mount: tmpDir("uh48")),
+                                        home: empty)
+        expect((missing.skip ?? "").contains("no database at ")
+               && (foreign.skip ?? "").lowercased().contains("not a database")
+               && !(missing.skip ?? "").contains("(no output)") && !(foreign.skip ?? "").contains("(no output)"),
+               "UH48 a refusing Hub check says why (\(missing.said) | \(foreign.said))")
+    }
+
+    // UH49 a pre-hold build with no idle check at all is still quit and updated — the force path is
+    // the owner's order — and the log says plainly that no check existed and the path bypassed it.
+    do {
+        let f = rig("force-no-probe", hold: holdURL, recipe: "app-dmg", running: true)
+        f.client.postError = URLError(.cannotConnectToHost)
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "0.6.235", config: f.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: RecordingShell(mount: f.mount),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        // One expect per condition: the runner prints only the description of a red line, so an ANDed
+        // assertion hides which part failed. Keep every condition, and let each name itself.
+        expect(result?.status == "updated", "UH49a a pre-hold build is updated (\(result?.status ?? "nil") \(result?.reason ?? "nil"))")
+        expect(result?.quitWithoutHold == true, "UH49b the result says the quit went without an update hold")
+        expect(f.app.events.contains("quit"), "UH49c the app was asked to quit (events \(f.app.events))")
+        expect(f.app.events.contains("launch"), "UH49d the app was put back running (events \(f.app.events))")
+        expect((result?.reason ?? "").contains("0.6.235") && (result?.reason ?? "").contains("2.0.0")
+               && (result?.reason ?? "").contains("temporary force path"),
+               "UH49e the reason names the installed version, the target and the force path (\(result?.reason ?? "nil"))")
+        expect((result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") },
+               "UH49f with no check configured the trace says exactly that (trace \(result?.quitTrace ?? []))")
+        expect((try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
+               "UH49g the installed bundle is the new version (\((try? BundleInfo.read(f.app.installed.path))?.version ?? "nil"))")
+    }
+
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
     do {
         let f = rig("hold-401", hold: holdURL, recipe: "app-dmg", running: true)
@@ -388,6 +753,17 @@ func updateHoldTests() {
         let reason = result?.reason ?? ""
         expect(result?.status == "refused" && reason.contains("credential") && !reason.contains("no update-hold endpoint"),
                "UH21 a 401 names the credential, not a missing endpoint (\(reason))")
+        // UH34 that refusal reaches this Mac's own log once per app, version and reason.
+        var memory = AgentMemory()
+        let refused = result ?? RecipeResult(status: "missing")
+        let first = Agent.refusalNote(app: "demo", version: "1.1.0", result: refused, memory: &memory)
+        let again = Agent.refusalNote(app: "demo", version: "1.1.0", result: refused, memory: &memory)
+        let newer = Agent.refusalNote(app: "demo", version: "1.2.0", result: refused, memory: &memory)
+        _ = Agent.refusalNote(app: "demo", version: "1.2.0", result: RecipeResult(status: "updated"), memory: &memory)
+        let afterSuccess = Agent.refusalNote(app: "demo", version: "1.2.0", result: refused, memory: &memory)
+        expect(first?.hasPrefix("demo 1.1.0: refused — ") == true && first?.contains("credential") == true
+               && again == nil && newer != nil && afterSuccess != nil,
+               "UH34 a refused attempt is logged locally once per version and reason, and again after a success (\(first ?? "nil"))")
     }
     do {
         let f = rig("hold-404", hold: holdURL, recipe: "app-dmg", running: true)
@@ -410,7 +786,7 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
         let reason = result?.reason ?? ""
-        expect(result?.status == "refused" && reason.contains("no update-hold endpoint")
+        expect(result?.status == Agent.waitingForClose && reason.contains("no update-hold endpoint")
                && reason.contains("one normal install") && !f.client.calls.contains("artifact"),
                "UH19 an absent endpoint names the bootstrap install (\(reason))")
     }

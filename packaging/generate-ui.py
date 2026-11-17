@@ -5,6 +5,22 @@ import json
 from pathlib import Path
 import runpy
 
+# The What's New dialog, one source for the publisher page and the Update Studio KH window's own
+# pages. It uses the page's colour variables (--panel, --line, --text, --sub, --ok, --ok-bg).
+WHATS_NEW_CSS = (
+    '#whats-new{width:min(760px,calc(100vw - 32px));max-height:min(820px,calc(100dvh - 40px));overflow:auto}'
+    '#whats-new .body{padding:20px 28px 28px}'
+    '#whats-new .newshead{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;margin:0}'
+    '#whats-new .newshead strong{font-size:22px}'
+    '#whats-new .when{color:var(--sub);font-weight:400;font-size:13px}'
+    '#whats-new .newssum{margin:6px 0 18px;color:var(--sub);font-size:15px}'
+    '#whats-new .rel{border-top:1px solid var(--line);padding-top:16px;margin-top:20px}'
+    '#whats-new .rel h3{margin:0 0 10px;font-size:16px;display:flex;gap:10px;align-items:baseline}'
+    '#whats-new .newslist{margin:0;padding-left:20px;line-height:1.55;font-size:15px}'
+    '#whats-new .newslist li{margin-bottom:10px}'
+    '#whats-new .tag{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--ok-bg);color:var(--ok)}'
+)
+
 
 def generate(root):
     shared = root / 'packaging/shared-ui'
@@ -30,6 +46,8 @@ def generate(root):
     css += '.sub,.when,.note{font-size:var(--kh-type-secondary)}'
     css += '.grid,.head{gap:var(--kh-space-m)}.meta,.foot{gap:var(--kh-space-s)}'
     values['layoutCSS'] = css
+    values['whatsNewCSS'] = WHATS_NEW_CSS
+    (out / 'whats-new-dialog.css').write_text(WHATS_NEW_CSS + '\n')
     # A raw literal preserves JSON escapes; reject its delimiters rather than emitting Swift code.
     for value in values.values():
         if '"""#' in value or '\\#(' in value:

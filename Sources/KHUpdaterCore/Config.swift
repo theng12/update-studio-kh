@@ -9,17 +9,30 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// The CFBundleIdentifier this app must have. When set, a DMG holding any other app is refused
     /// even with the right version; when unset, the installed app's own identifier is the rule.
     public var bundleID: String?
-    public init(bundlePath: String, recipe: String = "app-dmg", automatic: Bool = false, bundleID: String? = nil) {
+    /// One small command that answers exit 0 only when the app has nothing running or queued. It is
+    /// the only thing that lets an order quit the app unattended. Set = this Mac's own command (even
+    /// empty, which turns the unattended quit off here); unset = the built-in check for that app, if
+    /// it ships with one (`Agent.builtInIdleProbes`); neither = never quit it.
+    public var idleProbe: String?
+    /// How long a relaunched app has to exist at all, in seconds. Unset = the recipe's default
+    /// (`Recipe.appearCeiling`). A slow-starting app may raise it here; the value used is written
+    /// into every result's timings line, so a limit nobody can see never applies.
+    public var appearCeilingSeconds: Int?
+    public init(bundlePath: String, recipe: String = "app-dmg", automatic: Bool = false, bundleID: String? = nil,
+                idleProbe: String? = nil, appearCeilingSeconds: Int? = nil) {
         self.bundlePath = bundlePath; self.recipe = recipe; self.automatic = automatic; self.bundleID = bundleID
+        self.idleProbe = idleProbe; self.appearCeilingSeconds = appearCeilingSeconds
     }
 
-    private enum CodingKeys: String, CodingKey { case bundlePath, recipe, automatic, bundleID }
+    private enum CodingKeys: String, CodingKey { case bundlePath, recipe, automatic, bundleID, idleProbe, appearCeilingSeconds }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bundlePath = try c.decode(String.self, forKey: .bundlePath)
         recipe = try c.decodeIfPresent(String.self, forKey: .recipe) ?? "app-dmg"
         automatic = try c.decodeIfPresent(Bool.self, forKey: .automatic) ?? false
         bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID)
+        idleProbe = try c.decodeIfPresent(String.self, forKey: .idleProbe)
+        appearCeilingSeconds = try c.decodeIfPresent(Int.self, forKey: .appearCeilingSeconds)
     }
 }
 
@@ -37,6 +50,19 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     /// Fallback only: when this agent runs from `<stubBase>/versions/<v>/khu`, `<v>` is its version.
     public var updaterVersion: String?
     public var network: FeedNetwork?
+    /// How many days an owner's order waits for an app whose build predates its hold to close
+    /// before it is refused. nil = 14.
+    public var waitForCloseDays: Int?
+    /// An owner's order for a running build that predates its update hold asks the app to quit,
+    /// swaps it and relaunches it, as before the hold existed. nil = on; false = wait for it to close.
+    public var quitOldBuilds: Bool?
+    /// Newest trash buckets kept after an install settles; nil = Space.defaultBucketsKept.
+    public var trashKept: Int?
+    /// Gigabytes kept free beyond an artifact's own bytes; nil = 2.
+    public var reserveGB: Int?
+    /// How long a remote launch waits for the app's process to appear; nil = 30 s. The wait is this
+    /// one's own: a launch is not an install, and a slow start must not borrow an install's window.
+    public var launchWaitSeconds: Int?
     public init(feedURL: String, publicKey: String, stateDir: String, machine: String, token: String,
                 apps: [String: AppConfig] = [:], intervalMinutes: Int = 5, once: Bool = false) {
         self.feedURL = feedURL; self.publicKey = publicKey; self.stateDir = stateDir
@@ -59,7 +85,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network
+        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays, quitOldBuilds, trashKept, reserveGB, launchWaitSeconds
     }
     /// Optional fields really are optional: a hand-written config may leave them out.
     public init(from decoder: Decoder) throws {
@@ -75,6 +101,11 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         stubBase = try c.decodeIfPresent(String.self, forKey: .stubBase)
         updaterVersion = try c.decodeIfPresent(String.self, forKey: .updaterVersion)
         network = try c.decodeIfPresent(FeedNetwork.self, forKey: .network)
+        waitForCloseDays = try c.decodeIfPresent(Int.self, forKey: .waitForCloseDays)
+        quitOldBuilds = try c.decodeIfPresent(Bool.self, forKey: .quitOldBuilds)
+        trashKept = try c.decodeIfPresent(Int.self, forKey: .trashKept)
+        reserveGB = try c.decodeIfPresent(Int.self, forKey: .reserveGB)
+        launchWaitSeconds = try c.decodeIfPresent(Int.self, forKey: .launchWaitSeconds)
     }
 }
 
@@ -104,6 +135,8 @@ public struct MachineState: Codable, Sendable, Equatable {
     public var automaticSet: [String: AutomaticChange]?
     /// Automatic is paused from the Mac's menu until then (reported by the agent).
     public var pausedUntil: String?
+    /// app → why an update is waiting for that app to close (reported by the agent).
+    public var waiting: [String: String]?
     /// The capabilities the agent advertised on its most recent /commands fetch. Used by the
     /// status page to warn when a pending rollback order cannot be delivered to an older agent.
     public var capabilities: [String]?
@@ -146,7 +179,7 @@ public struct MachineState: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case machine, displayName, reportedName, tokenHash, installed, installedBuild, installedExecutableSha256, health, lastSeen, pending, lastResult, lastResults,
              automatic, automaticDefault, capabilities, enrolledAt, enrolmentSource, enrolNonceHash, history,
-             automaticSet, pausedUntil, inventory, site, tags, vendorAssignments
+             automaticSet, pausedUntil, inventory, site, tags, vendorAssignments, waiting
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -175,6 +208,7 @@ public struct MachineState: Codable, Sendable, Equatable {
         site = try c.decodeIfPresent(String.self, forKey: .site)
         tags = try c.decodeIfPresent([String].self, forKey: .tags)
         vendorAssignments = try c.decodeIfPresent([String: Bool].self, forKey: .vendorAssignments)
+        waiting = try c.decodeIfPresent([String: String].self, forKey: .waiting)
     }
 
     /// The setting the agent will actually follow.
@@ -188,6 +222,9 @@ public struct ServerCommand: Codable, Sendable, Equatable {
     public static let update = "update"
     public static let rollback = "rollback"
     public static let vendorInstall = "vendor-install"
+    /// Start this Mac's installed copy of the app, hidden, and prove it is running. Never automatic:
+    /// only a person pressing Launch on the publisher creates one.
+    public static let launch = "launch"
 
     public var id: String
     public var machine: String
@@ -220,6 +257,8 @@ public struct ServerCommand: Codable, Sendable, Equatable {
 public enum AgentCapability {
     public static let ownerRollback = "owner-rollback-v1"
     public static let vendorInstall = "vendor-install-v1"
+    /// An agent that can start an installed app on this Mac when the owner asks from the publisher.
+    public static let launch = "launch-v1"
 }
 
 /// One install result as the page shows it: which app, the version it was on, the version the feed

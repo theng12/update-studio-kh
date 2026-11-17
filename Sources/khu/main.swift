@@ -28,7 +28,7 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--hold-url <loopback hold endpoint>]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>]
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
@@ -107,7 +107,7 @@ struct KHUMain {
                 print(executable.path)
             } catch { fail("\(error)") }
         case "publish":
-            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, hold: String?, allowSame = false
+            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil
             var i = 1
             while i < args.count {
@@ -125,6 +125,7 @@ struct KHUMain {
                 case "--name": shown = value("--name", &i)
                 case "--main-mac-only": mainOnly = true
                 case "--hold-url": hold = value("--hold-url", &i)
+                case "--hold-since": holdSince = value("--hold-since", &i)
                 case "--tagline": words.tagline = value("--tagline", &i); wordsGiven = true
                 case "--description": words.description = value("--description", &i); wordsGiven = true
                 case "--accent": words.accent = value("--accent", &i); wordsGiven = true
@@ -137,6 +138,7 @@ struct KHUMain {
             }
             guard let f = feed, let k = key, let a = app, let v = version, let art = artifact else { usage() }
             guard let changelog else { fail("publish needs --changelog <repo or CHANGELOG.md>: the notes come from its top entry") }
+            if let holdSince, !VersionCompare.isValid(holdSince) { fail("--hold-since must be a dotted numeric version, not \(holdSince)") }
             if let hold, UpdateHold.trusted(hold) == nil {
                 fail("--hold-url must be this Mac's loopback hold endpoint (http://127.0.0.1:<port>/api/maintenance/hold or /drain), not \(hold)")
             }
@@ -145,7 +147,7 @@ struct KHUMain {
                 try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
-                                          holdURL: hold)
+                                          holdURL: hold, holdSince: holdSince)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "unpublish":

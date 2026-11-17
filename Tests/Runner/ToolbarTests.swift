@@ -108,10 +108,23 @@ func toolbarTests() {
     close(savedError)
     try! pipe.fileHandleForWriting.close()
     let lines = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n")
-    let payload = lines.first.map { Data($0.dropFirst("order-provenance ".count).utf8) } ?? Data()
-    let audit = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
-    expect(first.status == 200 && repeated.status == 200 && lines.count == 1 && audit?["created"] as? Int == 1
-           && audit?["path"] as? String == "/api/request-update" && audit?["source"] as? String == "owner-page"
-           && !String(decoding: payload, as: UTF8.self).contains(auditToken),
-           "T9 owner-created order audit records committed scope once without credentials")
+    func audit(_ line: Substring?) -> [String: Any]? {
+        line.flatMap { (try? JSONSerialization.jsonObject(with: Data($0.dropFirst("order-provenance ".count).utf8))) as? [String: Any] }
+    }
+    let created = audit(lines.first)
+    let swallowed = audit(lines.dropFirst().first)
+    expect(first.status == 200 && repeated.status == 200,
+           "T9 both owner requests answer 200 (first \(first.status), repeated \(repeated.status))")
+    expect(created?["created"] as? Int == 1 && created?["skipped"] as? Int == 0 && created?["why"] == nil,
+           "T9a the first order is logged as created once, with nothing skipped (\(created ?? [:]))")
+    // The duplicate creates nothing, and it is now recorded instead of vanishing: that line is how a
+    // swallowed order stops being invisible (2026-11-16, 39 Macs sat on one for an hour).
+    expect(swallowed?["created"] as? Int == 0 && swallowed?["skipped"] as? Int == 1
+           && swallowed?["why"] as? String == "fresh-duplicate",
+           "T9b a swallowed duplicate is logged with its reason (\(swallowed ?? [:]))")
+    expect(lines.count == 2,
+           "T9c one line per owner request, never more (\(lines.count))")
+    expect(created?["path"] as? String == "/api/request-update" && created?["source"] as? String == "owner-page"
+           && !lines.contains(where: { $0.contains(auditToken) }),
+           "T9d the audit names its route and source and carries no credential")
 }

@@ -63,11 +63,37 @@ struct DeliveryMismatch: Error, CustomStringConvertible {
 public struct URLSessionHTTPClient: HTTPClient {
     /// Feed, status and command replies are small; anything bigger is refused, not buffered.
     public var smallLimit = 8 << 20
-    /// No data for this long ends the transfer (URLRequest's own timeout).
+    /// No data for this long ends the transfer (URLRequest's own timeout). This is silence detection:
+    /// a peer that stops sending at all. The transfer deadline below is a different job — it bounds
+    /// a slow-but-alive link by the bytes that still have to move.
     public var timeout: TimeInterval = 60
-    /// ...and no transfer takes longer than this IN TOTAL, however steadily the peer drips: an
-    /// inactivity timeout alone lets a stalled or malicious peer hold a run open for ever.
+    /// ...and no small request (feed, status, hold) takes longer than this IN TOTAL, however steadily
+    /// the peer drips: an inactivity timeout alone lets a stalled or malicious peer hold a run open
+    /// for ever. Artifact downloads use a size-derived deadline instead; see transferDeadline.
     public var totalTimeout: TimeInterval = 600
+    /// The rate the deadline assumes, from what the fleet actually does: a 1.48 GB artifact has been
+    /// taking ~1,500 s, i.e. about 1 MB/s. It is a CONSTANT, never measured from the transfer — a
+    /// rate read off a stalled pull would divide by ~0 and hand back an unbounded deadline.
+    public var assumedBytesPerSecond: Double = 1_000_000
+    /// The old flat ceiling is now the FLOOR, not the bar to beat: no artifact may be given less time
+    /// than it had before, so this change can only ever lengthen an allowance.
+    static let transferFloor: TimeInterval = 600
+    /// Cap: four hours covers any artifact the signed feed will ever name (1.5 GB at 1 MB/s is
+    /// 1,500 s), and nothing may outlast it however the numbers move.
+    static let transferCap: TimeInterval = 14_400
+    /// The time `bytes` are allowed at `rate`, floored at the old ceiling and capped. `rate` is a
+    /// constant, so this can never be unbounded; a rate of zero or less answers the cap rather than
+    /// dividing by it. A dead link is ended by the 60 s inactivity timeout, not by this number.
+    static func transferDeadline(bytes: Int64, rate: Double) -> TimeInterval {
+        guard rate > 0 else { return transferCap }
+        return min(max(Double(bytes) / rate, transferFloor), transferCap)
+    }
+    /// Shorten-only timeout for non-download requests: the hold's window and small feed/status calls
+    /// cap at totalTimeout and may only be made shorter, never extended. Downloads use transferDeadline
+    /// instead; keeping them apart means nobody can merge the two paths by accident.
+    static func requestTimeout(total: TimeInterval, override: TimeInterval?) -> TimeInterval {
+        min(total, override ?? total)
+    }
     /// Vendor downloads and page lookups must stay on the catalog's official HTTPS hosts.
     public var officialHosts: [String]?
     public init() {}
@@ -136,9 +162,16 @@ public struct URLSessionHTTPClient: HTTPClient {
     private func transfer(_ method: String, _ url: URL, headers: [String: String], body: Data?,
                           handle: FileHandle?, limit: Int64, phase: String = "downloading",
                           resumeFrom: Int64 = 0, timeoutOverride: TimeInterval? = nil) throws -> StreamSink {
-        // A caller's deadline (the hold's 30 s window) caps both the request's own timeout and the
-        // operation loop below; it can only shorten the client's defaults, never extend them.
-        let deadline = min(totalTimeout, timeoutOverride ?? totalTimeout)
+        // Downloads get a deadline sized from the bytes still to move; everything else (hold POSTs,
+        // feed/status GETs) keeps the old shorten-only behaviour. Keeping them apart means nobody
+        // can merge the two paths by accident and silently cap a download at totalTimeout again.
+        let deadline: TimeInterval
+        if handle != nil {
+            let remaining = max(0, limit - resumeFrom)
+            deadline = Self.transferDeadline(bytes: remaining, rate: assumedBytesPerSecond)
+        } else {
+            deadline = Self.requestTimeout(total: totalTimeout, override: timeoutOverride)
+        }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
                                  timeoutInterval: min(timeout, timeoutOverride ?? timeout))
         request.httpMethod = method
@@ -172,7 +205,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         }
         session.finishTasksAndInvalidate()
         if cancelled { throw khuFail("cancelled on this Mac; nothing was changed") }
-        guard finished else { throw khuFail("\(url.path) did not finish within \(Int(totalTimeout)) s; it was stopped") }
+        guard finished else { throw khuFail("\(url.path) did not finish within \(Int(deadline)) s; it was stopped") }
         if let error = sink.error { throw error }
         return sink
     }
@@ -319,6 +352,13 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     public var feedPublishedAt: String?
     public var feedSHA256: String?
     public var feedNetwork: FeedNetwork?
+    /// app → "version|status|reason" of the last refused or failed attempt already written to the
+    /// local log, so a refusal repeated every cycle is said once, not every 5 minutes.
+    public var refusalsSaid: [String: String]?
+    /// app → since when an update has waited for the app to close (its build predates the hold),
+    /// and why. Reported on each status, so the page says the Mac is waiting, not failing.
+    public struct Waiting: Codable, Sendable, Equatable { public var since: String; public var reason: String }
+    public var waiting: [String: Waiting]?
     public init() {}
 
     /// `protected` is what the publisher still lists as an order for this Mac. Those id keep their
@@ -473,6 +513,23 @@ public enum Agent {
         return (merged, notes)
     }
 
+    /// A refused or failed attempt names its reason in this Mac's own log, not only in the
+    /// publisher's record: once per app, version and reason. A success clears it, so the next
+    /// refusal is said again.
+    /// The hold step's answer for a running build that predates its hold: not a refusal, a wait.
+    public static let waitingForClose = "waiting_for_close"
+
+    static func refusalNote(app: String, version: String?, result: RecipeResult, memory: inout AgentMemory) -> String? {
+        let refusals: Set<String> = [waitingForClose, "refused", "failed", "install_failed", "download_failed", "download_mismatch",
+                                     "did_not_start", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"]
+        guard refusals.contains(result.status) else { memory.refusalsSaid?[app] = nil; return nil }
+        let shown = version ?? "the feed's version"
+        let said = "\(shown)|\(result.status)|\(result.reason ?? "")"
+        guard memory.refusalsSaid?[app] != said else { return nil }
+        memory.refusalsSaid = (memory.refusalsSaid ?? [:]).merging([app: said]) { _, new in new }
+        return "\(app) \(shown): \(result.status) — \(result.reason ?? "no reason was given")"
+    }
+
     static func liveControl(_ cfg: AppConfig, shell: Shell) -> AppControl {
         cfg.recipe == "gateway" ? LiveControl.gateway(cfg.bundlePath, shell: shell) : LiveControl.appDmg(cfg.bundlePath, shell: shell)
     }
@@ -619,6 +676,7 @@ public enum Agent {
         if !installedExecutableSha256.isEmpty { report["installed_executable_sha256"] = installedExecutableSha256 }
         if let name = MacName.current(expectedMachine: config.machine) { report["display_name"] = name }
         if let until = helper.pausedUntil, helper.paused(at: now) { report["paused_until"] = until }
+        if let waiting = memory.waiting, !waiting.isEmpty { report["waiting"] = waiting.mapValues { $0.reason } }
         // A read-only snapshot of this Mac's own hardware, addresses and installed apps, bounded
         // like every other report. Fields that could not be read stay absent; the machine's name
         // is never used as hardware, and the installed managed-app maps above are untouched.
@@ -744,7 +802,9 @@ public enum Agent {
             let response: (Data, Int)?
             do {
                 response = try http.get(serverBase.appendingPathComponent("commands")
-                    .appendingQuery("machine", config.machine).appendingQuery("capabilities", AgentCapability.ownerRollback + "," + AgentCapability.vendorInstall), headers: headers)
+                    .appendingQuery("machine", config.machine)
+                    .appendingQuery("capabilities", [AgentCapability.ownerRollback, AgentCapability.vendorInstall,
+                                                     AgentCapability.launch].joined(separator: ",")), headers: headers)
             } catch {
                 guard memory.feedNetwork?.feedURLs.isEmpty == false else { throw error }
                 response = nil; publisherAvailable = false
@@ -824,6 +884,8 @@ public enum Agent {
         try remember()
 
         // 6. One install at a time; a failure is reported and the next app still runs.
+        // An app no longer asked for is no longer waiting.
+        memory.waiting = memory.waiting?.filter { w in todo.contains { $0.app == w.key } }
         for item in todo {
             var res: RecipeResult
             // An order to update is the owner asking for that artifact again, so what failed here
@@ -861,7 +923,9 @@ public enum Agent {
                     res = try install(app: item.app, feed: feed, installed: current, config: config,
                                       serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
                                       force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual,
-                                      catalogEntry: entry)
+                                      catalogEntry: entry, quitOldBuild: item.explicit && config.quitOldBuilds != false)
+                case ServerCommand.launch:
+                    res = launchOrdered(app: item.app, config: config, shell: shell, wait: Agent.launchWait(config))
                 case ServerCommand.vendorInstall:
                     guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
                         throw khuFail("vendor install requires an explicit signed order for this Mac")
@@ -870,7 +934,7 @@ public enum Agent {
                 case ServerCommand.rollback:
                     res = try orderedRollback(app: item.app, order: item.id, installed: installed[item.app], config: config,
                                               stateDir: stateDir, shell: shell, control: control,
-                                              holdURL: feed.apps[item.app]?.holdURL, http: http)
+                                              holdURL: feed.apps[item.app]?.holdURL, holdSince: feed.apps[item.app]?.holdSince, http: http)
                 default:
                     res = RecipeResult(status: "refused", reason: "this Mac does not know the order action \"\(item.action)\"; refused")
                 }
@@ -879,6 +943,26 @@ public enum Agent {
             } catch {
                 res = RecipeResult(status: "install_failed", reason: "\(error)")
             }
+            // A build that predates its hold installs the first time the app is closed: the order
+            // stays pending and is tried again each run, up to its own ceiling (then it is refused,
+            // terminal). The person at this Mac can close the app now, so their request is answered.
+            if res.status == Agent.waitingForClose {
+                let days = config.waitForCloseDays ?? 14
+                let since = memory.waiting?[item.app]?.since ?? ISO.string(now)
+                if item.manual {
+                    res.status = "refused"
+                } else if item.explicit, let start = ISO.date(since), now.timeIntervalSince(start) > Double(days) * 86_400 {
+                    res = RecipeResult(status: "refused", reason: "\(res.reason ?? "") It waited \(days) days for \(item.app) to close; send the order again to keep waiting.")
+                } else {
+                    memory.waiting = (memory.waiting ?? [:]).merging([item.app: .init(since: since, reason: res.reason ?? "")]) { _, new in new }
+                    if let note = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory) {
+                        result.notes.append(note)
+                    }
+                    try remember()
+                    continue
+                }
+            }
+            memory.waiting?[item.app] = nil
             if res.status == "download_mismatch", let sha = feed.apps[item.app]?.sha256 {
                 let previous = memory.deliveryMismatches?[item.app]
                 let count = (previous?.sha256 == sha ? previous!.count : 0) + 1
@@ -908,6 +992,15 @@ public enum Agent {
                let sha = feed.apps[item.app]?.sha256 {
                 memory.rejected[item.app] = sha
             }
+            let refusal = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory)
+            if res.quitWithoutHold {
+                let how = res.status == "refused" ? "did not quit within its time limit; nothing was changed"
+                    : res.status == "updated" ? "quit cleanly and was updated" : "quit cleanly, then \(res.status)"
+                result.notes.append("\(item.app) \(installed[item.app] ?? "unknown version"): predates its update hold, asked to quit without one — \(how)")
+                for line in res.quitTrace { result.notes.append("\(item.app) \(line)") }
+            } else if let refusal {
+                result.notes.append(refusal)
+            }
             let done = AgentMemory.Done(app: item.app, status: res.status, reason: res.reason ?? "", at: ISO.string(Date()), sent: false)
             memory.done[item.id] = done
             try remember()  // recorded before it is reported: a crash here re-reports, never re-installs
@@ -915,7 +1008,10 @@ public enum Agent {
             result.commandsRun += 1
             if ["updated", "switched"].contains(res.status) { result.updates += 1 }
             // Said where a person at this Mac can see it: the fleet page is not in front of them.
-            result.notes.append("\(item.app): \(res.status)" + (res.reason.map { " — \($0)" } ?? ""))
+            // A refusal note already said it (and only once, so it is not repeated every run).
+            if res.quitWithoutHold == false, refusal == nil {
+                result.notes.append("\(item.app): \(res.status)" + (res.reason.map { " — \($0)" } ?? ""))
+            }
             if res.status == "switched" {
                 result.restartRequested = true; break
             }  // the rest wait for the new version
@@ -932,6 +1028,12 @@ public enum Agent {
                     result.notes.append("controller connection moved; this Mac's enrolment and app choices were kept")
                 }
             } catch { result.notes.append("controller move did not finish: \(error)") }
+        }
+        // Prune the updater's own trash after every run settles. Never throws or fails a run.
+        do {
+            let kept = max(config.trashKept ?? Space.defaultBucketsKept, 0)
+            let swept = Space.pruneTrash(in: stateDir, keeping: kept, shell: shell)
+            if !swept.isEmpty { result.notes.append(swept.words) }
         }
         return result
     }
@@ -1047,12 +1149,60 @@ public enum Agent {
         return feed
     }
 
+    /// How long a remote launch waits for the app's own process to appear; `launchWaitSeconds`
+    /// replaces it. The wait is its own ceiling: a launch is not an install and must not borrow a
+    /// health window, and an app that never appears is `failed`, not left saying "launching".
+    public static let launchWaitSeconds: TimeInterval = 30
+
+    /// The ceiling a launch actually uses: a positive `launchWaitSeconds`, else the 30 s default.
+    /// A typo (`-30`) is read as unset, not as a 1 s window that would call a slow start a failure.
+    public static func launchWait(_ config: AgentConfig) -> TimeInterval {
+        guard let seconds = config.launchWaitSeconds, seconds > 0 else { return launchWaitSeconds }
+        return TimeInterval(seconds)
+    }
+
+    /// The owner's launch order: open the installed app hidden and detached, then prove it is
+    /// running. The exit status of `open` proves nothing — the pid does. Nothing is quit, stopped,
+    /// installed or downloaded; an app that is already running is reported with its pid.
+    static func launchOrdered(app: String, config: AgentConfig, shell: Shell,
+                              processes: (String) -> [pid_t]? = LiveControl.processes,
+                              clock: () -> TimeInterval = Mono.now,
+                              wait: TimeInterval = Agent.launchWaitSeconds) -> RecipeResult {
+        guard let installedPath = config.apps[app]?.bundlePath else {
+            return RecipeResult(status: "failed", reason: "\(app) has no installed app path in this Mac's settings; nothing was opened")
+        }
+        guard FileManager.default.fileExists(atPath: installedPath) else {
+            return RecipeResult(status: "failed", reason: "\(app) is not installed at \(installedPath); nothing was opened")
+        }
+        guard Recipe.signatureVerifies(installedPath, shell: shell) else {
+            return RecipeResult(status: "failed",
+                                reason: "the installed \(app) at \(installedPath) does not pass its signature check; it was not opened")
+        }
+        if let pid = processes(installedPath)?.first {
+            return RecipeResult(status: "launched", reason: "already running (pid \(pid))")
+        }
+        // `-g` never brings it forward, `-j` starts it hidden: a remote launch never takes the
+        // owner's desktop.
+        let opened = try? shell.run("/usr/bin/open", arguments: ["-g", "-j", installedPath], timeout: 30)
+        let deadline = clock() + wait
+        repeat {
+            if let pid = processes(installedPath)?.first {
+                return RecipeResult(status: "launched", reason: "pid \(pid)")
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while clock() < deadline
+        let why = opened.map { "open exited \($0.exitCode)" + ($0.stderr.isEmpty ? "" : " (\($0.stderr.prefix(200)))") }
+            ?? "open could not be run"
+        return RecipeResult(status: "failed",
+                            reason: "\(app) did not start within \(Int(wait)) s (\(why)); nothing else was changed")
+    }
+
     /// The owner's rollback order: the version this Mac kept goes back through the same journaled,
     /// health-settled path an install uses. Nothing is downloaded and the feed is not consulted —
     /// what runs is the bundle already on this Mac, verified before anything is stopped.
     static func orderedRollback(app: String, order: String, installed: String?, config: AgentConfig, stateDir: URL,
                                 shell: Shell, control: (String, AppConfig) -> AppControl,
-                                holdURL: String? = nil, http: HTTPClient? = nil) throws -> RecipeResult {
+                                holdURL: String? = nil, holdSince: String? = nil, http: HTTPClient? = nil) throws -> RecipeResult {
         guard let cfg = config.apps[app] else {
             return RecipeResult(status: "refused", reason: "\(app) is not configured on this Mac")
         }
@@ -1070,7 +1220,8 @@ public enum Agent {
             var endpoint: URL?
             let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
             if let http {
-                let hold = beginUpdateHold(app: app, holdURL: holdURL, http: http, control: ctl, exempt: exempt)
+                let hold = beginUpdateHold(app: app, holdURL: holdURL, http: http, control: ctl, exempt: exempt,
+                                           installed: installed, holdSince: holdSince)
                 if let refusal = hold.refusal { return refusal }
                 endpoint = hold.endpoint
             } else if ctl.isRunning() != false, !exempt {
@@ -1113,7 +1264,7 @@ public enum Agent {
     /// paths so both hold before a swap and both refuse an app that cannot offer a gap. Returns the
     /// endpoint even when the reply is unsafe, so the caller can resume it.
     static func beginUpdateHold(app: String, holdURL: String?, http: HTTPClient, control: AppControl,
-                                exempt: Bool) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
+                                exempt: Bool, installed: String? = nil, holdSince: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
         guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }
         guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
             return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. Update it by hand."))
@@ -1134,6 +1285,15 @@ public enum Agent {
             // The feed names an endpoint the installed build does not serve: a first hold-capable
             // release needs one normal install while the app is closed. Say that, not a bare -1004.
             if let refused = error as? UpdateHold.Refused {
+                // A build older than the feed's holdSince has no hold route yet, so its auth layer's
+                // 401/403 (or a 404) is "needs one install while closed", not a credential refusal.
+                if [401, 403, 404].contains(refused.status), let installed, let since = holdSince,
+                   VersionCompare.isNewer(since, than: installed) {
+                    var out = RecipeResult(status: waitingForClose,
+                        reason: "Waiting for \(app) to close: \(app) \(installed) predates its update hold (first in \(since)), so it answered \(refused.status); it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed.")
+                    out.predatesHold = true
+                    return (endpoint, nil, out)
+                }
                 let reason: String
                 switch refused.status {
                 case 401, 403:
@@ -1146,17 +1306,100 @@ public enum Agent {
                 return (endpoint, nil, RecipeResult(status: "refused", reason: reason))
             }
             if UpdateHold.endpointAbsent(error) {
-                return (endpoint, nil, RecipeResult(status: "refused",
-                    reason: "\(app) is running and its installed build has no update-hold endpoint; it needs one normal install while \(app) is closed. Nothing was changed."))
+                var out = RecipeResult(status: waitingForClose,
+                    reason: "Waiting for \(app) to close: its installed build has no update-hold endpoint, so it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed.")
+                out.predatesHold = true
+                return (endpoint, nil, out)
             }
             return (endpoint, nil, RecipeResult(status: "refused", reason: "\(error)"))
+        }
+    }
+
+    /// Idle checks that ship with the helper, so a Mac is armed without anyone editing its config.
+    /// Hub's is Hub's owner's own command, reviewed against fixture data from 0.6.235: it counts
+    /// queued *and* running items by their state, not the batch's flag, and fails closed — a missing,
+    /// unreadable or corrupt database, or an unknown table, exits non-zero. So a wrong guess about
+    /// its data folder makes that Mac wait, and never quits a working Hub.
+    /// It reads Hub's default data folder; on a Mac that moved it, the probe says "not idle".
+    public static let builtInIdleProbes: [String: String] = ["hub": #"test -r "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" && [ "$(/usr/bin/sqlite3 -readonly "$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db" "select count(*) from batches, json_each(json_extract(batches.payload,'$.items')) i where (batches.finished=0 or batches.created_at > strftime('%s','now')-86400) and json_extract(i.value,'$.state') in ('queued','running','cancel_requested','cancelling','paused','uncertain','recovery_pending','draining','restart_requested')" 2>/dev/null)" = 0 ]"#]
+
+    /// Hub's data folder under the user's real home. A launch agent's environment is not an
+    /// interactive shell's, so this is joined here and exported into the check, never inherited.
+    public static let hubDatabase = "Library/Application Support/StudioHub Standalone/hub/hub.db"
+
+    /// A shell word that survives any space or quote in a real home path.
+    static func shellWord(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// The check as it is actually run: an explicit HOME and PATH, then the app's own command.
+    static func idleScript(_ command: String, home: URL) -> String {
+        "HOME=\(shellWord(home.path))\nexport HOME\nPATH=/usr/bin:/bin:/usr/sbin:/sbin\nexport PATH\n\(command)"
+    }
+
+    static func firstLine(_ answer: ShellResult) -> String? {
+        (answer.stdout + "\n" + answer.stderr)
+            .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty }
+    }
+
+    /// Why Hub's check could not answer, in the operator's words. The check itself discards sqlite's
+    /// message, so a missing database, a missing sqlite3, a foreign or locked file all read as a bare
+    /// "exited 1 (no output)". This asks once more, keeping the words, and only after a refusal.
+    static func hubDiagnosis(home: URL, shell: Shell) -> String? {
+        let db = home.appendingPathComponent(hubDatabase).path
+        let script = """
+        db=\(shellWord(db))
+        [ -r "$db" ] || { printf 'no database at %s\n' "$db"; exit 0; }
+        /usr/bin/sqlite3 -readonly "$db" 'select count(*) from batches' 2>&1 || true
+        """
+        guard let answer = try? shell.run("/bin/sh", arguments: ["-lc", script], timeout: 5) else {
+            return "the database could not be read"
+        }
+        return firstLine(answer)
+    }
+
+    /// Which idle check an app on this Mac gets, in the order the owner's rule asks for: the Mac's
+    /// own `idleProbe` wins, an explicit empty string turns the unattended quit off for that Mac, and
+    /// a missing one falls back to the built-in check for that app. Never a rule: rearrange it or
+    /// switch it off per Mac.
+    public static func idleProbe(app: String, cfg: AppConfig) -> String? {
+        cfg.idleProbe ?? builtInIdleProbes[app]
+    }
+
+    /// The owner's rule before an old build is quit unattended: the app's own probe must answer that
+    /// it has nothing running or queued. No probe, a non-zero answer, output that names a job or a
+    /// probe that outlasts its own short ceiling all skip the quit. Returns why, or nil when it is safe.
+    /// Returns what the check answered (`said`, always worth a log line) and why the quit must be
+    /// skipped (`skip`, nil when it is safe to go ahead and quit).
+    static func idleRefusal(app: String, probe: String?, shell: Shell, timeout: TimeInterval = 15,
+                            home: URL = FileManager.default.homeDirectoryForCurrentUser) -> (said: String, skip: String?) {
+        let command = probe?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !command.isEmpty else {
+            return ("idle check: none configured", "\(app) has no idle check configured, so it was not asked to quit and nothing was interrupted.")
+        }
+        do {
+            let answer = try shell.run("/bin/sh", arguments: ["-lc", idleScript(command, home: home)], timeout: timeout)
+            guard answer.exitCode != 0 else { return ("idle check exited 0, so it is idle", nil) }
+            // What the check said, and when it said nothing, why it could not: Hub's own check
+            // discards sqlite's message, and "exited 1 (no output)" tells an operator nothing.
+            var said = firstLine(answer) ?? ""
+            if said.isEmpty, builtInIdleProbes[app] != nil, let why = hubDiagnosis(home: home, shell: shell) {
+                said = why
+            }
+            if said.isEmpty { said = "no output" }
+            return ("idle check exited \(answer.exitCode) (\(said))",
+                    "\(app)'s idle check exited \(answer.exitCode) (\(said)), so it was not asked to quit and nothing was interrupted.")
+        } catch {
+            return ("idle check did not answer within \(Int(timeout)) s",
+                    "\(app)'s idle check did not answer within \(Int(timeout)) s, so it was not asked to quit and nothing was interrupted.")
         }
     }
 
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = [],
-                        manual: Bool = false, catalogEntry: CatalogEntry? = nil) throws -> RecipeResult {
+                        manual: Bool = false, catalogEntry: CatalogEntry? = nil, quitOldBuild: Bool = false) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         // An app that updates itself is never installed by KH Updater on its own: Automatic and a
         // remote order leave it alone. Only a choice made here, at this Mac, may install it.
@@ -1183,14 +1426,82 @@ public enum Agent {
         // with no trusted hold endpoint is refused rather than interrupted silently.
         var holdEndpoint: URL?
         var holdNote: String?
+        var legacyQuit = false
+        // The three facts this Mac's log must carry for every unattended quit, whichever way it
+        // ends: what the idle check answered, whether the app exited and how long it took, and
+        // whether it came back with its services. Written where those things really happen, so a
+        // Mac that stalls, refuses or half-restarts still says which of the three failed.
+        var probeSaid: String?
+        var quitSaid: String?
+        var servicesSaid: String?
+        func traced(_ base: AppControl) -> AppControl {
+            guard legacyQuit else { return base }
+            var wrapped = base
+            wrapped.quit = {
+                let started = Date()
+                let gone = base.quit()
+                let took = String(format: "%.1f", Date().timeIntervalSince(started))
+                quitSaid = gone ? "quit: the app exited after \(took) s"
+                                : "quit: the app had not exited after \(took) s, so its own ceiling was reached"
+                return gone
+            }
+            wrapped.resumeServices = {
+                let resume = base.resumeServices()
+                servicesSaid = resume.ok ? "services: started"
+                                         : "services: did NOT start (\(resume.reason ?? "launchd refused"))"
+                return resume
+            }
+            return wrapped
+        }
+        /// The three lines plus what came back, attached to a result the moment it is known.
+        func withTrace(_ result: RecipeResult) -> RecipeResult {
+            guard legacyQuit else { return result }
+            var out = result
+            out.quitWithoutHold = true
+            let back = appControl.isRunning() == false ? "the app did NOT come back"
+                                                       : "the app came back as \((try? BundleInfo.read(cfg.bundlePath))?.version ?? "an unreadable version")"
+            out.quitTrace = [probeSaid, quitSaid, servicesSaid, back].compactMap { $0 }
+            return out
+        }
         func acquireHold() -> RecipeResult? {
-            guard holdEndpoint == nil else { return nil }
+            guard holdEndpoint == nil, !legacyQuit else { return nil }
             // The updater's own engine and menu-bar UI hold no work queue: the engine switches itself
             // through installUpdater, and the Launcher updates itself from its own Update click.
             let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
             DownloadControl.updateProgress("held")
             let hold = beginUpdateHold(app: app, holdURL: feed.apps[app]?.holdURL, http: http,
-                                       control: appControl, exempt: exempt)
+                                       control: appControl, exempt: exempt, installed: installed,
+                                       holdSince: feed.apps[app]?.holdSince)
+            // A build that predates its hold is updated the way it was before holds existed: asked to
+            // quit (bounded by the quit's own ceiling, never killed), swapped, relaunched hidden —
+            // but only when the app's own probe says it has nothing running or queued.
+            if quitOldBuild, let refusal = hold.refusal, refusal.status == waitingForClose {
+                let answer = idleRefusal(app: app, probe: idleProbe(app: app, cfg: cfg), shell: shell)
+                probeSaid = answer.said
+                // The owner, 2026-11-16: "can we use the old force update first to add this guard.
+                // then next release we remove? like the old updater used to work?" A build that
+                // predates its hold is quit the way updates worked before holds existed: the idle
+                // check is logged, not obeyed. Hub's owner established a quit loses no work —
+                // queued items are written through to its database and reloaded, a running item is
+                // requeued. TEMPORARY: remove this force path once the fleet is past the hold.
+                if refusal.predatesHold {
+                    legacyQuit = true
+                    let feedVersion = feed.apps[app]?.version ?? "the feed's version"
+                    holdNote = "\(app) \(installed ?? "") predates its update hold (\(feed.apps[app]?.holdSince ?? "first hold version unknown")); "
+                        + "asked to quit without waiting for an idle check, the way updates worked before holds existed, to install \(feedVersion) (temporary force path)."
+                    return nil
+                }
+                if let skipped = answer.skip {
+                    holdEndpoint = hold.endpoint
+                    var out = refusal
+                    out.reason = (out.reason.map { $0 + " " } ?? "") + skipped
+                    out.quitTrace = ["\(app)'s \(answer.said)"]
+                    return out
+                }
+                legacyQuit = true
+                holdNote = "\(app) \(installed ?? "") predates its update hold; its idle check passed, so it was asked to quit without one (quitOldBuilds is on)."
+                return nil
+            }
             // Resume is attempted even when the POST itself failed: it may have paused before failing.
             holdEndpoint = hold.endpoint
             holdNote = hold.note
@@ -1224,13 +1535,22 @@ public enum Agent {
             guard let holdNote else { return result }
             var out = result
             out.reason = (out.reason.map { $0 + " " } ?? "") + holdNote
-            return out
+            return withTrace(out)
+        }
+        // An old build that would not quit within its ceiling (busy, or a question on its screen)
+        // is a refusal: nothing was swapped, so it is said plainly and nothing is retried.
+        func refusedQuit(_ run: () throws -> RecipeResult) throws -> RecipeResult {
+            do { return try run() } catch {
+                let said = "\(error)"
+                guard legacyQuit && said.contains(Recipe.didNotQuit) && !said.contains("did not restart") else { throw error }
+                return withTrace(RecipeResult(status: "refused", reason: "\(holdNote ?? "") It did not quit within its time limit, so nothing was changed and it keeps running."))
+            }
         }
         if let local {
             if let refusal = acquireHold() { return refusal }
             DownloadControl.updateProgress("copying")
-            return withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: control,
-                                                 force: force, manual: manual, catalogEntry: catalogEntry, beforeStop: beforeStop))
+            return try refusedQuit { withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: { a, c in traced(control(a, c)) },
+                                                 force: force, manual: manual || legacyQuit, catalogEntry: catalogEntry, beforeStop: beforeStop)) }
         }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
         // The report can lag the disk: a stale one re-downloaded and reinstalled media-studio 0.1.109
@@ -1248,7 +1568,10 @@ public enum Agent {
         if let refusal = acquireHold() { return refusal }
         let artifact: URL
         do {
-            artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http, fallbacks: artifactFallbacks)
+            artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http, fallbacks: artifactFallbacks,
+                                    reserveBytes: UInt64(max(config.reserveGB ?? Space.defaultReserveGB, 0)) * 1_000_000_000)
+        } catch let error as Space.NoSpace {
+            return RecipeResult(status: "refused", reason: "\(error)")
         } catch let error as ArtifactFailure {
             return RecipeResult(status: "failed", reason: "\(error)")
         } catch let error as DeliveryMismatch {
@@ -1274,10 +1597,11 @@ public enum Agent {
             // Put back what the install stopped, unattended included: the owner's rule is that the
             // app resumes by itself — nobody is there to open it after an automatic update or an
             // order. The relaunch is hidden (`open -g -j`), never a window on the owner's desktop.
-            return try withHoldNote(Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
-                                                  expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
+            return try refusedQuit { withHoldNote(try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
+                                                  expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: traced(control(app, cfg)),
                                                   refuseIfRunning: itself, relaunchAfterInstall: true,
-                                                  beforeStop: beforeStop))
+                                                  appearCeiling: TimeInterval(cfg.appearCeilingSeconds ?? Int(Recipe.appearCeiling)),
+                                                  beforeStop: beforeStop)) }
         }
     }
 
@@ -1334,7 +1658,9 @@ public enum Agent {
             }
             result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
-                                     refuseIfRunning: itself, relaunchAfterInstall: true, verifyStaged: { path in
+                                     refuseIfRunning: itself, relaunchAfterInstall: true,
+                                     appearCeiling: TimeInterval(cfg.appearCeilingSeconds ?? Int(Recipe.appearCeiling)),
+                                     verifyStaged: { path in
                 guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
             }, beforeStop: beforeStop)
         }
@@ -1342,7 +1668,8 @@ public enum Agent {
         if result.status == "updated" {
             do {
                 let cache = stateDir.appendingPathComponent("downloads").appendingPathComponent(try SafeName.component(app, what: "app id"))
-                try Trash.move(cache, into: Trash.root(in: stateDir))
+                // A trash with no reader is the bug: remove the old cache outright.
+                _ = Space.remove(cache, shell: shell, fileManager: FileManager.default)
                 try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: artifact, to: cache.appendingPathComponent(local.sha256 + ".dmg"))
             } catch {
@@ -1367,12 +1694,13 @@ public enum Agent {
     /// tries. It is retired only when the new artifact replaces it: an operation that ends in
     /// failure or cancellation leaves the base where it is, so the next source, and the next run,
     /// still have the exact bytes a patch was built for.
-    static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient, fallbacks: [URL] = []) throws -> URL {
+    static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient, fallbacks: [URL] = [],
+                         freeSpace: (URL) -> UInt64? = Space.freeBytes, reserveBytes: UInt64 = Space.defaultReserveBytes) throws -> URL {
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         // The only base a patch may use: the exact full artifact this Mac already downloaded.
         let base = takeCachedBase(for: entry.delta, in: dir, app: app)
         let artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http,
-                                    fallbacks: fallbacks, base: base)
+                                    fallbacks: fallbacks, base: base, freeSpace: freeSpace, reserveBytes: reserveBytes)
         // The new artifact is this Mac's base from now on: the slot is retired, whatever it held.
         _ = try? Trash.move(heldBase(in: dir, app: app), into: Trash.root(in: stateDir))
         return artifact
@@ -1381,7 +1709,8 @@ public enum Agent {
     /// One download operation: every source it is given is offered the same exact base to patch
     /// from, so a source that does not have the patch cannot cost the next one its chance.
     private static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient,
-                                 fallbacks: [URL], base: URL?) throws -> URL {
+                                 fallbacks: [URL], base: URL?, freeSpace: (URL) -> UInt64? = Space.freeBytes,
+                                 reserveBytes: UInt64 = Space.defaultReserveBytes) throws -> URL {
         let name = try SafeName.component(entry.file, what: "artifact name")
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         let fm = FileManager.default
@@ -1396,10 +1725,8 @@ public enum Agent {
             return artifact
         }
         // Only this artifact's own partial may be resumed. Anything else in the folder is a
-        // superseded version's bytes: retired recoverably, never deleted.
-        for item in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where item != name + ".part" {
-            _ = try? Trash.move(dir.appendingPathComponent(item), into: trash)
-        }
+        // superseded version's bytes: removed, not trashed — a trash with no reader is the bug.
+        _ = Space.sweep(dir, keeping: [name, name + ".part"], shell: SystemShell(), fileManager: fm)
         // A partial that already reached the signed size (a run stopped between its last byte and
         // the move) only needs verifying — the whole artifact is not fetched a second time.
         if let size = (try? fm.attributesOfItem(atPath: part.path))?[.size] as? NSNumber, size.int64Value == entry.bytes {
@@ -1409,6 +1736,13 @@ public enum Agent {
                 return artifact
             }
             _ = try? Trash.move(part, into: trash)
+        }
+        // Nothing usable is on disk, so these bytes really must be fetched: refuse before the first
+        // request when the disk cannot hold them and still leave the reserve. A Mac that already
+        // has the artifact or a complete partial never reaches this and is never refused.
+        if let free = freeSpace(dir), free < UInt64(clamping: entry.bytes) + reserveBytes {
+            throw Space.NoSpace(app: app, version: entry.version, artifact: UInt64(clamping: entry.bytes),
+                                reserve: reserveBytes, free: free)
         }
         let triedPatch = entry.delta != nil && base != nil
         if let delta = entry.delta, let base {
@@ -1456,7 +1790,8 @@ public enum Agent {
             if DownloadControl.cancelled { _ = try? Trash.move(part, into: trash); throw error }
             if let next = fallbacks.first {
                 return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http,
-                                    fallbacks: Array(fallbacks.dropFirst()), base: base)
+                                    fallbacks: Array(fallbacks.dropFirst()), base: base,
+                                    freeSpace: freeSpace, reserveBytes: reserveBytes)
             }
             throw error
         }

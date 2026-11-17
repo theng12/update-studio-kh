@@ -2,8 +2,62 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.52 — 2026-11-17
 
+- An app can be started on another Mac from the publisher. One Launch button per Mac and app opens it hidden — never taking anyone's screen — and checks it is really running before saying so: the Mac reports the process it found, or why it could not start (not installed, fails its signature check, did not start in time). It is a button a person presses; nothing launches on its own.
+- A Mac that is asleep or offline keeps the launch order queued and visible, and runs it the next time it reports.
+- A failed health check now says what was missing — the version on disk, the app not running, or the name of the background service that did not come back — instead of only how long it waited. A blocked rollback carries the same detail, and the install's timings line repeats it, so a Mac nobody can log into still explains itself.
+- Building the installer now fails loudly if the disk image step fails, naming the file and the reason, and an image that came out truncated is verified and refused before anything records it. It used to exit silently, which is how the wrong file was nearly shipped.
 
+## 0.1.51 — 2026-11-17
+
+- The updater's own trash is emptied after every update it finishes: only the newest copy stays (the one that update just retired), the rest go, and the run says how many copies and how much space were cleared. The copy's locked file flag is cleared first — that flag is why the old cleanup answered "Permission denied" and the folder grew to 130 GB on the publisher.
+- Downloads and rollback copies no longer pile up. Only the newest installer is kept for each app, and each app keeps exactly one previous version to roll back to; a superseded one is removed instead of being moved into the trash.
+- An update is refused before its download starts when the disk has less free space than the installer plus 2 GB, and the result names the free space it found. Free space and it tries again.
+- Both limits are settings with these defaults: one copy kept, 2 GB kept free.
+- An update's health check now starts when the relaunched app's process appears, not when the quit began. The Gateway spends most of its gap draining and stopping (127 s measured on 1301), and 0.1.50 charged that to the app's start, so a version upgrade would have been rolled back with the app running.
+- The Gateway's health ceiling is 300 s from that moment — 2.3x the measurement — so a slow but successful start is not called a failure.
+- Every install now reports its own step timings in the result (gone, promoted, launched, appeared, healthy, and the appear and health ceilings it used), so the next estimate is measured rather than guessed.
+- How long a relaunched app has to appear is its own per-app setting (`appearCeilingSeconds`, default 120 s), not the health window; an app that never starts is reported as `did_not_start` with the previous version put back, rather than as a failed health check.
+- A refusal is printed once, not twice, in the helper's own log.
+
+## 0.1.50 — 2026-11-17
+
+- An update now puts the app back. An install that found an app running relaunches it, hidden, and requires it healthy as the new version — unattended included, because nobody is there to open it after an automatic update or an order. An install that found the app closed still leaves it closed.
+- The Gateway restarts through its own login job, so it comes back with `--background` instead of as a windowed copy.
+- A launchd launch with a fixed flag is no longer mistaken for a test run. The Gateway starts as `--background`, and every install used to read that as a test instance and leave the Gateway stopped. A test run is one that says so (`--test-mode`, `--headless`, `--snapshot`) or carries its own data location.
+- Each install's outcome now appears in the helper's own log, so a person at the Mac sees what happened instead of only the fleet page.
+
+## 0.1.48 — 2026-11-17
+
+- An owner's order can no longer become undrivable because one Mac never answered it. A new order for the same app on the same Mac now replaces an order older than 30 minutes instead of being silently swallowed, and a swallowed order is recorded in the publisher's own log, so a stuck order cannot sit invisible for an hour again.
+- A download is no longer stopped by a flat ten-minute clock. The time allowed now comes from the size of the artifact, with the clock only as a hard backstop: a stalled small file still fails fast, and a large artifact on a slow link is allowed to finish.
+- The publisher now records each order it hands to a Mac, with the order ids and the clock gap, so "the Mac is online and doing nothing" can be answered from the log.
+
+## 0.1.47 — 2026-11-17
+
+- No change in what the helper does: this release carries the same behaviour as 0.1.46, with the checks behind the unattended quit split so that a failing one names itself instead of hiding behind a single combined line.
+
+## 0.1.46 — 2026-11-16
+
+- An app whose build predates its update hold is now updated the way it was before holds existed: the Launcher quits it, swaps it and reopens it, so a Mac with an old build can be updated with nobody sitting at it. This is the owner's temporary order for this release, and it is removed once the fleet is past the hold: the app's idle check is now recorded rather than obeyed. A quit that the app does not complete within its own time limit fails that attempt with the reason, and nothing is replaced — an app is never killed.
+
+- Hub's idle check now says why it refused, in the words the operator needs: "no database at …", "file is not a database", "database is locked" or "unable to open database file", instead of a bare "exited 1 (no output)" that made a missing database, a missing `sqlite3`, a moved data folder and a genuinely busy Hub all look the same. The check itself is unchanged, and it still fails closed.
+- The check runs with the user's real home folder and a fixed `PATH` exported into it, and calls `/usr/bin/sqlite3` directly, so a launch agent's bare environment cannot change what it finds.
+
+## 0.1.45 — 2026-11-16
+
+- Hub's idle check comes with the helper, so no Mac has to be visited to arm it: it is Hub's own condition, and it fails closed — a missing, unreadable or corrupt Hub database answers "not idle", so that Mac waits rather than quitting a working Hub. A Mac can overrule it: `idleProbe` in that Mac's `apps.hub` settings replaces the built-in check, and an empty `idleProbe` turns the unattended quit off there. No other app is affected.
+- Every unattended quit now says four things in that Mac's own log: what the idle check answered (its exit status, and the reason it gave when it refused), whether the app exited and how long it took or that its time limit was reached, whether its background services started, and whether it came back and as which version. So a Mac that stalls, refuses or half-restarts says which of the four failed, instead of looking like it worked.
+
+## 0.1.44 — 2026-11-16
+
+- When an app refuses or fails an automatic update, this Mac's own log now says which app, which version and why. Each reason is logged once, not every 5 minutes, and is logged again after the next successful update.
+- The What's New dialog on the publisher page is bigger and shows more detail, the same as in the Update Studio KH window.
+- An app build older than its update hold (for example Hub 0.6.235, where the hold first shipped in 0.6.240) is no longer reported as "refused the update hold (credential)". It now says it needs one normal install while the app is closed, naming both versions. The feed records the first version of each app's hold (`holdSince`); `khu publish --hold-since <version>` sets it for an app published before this field existed.
+- An update for an app whose build has no update hold yet no longer fails once and is dropped. The owner's order stays pending and installs on the first run that finds the app closed, with nobody needed at the Mac. The Mac's row on the publisher page says "Waiting for <app> to close" and why. An order waits up to 14 days (`waitForCloseDays` in the agent config); after that it is refused with the reason, so the wait always ends.
+- An owner's order can now finish on a Mac nobody is sitting at: for a build older than its update hold, the Launcher quits the app, swaps it and reopens the new one, the way updates worked before holds existed. This happens only when that app's own idle check answers that nothing is running or queued — one small command per app, `idleProbe` in the agent config, exit 0 = safe. No idle check configured, a non-zero answer, an unreadable answer or one that takes longer than 15 seconds all mean the app is **not** quit: the order keeps waiting for it to close and the log says in one line what the check saw. An app that will not quit within its own time limit is left exactly as it was and reported as a refusal with the reason.
+- `quitOldBuilds` in the agent config turns this off for a Mac (`false` = never quit an old build; unset = on, for orders only — Automatic updates always wait).
 
 ## 0.1.49 — 2026-11-17
 

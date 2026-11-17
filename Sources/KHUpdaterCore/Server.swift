@@ -264,6 +264,27 @@ public final class FeedServer: @unchecked Sendable {
     private let enrolLimiter: RateLimiter
     private let reportLimiter: RateLimiter
 
+    /// How long one order may block another for the same machine, app and action. Past this an order is
+    /// retired when the owner places a new one, so a Mac that never answered cannot make an app
+    /// undrivable for good (2026-11-16: 39 Macs held a dead order and every retry was swallowed).
+    static let orderRetryWindow: TimeInterval = 30 * 60
+
+    enum OrderQueue { case appended, replacedStale, skippedFreshDuplicate }
+
+    /// Queues one owner order for a machine. `now` is a parameter so a test can place an old order
+    /// without a fake clock anywhere else.
+    static func queueOrder(_ ms: inout MachineState, machine: String, app: String, action: String,
+                           now: Date = Date()) -> OrderQueue {
+        let hasYoung = ms.pending.contains { $0.app == app && $0.action == action &&
+            ISO.date($0.createdAt).map { now.timeIntervalSince($0) <= orderRetryWindow } ?? false }
+        if hasYoung { return .skippedFreshDuplicate }
+        // A corrupt timestamp counts as stale: a bad createdAt must not wedge an app for ever.
+        let hadStale = ms.pending.contains { $0.app == app && $0.action == action }
+        if hadStale { ms.pending.removeAll { $0.app == app && $0.action == action } }
+        ms.pending.append(ServerCommand(machine: machine, app: app, action: action))
+        return hadStale ? .replacedStale : .appended
+    }
+
     public init(feedDir: URL, stateDir: URL, bind: String, port: Int,
                 commandKey: Curve25519.Signing.PrivateKey? = nil, maxConnections: Int = 32,
                 maxEnrolmentsPerWindow: Int = EnrolPolicy.maxPerWindow,
@@ -636,6 +657,10 @@ public final class FeedServer: @unchecked Sendable {
                 return Self.text(400, "send a valid Mac name (at most \(MacName.maxCharacters) characters)")
             }
             let pausedUntil = (body["paused_until"] as? String).flatMap(ISO.date).map(ISO.string)
+            // Bounded like every other report field; an oversized map is dropped, not stored.
+            let waiting = (body["waiting"] as? [String: String]).flatMap { w in
+                w.count <= ReportPolicy.maxApps && w.allSatisfy { $0.key.utf8.count <= 64 && $0.value.utf8.count <= ReportPolicy.maxReasonCharacters } ? w : nil
+            }
             return transact { state in
                 guard authorised(state, machine, token) else { return Self.text(401, "wrong token") }
                 // Counted only for the Mac the token proves: a limit keyed on a machine id the
@@ -657,6 +682,7 @@ public final class FeedServer: @unchecked Sendable {
                     ms.automaticSet = (ms.automaticSet ?? [:]).merging([app: AutomaticChange(at: ISO.string(at), byMac: true)]) { _, new in new }
                 }
                 ms.pausedUntil = pausedUntil
+                ms.waiting = waiting
                 ms.lastSeen = ISO.string(Date())
                 state.machines[machine] = ms
                 return Self.ok
@@ -696,6 +722,9 @@ public final class FeedServer: @unchecked Sendable {
                     switch $0.action {
                     case ServerCommand.update: return true
                     case ServerCommand.rollback: return names.contains(AgentCapability.ownerRollback)
+                    // A launch order is withheld from an agent that cannot start an app: an older
+                    // agent would refuse it, and the order would sit pending for ever.
+                    case ServerCommand.launch: return names.contains(AgentCapability.launch)
                     case ServerCommand.vendorInstall:
                         guard names.contains(AgentCapability.vendorInstall), let payload = $0.vendor,
                               ms.vendorAssignments?[payload.entry.id] == true,
@@ -711,10 +740,25 @@ public final class FeedServer: @unchecked Sendable {
                 }
                 // Signed with the key every agent is pinned to, and naming this Mac and the moment
                 // it was made: a forged or replayed reply is refused at the Mac.
+                let now = Date()
                 let body = JSON.encode(CommandsReply(machine: machine, commands: deliverable, automatic: ms.automatic,
                                                        automaticAt: ms.automaticSet?.mapValues(\.at)), pretty: false)
                 guard let signature = try? Signing.sign(body, with: commandKey) else {
                     return Self.text(500, "could not sign the orders")
+                }
+                // One line per handout so an operator can tell whether a Mac fetched its orders and
+                // how far the signed-at drifted from the server's clock (a large gap means the Mac
+                // will refuse the reply as stale). The gap is between now and the newest order's
+                // createdAt, since that is what the agent will compare against its own clock.
+                if !deliverable.isEmpty {
+                    let ids = deliverable.map(\.id).joined(separator: ",")
+                    let newestAt = deliverable.compactMap { ISO.date($0.createdAt) }.max() ?? now
+                    let gap = Int(abs(now.timeIntervalSince(newestAt)))
+                    let audit: [String: Any] = ["at": ISO.string(now), "machine": machine,
+                                                "ids": ids, "gap_s": gap]
+                    if let data = try? JSONSerialization.data(withJSONObject: audit, options: [.sortedKeys]) {
+                        FileHandle.standardError.write(Data("commands-handout ".utf8) + data + Data("\n".utf8))
+                    }
                 }
                 return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
             }
@@ -813,6 +857,7 @@ public final class FeedServer: @unchecked Sendable {
                 return vendorRequest(req)
             }
             if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
+                                        || req.path == "/api/request-launch"
                                         || req.path == "/api/automatic" || req.path == "/api/enrol-window"
                                         || req.path == "/api/remove-machine" || req.path == "/api/update-all"
                                         || req.path == "/api/pairing-code" || req.path == "/api/rename-machine"
@@ -820,6 +865,7 @@ public final class FeedServer: @unchecked Sendable {
                 guard OwnerAccess.isSameSite(req.headers, port: port) else { return Self.text(403, "cross-site request refused") }
                 let f = OwnerAccess.fields(req)
                 var createdOrders = 0
+                var skippedOrders = 0
                 let response = transact { state -> HTTPResponse in
                     // Opening and closing the window, and removing a Mac, are decisions about this
                     // publisher rather than about one app on one Mac.
@@ -851,8 +897,11 @@ public final class FeedServer: @unchecked Sendable {
                         guard let app = f["app"], !app.isEmpty else { return Self.text(400, "send app") }
                         let feed = FeedPublisher.loadFeed(from: feedDir)
                         for (machine, var ms) in state.machines where Self.updateAvailable(ms, app: app, feed: feed, now: Date()) {
-                            ms.pending.append(ServerCommand(machine: machine, app: app, action: ServerCommand.update))
-                            createdOrders += 1
+                            switch Self.queueOrder(&ms, machine: machine, app: app, action: ServerCommand.update) {
+                            case .appended: createdOrders += 1
+                            case .replacedStale: createdOrders += 1; skippedOrders += 1
+                            case .skippedFreshDuplicate: skippedOrders += 1
+                            }
                             state.machines[machine] = ms
                         }
                         return Self.ok
@@ -901,18 +950,24 @@ public final class FeedServer: @unchecked Sendable {
                         ms.automatic[app] = f["on"] == "true"
                         ms.automaticSet = (ms.automaticSet ?? [:]).merging([app: AutomaticChange(at: ISO.string(Date()), byMac: false)]) { _, new in new }
                     } else {
-                        let action = req.path == "/api/request-rollback" ? ServerCommand.rollback : ServerCommand.update
-                        if !ms.pending.contains(where: { $0.app == app && $0.action == action }) {
-                            ms.pending.append(ServerCommand(machine: machine, app: app, action: action))
-                            createdOrders += 1
+                        let action = req.path == "/api/request-rollback" ? ServerCommand.rollback
+                            : req.path == "/api/request-launch" ? ServerCommand.launch : ServerCommand.update
+                        switch Self.queueOrder(&ms, machine: machine, app: app, action: action) {
+                        case .appended: createdOrders += 1
+                        case .replacedStale: createdOrders += 1; skippedOrders += 1
+                        case .skippedFreshDuplicate: skippedOrders += 1
                         }
                     }
                     state.machines[machine] = ms
                     return Self.ok
                 }
-                if response.status == 200, createdOrders > 0 {
-                    let audit: [String: Any] = ["at": ISO.string(Date()), "path": req.path,
-                                               "app": f["app"] ?? "", "created": createdOrders, "source": "owner-page"]
+                if response.status == 200, createdOrders > 0 || skippedOrders > 0 {
+                    var audit: [String: Any] = ["at": ISO.string(Date()), "path": req.path,
+                                                "app": f["app"] ?? "", "created": createdOrders,
+                                                "skipped": skippedOrders, "source": "owner-page"]
+                    if skippedOrders > 0 && createdOrders == 0 { audit["why"] = "fresh-duplicate" }
+                    else if createdOrders > 0 && skippedOrders == 0 { /* no why needed */ }
+                    else if createdOrders > 0 && skippedOrders > 0 { audit["why"] = "stale-replaced" }
                     if let data = try? JSONSerialization.data(withJSONObject: audit, options: [.sortedKeys]) {
                         FileHandle.standardError.write(Data("order-provenance ".utf8) + data + Data("\n".utf8))
                     }
@@ -1019,16 +1074,27 @@ public final class FeedServer: @unchecked Sendable {
                 // that has advertised nothing at all — every build before the action existed, and
                 // anything that has only ever been probed — cannot be assumed capable. So this is
                 // "we have no evidence", never "the Mac said it cannot".
-                let agentTooOld = order?.action == ServerCommand.rollback && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false)
+                let agentTooOld = order.map { o in
+                    (o.action == ServerCommand.rollback && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false))
+                        || (o.action == ServerCommand.launch && !(ms.capabilities?.contains(AgentCapability.launch) ?? false))
+                } ?? false
                 let result = ms.lastResults?[app]
                 let failed = result.map { Self.failureStatuses.contains($0.status) } ?? false
                 let behind = installed.flatMap { i in feedApp.map { VersionCompare.isNewer($0.version, than: i) } } ?? false
                 let same = installed.flatMap { i in feedApp.map { VersionCompare.compare(i, $0.version) == 0 } } ?? false
                 let st: (String, String)
                 if let order {
-                    st = order.action == ServerCommand.rollback ? (agentTooOld ? "Rollback requested (agent too old for rollback)" : "Rollback requested", "info") : ("Update requested", "info")
-                    anyUpdating = true
-                } else if failed { st = ("Failed", "bad"); anyFailed = true }
+                    if order.action == ServerCommand.launch {
+                        st = agentTooOld ? ("Launch requested (agent too old for launch)", "info") : ("Launch requested", "info")
+                    } else if order.action == ServerCommand.rollback {
+                        st = agentTooOld ? ("Rollback requested (agent too old for rollback)", "info") : ("Rollback requested", "info")
+                    } else {
+                        st = ms.waiting?[app] != nil ? ("Waiting for \(name(app)) to close", "info") : ("Update requested", "info")
+                    }
+                    // A launch is not an update and must not show up in the update counts.
+                    if order.action != ServerCommand.launch { anyUpdating = true }
+                } else if result?.status == "launched" { st = ("Running", "ok") }
+                else if failed { st = ("Failed", "bad"); anyFailed = true }
                 else if !online { st = ("Not checked · no report for 10 min", "unknown") }
                 else if ownUpdater { st = ("Updates itself", "muted") }
                 else if feedApp == nil { st = ("Not checked · not in feed", "unknown") }
@@ -1042,6 +1108,12 @@ public final class FeedServer: @unchecked Sendable {
                     actions += form("/api/request-update", machine, app, "", installed == nil ? "Install" : "Update", "primary small")
                     if online && !failed && rowUpdate.isEmpty { rowUpdate = form("/api/request-update", machine, app, "", "Update \(h(name(app)))", "primary small") }
                 }
+                // Launch is one person pressing a button: never automatic, never a background job,
+                // and never offered to an agent that cannot carry it out.
+                if !ownUpdater, installed != nil, order == nil,
+                   ms.capabilities?.contains(AgentCapability.launch) == true {
+                    actions += form("/api/request-launch", machine, app, "", "Launch", "small")
+                }
                 // Rollback needs no feed entry: it puts back the version this Mac kept.
                 if !ownUpdater {
                     // The version it goes back to is the one the last update replaced, when this page saw it.
@@ -1053,8 +1125,9 @@ public final class FeedServer: @unchecked Sendable {
                     actions += form("/api/automatic", machine, app, "<input type=hidden name=on value=\(auto ? "false" : "true")>", auto ? "Turn Automatic off" : "Turn Automatic on", "small")
                 }
                 let health = ms.health[app].flatMap { $0 == "running" ? nil : " <span class=warntext>\(h($0))</span>" } ?? ""
+                let waitLine = ms.waiting?[app].map { "<div class=sub>\(h($0))</div>" } ?? ""
                 rows += "<tr><td class=name>\(h(name(app)))</td><td class=num>\(h(installed ?? "—"))\(health)</td><td class=num>\(h(feedApp?.version ?? "—"))</td>"
-                    + "<td><span class=\"chip \(st.1)\">\(h(st.0))</span>\(auto && !ownUpdater && feedApp != nil ? " <span class=\"tag on\">Automatic: on</span>" : "")\(ms.automaticSet?[app]?.byMac == true && !ownUpdater ? " <span class=sub>changed on this Mac</span>" : "")</td><td class=actions>\(actions)</td></tr>"
+                    + "<td><span class=\"chip \(st.1)\">\(h(st.0))</span>\(auto && !ownUpdater && feedApp != nil ? " <span class=\"tag on\">Automatic: on</span>" : "")\(ms.automaticSet?[app]?.byMac == true && !ownUpdater ? " <span class=sub>changed on this Mac</span>" : "")\(waitLine)</td><td class=actions>\(actions)</td></tr>"
                 if failed, let result {
                     if failSummary.isEmpty { failSummary = "\(name(app)): \(words(result.status).lowercased())" }
                     let entry = ms.history?.first { $0.app == app && $0.at == result.at }
@@ -1197,10 +1270,10 @@ public final class FeedServer: @unchecked Sendable {
         let removed = state.removed.isEmpty ? "<p class=sub>No Mac has been removed.</p>"
             : "<div class=tablewrap><table><thead><tr><th>Mac</th><th>Removed</th><th>Last seen then</th><th>Now</th></tr></thead>\(removedRows)</table></div>"
         let latest = WhatsNew.publisher.first
-        let news = (latest?.items ?? []).map { "<li>\(h($0))</li>" }.joined()
         let currentVersion = latest?.version ?? "unknown"
         // The Launcher names the version it is running; a browser without one sees the published one.
         let shownVersion = appVersion.flatMap { $0.range(of: #"^[0-9][0-9.]*$"#, options: .regularExpression) == nil ? nil : $0 } ?? currentVersion
+        let news = WhatsNew.dialogBody(app: "Update Studio KH", shown: shownVersion, entries: WhatsNew.publisher, escape: h)
         let ownEntry = feed?.apps["kh-updater-app"]
         // Only an offer some Mac is actually behind is shown: the same rule the feed table uses.
         let ownBehind = state.machines.filter { Self.updateAvailable($0.value, app: "kh-updater-app", feed: feed, now: now) }.count
@@ -1285,7 +1358,7 @@ public final class FeedServer: @unchecked Sendable {
         \(settings)
         \(support)
         <section data-view=apps><div class=pagehead><div><h2>Apps &amp; updates</h2><p class=sub>Published versions, release notes and updates for your connected Macs.</p></div></div><p class=sub>Update N Macs updates every connected Mac that is behind. Each Mac reports its result here.</p>\(feedSection)\(vendorHTML(state))</section>
-        <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main><dialog id=whats-new aria-labelledby=whats-new-title><div class=modalbar><h2 id=whats-new-title>What's New</h2><button type=button id=whats-new-close aria-label="Close What's New">Close</button></div><div class=body><p class=sub>Update Studio KH v\(h(shownVersion)) · built \(h(Changelog.buildDate))</p><ul class=newslist>\(news.isEmpty ? "<li>Release notes are not available for this version.</li>" : news)</ul></div></dialog>\(script)</body></html>
+        <dialog id=mac-dialog aria-labelledby=mac-dialog-title><div class=modalbar><h2 id=mac-dialog-title>Mac details</h2><button type=button id=mac-dialog-close aria-label="Close Mac details">Close</button></div><div id=mac-dialog-body></div><p class=\"sr copystatus\" role=status aria-live=polite></p></dialog><p id=copy-status class=sr role=status aria-live=polite></p></main><dialog id=whats-new aria-labelledby=whats-new-title><div class=modalbar><h2 id=whats-new-title>What's New</h2><button type=button id=whats-new-close aria-label="Close What's New">Close</button></div><div class=body>\(news)</div></dialog>\(script)</body></html>
         """
     }
 
@@ -1362,7 +1435,6 @@ public final class FeedServer: @unchecked Sendable {
     .themes{display:inline-flex;padding:2px;background:var(--muted-bg);border-radius:8px;gap:2px}
     .themes button{border:0;background:none;padding:4px 11px;border-radius:6px;color:var(--sub);min-height:26px}
     .themes button[aria-pressed=true]{background:var(--panel);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
-    #whats-new{width:min(460px,calc(100vw - 32px))}#whats-new .body{padding:14px 24px 4px}#whats-new .newslist{margin:0;padding-left:18px}#whats-new .newslist li{margin-bottom:6px}
     [data-view][hidden]{display:none}.mark{width:34px;height:34px;flex:none}
     main{width:100%;padding:22px 28px 44px;max-width:1240px;min-width:0}section{margin-bottom:28px}
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
@@ -1448,7 +1520,7 @@ public final class FeedServer: @unchecked Sendable {
     @media(min-width:821px) and (max-width:1100px){.brand p{display:none}.stats{grid-template-columns:1fr 1fr}.connectlayout{gap:24px}.pairpanel{padding:24px}details.mac>summary{grid-template-columns:minmax(130px,1fr) minmax(0,1fr) auto 14px}.seen{grid-column:1/4;text-align:left}.chev{grid-column:4;grid-row:1}}
     @media(max-width:820px){.pagehead{align-items:flex-start;flex-direction:column;gap:8px;margin-bottom:20px}.pagehead h2{font-size:23px}.connectlayout{grid-template-columns:minmax(0,1fr);gap:24px}.pairpanel{order:-1;padding:24px}.paircode{font-size:48px}.pair{margin:20px 0}.connectfoot{flex-direction:column;gap:8px}.setting{grid-template-columns:1fr;gap:12px}.settingslist{padding:0 18px}.brand{min-width:0}.feed td{min-width:0}.feed .name{min-width:0}.feed .actions{white-space:normal}.feed .num{overflow-wrap:anywhere}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
-    """ + Changelog.layoutCSS
+    """ + Changelog.layoutCSS + Changelog.whatsNewCSS
 
     /// Bind and listen; returns the listening socket (port 0 picks a free port: see `boundPort`).
     public func listen() throws -> Int32 {
