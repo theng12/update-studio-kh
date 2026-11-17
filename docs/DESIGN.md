@@ -494,12 +494,16 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
    the previous bundle, relaunches it and says exactly what was restored — or, loudly, that it
    could not be, **and keeps the journal** so the next run retries instead of reporting a Mac
    whose app is merely the new version as settled;
-5. relaunch only when the install was asked for here at this Mac (attended), and then require
-   it healthy as the new version; the relaunch is background and hidden (`open -g -j`) and a
-   running test/hidden instance is never relaunched. An unattended install (Automatic or a
-   remote order) never opens the app: it is left stopped and reported as such, so an install can
-   never take the owner's desktop; a first install with no previous bundle is checked the same
-   way when attended, and left stopped when not;
+5. put back what the install stopped, unattended included: an app it found running is relaunched
+   — background and hidden (`open -g -j`; the Gateway through its own login job, so it keeps
+   `--background` and does not come back as a windowed copy) — and required to be healthy as the
+   new version. This is the owner's rule: the app resumes by itself, because nobody is there to
+   open it after an Automatic install or a remote order. A running test/hidden instance is still
+   never relaunched in the owner's profile, and a test run is one that says so (`--test-mode`,
+   `--headless`, `--snapshot`) or carries its own data location (a path argument, an isolated
+   HOME) — never merely one started with a flag: launchd starts the Gateway with `--background`.
+   An install that found the app closed leaves it closed and says so; a first install with no
+   previous bundle is health-checked the same way;
 6. otherwise quit and stop both again (else `rollback_blocked`, both bundles kept and journal
    kept), copy and verify the previous bundle into a sibling on the installed volume, move the
    unhealthy bundle to another sibling, and rename the prepared previous bundle into place.
