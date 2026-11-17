@@ -802,7 +802,9 @@ public enum Agent {
             let response: (Data, Int)?
             do {
                 response = try http.get(serverBase.appendingPathComponent("commands")
-                    .appendingQuery("machine", config.machine).appendingQuery("capabilities", AgentCapability.ownerRollback + "," + AgentCapability.vendorInstall), headers: headers)
+                    .appendingQuery("machine", config.machine)
+                    .appendingQuery("capabilities", [AgentCapability.ownerRollback, AgentCapability.vendorInstall,
+                                                     AgentCapability.launch].joined(separator: ",")), headers: headers)
             } catch {
                 guard memory.feedNetwork?.feedURLs.isEmpty == false else { throw error }
                 response = nil; publisherAvailable = false
@@ -922,6 +924,9 @@ public enum Agent {
                                       serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
                                       force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual,
                                       catalogEntry: entry, quitOldBuild: item.explicit && config.quitOldBuilds != false)
+                case ServerCommand.launch:
+                    res = launchOrdered(app: item.app, config: config, shell: shell,
+                                        wait: TimeInterval(max(config.launchWaitSeconds ?? Int(Agent.launchWaitSeconds), 1)))
                 case ServerCommand.vendorInstall:
                     guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
                         throw khuFail("vendor install requires an explicit signed order for this Mac")
@@ -1143,6 +1148,47 @@ public enum Agent {
         memory.feedPublishedAt = feed.published_at
         memory.feedSHA256 = sha
         return feed
+    }
+
+    /// How long a remote launch waits for the app's own process to appear; `launchWaitSeconds`
+    /// replaces it. The wait is its own ceiling: a launch is not an install and must not borrow a
+    /// health window, and an app that never appears is `failed`, not left saying "launching".
+    public static let launchWaitSeconds: TimeInterval = 30
+
+    /// The owner's launch order: open the installed app hidden and detached, then prove it is
+    /// running. The exit status of `open` proves nothing — the pid does. Nothing is quit, stopped,
+    /// installed or downloaded; an app that is already running is reported with its pid.
+    static func launchOrdered(app: String, config: AgentConfig, shell: Shell,
+                              processes: (String) -> [pid_t]? = LiveControl.processes,
+                              clock: () -> TimeInterval = Mono.now,
+                              wait: TimeInterval = Agent.launchWaitSeconds) -> RecipeResult {
+        guard let installedPath = config.apps[app]?.bundlePath else {
+            return RecipeResult(status: "failed", reason: "\(app) has no installed app path in this Mac's settings; nothing was opened")
+        }
+        guard FileManager.default.fileExists(atPath: installedPath) else {
+            return RecipeResult(status: "failed", reason: "\(app) is not installed at \(installedPath); nothing was opened")
+        }
+        guard Recipe.signatureVerifies(installedPath, shell: shell) else {
+            return RecipeResult(status: "failed",
+                                reason: "the installed \(app) at \(installedPath) does not pass its signature check; it was not opened")
+        }
+        if let pid = processes(installedPath)?.first {
+            return RecipeResult(status: "launched", reason: "already running (pid \(pid))")
+        }
+        // `-g` never brings it forward, `-j` starts it hidden: a remote launch never takes the
+        // owner's desktop.
+        let opened = try? shell.run("/usr/bin/open", arguments: ["-g", "-j", installedPath], timeout: 30)
+        let deadline = clock() + wait
+        repeat {
+            if let pid = processes(installedPath)?.first {
+                return RecipeResult(status: "launched", reason: "pid \(pid)")
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        } while clock() < deadline
+        let why = opened.map { "open exited \($0.exitCode)" + ($0.stderr.isEmpty ? "" : " (\($0.stderr.prefix(200)))") }
+            ?? "open could not be run"
+        return RecipeResult(status: "failed",
+                            reason: "\(app) did not start within \(Int(wait)) s (\(why)); nothing else was changed")
     }
 
     /// The owner's rollback order: the version this Mac kept goes back through the same journaled,

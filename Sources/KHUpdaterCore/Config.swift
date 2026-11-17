@@ -60,6 +60,9 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     public var trashKept: Int?
     /// Gigabytes kept free beyond an artifact's own bytes; nil = 2.
     public var reserveGB: Int?
+    /// How long a remote launch waits for the app's process to appear; nil = 30 s. The wait is this
+    /// one's own: a launch is not an install, and a slow start must not borrow an install's window.
+    public var launchWaitSeconds: Int?
     public init(feedURL: String, publicKey: String, stateDir: String, machine: String, token: String,
                 apps: [String: AppConfig] = [:], intervalMinutes: Int = 5, once: Bool = false) {
         self.feedURL = feedURL; self.publicKey = publicKey; self.stateDir = stateDir
@@ -82,7 +85,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays, quitOldBuilds, trashKept, reserveGB
+        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays, quitOldBuilds, trashKept, reserveGB, launchWaitSeconds
     }
     /// Optional fields really are optional: a hand-written config may leave them out.
     public init(from decoder: Decoder) throws {
@@ -102,6 +105,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         quitOldBuilds = try c.decodeIfPresent(Bool.self, forKey: .quitOldBuilds)
         trashKept = try c.decodeIfPresent(Int.self, forKey: .trashKept)
         reserveGB = try c.decodeIfPresent(Int.self, forKey: .reserveGB)
+        launchWaitSeconds = try c.decodeIfPresent(Int.self, forKey: .launchWaitSeconds)
     }
 }
 
@@ -218,6 +222,9 @@ public struct ServerCommand: Codable, Sendable, Equatable {
     public static let update = "update"
     public static let rollback = "rollback"
     public static let vendorInstall = "vendor-install"
+    /// Start this Mac's installed copy of the app, hidden, and prove it is running. Never automatic:
+    /// only a person pressing Launch on the publisher creates one.
+    public static let launch = "launch"
 
     public var id: String
     public var machine: String
@@ -250,6 +257,8 @@ public struct ServerCommand: Codable, Sendable, Equatable {
 public enum AgentCapability {
     public static let ownerRollback = "owner-rollback-v1"
     public static let vendorInstall = "vendor-install-v1"
+    /// An agent that can start an installed app on this Mac when the owner asks from the publisher.
+    public static let launch = "launch-v1"
 }
 
 /// One install result as the page shows it: which app, the version it was on, the version the feed

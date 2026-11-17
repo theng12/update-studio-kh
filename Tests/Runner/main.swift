@@ -145,10 +145,21 @@ final class FakeApp: @unchecked Sendable {
 /// Records shell commands without running them, for the launch path.
 final class LaunchShell: Shell, @unchecked Sendable {
     var calls: [String] = []
+    /// What the signature check and `open` answer; both succeed unless a test says otherwise.
+    var codesignExit: Int32 = 0
+    var openExit: Int32 = 0
     func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
         calls.append(([executable] + arguments).joined(separator: " "))
-        return ShellResult(exitCode: 0, stdout: "", stderr: "")
+        switch executable {
+        case "/usr/bin/codesign":
+            return ShellResult(exitCode: codesignExit, stdout: "", stderr: codesignExit == 0 ? "" : "code object is not signed at all")
+        case "/usr/bin/open":
+            return ShellResult(exitCode: openExit, stdout: "", stderr: openExit == 0 ? "" : "The application cannot be opened.")
+        default:
+            return ShellResult(exitCode: 0, stdout: "", stderr: "")
+        }
     }
+    var opens: Int { calls.filter { $0.hasPrefix("/usr/bin/open") }.count }
 }
 
 /// Fails every request: a no-op install must never reach the network.
@@ -4126,6 +4137,7 @@ r41HealthMustHold()
         vendorExecutionTests()
         spaceFlowTests()
         spaceReclaimTests()
+        launchOrderTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

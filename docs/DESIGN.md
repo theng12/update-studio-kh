@@ -154,19 +154,33 @@ one slow or stalled Mac never holds up the others.
   an update and install the feed's version — the opposite of what the owner asked. `action` itself
   defaults to `update` when absent, so an order signed before the field existed decodes unchanged
   and still means what it meant when the owner gave it.
-- `vendor-install` orders are delivered only to agents advertising `vendor-install-v1`. Other unknown actions retain the existing rollback-capable agent refusal path; legacy agents receive neither. The signed order carries the vendor entry, signature pins, payload kind and visible byte cap. Vendor IDs use `vendor-<id>` to keep results separate from KH releases.
+- `vendor-install` orders are delivered only to agents advertising `vendor-install-v1`. A
+  **launch** order is delivered only to agents advertising `launch-v1`: it starts an app on the Mac,
+  which an older agent would refuse, leaving the order pending for ever. The Mac opens the installed
+  bundle with `/usr/bin/open -g -j` (never brought forward, never activating), proves the app is
+  running by finding a process whose executable is inside the bundle — the exit status of `open`
+  proves nothing — and answers `launched` with the pid (or `already running (pid N)`), or `failed`
+  naming why: no configured path, not installed, the bundle does not pass its signature check, or
+  no process appeared within its own ceiling (`launchWaitSeconds`, default 30 s). Nothing is quit,
+  stopped, installed or downloaded by a launch. Only the owner's page creates one; no automatic or
+  background path ever launches an app.
+- Other unknown actions retain the existing rollback-capable agent refusal path; legacy agents receive neither. The signed order carries the vendor entry, signature pins, payload kind and visible byte cap. Vendor IDs use `vendor-<id>` to keep results separate from KH releases.
 - Other apps adds owner-only `POST /api/vendor-edit`, `/api/vendor-assign`, `/api/vendor-retire` and `/api/vendor-restore`, under the same loopback/Host/Origin checks. The six catalog entries and all per-Mac assignments start off. Bulk assignment requires explicit confirmation. Turning off cancels waiting installs, preserving installed apps; retirement keeps the entry/history, turns assignments off and cancels pending installs. Restore leaves assignments off. Editing sources refreshes only waiting vendor orders, including the shared download limit; it never creates a new install. Catalog source type, page-link match, official hosts, Team ID/evidence and bundle ID are editable; every editable field, the page-link match included, is capped at 4096 bytes before it can enter the catalog or a signed order. A refused owner form answers as a styled page carrying the reason and a link back, never as bare text.
 - `/status` may also report optional `installed_build` and `installed_executable_sha256` maps. Each has the same app/name/value bounds as `installed`; builds are nonempty single lines and executable hashes are exactly 64 lowercase hexadecimal characters. The publisher retains only the latest maps for readback; a later report without them clears previous identity to unknown. These are reported installed-bundle bytes, not proof of a release archive, and older state files remain readable.
 - `/status` may report a bounded `display_name`. The helper reads the installed Hub’s current Machine ID, else the macOS computer name. The publisher stores the last reported name separately: a manual label survives unchanged reports, and the next actual Mac name change follows automatically. Older helpers omit the field and leave the label alone.
 - A Mac has a separate optional display label. Renaming changes that label and adds one history entry; the enrolment ID, token hash, pending orders and enrolment date stay unchanged. Duplicate labels remain separate records and show “same name” on the page.
-- Owner-only: `GET /`, `POST /api/rename-machine`, `POST /api/request-update`, `POST /api/request-rollback`, `POST /api/automatic`,
+- Owner-only: `GET /`, `POST /api/rename-machine`, `POST /api/request-update`, `POST /api/request-rollback`,
+  `POST /api/request-launch`, `POST /api/automatic`,
   `POST /api/enrol-window`, `POST /api/remove-machine` — loopback peer, a Host of
   127.0.0.1/localhost/[::1] with this port (no DNS rebinding), and for changes an Origin or
   Referer from this page (neither is refused). The page sends CSP, `X-Frame-Options: DENY`,
   `Cache-Control: no-store`. It shows each Mac's effective Automatic setting (the owner's
   override, else what the Mac's own config says). Each row with an app of its own has an Update
   button, a Roll back button and its Automatic toggle; the rollback route needs no feed entry
-  for that app, because it puts back a version the Mac already keeps.
+  for that app, because it puts back a version the Mac already keeps. A Mac whose agent advertises
+  `launch-v1` also gets one Launch button per installed app: it shows "Launch requested" while the
+  order waits (a sleeping Mac keeps it queued and visible), then "Running" when the Mac reports
+  `launched`, or the failure and its plain reason.
 
 **Enrolment is closed until the owner opens a window.** `POST /enrol` is the one route with no
 token, and it is the only way a Mac gets a token without the owner touching the publisher:

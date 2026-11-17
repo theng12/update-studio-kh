@@ -722,6 +722,9 @@ public final class FeedServer: @unchecked Sendable {
                     switch $0.action {
                     case ServerCommand.update: return true
                     case ServerCommand.rollback: return names.contains(AgentCapability.ownerRollback)
+                    // A launch order is withheld from an agent that cannot start an app: an older
+                    // agent would refuse it, and the order would sit pending for ever.
+                    case ServerCommand.launch: return names.contains(AgentCapability.launch)
                     case ServerCommand.vendorInstall:
                         guard names.contains(AgentCapability.vendorInstall), let payload = $0.vendor,
                               ms.vendorAssignments?[payload.entry.id] == true,
@@ -854,6 +857,7 @@ public final class FeedServer: @unchecked Sendable {
                 return vendorRequest(req)
             }
             if req.method == "POST" && (req.path == "/api/request-update" || req.path == "/api/request-rollback"
+                                        || req.path == "/api/request-launch"
                                         || req.path == "/api/automatic" || req.path == "/api/enrol-window"
                                         || req.path == "/api/remove-machine" || req.path == "/api/update-all"
                                         || req.path == "/api/pairing-code" || req.path == "/api/rename-machine"
@@ -946,7 +950,8 @@ public final class FeedServer: @unchecked Sendable {
                         ms.automatic[app] = f["on"] == "true"
                         ms.automaticSet = (ms.automaticSet ?? [:]).merging([app: AutomaticChange(at: ISO.string(Date()), byMac: false)]) { _, new in new }
                     } else {
-                        let action = req.path == "/api/request-rollback" ? ServerCommand.rollback : ServerCommand.update
+                        let action = req.path == "/api/request-rollback" ? ServerCommand.rollback
+                            : req.path == "/api/request-launch" ? ServerCommand.launch : ServerCommand.update
                         switch Self.queueOrder(&ms, machine: machine, app: app, action: action) {
                         case .appended: createdOrders += 1
                         case .replacedStale: createdOrders += 1; skippedOrders += 1
@@ -1069,17 +1074,27 @@ public final class FeedServer: @unchecked Sendable {
                 // that has advertised nothing at all — every build before the action existed, and
                 // anything that has only ever been probed — cannot be assumed capable. So this is
                 // "we have no evidence", never "the Mac said it cannot".
-                let agentTooOld = order?.action == ServerCommand.rollback && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false)
+                let agentTooOld = order.map { o in
+                    (o.action == ServerCommand.rollback && !(ms.capabilities?.contains(AgentCapability.ownerRollback) ?? false))
+                        || (o.action == ServerCommand.launch && !(ms.capabilities?.contains(AgentCapability.launch) ?? false))
+                } ?? false
                 let result = ms.lastResults?[app]
                 let failed = result.map { Self.failureStatuses.contains($0.status) } ?? false
                 let behind = installed.flatMap { i in feedApp.map { VersionCompare.isNewer($0.version, than: i) } } ?? false
                 let same = installed.flatMap { i in feedApp.map { VersionCompare.compare(i, $0.version) == 0 } } ?? false
                 let st: (String, String)
                 if let order {
-                    st = order.action == ServerCommand.rollback ? (agentTooOld ? "Rollback requested (agent too old for rollback)" : "Rollback requested", "info")
-                        : ms.waiting?[app] != nil ? ("Waiting for \(name(app)) to close", "info") : ("Update requested", "info")
-                    anyUpdating = true
-                } else if failed { st = ("Failed", "bad"); anyFailed = true }
+                    if order.action == ServerCommand.launch {
+                        st = agentTooOld ? ("Launch requested (agent too old for launch)", "info") : ("Launch requested", "info")
+                    } else if order.action == ServerCommand.rollback {
+                        st = agentTooOld ? ("Rollback requested (agent too old for rollback)", "info") : ("Rollback requested", "info")
+                    } else {
+                        st = ms.waiting?[app] != nil ? ("Waiting for \(name(app)) to close", "info") : ("Update requested", "info")
+                    }
+                    // A launch is not an update and must not show up in the update counts.
+                    if order.action != ServerCommand.launch { anyUpdating = true }
+                } else if result?.status == "launched" { st = ("Running", "ok") }
+                else if failed { st = ("Failed", "bad"); anyFailed = true }
                 else if !online { st = ("Not checked · no report for 10 min", "unknown") }
                 else if ownUpdater { st = ("Updates itself", "muted") }
                 else if feedApp == nil { st = ("Not checked · not in feed", "unknown") }
@@ -1092,6 +1107,12 @@ public final class FeedServer: @unchecked Sendable {
                 if !ownUpdater && feedApp != nil && !same && order == nil {
                     actions += form("/api/request-update", machine, app, "", installed == nil ? "Install" : "Update", "primary small")
                     if online && !failed && rowUpdate.isEmpty { rowUpdate = form("/api/request-update", machine, app, "", "Update \(h(name(app)))", "primary small") }
+                }
+                // Launch is one person pressing a button: never automatic, never a background job,
+                // and never offered to an agent that cannot carry it out.
+                if !ownUpdater, installed != nil, order == nil,
+                   ms.capabilities?.contains(AgentCapability.launch) == true {
+                    actions += form("/api/request-launch", machine, app, "", "Launch", "small")
                 }
                 // Rollback needs no feed entry: it puts back the version this Mac kept.
                 if !ownUpdater {
