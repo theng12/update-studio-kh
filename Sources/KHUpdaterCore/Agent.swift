@@ -1003,6 +1003,8 @@ public enum Agent {
             if delivered(post(item.id, done)) { memory.done[item.id]?.sent = true; try remember() }
             result.commandsRun += 1
             if ["updated", "switched"].contains(res.status) { result.updates += 1 }
+            // Said where a person at this Mac can see it: the fleet page is not in front of them.
+            result.notes.append("\(item.app): \(res.status)" + (res.reason.map { " — \($0)" } ?? ""))
             if res.status == "switched" {
                 result.restartRequested = true; break
             }  // the rest wait for the new version
@@ -1528,10 +1530,12 @@ public enum Agent {
             guard appDmgRecipes.contains(cfg.recipe) || statusOnly.contains(cfg.recipe) else {
                 throw khuFail("unknown recipe \(cfg.recipe)")
             }
-            // An app this run asked to quit is put back running; other unattended installs leave it closed.
+            // Put back what the install stopped, unattended included: the owner's rule is that the
+            // app resumes by itself — nobody is there to open it after an automatic update or an
+            // order. The relaunch is hidden (`open -g -j`), never a window on the owner's desktop.
             return try refusedQuit { withHoldNote(try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
                                                   expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: traced(control(app, cfg)),
-                                                  refuseIfRunning: itself, relaunchAfterInstall: manual || legacyQuit,
+                                                  refuseIfRunning: itself, relaunchAfterInstall: true,
                                                   beforeStop: beforeStop)) }
         }
     }
@@ -1589,7 +1593,7 @@ public enum Agent {
             }
             result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
-                                     refuseIfRunning: itself, relaunchAfterInstall: manual, verifyStaged: { path in
+                                     refuseIfRunning: itself, relaunchAfterInstall: true, verifyStaged: { path in
                 guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
             }, beforeStop: beforeStop)
         }

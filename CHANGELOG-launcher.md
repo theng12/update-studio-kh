@@ -5,6 +5,13 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 
 
+## 0.1.50 — 2026-11-17
+
+- An update now puts the app back. An install that found an app running relaunches it, hidden, and requires it healthy as the new version — unattended included, because nobody is there to open it after an automatic update or an order. An install that found the app closed still leaves it closed.
+- The Gateway restarts through its own login job, so it comes back with `--background` instead of as a windowed copy.
+- A launchd launch with a fixed flag is no longer mistaken for a test run. The Gateway starts as `--background`, and every install used to read that as a test instance and leave the Gateway stopped. A test run is one that says so (`--test-mode`, `--headless`, `--snapshot`) or carries its own data location.
+- Each install's outcome now appears in the helper's own log, so a person at the Mac sees what happened instead of only the fleet page.
+
 ## 0.1.48 — 2026-11-17
 
 - An owner's order can no longer become undrivable because one Mac never answered it. A new order for the same app on the same Mac now replaces an order older than 30 minutes instead of being silently swallowed, and a swallowed order is recorded in the publisher's own log, so a stuck order cannot sit invisible for an hour again.

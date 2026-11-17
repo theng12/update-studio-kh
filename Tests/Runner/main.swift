@@ -204,16 +204,34 @@ func recipeTests() {
         expect(res?.reason?.contains("test instance") == true, "the report says a test instance was left stopped")
         expect(marker(rig.installed) == "1.2.3", "the test-instance install still promoted the new version")
     }
-    // An unattended install never opens the app: it is closed for the swap and left closed.
+    // A launchd launch with a fixed flag is the owner's app, not a test run (2026-11-17): the
+    // Gateway starts as `--background` and every install used to read that as a test instance and
+    // leave it stopped. Only an explicit test flag or its own data location makes a test run.
     do {
-        let rig = RecipeRig("unattended")
+        expect(!LiveControl.isTestLaunch(["/Applications/gateway-kh.app/Contents/MacOS/Gateway Studio KH", "--background"]),
+               "a launchd flag alone is not a test instance")
+        expect(!LiveControl.isTestLaunch(["/Applications/X.app/Contents/MacOS/X"]), "a bare launch is not a test instance")
+        expect(!LiveControl.isTestLaunch(["/Applications/X.app/Contents/MacOS/X", "-psn_0_12345"]),
+               "a system-supplied process serial number is not a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "--test-mode"]), "an explicit test flag is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "--data-dir", "/tmp/run-1"]), "its own data directory is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "--user-data-dir=/tmp/run-1"]),
+               "an own-data-directory flag with a value is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "--data-dir", "./tmp/run-1"]),
+               "a relative data directory is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "--data-dir", "~/run-1"]), "a home-relative data directory is a test instance")
+        expect(LiveControl.isTestLaunch(["/x/X", "./tmp/run-1"]), "a relative positional path is a test instance")
+    }
+    // A caller that asks for no relaunch leaves the app closed; the agent itself always relaunches.
+    do {
+        let rig = RecipeRig("norelaunch")
         let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
         let res = try? rig.run(app, relaunchAfterInstall: false).get()
         expect(res?.status == "updated" && app.events == ["quit", "stop"],
-               "an unattended install leaves the app closed (events \(app.events))")
-        expect(res?.reason?.contains("unattended") == true,
-               "the report says an unattended install never opens an app")
-        expect(marker(rig.installed) == "1.2.3", "the unattended install still promoted the new version")
+               "a no-relaunch caller leaves the app closed (events \(app.events))")
+        expect(res?.reason?.contains("left closed") == true,
+               "the report says the app was left closed")
+        expect(marker(rig.installed) == "1.2.3", "the no-relaunch install still promoted the new version")
     }
     // A stale report must not reinstall a version already on disk (Media, 2026-11-13).
     do {
