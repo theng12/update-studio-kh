@@ -535,6 +535,23 @@ for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Es
 assert(document.activeElement && document.activeElement.id === 'gear',
   'R17b focus falls back to the connected Settings button, never the body');
 assert.notEqual(document.activeElement, document.body, 'R17b focus is never left on the body');
+// A retired app stays visible only so its owner can remove it: marked Retired, no Update or Install,
+// no Automatic switch, and its own Uninstall… still offered.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
+render(state([row({ id:'kh-updater-app', name:'Update Studio KH', status:'Up to date', installed:'1.0.42', available:'1.0.42',
+                    retired:'Update Studio KH is retired into Studio Launcher KH.' })]));
+const retiredCard = document.querySelector('.card');
+assert.match(retiredCard.textContent, /Retired/, 'the retired row says Retired, not Up to date');
+assert.match(retiredCard.textContent, /retired into Studio Launcher KH/, 'it says what happened to it');
+assert(![...retiredCard.querySelectorAll('button')].some(b => /Update|Install/.test(b.textContent)),
+  'a retired app offers no Update or Install');
+posts.length = 0;
+retiredCard.querySelector('button[title="More"]').fire('click');
+const retiredMenu = document.querySelector('.menu').textContent;
+assert.doesNotMatch(retiredMenu, /Update automatically/, 'a retired app has no Automatic switch');
+assert.match(retiredMenu, /Uninstall…/, 'removing it stays a person\'s own click');
+document.querySelectorAll('.menu').forEach(x => x.remove());
+
 // The publisher's fleet view lives in this app now (Update Studio KH.app is retired): the footer
 // offers it, and one click asks the helper to open it — the page itself reaches no network.
 run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');

@@ -129,12 +129,14 @@ function plain(r){if(!r)return '';const t=r.toLowerCase();
  const first=text.slice(0,end).trim();
  return (first||text).replace(/[.;,]+$/,'')+'.'}
 function installed(a){return a.installed!=null&&a.managed}
-function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Receiving update…':['Receiving update…','info'],
+function chip(a){if(a.retired)return el('span',{class:'chip'},'Retired');const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Receiving update…':['Receiving update…','info'],
  'Failed':['Failed','bad'],'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
  if(!a.managed)return el('span',{class:'chip'},a.available?'Not installed':'Not available');return el('span',{class:'chip '+m[1]},m[0])}
 function versionLine(a){if(a.installed&&a.available&&a.installed!=a.available&&a.status!='Updates itself')return el('span',{class:'ver'},a.installed+' → ',el('b',{},a.available));
  const v=a.installed||a.available;return v?el('span',{class:'ver'},el('b',{},v)):null}
 function mainAction(a){if(a.status=='Updating…'||a.status=='Receiving update…')return null;
+ // A retired app gets no Update or Install: it is shown so its owner can see it and remove it.
+ if(a.retired)return a.open?['Open','open','']:null;
  // Nothing is offered when the agent has no recipe it would really run for this app.
  if(!a.installable&&!a.statusOnly&&!a.managed)return null;
  if(a.statusOnly){
@@ -220,7 +222,7 @@ function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor
  const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget)openDetail(a.id)}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
-  a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
+  (a.retired||a.reason)?el('div',{class:'reason'},(a.retrying&&!a.retired?'Last attempt: ':'')+plain(a.retired||a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
@@ -281,7 +283,7 @@ function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remo
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
  if(a.canRollBack)add('Roll back to the previous version',()=>post({action:'rollback',app:a.id}));
  if(a.status=='Failed'&&a.reason)add('Copy error report',()=>post({action:'copyReport',app:a.id}));
- if(a.managed&&!a.statusOnly){items.push(el('hr'));const why='automatic-origin-'+a.id;
+ if(a.managed&&!a.statusOnly&&!a.retired){items.push(el('hr'));const why='automatic-origin-'+a.id;
   items.push(el('button',{role:'menuitemcheckbox','aria-checked':a.automatic,'aria-describedby':a.automaticOrigin?why:null,onclick:()=>{m.remove();post({action:'automatic',app:a.id,on:!a.automatic})}},el('span',{class:'check'},a.automatic?svg('M3.5 8.5l3 3 6-7'):''),'Update automatically'));
   // The words come from the agent's own decision, so this line can never disagree with the switch.
   // Clearing this Mac's switch is not offered: the controller keeps the last value it was told, so

@@ -1238,11 +1238,13 @@ public final class FeedServer: @unchecked Sendable {
 
         // The feed: what each app is published at, its notes, and one button for every Mac behind it.
         let sizes = ByteCountFormatter()
-        let feedRows = (feed?.apps ?? [:]).sorted { name($0.key) < name($1.key) }.map { app, entry -> String in
+        // A retired app keeps its published entry but is not presented here: the fleet has one GUI
+        // app, and a row with an Update button would keep offering the one that is gone.
+        let feedRows = (feed?.apps ?? [:]).filter { RetiredApps.note($0.key) == nil }.sorted { name($0.key) < name($1.key) }.map { app, entry -> String in
             let behind = state.machines.filter { Self.updateAvailable($0.value, app: app, feed: feed, now: now) }.count
-            // KH Updater's own apps (agent and app) read their own changelog entry when the feed has no notes.
-            let own = app == "updater" || app == "kh-updater-app"
-                ? (app == "updater" ? Changelog.launcher : Changelog.text).components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(entry.version + " ") }
+            // The agent reads its own changelog entry when the feed has no notes.
+            let own = app == "updater"
+                ? Changelog.launcher.components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(entry.version + " ") }
                     .map { $0.split(separator: "\n").dropFirst().joined(separator: "\n") } : nil
             let lines = (entry.notes.flatMap { $0.isEmpty ? nil : $0 } ?? own ?? "").split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let notes = lines.isEmpty ? "<span class=sub>No notes yet</span>"
@@ -1274,16 +1276,9 @@ public final class FeedServer: @unchecked Sendable {
         // The Launcher names the version it is running; a browser without one sees the published one.
         let shownVersion = appVersion.flatMap { $0.range(of: #"^[0-9][0-9.]*$"#, options: .regularExpression) == nil ? nil : $0 } ?? currentVersion
         let news = WhatsNew.dialogBody(app: "Update Studio KH", shown: shownVersion, entries: WhatsNew.publisher, escape: h)
-        let ownEntry = feed?.apps["kh-updater-app"]
-        // Only an offer some Mac is actually behind is shown: the same rule the feed table uses.
-        let ownBehind = state.machines.filter { Self.updateAvailable($0.value, app: "kh-updater-app", feed: feed, now: now) }.count
-        let offered = ownBehind > 0 ? ownEntry.flatMap { VersionCompare.isNewer($0.version, than: shownVersion) ? $0 : nil } : nil
         // The footer group: version + What's New pill, an icon-only Check, and a tiny update only
         // when the feed offers one this page is not running yet.
         let pill = "<button type=button class=pill id=whats-new-pill title=\"What's New in Update Studio KH \(h(shownVersion))\"><span class=nm>Update Studio KH</span><span class=v>v\(h(shownVersion))</span></button>"
-        let updateLink = offered.map {
-            "<form method=post action=/api/update-all class=updform data-confirm=\"Update Update Studio KH to \(h($0.version)) on \(ownBehind) Mac\(ownBehind == 1 ? "" : "s")?\"><input type=hidden name=app value=kh-updater-app><button type=submit class=\"iconbtn update\" id=update title=\"Update Studio KH \(h($0.version)) is available\" aria-label=\"Update Studio KH to \(h($0.version))\">\(icon("update"))</button></form>"
-        } ?? ""
         let support = "<section data-view=support><div class=pagehead><div><h2>Support this app</h2><p class=sub>Update Studio KH is free, and every feature is unlocked.</p></div></div>"
             + "<div class=settingslist><div class=setting><div><h3>A one-time donation</h3><p class=sub>Optional, and it never unlocks or blocks anything. It supports the work behind this app.</p></div>"
             + "<div><a class=donate href=\"https://nowpayments.io/donation/studiokh\">Donate once</a><p class=sub>Opens in your browser at nowpayments.io.</p></div></div></div></section>"
@@ -1346,7 +1341,7 @@ public final class FeedServer: @unchecked Sendable {
         <a href=#settings data-tab=settings>\(icon("settings"))<span>Settings</span></a>
         </nav><div class=grow></div>
         <a class=supportbtn href=#support data-tab=support>\(icon("heart"))<span>Support this app</span></a>
-        <div class=sidefoot>\(pill)<button type=button class=iconbtn id=check title="Check for updates" aria-label="Check for updates" data-offered="\(h(offered?.version ?? ""))">\(icon("check"))</button>\(updateLink)</div>
+        <div class=sidefoot>\(pill)<button type=button class=iconbtn id=check title="Check for updates" aria-label="Check for updates">\(icon("check"))</button></div>
         <span id=check-status class=statusline role=status aria-live=polite></span>
         </aside>
         <main>

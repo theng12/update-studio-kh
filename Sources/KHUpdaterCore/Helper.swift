@@ -157,6 +157,9 @@ public struct HelperApp: Sendable, Equatable {
     public var manuallyInstallable = false
     /// True when a first Install or an Update has a recipe the agent will really run for this app.
     public var installable = true
+    /// Set on an app that has been retired into another, in plain words, when this Mac still has its
+    /// bundle: the row is shown once, says what happened, and offers nothing but the manual actions.
+    public var retired: String?
 
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
                       receiving = "Receiving update…", failed = "Failed", updatesItself = "Updates itself",
@@ -194,6 +197,14 @@ public enum AppNames {
                         "printer-studio": "Printer Studio KH", "media-studio": "Media Studio KH", "music-studio": "Music Studio KH",
                         "kh-updater-app": "Update Studio KH"]
     public static func display(_ app: String) -> String { names[app] ?? app }
+}
+
+/// Apps that were folded into another and are no longer presented as current (owner, 2026-11-17).
+/// The id, its published versions and its feed entry stay: a published version is never withdrawn,
+/// and nothing here is uninstalled for anyone — only the row says what it is now.
+public enum RetiredApps {
+    public static let notes = ["kh-updater-app": "Update Studio KH is retired into Studio Launcher KH. Its fleet window is the Launcher's Fleet window; nothing new is published for it."]
+    public static func note(_ app: String) -> String? { notes[app] }
 }
 
 /// Release notes compiled from the shared CHANGELOG parser, never a target-side file.

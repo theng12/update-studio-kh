@@ -1103,10 +1103,25 @@ public enum Agent {
             if let cfg, installed != nil, cfg.recipe != "updater" { row.bundlePath = cfg.bundlePath }
             // The icon read from the app's own bundle (cached from an SSD or the feed), else the installed copy's.
             row.icon = entry?.icon ?? feedIcon(feed.apps[app], http: http, serverBase: serverBase, stateDir: stateDir) ?? row.bundlePath
+            // A retired app is not presented as current: the row says what it is, offers no update and
+            // no Automatic switch, and is drawn only on a Mac that still has the bundle. Nothing is
+            // removed for anyone — Uninstall stays a person's own click.
+            if let note = RetiredApps.note(app) {
+                row.retired = note
+                row.reason = note
+                row.automatic = false
+                row.automaticOrigin = nil
+                row.installable = false
+                row.manuallyInstallable = false
+                row.canRollBack = false
+                row.initialSSD = nil
+            }
             return row
         }.filter { row in
-            // Offered only where it can be installed; the control window only where it already is.
-            (row.managed || row.available != nil) && !(row.installed == nil && catalog.first { $0.id == row.app }?.mainMacOnly == true)
+            // Offered only where it can be installed; the control window only where it already is;
+            // a retired app only where its bundle still exists (a Mac that never had it stays as it is).
+            guard row.retired == nil || row.installed != nil else { return false }
+            return (row.managed || row.available != nil) && !(row.installed == nil && catalog.first { $0.id == row.app }?.mainMacOnly == true)
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 

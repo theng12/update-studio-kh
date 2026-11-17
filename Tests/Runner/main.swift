@@ -1173,6 +1173,12 @@ func agentAndServerTests() {
         expect(s.statusHTML().contains("id=whats-new-pill title=\"What's New in Update Studio KH \(publisherNotes.version)\">")
                && s.statusHTML().contains("<dialog id=whats-new aria-labelledby=whats-new-title>")
                && s.statusHTML().contains(firstItem), "the pill opens What's New with the top CHANGELOG entry")
+        // A retired app keeps its published entry (a published version is never withdrawn) but the page
+        // presents no row and no update button for it: the fleet has one GUI app.
+        try? rigO.publish("kh-updater-app", "1.0.42", rigO.artifact("u.zip", "u"))
+        let retiredPage = s.statusHTML()
+        expect(!retiredPage.contains("kh-updater-app") && !retiredPage.contains("Update Studio KH</td>"),
+               "a retired app's feed entry is not listed or offered on the publisher page")
         do {
             let e = [WhatsNew.Entry(version: "2.0.0", date: "2026-11-16", items: ["a <b>", "**c** `d`"]),
                      WhatsNew.Entry(version: "1.9.0", date: "2026-11-10", items: ["old"])]
@@ -2577,6 +2583,12 @@ func launcherTests() {
         _ = makeApp(apps.appendingPathComponent("U.app"), version: "1.0.4", id: "com.t.ctl")
         let r2 = try? Agent.runOnce(config: agentConfig(rig, token: token, apps: [:]), http: InProcessClient(server: rig.server), ssd: [ssd([control])], appFolders: [apps])
         expect(r2?.apps.contains { $0.app == "kh-updater-app" && $0.installed == "1.0.4" } == true, "L9 it is listed on a Mac that already has it")
+        // It is listed so its owner can see it and remove it — marked retired, with nothing on offer.
+        let retiredRow = r2?.apps.first { $0.app == "kh-updater-app" }
+        expect(retiredRow?.retired?.contains("retired into Studio Launcher KH") == true
+               && retiredRow?.installable == false && retiredRow?.automatic == false && retiredRow?.automaticOrigin == nil
+               && retiredRow?.manuallyInstallable == false,
+               "L9 a Mac that still has the retired app sees it once, marked retired, with no update or switch")
     }
     // L5. Publishing records the app's own name, bundle ID and icon; a DMG of another version is refused.
     do {

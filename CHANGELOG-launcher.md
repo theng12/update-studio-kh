@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.54 — 2026-11-17
+
+- The hold credential is now written owner-only (0600) whenever it is rotated or read. It was meant to be, but the file kept whatever mode it already had, so an app that checks — Library refuses a hold whose token file is not 0600 — answered 401 and could never be held. A Mac that already has a wrong-mode token heals on its next hold check. (0.1.53 carried the fix; this release says it in the notes.)
+- Update Studio KH.app is no longer presented as a current app. The publisher's page lists no row and no update button for it, and the Launcher's menu shows a Mac that still has it as one row marked Retired, saying plainly that Update Studio KH is retired into Studio Launcher KH.
+- Nothing is removed for anyone: the retired app keeps its published version, its feed entry and its own Uninstall… in that row — a person removes it, never an automatic step.
+
 ## 0.1.53 — 2026-11-17
 
 - The hold credential the Launcher presents is now written owner-only (0600) every time it is rotated or read. It was meant to be, but the file kept whatever mode it already had, so an app that checks — Library refuses a hold whose token file is not 0600 — answered 401 and could never be held. A Mac that already has a wrong-mode token heals on its next hold check, without waiting for a rotation.
