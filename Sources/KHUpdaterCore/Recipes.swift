@@ -194,6 +194,7 @@ public enum Recipe {
     public static func appDmg(shell: Shell, installedPath: String, artifactPath: String, feedVersion: String,
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
                               refuseIfRunning: Bool = false, relaunchAfterInstall: Bool = true,
+                              appearCeiling: TimeInterval = Recipe.appearCeiling,
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil,
                               clock: @escaping () -> TimeInterval = Mono.now,
@@ -242,7 +243,7 @@ public enum Recipe {
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
                                     refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall,
-                                    clock: clock, beforeStop: beforeStop)
+                                    clock: clock, appearCeiling: appearCeiling, beforeStop: beforeStop)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -413,6 +414,7 @@ public enum Recipe {
                                  notes: [String], refuseIfRunning: Bool = false,
                                  relaunchAfterInstall: Bool = true,
                                  clock: @escaping () -> TimeInterval = Mono.now,
+                                 appearCeiling: TimeInterval = Recipe.appearCeiling,
                                  beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
         let installedPath = paths.installedPath
         // The gap's own timeline: each step's offset from the moment the install began, so the next
@@ -589,7 +591,9 @@ public enum Recipe {
         // spends most of its gap draining and stopping, and that time must not be charged to the
         // app's own start (measured on 1301, 2026-11-17: 127 s quit-to-healthy, the health clock
         // had already nearly expired).
-        let appeared = waitForRunning(control, clock: clock, ceiling: control.healthTimeout)
+        mark("appear-ceiling \(Int(appearCeiling))s")
+        // Only a process this install stopped has to come back; a first install has none to wait for.
+        let appeared = !wasRunning || waitForRunning(control, clock: clock, ceiling: appearCeiling)
         mark(appeared ? "appeared" : "did-not-appear")
         mark("health-window \(Int(control.healthTimeout))s")
         if appeared, waitHealthy(control, version: targetVersion, clock: clock) {
@@ -597,22 +601,32 @@ public enum Recipe {
             return finish(settled(RecipeResult(status: "updated")))
         }
 
-        // 6. Roll back — only once both the app and its service are really gone.
+        // 6. Roll back — only once both the app and its service are really gone. The sentence names
+        // what actually happened: a process that never existed did not fail a health check, and on
+        // the fleet page "never started" is its own status, not a rollback.
+        let why = appeared ? "the new version was not healthy within \(Int(control.healthTimeout)) s"
+                           : "the new version did not start within \(Int(appearCeiling)) s"
         guard control.quit(), control.stopService() else {
             // Both bundles stay, and so does the journal: the next run asks the bad version to stop
             // again instead of finding the new version in place and calling the app settled.
             return settled(RecipeResult(status: "rollback_blocked", reason:
-                "\(targetVersion) was unhealthy and would not stop; both versions were kept (previous at "
+                "\(targetVersion) \(why) and it would not stop; both versions were kept (previous at "
                 + "\(paths.rollback.path)) and \(paths.journal.path) with them — the next run tries again"))
         }
         do {
-            let result = try rollBack(paths, journal: journal, control: control, fileManager: fm)
+            let result = try rollBack(paths, journal: journal, control: control, fileManager: fm, why: why)
+            guard appeared else {
+                var out = result
+                out.status = "did_not_start"
+                out.reason = result.reason.map { $0.hasPrefix(why) ? $0 : "\(why); \($0)" } ?? why
+                return finish(settled(out))
+            }
             return result.status == "rolled_back" ? finish(settled(result)) : settled(result)
         } catch {
             // Nothing was written away: the journal stays exactly as it is, and a later run picks
             // the rollback up again rather than reporting a Mac whose app is simply the new version.
             return settled(RecipeResult(status: "rollback_failed", reason:
-                "\(targetVersion) was unhealthy and \(displaced ?? "the version this Mac was running") could not be put back (\(error)); "
+                "\(targetVersion) \(why) and \(displaced ?? "the version this Mac was running") could not be put back (\(error)); "
                 + "nothing was reported as settled and \(paths.journal.path) is kept — the next run tries again"))
         }
     }
@@ -777,7 +791,7 @@ public enum Recipe {
     /// up healthy as that version. Throws when the previous bundle could not be put back, and in
     /// that case nothing was written away: the caller keeps the journal.
     static func rollBack(_ paths: Paths, journal: InstallJournal, control: AppControl,
-                         fileManager fm: FileManager) throws -> RecipeResult {
+                         fileManager fm: FileManager, why: String = "the new version was not healthy") throws -> RecipeResult {
         guard let previousVersion = journal.previousVersion else {
             throw khuFail("nothing was installed here before, so there is no previous version to put back")
         }
@@ -790,19 +804,19 @@ public enum Recipe {
             // A service that did not come back is not an artifact judgement: the previous version
             // was put back, so the feed's artifact is not marked rejected by this.
             return resumed.ok
-                ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy; \(previousVersion) was put back and left stopped")
-                : RecipeResult(status: "install_failed", reason: "the new version was not healthy; \(previousVersion) was put back, "
+                ? RecipeResult(status: "rolled_back", reason: "\(why); \(previousVersion) was put back and left stopped")
+                : RecipeResult(status: "install_failed", reason: "\(why); \(previousVersion) was put back, "
                                + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); \(previousVersion) was put back and its journal is kept, so the next run tries again")
         }
         let resumed = control.resumeServices()
         guard resumed.ok else {
-            return RecipeResult(status: "install_failed", reason: "the new version was not healthy; \(previousVersion) was put back, "
+            return RecipeResult(status: "install_failed", reason: "\(why); \(previousVersion) was put back, "
                                + "but its background service did not restart (\(resumed.reason ?? "launchd refused")); \(previousVersion) was put back and its journal is kept, so the next run tries again")
         }
         control.launch()
         return waitHealthy(control, version: previousVersion)
-            ? RecipeResult(status: "rolled_back", reason: "the new version was not healthy within \(Int(control.healthTimeout)) s; \(previousVersion) is running again")
-            : RecipeResult(status: "rollback_unhealthy", reason: "the new version was unhealthy, and the restored \(previousVersion) is not healthy either")
+            ? RecipeResult(status: "rolled_back", reason: "\(why); \(previousVersion) is running again")
+            : RecipeResult(status: "rollback_unhealthy", reason: "\(why), and the restored \(previousVersion) is not healthy either")
     }
 
     /// The installed path is empty or wrong: put the rollback bundle back if there is one.
@@ -851,7 +865,14 @@ public enum Recipe {
         if fm.fileExists(atPath: displaced.path) { _ = Space.remove(displaced, shell: SystemShell(), fileManager: fm) }
     }
 
-    /// The relaunched process is there. Bounded by the health ceiling, and the health clock starts
+    /// The default for how long a relaunched app has to exist at all — its own ceiling, not the
+    /// health one: a launch that never produces a process is a different fault from one that starts
+    /// and stays unhealthy, and it must not consume the health budget. 120 s is twice what the
+    /// Gateway's relaunch took on 1301 (about 60 s from launch to process, 2026-11-17). A Mac may
+    /// raise or lower it per app with `appearCeilingSeconds`; the value used is in every timings line.
+    public static let appearCeiling: TimeInterval = 120
+
+    /// The relaunched process is there. Bounded by its own ceiling, and the health clock starts
     /// only after this returns: a slow quit-and-stop is the app draining, not its start failing.
     static func waitForRunning(_ control: AppControl, clock: () -> TimeInterval, ceiling: TimeInterval) -> Bool {
         let deadline = clock() + ceiling

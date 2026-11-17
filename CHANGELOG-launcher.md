@@ -10,7 +10,9 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - Both limits are settings with these defaults: one copy kept, 2 GB kept free.
 - An update's health check now starts when the relaunched app's process appears, not when the quit began. The Gateway spends most of its gap draining and stopping (127 s measured on 1301), and 0.1.50 charged that to the app's start, so a version upgrade would have been rolled back with the app running.
 - The Gateway's health ceiling is 300 s from that moment — 2.3x the measurement — so a slow but successful start is not called a failure.
-- Every install now reports its own step timings in the result (gone, promoted, launched, appeared, healthy), so the next estimate is measured rather than guessed.
+- Every install now reports its own step timings in the result (gone, promoted, launched, appeared, healthy, and the appear and health ceilings it used), so the next estimate is measured rather than guessed.
+- How long a relaunched app has to appear is its own per-app setting (`appearCeilingSeconds`, default 120 s), not the health window; an app that never starts is reported as `did_not_start` with the previous version put back, rather than as a failed health check.
+- A refusal is printed once, not twice, in the helper's own log.
 
 ## 0.1.50 — 2026-11-17
 

@@ -14,13 +14,17 @@ public struct AppConfig: Codable, Sendable, Equatable {
     /// empty, which turns the unattended quit off here); unset = the built-in check for that app, if
     /// it ships with one (`Agent.builtInIdleProbes`); neither = never quit it.
     public var idleProbe: String?
+    /// How long a relaunched app has to exist at all, in seconds. Unset = the recipe's default
+    /// (`Recipe.appearCeiling`). A slow-starting app may raise it here; the value used is written
+    /// into every result's timings line, so a limit nobody can see never applies.
+    public var appearCeilingSeconds: Int?
     public init(bundlePath: String, recipe: String = "app-dmg", automatic: Bool = false, bundleID: String? = nil,
-                idleProbe: String? = nil) {
+                idleProbe: String? = nil, appearCeilingSeconds: Int? = nil) {
         self.bundlePath = bundlePath; self.recipe = recipe; self.automatic = automatic; self.bundleID = bundleID
-        self.idleProbe = idleProbe
+        self.idleProbe = idleProbe; self.appearCeilingSeconds = appearCeilingSeconds
     }
 
-    private enum CodingKeys: String, CodingKey { case bundlePath, recipe, automatic, bundleID, idleProbe }
+    private enum CodingKeys: String, CodingKey { case bundlePath, recipe, automatic, bundleID, idleProbe, appearCeilingSeconds }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bundlePath = try c.decode(String.self, forKey: .bundlePath)
@@ -28,6 +32,7 @@ public struct AppConfig: Codable, Sendable, Equatable {
         automatic = try c.decodeIfPresent(Bool.self, forKey: .automatic) ?? false
         bundleID = try c.decodeIfPresent(String.self, forKey: .bundleID)
         idleProbe = try c.decodeIfPresent(String.self, forKey: .idleProbe)
+        appearCeilingSeconds = try c.decodeIfPresent(Int.self, forKey: .appearCeilingSeconds)
     }
 }
 
