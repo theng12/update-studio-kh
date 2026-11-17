@@ -6,6 +6,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 - An app can be started on another Mac from the publisher. One Launch button per Mac and app opens it hidden — never taking anyone's screen — and checks it is really running before saying so: the Mac reports the process it found, or why it could not start (not installed, fails its signature check, did not start in time). It is a button a person presses; nothing launches on its own.
 - A Mac that is asleep or offline keeps the launch order queued and visible, and runs it the next time it reports.
+- Building the installer now fails loudly if the disk image step fails, naming the file and the reason. It used to exit silently, which is how the wrong file was nearly shipped.
 
 ## 0.1.51 — 2026-11-17
 
