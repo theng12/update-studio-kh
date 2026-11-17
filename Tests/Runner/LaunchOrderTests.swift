@@ -132,6 +132,12 @@ func launchOrderTests() {
                "L7 a launch order is not delivered to an agent that does not advertise launch-v1")
         expect(orders("&capabilities=owner-rollback-v1,launch-v1")?.commands.first?.action == "launch",
                "L7 a launch order is delivered to an agent that advertises it")
+        // The page offers Launch for an app this Mac has reported installed, and not while a launch
+        // is already queued: an app it has never reported is "not checked", not launchable.
+        var state = try! StateStore.load(from: r.rig.state)
+        state.machines["mac1"]?.installed = ["foo": "2.0.0"]
+        state.machines["mac1"]?.pending = []
+        try! StateStore.save(state, to: r.rig.state)
         let page = r.rig.server.handleRequest(HTTPRequest(method: "GET", path: "/", headers: ["host": "127.0.0.1:8790"]), remote: "127.0.0.1")
         let html = String(data: page.data, encoding: .utf8) ?? ""
         expect(html.contains("action=/api/request-launch") && html.contains("Launch"),
