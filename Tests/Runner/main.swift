@@ -157,8 +157,8 @@ struct RecipeRig {
         shell = RecordingShell(mount: mount)
     }
     func run(_ app: FakeApp, expectedID: String? = nil, relaunchAfterInstall: Bool = true,
-             fileManager: FileManager = .default) -> Result<RecipeResult, Error> {
-        Result { try Recipe.appDmg(shell: shell, installedPath: installed.path, artifactPath: "/tmp/x.dmg", feedVersion: "1.2.3",
+             version: String = "1.2.3", fileManager: FileManager = .default) -> Result<RecipeResult, Error> {
+        Result { try Recipe.appDmg(shell: shell, installedPath: installed.path, artifactPath: "/tmp/x.dmg", feedVersion: version,
                                    expectedBundleID: expectedID, stateDir: state.path, app: "foo", control: app.control,
                                    relaunchAfterInstall: relaunchAfterInstall, fileManager: fileManager) }
     }
@@ -3994,6 +3994,13 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        // The space patch's own tests, alone: a focused run never needs the whole suite.
+        if ProcessInfo.processInfo.environment["SPACE_ONLY"] != nil {
+            spaceFlowTests()
+            spaceReclaimTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         recipeTests()
         supportTests()
         gatewayIdentityTests()
@@ -4035,6 +4042,8 @@ r41HealthMustHold()
         vendorInstallerTests()
         vendorPublisherTests()
         vendorExecutionTests()
+        spaceFlowTests()
+        spaceReclaimTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

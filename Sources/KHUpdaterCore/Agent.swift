@@ -1020,6 +1020,12 @@ public enum Agent {
                 }
             } catch { result.notes.append("controller move did not finish: \(error)") }
         }
+        // Prune the updater's own trash after every run settles. Never throws or fails a run.
+        do {
+            let kept = max(config.trashKept ?? Space.defaultBucketsKept, 0)
+            let swept = Space.pruneTrash(in: stateDir, keeping: kept, shell: shell)
+            if !swept.isEmpty { result.notes.append(swept.words) }
+        }
         return result
     }
 
@@ -1505,7 +1511,10 @@ public enum Agent {
         if let refusal = acquireHold() { return refusal }
         let artifact: URL
         do {
-            artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http, fallbacks: artifactFallbacks)
+            artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http, fallbacks: artifactFallbacks,
+                                    reserveBytes: UInt64(max(config.reserveGB ?? Space.defaultReserveGB, 0)) * 1_000_000_000)
+        } catch let error as Space.NoSpace {
+            return RecipeResult(status: "refused", reason: "\(error)")
         } catch let error as ArtifactFailure {
             return RecipeResult(status: "failed", reason: "\(error)")
         } catch let error as DeliveryMismatch {
@@ -1597,7 +1606,8 @@ public enum Agent {
         if result.status == "updated" {
             do {
                 let cache = stateDir.appendingPathComponent("downloads").appendingPathComponent(try SafeName.component(app, what: "app id"))
-                try Trash.move(cache, into: Trash.root(in: stateDir))
+                // A trash with no reader is the bug: remove the old cache outright.
+                _ = Space.remove(cache, shell: shell, fileManager: FileManager.default)
                 try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: artifact, to: cache.appendingPathComponent(local.sha256 + ".dmg"))
             } catch {
@@ -1622,12 +1632,13 @@ public enum Agent {
     /// tries. It is retired only when the new artifact replaces it: an operation that ends in
     /// failure or cancellation leaves the base where it is, so the next source, and the next run,
     /// still have the exact bytes a patch was built for.
-    static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient, fallbacks: [URL] = []) throws -> URL {
+    static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient, fallbacks: [URL] = [],
+                         freeSpace: (URL) -> UInt64? = Space.freeBytes, reserveBytes: UInt64 = Space.defaultReserveBytes) throws -> URL {
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         // The only base a patch may use: the exact full artifact this Mac already downloaded.
         let base = takeCachedBase(for: entry.delta, in: dir, app: app)
         let artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http,
-                                    fallbacks: fallbacks, base: base)
+                                    fallbacks: fallbacks, base: base, freeSpace: freeSpace, reserveBytes: reserveBytes)
         // The new artifact is this Mac's base from now on: the slot is retired, whatever it held.
         _ = try? Trash.move(heldBase(in: dir, app: app), into: Trash.root(in: stateDir))
         return artifact
@@ -1636,7 +1647,8 @@ public enum Agent {
     /// One download operation: every source it is given is offered the same exact base to patch
     /// from, so a source that does not have the patch cannot cost the next one its chance.
     private static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient,
-                                 fallbacks: [URL], base: URL?) throws -> URL {
+                                 fallbacks: [URL], base: URL?, freeSpace: (URL) -> UInt64? = Space.freeBytes,
+                                 reserveBytes: UInt64 = Space.defaultReserveBytes) throws -> URL {
         let name = try SafeName.component(entry.file, what: "artifact name")
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         let fm = FileManager.default
@@ -1651,10 +1663,8 @@ public enum Agent {
             return artifact
         }
         // Only this artifact's own partial may be resumed. Anything else in the folder is a
-        // superseded version's bytes: retired recoverably, never deleted.
-        for item in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where item != name + ".part" {
-            _ = try? Trash.move(dir.appendingPathComponent(item), into: trash)
-        }
+        // superseded version's bytes: removed, not trashed — a trash with no reader is the bug.
+        _ = Space.sweep(dir, keeping: [name, name + ".part"], shell: SystemShell(), fileManager: fm)
         // A partial that already reached the signed size (a run stopped between its last byte and
         // the move) only needs verifying — the whole artifact is not fetched a second time.
         if let size = (try? fm.attributesOfItem(atPath: part.path))?[.size] as? NSNumber, size.int64Value == entry.bytes {
@@ -1664,6 +1674,13 @@ public enum Agent {
                 return artifact
             }
             _ = try? Trash.move(part, into: trash)
+        }
+        // Nothing usable is on disk, so these bytes really must be fetched: refuse before the first
+        // request when the disk cannot hold them and still leave the reserve. A Mac that already
+        // has the artifact or a complete partial never reaches this and is never refused.
+        if let free = freeSpace(dir), free < UInt64(clamping: entry.bytes) + reserveBytes {
+            throw Space.NoSpace(app: app, version: entry.version, artifact: UInt64(clamping: entry.bytes),
+                                reserve: reserveBytes, free: free)
         }
         let triedPatch = entry.delta != nil && base != nil
         if let delta = entry.delta, let base {
@@ -1711,7 +1728,8 @@ public enum Agent {
             if DownloadControl.cancelled { _ = try? Trash.move(part, into: trash); throw error }
             if let next = fallbacks.first {
                 return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http,
-                                    fallbacks: Array(fallbacks.dropFirst()), base: base)
+                                    fallbacks: Array(fallbacks.dropFirst()), base: base,
+                                    freeSpace: freeSpace, reserveBytes: reserveBytes)
             }
             throw error
         }

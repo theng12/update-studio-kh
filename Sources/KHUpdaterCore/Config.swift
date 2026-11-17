@@ -51,6 +51,10 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     /// An owner's order for a running build that predates its update hold asks the app to quit,
     /// swaps it and relaunches it, as before the hold existed. nil = on; false = wait for it to close.
     public var quitOldBuilds: Bool?
+    /// Newest trash buckets kept after an install settles; nil = Space.defaultBucketsKept.
+    public var trashKept: Int?
+    /// Gigabytes kept free beyond an artifact's own bytes; nil = 2.
+    public var reserveGB: Int?
     public init(feedURL: String, publicKey: String, stateDir: String, machine: String, token: String,
                 apps: [String: AppConfig] = [:], intervalMinutes: Int = 5, once: Bool = false) {
         self.feedURL = feedURL; self.publicKey = publicKey; self.stateDir = stateDir
@@ -73,7 +77,7 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays, quitOldBuilds
+        case feedURL, publicKey, stateDir, machine, token, apps, intervalMinutes, once, stubBase, updaterVersion, network, waitForCloseDays, quitOldBuilds, trashKept, reserveGB
     }
     /// Optional fields really are optional: a hand-written config may leave them out.
     public init(from decoder: Decoder) throws {
@@ -91,6 +95,8 @@ public struct AgentConfig: Codable, Sendable, Equatable {
         network = try c.decodeIfPresent(FeedNetwork.self, forKey: .network)
         waitForCloseDays = try c.decodeIfPresent(Int.self, forKey: .waitForCloseDays)
         quitOldBuilds = try c.decodeIfPresent(Bool.self, forKey: .quitOldBuilds)
+        trashKept = try c.decodeIfPresent(Int.self, forKey: .trashKept)
+        reserveGB = try c.decodeIfPresent(Int.self, forKey: .reserveGB)
     }
 }
 

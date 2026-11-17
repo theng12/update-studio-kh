@@ -408,7 +408,11 @@ Artifacts stream to `downloads/<app>/`, refused past their signed size, then che
 the signed size and SHA-256. A transfer that fails keeps its `.part`, and the next attempt resumes
 it with `Range: bytes=<have>-` (a publisher that answers 200 restarts it at zero instead); only
 Cancel gives a partial up. A finished artifact is reused by a retried install, so an app that did
-not quit costs no second download, and a superseded version's bytes move to `_trash`. Transport
+not quit costs no second download, and a superseded version's bytes are removed: only the newest
+artifact per app stays (it is the patch base and the retry source), because moving whole installers
+into `_trash` is what filled a publisher's disk. A download is refused before any network work when
+the volume has less free space than the artifact plus the reserve (`reserveGB`, default 2 GB), and
+that refusal names the free space it found. Transport
 failures (no data, connection reset, deadline exceeded) are NOT artifact rejections — they retry
 next run and resume. Bytes
 that arrive but do not match the signed size or SHA (oversize, truncated, corrupt) are a delivery
@@ -489,7 +493,8 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
 3. write the install journal (naming both paths, the target version and any active owned service
    labels, so recovery can prove which side it found); quit the app and stop its service, in that
    order. A refusal keeps the installed bundle and requests restart of what was stopped;
-4. installed → rollback (the earlier rollback moves to `_trash`), staging → installed, the
+4. installed → rollback (the earlier rollback is removed: one kept bundle per app, replaced and
+   never accumulated), staging → installed, the
    journal moving forward at each step. Any failure restores
    the previous bundle, relaunches it and says exactly what was restored — or, loudly, that it
    could not be, **and keeps the journal** so the next run retries instead of reporting a Mac
@@ -585,7 +590,10 @@ Helpers run with absolute paths and hard deadlines: both pipes are drained while
 deadline they get SIGTERM, then SIGKILL, and are reaped before the error is raised. The HTTP
 client has BOTH an inactivity timeout (`timeout`) and a total transfer deadline (`totalTimeout`)
 — an inactivity deadline alone lets a stalled or malicious peer hold a run open for ever. No
-`sudo`. Nothing is deleted: superseded files go to `_trash/`. `SafeName` caps components at 196
+`sudo`. Nothing of the owner's is deleted: superseded files go to `_trash/`. The one exception is
+the updater's own working space — its `state/_trash`, superseded downloads and replaced rollback
+bundles, described under `## Recipes` — which holds no owner file and is reclaimed instead.
+`SafeName` caps components at 196
 bytes so the longest derived name (`.<sha12-><name>.khu-tmp-<uuid>`) fits inside 255.
 The reviewed base `6c47e36` already restricted names to 128 ASCII characters; the round-2
 claim that it accepted overflowing names could not be reproduced. The explicit 196-byte
@@ -629,7 +637,9 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
 - Persisted timestamps use wall-clock time, but each stub process restarts an open probation
   and measures live deadlines with a monotonic clock. Crash timestamps remain wall-clock
   records, so a wall-clock jump can affect which exits belong to the crash window.
-- `_trash` grows with each install (previous downloads and bundles) until the owner empties it.
+- The updater's state trash is pruned at the end of every agent run to its newest entry
+  (`trashKept`, default 1), so it no longer grows with each install. A copy that cannot be removed
+  even after its immutable flag is cleared stays and is counted in the run note, never hidden.
 - The signature check tells one signed app from another, not who published it: two bundles can be
   ad-hoc signed locally under the same identifier, so it proves "this is the same app this Mac is
   running, unaltered", which is the question a rollback has to answer. The feed's own signed SHA-256

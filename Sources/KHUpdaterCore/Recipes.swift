@@ -223,7 +223,7 @@ public enum Recipe {
         try stage(paths, from: source, info: info, shell: shell, fileManager: fm)
         do { try verifyStaged?(paths.staged.path) }
         catch {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             throw error
         }
         mounted = false
@@ -234,7 +234,7 @@ public enum Recipe {
         // happens here — before the journal exists and before anything is quit: the staged copy goes
         // back to `_trash`, the installed bundle is untouched and nothing is stopped or started.
         if refuseIfRunning, control.isRunning() != false {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             return RecipeResult(status: "refused", reason: handKeepsRunningApp)
         }
 
@@ -304,7 +304,7 @@ public enum Recipe {
         try stage(paths, from: paths.rollback.path, info: kept, shell: shell, fileManager: fm)
         guard signingIdentity(paths.staged.path, shell: shell) == keptIdentity,
               signatureVerifies(paths.staged.path, shell: shell) else {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             return RecipeResult(status: "refused", reason: "the staged copy of \(kept.version) at \(paths.staged.path) does not verify as "
                                + "\(keptIdentity); nothing was changed")
         }
@@ -316,11 +316,11 @@ public enum Recipe {
     /// Copy a verified bundle into the staging path beside the installed one and check the copy —
     /// always before anything running is stopped. `ditto` carries the bundle's own signature over.
     static func stage(_ paths: Paths, from source: String, info: BundleInfo, shell: Shell, fileManager fm: FileManager) throws {
-        if fm.fileExists(atPath: paths.staged.path) { try Trash.move(paths.staged, into: paths.trash, fileManager: fm) }
+        if fm.fileExists(atPath: paths.staged.path) { _ = Space.remove(paths.staged, shell: shell, fileManager: fm) }
         let copy = try shell.run("/usr/bin/ditto", arguments: [source, paths.staged.path], timeout: 900)
         guard copy.exitCode == 0, let stagedInfo = try? BundleInfo.read(paths.staged.path), stagedInfo == info,
               stagedInfo.executableIsRunnable(in: paths.staged.path) else {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             throw khuFail("copying the new app failed (\(copy.stderr.prefix(200))); nothing was changed")
         }
     }
@@ -425,14 +425,14 @@ public enum Recipe {
         // An app that updates itself came up between the staging look and here: this route proves no
         // quiet point, so it is kept exactly as it is — no journal, no quit, no service stop.
         if refuseIfRunning, wasRunning {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
             return RecipeResult(status: "refused", reason: Recipe.handKeepsRunningApp)
         }
         // The replacement must be proven present and readable before anything is stopped or moved:
         // a missing or corrupt staged app leaves the installed one exactly where it is, so a failed
         // install can never leave the machine with no app. No journal exists yet for this path.
         guard fm.fileExists(atPath: paths.staged.path), (try? BundleInfo.read(paths.staged.path)) != nil else {
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
             return RecipeResult(status: "install_failed",
                                 reason: "the staged app is missing or unreadable; the installed app was kept; nothing was replaced")
         }
@@ -442,7 +442,7 @@ public enum Recipe {
         // interrupted, and its pause expires by itself.
         if !refuseIfRunning, wasRunning, let beforeStop {
             do { try beforeStop() } catch {
-                _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+                _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
                 throw error
             }
         }
@@ -468,7 +468,7 @@ public enum Recipe {
             // services whether or not it is relaunched.
             let resumed = control.resumeServices()
             if wasRunning && mayRelaunch && (appQuit || control.isRunning() != true) { control.launch() }
-            _ = try? Trash.move(paths.staged, into: paths.trash, fileManager: fm)
+            _ = Space.remove(paths.staged, shell: SystemShell(), fileManager: fm)
             // Only a stop that really began (the app was quit) can have left a service down; a
             // refusal before that leaves nothing to recover, so no journal is kept for it.
             let keepJournal = !resumed.ok && appQuit
@@ -493,7 +493,7 @@ public enum Recipe {
         do {
             if fm.fileExists(atPath: installedPath) {
                 try fm.createDirectory(at: paths.rollback.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if fm.fileExists(atPath: paths.rollback.path) { try Trash.move(paths.rollback, into: paths.trash, fileManager: fm) }
+                if fm.fileExists(atPath: paths.rollback.path) { _ = Space.remove(paths.rollback, shell: SystemShell(), fileManager: fm) }
                 journal.phase = "moving"; try AtomicFile.writeJSON(journal, to: paths.journal)
                 try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path)
             }
@@ -711,7 +711,7 @@ public enum Recipe {
         }
         if resolved {
             if !journal.staged.isEmpty, fm.fileExists(atPath: journal.staged) {
-                try Trash.move(URL(fileURLWithPath: journal.staged), into: paths.trash, fileManager: fm)
+                _ = Space.remove(URL(fileURLWithPath: journal.staged), shell: SystemShell(), fileManager: fm)
             }
             try Trash.move(paths.journal, into: paths.trash, fileManager: fm)
         } else { note += "; unresolved, journal kept for the next run" }
@@ -812,11 +812,11 @@ public enum Recipe {
         let displaced = installed.deletingLastPathComponent().appendingPathComponent(".\(installed.lastPathComponent).khu-unhealthy")
         guard let info = try? BundleInfo.read(rollback.path), info.version == expectedVersion,
               info.executableIsRunnable(in: rollback.path) else { throw khuFail("rollback is not runnable version \(expectedVersion)") }
-        if fm.fileExists(atPath: prepared.path) { try Trash.move(prepared, into: paths.trash, fileManager: fm) }
+        if fm.fileExists(atPath: prepared.path) { _ = Space.remove(prepared, shell: SystemShell(), fileManager: fm) }
         try fm.copyItem(at: rollback, to: prepared)
         guard (try? BundleInfo.read(prepared.path)) == info else { throw khuFail("the prepared rollback does not match") }
         if fm.fileExists(atPath: installed.path) {
-            if fm.fileExists(atPath: displaced.path) { try Trash.move(displaced, into: paths.trash, fileManager: fm) }
+            if fm.fileExists(atPath: displaced.path) { _ = Space.remove(displaced, shell: SystemShell(), fileManager: fm) }
             try fm.moveItem(at: installed, to: displaced)
         }
         do { try fm.moveItem(at: prepared, to: installed) }
@@ -826,7 +826,7 @@ public enum Recipe {
             }
             throw error
         }
-        if fm.fileExists(atPath: displaced.path) { try Trash.move(displaced, into: paths.trash, fileManager: fm) }
+        if fm.fileExists(atPath: displaced.path) { _ = Space.remove(displaced, shell: SystemShell(), fileManager: fm) }
     }
 
     static func waitHealthy(_ control: AppControl, version: String, clock: () -> TimeInterval = Mono.now) -> Bool {
