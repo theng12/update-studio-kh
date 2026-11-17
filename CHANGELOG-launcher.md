@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.57 — 2026-11-18
+
+- The window now says one plain sentence when the publisher cannot be reached, instead of a block of system error text. An address macOS refuses is named as what it is: a bare IP, which must be the publisher's host name — the thing to change — rather than a network fault to wait out.
+- This Mac's own settings now win over the helper's cached copy of the publisher's network settings. The cache exists so an offline Mac still knows its mirrors, but a stale entry could keep a bad address alive after the settings had stopped naming it; the settings now replace the addresses, while the host roles and any controller move still come from the saved signed copy, which is the only place they live.
+- An address a check proves macOS will always refuse is dropped from the cache as soon as the same check reaches the publisher another way, so it is not retried for ever.
+- The Fleet window's "trust this Mac" message now prints the command with the full host name it actually connects with, so following it once is enough.
+
 ## 0.1.56 — 2026-11-17
 
 - The helper now starts itself again in place after 500 transfers or a day, whichever comes first, and writes one line saying so. Each completed transfer leaves about one port and a few tens of kilobytes behind in the system's HTTP stack — roughly 860 a day at a five-minute check — and nothing gives them back; this is the HTTP stack's own cost, measured with a bare URLSession, not a connection this app forgets to close. Restarting in place keeps the same process, the same launchd job and no supervision gap; it happens only between runs, never while a download, an install or an update hold is in progress, and it holds the helper near 500 ports and about 20 MB instead of climbing.
