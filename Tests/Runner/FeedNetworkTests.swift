@@ -202,11 +202,11 @@ func feedNetworkTests() {
     for invalid in ["http://evil.example/release.json", "http://100.64.0.2/other", "http://token@100.64.0.2/release.json"] {
         expectThrows("FN unsafe feed endpoint refused", contains: "feed address") { _ = try FeedNetwork.feedURL(invalid) }
     }
-    // FN40 a tailnet address written as a bare IP can never work: macOS refuses plain HTTP to an
-    // address (ATS -1022), so it is refused here with the fix named, not retried forever.
-    expectThrows("FN40 a bare tailnet IP is refused", contains: "bare IP address") {
-        _ = try FeedNetwork.feedURL("http://100.82.91.102:8790/release.json")
-    }
+    // FN40 a mirror named by a bare IP can never answer: macOS refuses plain HTTP to an address
+    // (ATS -1022) every time, so the agent drops it instead of retrying it forever. The parser still
+    // reads one, because a signed handoff record may name a publisher that way.
+    expect((try? FeedNetwork.feedURL("http://100.82.91.102:8790/release.json")) != nil,
+           "FN40 the parser still reads an address a signed record may name")
     expect(FeedNetwork.isAddressLiteral("100.82.91.102") && !FeedNetwork.isAddressLiteral("terranash-1301.tail093f2c.ts.net"),
            "FN40 an address literal is told apart from a host name")
     expect((try? FeedNetwork.feedURL("http://terranash-1301.tail093f2c.ts.net:8790/release.json")) != nil,

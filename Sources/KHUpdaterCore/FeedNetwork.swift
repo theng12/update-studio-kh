@@ -115,12 +115,6 @@ public struct FeedNetwork: Codable, Sendable, Equatable {
               url.port.map({ (1...65535).contains($0) }) ?? true else {
             throw khuFail("feed address must be an HTTP release.json on the existing tailnet or loopback")
         }
-        // A bare address cannot pass App Transport Security: the app's exception names a host, and
-        // macOS refuses plain HTTP to an IPv4 literal (NSURLErrorDomain -1022) every single time.
-        // Such an address is not a slower fallback, it is one that can never work.
-        guard !FeedServer.isTailnet(host) || !isAddressLiteral(host) else {
-            throw khuFail("\(host) is a bare IP address; macOS refuses plain HTTP to an address, so the feed must be named by its host name (for example the Mac's ….ts.net name)")
-        }
         return url
     }
 
