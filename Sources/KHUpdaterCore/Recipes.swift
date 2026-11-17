@@ -511,9 +511,23 @@ public enum Recipe {
         do {
             if fm.fileExists(atPath: installedPath) {
                 try fm.createDirectory(at: paths.rollback.deletingLastPathComponent(), withIntermediateDirectories: true)
-                if fm.fileExists(atPath: paths.rollback.path) { _ = Space.remove(paths.rollback, shell: SystemShell(), fileManager: fm) }
+                // Our own bookkeeping must never fail an install: a rollback copy left from an
+                // earlier update is retired into this Mac's own trash (recoverable, never deleted)
+                // before the new one takes its place. The old code removed it with a best-effort
+                // helper whose failure was ignored, so the move then hit an existing item and the
+                // whole install failed on NSCocoaErrorDomain 516.
+                if fm.fileExists(atPath: paths.rollback.path) {
+                    _ = try Trash.move(paths.rollback, into: paths.trash, fileManager: fm)
+                    guard !fm.fileExists(atPath: paths.rollback.path) else {
+                        throw khuFail("the previous rollback copy could not be moved aside, so \(installedPath) was left where it was")
+                    }
+                }
                 journal.phase = "moving"; try AtomicFile.writeJSON(journal, to: paths.journal)
-                try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path)
+                do { try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path) }
+                catch {
+                    // One sentence the row can show: what was in the way, and that the app is untouched.
+                    throw khuFail("the previous rollback copy was in the way and the app could not be kept as the fallback; the app was left where it was")
+                }
             }
             // With nothing installed, an existing rollback bundle is kept: it is the only fallback.
             journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)

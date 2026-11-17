@@ -8,6 +8,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - This Mac's own settings now win over the helper's cached copy of the publisher's network settings. The cache exists so an offline Mac still knows its mirrors, but a stale entry could keep a bad address alive after the settings had stopped naming it; the settings now replace the addresses, while the host roles and any controller move still come from the saved signed copy, which is the only place they live.
 - An address a check proves macOS will always refuse is dropped from the cache as soon as the same check reaches the publisher another way, so it is not retried for ever.
 - The Fleet window's "trust this Mac" message now prints the command with the full host name it actually connects with, so following it once is enough.
+- An update no longer fails because the updater's own previous copy is in the way. A rollback copy left by an earlier update kept the next install from starting, and the row read a system error naming a file path; the old copy is now moved into this Mac's own trash — recoverable, never deleted — and the install goes ahead. When a row does fail, it says a sentence: which app, what happened, and that the app was left as it was.
 
 ## 0.1.56 — 2026-11-17
 

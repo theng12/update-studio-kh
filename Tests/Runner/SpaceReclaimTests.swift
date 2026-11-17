@@ -1,7 +1,14 @@
 import Foundation
 
-/// Space reclaim tests: staged copies and superseded rollbacks are removed, not retired into trash.
-/// Each test fails against the old Trash.move behaviour (whole bundles accumulating in state/_trash).
+/// Space reclaim tests: a leftover staged copy is removed; a superseded rollback copy is retired
+/// into this Mac's own trash rather than deleted.
+/// Everything under this Mac's own trash, however deep: `Trash.move` buckets by timestamp.
+func trashed(in state: URL) -> [URL] {
+    let root = Trash.root(in: state)
+    guard let walk = fm.enumerator(at: root, includingPropertiesForKeys: nil) else { return [] }
+    return walk.compactMap { $0 as? URL }
+}
+
 func spaceReclaimTests() {
     // SR1: a leftover staged copy is gone after a successful install; nothing lands in state/_trash.
     do {
@@ -44,13 +51,11 @@ func spaceReclaimTests() {
         expect(res2?.status == "updated", "SR2 second install succeeded")
         expect(marker(rig.rollback) == "2.0.0", "SR2 rollback holds v2 after second install")
 
-        // v1 must not exist anywhere: not in rollback, not in state/_trash.
-        let trashRoot = Trash.root(in: rig.state)
-        let trashEntries = (try? fm.contentsOfDirectory(at: trashRoot, includingPropertiesForKeys: nil)) ?? []
-        let v1Anywhere = trashEntries.contains { url in
-            marker(url) == "1.0.0"
-        }
-        expect(!v1Anywhere, "SR2 v1 not in state/_trash")
+        // v1 no longer holds the rollback slot, and it is not deleted either: the copy it was
+        // replaced by goes into this Mac's own trash, where it can be put back by hand
+        // (owner, 2026-11-11: nothing deleted for good).
+        expect(trashed(in: rig.state).contains { marker($0) == "1.0.0" },
+               "SR2 the replaced rollback copy is kept in state/_trash, not deleted")
         expect(marker(rig.rollback) != "1.0.0", "SR2 v1 not in rollback")
 
         // Exactly one rollback folder for this app.
@@ -74,5 +79,37 @@ func spaceReclaimTests() {
         let res = try? rig.run(app).get()
         expect(res?.status == "updated", "SR3 install succeeded despite immutable staged copy")
         expect(!fm.fileExists(atPath: staged.path), "SR3 immutable leftover staged was removed")
+    }
+
+    // SR4: a rollback copy left by an earlier update never fails the next install — the case the
+    // owner hit on 2026-11-17, where the move failed with NSCocoaErrorDomain 516, "an item with the
+    // same name already exists", and the row read `install_failed` because of our own bookkeeping.
+    do {
+        let rig = RecipeRig("sr4", installedVersion: "2.0.0", dmgVersion: "3.0.0")
+        // A rollback copy is already there, from a previous update that ended some other way.
+        try? fm.createDirectory(at: rig.rollback.deletingLastPathComponent(), withIntermediateDirectories: true)
+        makeApp(rig.rollback, version: "1.0.0", marker: "1.0.0")
+        expect(fm.fileExists(atPath: rig.rollback.path), "SR4 precondition: an old rollback copy is in the way")
+        let app = FakeApp(installed: rig.installed, healthy: ["3.0.0"])
+        let res = try? rig.run(app, version: "3.0.0").get()
+        expect(res?.status == "updated", "SR4 an existing rollback copy does not fail the install (\(res?.status ?? "nil"))")
+        expect(marker(rig.rollback) == "2.0.0", "SR4 the new fallback took the slot (\(marker(rig.rollback) ?? "nil"))")
+        expect(trashed(in: rig.state).contains { marker($0) == "1.0.0" },
+               "SR4 the copy that was in the way is recoverable in state/_trash")
+    }
+    // SR5: the row speaks a sentence, never Foundation's domain, code and path.
+    do {
+        let ns = NSError(domain: NSCocoaErrorDomain, code: 516, userInfo: [
+            NSLocalizedDescriptionKey: "Hub Studio KH couldn't be moved to rollback-hub because an item with the same name already exists",
+            "NSDestinationFilePath": "/Users/someone/Library/KHUpdater/state/rollback-hub/Hub Studio KH.app",
+        ])
+        let said = PlainFailure.sentence(ns, app: "hub")
+        expect(!said.contains("NSCocoaErrorDomain") && !said.contains("Code=") && !said.contains("/Users/"),
+               "SR5 a system failure is said without its domain, code or path (\(said))")
+        expect(said.contains("same name already exists") && said.hasPrefix("hub could not be installed"),
+               "SR5 the row keeps the cause and names the app (\(said))")
+        let ours = PlainFailure.sentence(khuFail("the previous rollback copy was in the way, so the app was left where it was"), app: "hub")
+        expect(ours.hasPrefix("hub could not be installed") && ours.contains("rollback copy was in the way"),
+               "SR5 a recipe's own sentence is passed through and still names the app (\(ours))")
     }
 }

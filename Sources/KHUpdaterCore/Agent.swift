@@ -986,7 +986,10 @@ public enum Agent {
             } catch let error as ArtifactFailure {
                 res = RecipeResult(status: "failed", reason: "\(error)")
             } catch {
-                res = RecipeResult(status: "install_failed", reason: "\(error)")
+                // A row says the one sentence the recipe produced, never Foundation's own text:
+                // "NSCocoaErrorDomain 516 … an item with the same name already exists" reached the
+                // owner's Launcher on 2026-11-17 and named nothing they could act on.
+                res = RecipeResult(status: "install_failed", reason: PlainFailure.sentence(error, app: item.app))
             }
             // A build that predates its hold installs the first time the app is closed: the order
             // stays pending and is tried again each run, up to its own ceiling (then it is refused,
