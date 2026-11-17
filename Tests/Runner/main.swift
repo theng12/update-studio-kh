@@ -1488,7 +1488,12 @@ func round2Tests(only: Int? = nil) {
         var actual = LiveControl.gateway(rig.installed.path, shell: menuShell, port: port, quitWait: 0.1)
         expect(actual.healthy("1.0.0"), "R2-6 genuine in-bundle listener passes identity health")
         // Preserve live quit and service stop; launch/health after promotion are fake desktop actions.
-        actual.launch = {}
+        // The fake launch is also what makes the relaunched process "appear": the real processes this
+        // test uses are gone by then, and an install waits for a process it stopped to come back.
+        var launched = false
+        let liveRunning = actual.isRunning
+        actual.isRunning = { launched || liveRunning() }
+        actual.launch = { launched = true }
         actual.healthy = { version in (try? BundleInfo.read(rig.installed.path).version) == version }
         let result = try? Recipe.appDmg(shell: rig.shell, installedPath: rig.installed.path, artifactPath: "/tmp/fake.dmg",
                                         feedVersion: "1.2.3", expectedBundleID: "com.example.foo", stateDir: rig.state.path,
