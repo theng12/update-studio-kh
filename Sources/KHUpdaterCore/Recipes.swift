@@ -517,9 +517,11 @@ public enum Recipe {
                 // helper whose failure was ignored, so the move then hit an existing item and the
                 // whole install failed on NSCocoaErrorDomain 516.
                 if fm.fileExists(atPath: paths.rollback.path) {
-                    _ = try Trash.move(paths.rollback, into: paths.trash, fileManager: fm)
-                    guard !fm.fileExists(atPath: paths.rollback.path) else {
-                        throw khuFail("the previous rollback copy could not be moved aside, so \(installedPath) was left where it was")
+                    // The move must actually happen: a container or a locked item can keep it there,
+                    // and proceeding would only trade one 516 for another.
+                    guard (try? Trash.move(paths.rollback, into: paths.trash, fileManager: fm)) != nil,
+                          !fm.fileExists(atPath: paths.rollback.path) else {
+                        throw khuFail("the previous rollback copy could not be moved aside, so the app was left where it was")
                     }
                 }
                 journal.phase = "moving"; try AtomicFile.writeJSON(journal, to: paths.journal)
