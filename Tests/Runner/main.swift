@@ -1492,7 +1492,7 @@ func round2Tests(only: Int? = nil) {
         // test uses are gone by then, and an install waits for a process it stopped to come back.
         var launched = false
         let liveRunning = actual.isRunning
-        actual.isRunning = { launched || liveRunning() }
+        actual.isRunning = { launched || (liveRunning() ?? false) }
         actual.launch = { launched = true }
         actual.healthy = { version in (try? BundleInfo.read(rig.installed.path).version) == version }
         let result = try? Recipe.appDmg(shell: rig.shell, installedPath: rig.installed.path, artifactPath: "/tmp/fake.dmg",
