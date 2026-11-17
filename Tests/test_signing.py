@@ -19,7 +19,7 @@ class SigningTests(unittest.TestCase):
         self.repo.mkdir()
         for name in ("build.sh", "CHANGELOG.md", "CHANGELOG-launcher.md",
                      "packaging/build-launcher.sh", "packaging/build-agent-kit.sh",
-                     "packaging/build-app.sh", "packaging/install-agent.sh", "packaging/rotate-build.py",
+                     "packaging/install-agent.sh", "packaging/rotate-build.py",
                      "packaging/generate-ui.py", "packaging/shared-ui/whats-new.py",
                      "packaging/shared-ui/design-tokens.json", "packaging/shared-ui/UI-CONVENTIONS.md",
                      "packaging/com.khupdater.agent.plist", "examples/agent-config.json"):
@@ -88,7 +88,7 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         self.assertTrue(all("--deep" not in c for c in calls))
 
     def test_ad_hoc_refused_before_artifact_changes(self):
-        for script in ("build.sh", "packaging/build-launcher.sh", "packaging/build-app.sh"):
+        for script in ("build.sh", "packaging/build-launcher.sh"):
             result = self.run_script(script, "0.1.99", KHU_SIGN_IDENTITY="-")
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("stable signing identity", result.stderr)

@@ -28,6 +28,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     var settingsNote: String?
     var serverKnown = false
     var window: LauncherWindow?
+    var fleetWindow: FleetWindow?
     var ssdSources: [SSDSource] { lock.lock(); defer { lock.unlock() }; return ssd }
     var ssd: [SSDSource] = []
 
@@ -196,6 +197,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
         menu.addItem(.separator())
         _ = action("Open Studio Launcher…", #selector(openWindow))
+        _ = action("Open Fleet…", #selector(openFleet))
         _ = action(showsAll ? "Show only apps needing attention" : "Show all apps in menu", #selector(toggleShowAll))
         _ = action("Check for Updates Now", #selector(checkNow))
         _ = action(settings.paused(at: Date()) ? "Resume Automatic Updates" : "Pause Automatic Updates for 24 Hours", #selector(togglePause))
@@ -217,6 +219,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     @objc private func checkNow() { wake.signal() }
     @objc private func openWindow() { showWindow() }
+    @objc private func openFleet() { showFleet() }
 
     @objc private func updateNow(_ sender: NSMenuItem) {
         guard let app = sender.representedObject as? String else { return }

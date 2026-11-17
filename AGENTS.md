@@ -49,11 +49,12 @@ credential-free agent kit per Mac.
   loaded, so an already-loaded agent is left alone and never doubled. A failed start keeps the
   finished install where it is, prints launchctl's reason and the command that retries it, and
   exits non-zero. Do not reintroduce an "installed but not started" state.
-- **One commit, one version across Studio Launcher and Update Studio** (owner, 2026-11-17).
-  `packaging/build-launcher.sh` (Studio Launcher KH + embedded `khu` helper) and
-  `packaging/build-app.sh` (Update Studio KH) must always be built from the same commit and ship
-  with the same version number, so a Mac with the Launcher and a Mac with only Update Studio are
-  never on different code.
+- **One GUI app: Studio Launcher KH** (owner, 2026-11-17). The publisher's fleet view is the
+  Launcher's own Fleet window (`Sources/khu/FleetWindow.swift`), reached from the menu bar or the
+  page footer; `Update Studio KH.app` and `packaging/build-app.sh` are retired and must not come
+  back. `packaging/build-launcher.sh` is the one GUI release; the headless `khu` agent and
+  `khu-stub` supervisor stay separate inside it, for Macs with no menu bar. The publisher page
+  itself is server-side (`Sources/KHUpdaterCore/Server.swift`) and is what the Fleet window shows.
 - **Whole-cycle release.** A change is not finished until, in order: `./build.sh build`, the
   unfiltered test set below, a commit on its own branch, and an agent kit rebuilt from that same
   commit (`packaging/build-agent-kit.sh`) for the Studio Hub kit to carry. KH Updater has no remote;

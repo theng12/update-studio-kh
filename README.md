@@ -16,8 +16,8 @@ turned on.
 This Mac builds, signs and tests. The release host, 1301, is the **only** feed writer, and every
 Mac pulls from it. A publish run on this Mac reaches nobody.
 
-1. Build and sign here: `packaging/build-app.sh <version>`, `packaging/build-launcher.sh <version> <publisher.json>`.
-   Each writes its DMG into `dist/` — no separate copy step.
+1. Build and sign here: `packaging/build-launcher.sh <version> <publisher.json>`.
+   It writes its DMG into `dist/` — no separate copy step.
 2. Once the release is accepted, `packaging/record-dist.sh rotate <app> <version>` keeps the
    latest two installers and retires the rest to `_trash`.
 3. `packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog>` copies the DMG and its
@@ -40,8 +40,11 @@ the release source.
 
 ## The app
 
-`packaging/build-app.sh <version>` builds `build/KH Updater.app` and its DMG: a window onto the
-publisher's page (http://127.0.0.1:8790/). Nothing else; the publisher runs without it.
+`packaging/build-launcher.sh <version> <publisher.json>` builds `build/Studio Launcher KH.app` and
+its DMG: the menu-bar helper as an app, with this Mac's apps in a window and, behind **Fleet…**, a
+window onto the publisher's page (http://127.0.0.1:8790/). That fleet view used to be the separate
+Update Studio KH.app; it is retired into this one (owner, 2026-11-17). The headless `khu` agent and
+`khu-stub` supervisor ship inside it and stay separate: a Mac with no menu bar still updates.
 
 ## Subcommands
 

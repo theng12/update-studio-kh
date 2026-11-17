@@ -672,7 +672,7 @@ def main(argv: list[str]) -> int:
             return 2
         code = os.environ.get("KH_UPDATER_PAIRING_CODE", "")
         if options["ask"]:
-            code = input("  Type the pairing code shown in Update Studio KH: ").strip()
+            code = input("  Type the pairing code shown in Studio Launcher KH (Fleet…, then Connect a Mac): ").strip()
     except (EOFError, KeyboardInterrupt):
         print("  Nothing was installed.")
         return 2
@@ -698,7 +698,7 @@ def main(argv: list[str]) -> int:
         else:
             print(f"  Anything this run wrote was moved to {where}.")
         print("  Fix that, then run this file again. "
-              "The pairing code is in Update Studio KH on the Mac Studio.")
+              "The pairing code is in Studio Launcher KH (Fleet…, then Connect a Mac) on the Mac Studio.")
         return 1
     print("  Agent installed; launchd already has com.khupdater.agent loaded, so it was left alone."
           if loaded else "  Started at login: the launchd job is loaded.")

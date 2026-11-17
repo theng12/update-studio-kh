@@ -451,10 +451,11 @@ try:
     check(khu.hub_data_dir(hub_home) == new_bundle / "Contents" / "Resources" / "voice",
           "hub_data_dir finds the Hub Studio KH.app bundle too")
     packaging = Path(__file__).resolve().parent.parent / "packaging"
-    check('record-dist.sh copy "Update Studio KH"' in (packaging / "build-app.sh").read_text()
-          and 'record-dist.sh copy "Studio Launcher KH"' in (packaging / "build-launcher.sh").read_text()
+    check('record-dist.sh copy "Studio Launcher KH"' in (packaging / "build-launcher.sh").read_text()
           and (packaging / "record-dist.sh").stat().st_mode & 0o111,
           "every packaged DMG is written into dist/ by the build itself, not by remembering")
+    check(not (packaging / "build-app.sh").exists() and not (ROOT / "App/main.swift").exists(),
+          "Update Studio KH.app stays retired into Studio Launcher KH: one GUI app, one DMG")
     rotation = work / "rotation"
     rotation.mkdir()
     for name in ["Studio-Launcher-KH-0.1.18.dmg", "Studio-Launcher-KH-0.1.39.dmg", "Studio-Launcher-KH-0.1.40.dmg",
@@ -477,8 +478,7 @@ try:
                             "--trash", str(work / "rotation-trash")], capture_output=True, text=True)
     check(again.returncode == 0 and len(list((work / "rotation-trash").glob("build-history-*"))) == 1,
           "a second rotation moves nothing and adds no folder")
-    check("rotate-build.py build" in (packaging / "build-launcher.sh").read_text()
-          and "rotate-build.py build" in (packaging / "build-app.sh").read_text(),
+    check("rotate-build.py build" in (packaging / "build-launcher.sh").read_text(),
           "every release build rotates its own build folder")
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:

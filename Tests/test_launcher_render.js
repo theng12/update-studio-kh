@@ -535,4 +535,14 @@ for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Es
 assert(document.activeElement && document.activeElement.id === 'gear',
   'R17b focus falls back to the connected Settings button, never the body');
 assert.notEqual(document.activeElement, document.body, 'R17b focus is never left on the body');
-console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the click’s immediate feedback and the empty list’s reason');
+// The publisher's fleet view lives in this app now (Update Studio KH.app is retired): the footer
+// offers it, and one click asks the helper to open it — the page itself reaches no network.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
+render(state([row({ status: 'Up to date', installed: '0.1.53', available: '0.1.53' })], { version: '0.1.53' }));
+posts.length = 0;
+const fleetButton = document.getElementById('fleet');
+assert(fleetButton, 'the footer offers the fleet');
+fleetButton.fire('click');
+assert.equal(posts.length, 1, 'one click sends exactly one message');
+assert.equal(posts[0].action, 'fleet', 'Fleet asks the helper to open the publisher page');
+console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback and the empty list’s reason');

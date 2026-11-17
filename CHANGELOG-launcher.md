@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.53 — 2026-11-17
+
+- Studio Launcher KH is now the one app. The publisher's fleet view — the whole fleet on 1301, with Connect a Mac, Save Launcher copy, updates, rollbacks and Remove Mac — opens from the menu bar's **Open Fleet…** or the **Fleet…** button in the Launcher window's footer, in its own window.
+- Update Studio KH.app is retired into it: one app to install, one installer to keep, and nothing left behind that only updates half the fleet. The background part that updates a Mac with no menu bar is unchanged and still separate.
+- The fleet window says what it tried when the publisher cannot be reached — the address, the connection it used and the reason it ended — and tries again by itself after a growing wait, rather than showing an empty page.
+
 ## 0.1.52 — 2026-11-17
 
 - An app can be started on another Mac from the publisher. One Launch button per Mac and app opens it hidden — never taking anyone's screen — and checks it is really running before saying so: the Mac reports the process it found, or why it could not start (not installed, fails its signature check, did not start in time). It is a button a person presses; nothing launches on its own.

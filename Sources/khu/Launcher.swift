@@ -14,6 +14,14 @@ extension HelperMenu {
         DistributedNotificationCenter.default().postNotificationName(LauncherBundle.shownNotification, object: nil, userInfo: nil, deliverImmediately: true)
     }
 
+    /// The publisher's fleet page, in its own window. Same tunnel the standalone Update Studio app
+    /// used; the app is retired into this one (owner, 2026-11-17).
+    func showFleet() {
+        if fleetWindow == nil { fleetWindow = FleetWindow() }
+        fleetWindow?.version = version ?? ""
+        fleetWindow?.show()
+    }
+
     /// Volumes are read only when the window opens or a volume mounts or unmounts.
     func rescanSSDs() {
         let found = SSDSource.scan()
