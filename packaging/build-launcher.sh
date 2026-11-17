@@ -43,6 +43,12 @@ if ! out=$(hdiutil create -volname "Studio Launcher KH" -srcfolder "$TMP/dmg" -o
   echo "hdiutil create failed for $DMG: ${out##*$'\n'}" >&2
   exit 1
 fi
+# Exit 0 from `create` is not proof the image is whole: a truncated one would be recorded and
+# published as if it were good. The image itself is verified before anything records it.
+if ! out=$(hdiutil verify "$DMG" 2>&1); then
+  echo "hdiutil verify failed for $DMG: ${out##*$'\n'}" >&2
+  exit 1
+fi
 mv "$TMP" "_trash/launcher-dmg-staging.$(date +%s)"
 echo "built $APP and $DMG (agent $(lipo -archs "$KIT/bin/khu"))"
 packaging/record-dist.sh copy "Studio Launcher KH" "$VERSION" "$DMG"

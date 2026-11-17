@@ -7,7 +7,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - An app can be started on another Mac from the publisher. One Launch button per Mac and app opens it hidden — never taking anyone's screen — and checks it is really running before saying so: the Mac reports the process it found, or why it could not start (not installed, fails its signature check, did not start in time). It is a button a person presses; nothing launches on its own.
 - A Mac that is asleep or offline keeps the launch order queued and visible, and runs it the next time it reports.
 - A failed health check now says what was missing — the version on disk, the app not running, or the name of the background service that did not come back — instead of only how long it waited. A blocked rollback carries the same detail, and the install's timings line repeats it, so a Mac nobody can log into still explains itself.
-- Building the installer now fails loudly if the disk image step fails, naming the file and the reason. It used to exit silently, which is how the wrong file was nearly shipped.
+- Building the installer now fails loudly if the disk image step fails, naming the file and the reason, and an image that came out truncated is verified and refused before anything records it. It used to exit silently, which is how the wrong file was nearly shipped.
 
 ## 0.1.51 — 2026-11-17
 

@@ -153,4 +153,15 @@ func launchOrderTests() {
         expect((try? StateStore.load(from: r.rig.state))?.machines["mac1"]?.pending.isEmpty == true,
                "L8 the order does not stay pending after its result")
     }
+
+    // L9: the wait ceiling is the default unless the setting is a positive number; a typo is not
+    // a 1 s window that would report a slow start as a failure.
+    do {
+        expect(Agent.launchWait(config("launch-wait-unset", bundle: nil)) == Agent.launchWaitSeconds,
+               "L9 no setting uses the 30 s default")
+        expect(Agent.launchWait(config("launch-wait-negative", bundle: nil, wait: -30)) == Agent.launchWaitSeconds,
+               "L9 a negative setting is read as unset, not as 1 s")
+        expect(Agent.launchWait(config("launch-wait-set", bundle: nil, wait: 7)) == 7,
+               "L9 a positive setting is used as given")
+    }
 }

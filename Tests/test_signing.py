@@ -114,6 +114,21 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         self.assertIn("Signing changed a pinned kit file", result.stderr)
         self.assertNotIn("hdiutil", self.calls.read_text())
 
+    def test_truncated_image_refused_before_record(self):
+        # create exits 0 but the image is not whole: the build must stop before it is recorded.
+        fake = self.work / "tools" / "hdiutil"
+        fake.write_text('#!/bin/bash\nprintf "hdiutil %s\\n" "$1" >> "$SIGN_CALLS"\n'
+                        '[[ "$1" != verify ]]\n')
+        fake.chmod(0o755)
+        recorded = self.repo / "packaging/record-dist.sh"
+        recorded.write_text('#!/bin/bash\nprintf "record-dist\\n" >> "$SIGN_CALLS"\n')
+        recorded.chmod(0o755)
+        result = self.launcher()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("hdiutil verify failed", result.stderr)
+        self.assertIn("Studio-Launcher-KH-0.1.99.dmg", result.stderr)
+        self.assertNotIn("record-dist", self.calls.read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

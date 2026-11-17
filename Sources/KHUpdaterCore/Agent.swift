@@ -925,8 +925,7 @@ public enum Agent {
                                       force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual,
                                       catalogEntry: entry, quitOldBuild: item.explicit && config.quitOldBuilds != false)
                 case ServerCommand.launch:
-                    res = launchOrdered(app: item.app, config: config, shell: shell,
-                                        wait: TimeInterval(max(config.launchWaitSeconds ?? Int(Agent.launchWaitSeconds), 1)))
+                    res = launchOrdered(app: item.app, config: config, shell: shell, wait: Agent.launchWait(config))
                 case ServerCommand.vendorInstall:
                     guard let command = orders.commands.first(where: { $0.id == item.id && $0.machine == config.machine }) else {
                         throw khuFail("vendor install requires an explicit signed order for this Mac")
@@ -1154,6 +1153,13 @@ public enum Agent {
     /// replaces it. The wait is its own ceiling: a launch is not an install and must not borrow a
     /// health window, and an app that never appears is `failed`, not left saying "launching".
     public static let launchWaitSeconds: TimeInterval = 30
+
+    /// The ceiling a launch actually uses: a positive `launchWaitSeconds`, else the 30 s default.
+    /// A typo (`-30`) is read as unset, not as a 1 s window that would call a slow start a failure.
+    public static func launchWait(_ config: AgentConfig) -> TimeInterval {
+        guard let seconds = config.launchWaitSeconds, seconds > 0 else { return launchWaitSeconds }
+        return TimeInterval(seconds)
+    }
 
     /// The owner's launch order: open the installed app hidden and detached, then prove it is
     /// running. The exit status of `open` proves nothing — the pid does. Nothing is quit, stopped,
