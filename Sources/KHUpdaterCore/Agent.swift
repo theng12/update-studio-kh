@@ -521,7 +521,7 @@ public enum Agent {
 
     static func refusalNote(app: String, version: String?, result: RecipeResult, memory: inout AgentMemory) -> String? {
         let refusals: Set<String> = [waitingForClose, "refused", "failed", "install_failed", "download_failed", "download_mismatch",
-                                     "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"]
+                                     "did_not_start", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"]
         guard refusals.contains(result.status) else { memory.refusalsSaid?[app] = nil; return nil }
         let shown = version ?? "the feed's version"
         let said = "\(shown)|\(result.status)|\(result.reason ?? "")"
@@ -1004,7 +1004,10 @@ public enum Agent {
             result.commandsRun += 1
             if ["updated", "switched"].contains(res.status) { result.updates += 1 }
             // Said where a person at this Mac can see it: the fleet page is not in front of them.
-            result.notes.append("\(item.app): \(res.status)" + (res.reason.map { " — \($0)" } ?? ""))
+            // A refusal note already said it (and only once, so it is not repeated every run).
+            if res.quitWithoutHold == false, refusal == nil {
+                result.notes.append("\(item.app): \(res.status)" + (res.reason.map { " — \($0)" } ?? ""))
+            }
             if res.status == "switched" {
                 result.restartRequested = true; break
             }  // the rest wait for the new version
@@ -1545,6 +1548,7 @@ public enum Agent {
             return try refusedQuit { withHoldNote(try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
                                                   expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: traced(control(app, cfg)),
                                                   refuseIfRunning: itself, relaunchAfterInstall: true,
+                                                  appearCeiling: TimeInterval(cfg.appearCeilingSeconds ?? Int(Recipe.appearCeiling)),
                                                   beforeStop: beforeStop)) }
         }
     }
@@ -1602,7 +1606,9 @@ public enum Agent {
             }
             result = try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: local.version,
                                      expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: control(app, cfg),
-                                     refuseIfRunning: itself, relaunchAfterInstall: true, verifyStaged: { path in
+                                     refuseIfRunning: itself, relaunchAfterInstall: true,
+                                     appearCeiling: TimeInterval(cfg.appearCeilingSeconds ?? Int(Recipe.appearCeiling)),
+                                     verifyStaged: { path in
                 guard Recipe.signatureVerifies(path, shell: shell) else { throw khuFail("The staged app signature could not be verified. Nothing was replaced.") }
             }, beforeStop: beforeStop)
         }

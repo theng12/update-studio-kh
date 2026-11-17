@@ -106,21 +106,38 @@ final class FakeApp: @unchecked Sendable {
     var stops: [Bool]
     var healthyVersions: Set<String>
     var testInstance = false
+    var healthTimeout: TimeInterval = 0.3
+    /// Virtual seconds between a launch and the process appearing; nil means at once.
+    var appearsAfter: TimeInterval?
+    /// When set, only this installed version goes through `appearsAfter`: a rolled-back previous
+    /// version comes up at once, so a "never started" case can still restore and settle.
+    var appearsOnlyFor: String?
+    var clock: () -> TimeInterval = Mono.now
+    private var launchedAt: TimeInterval?
     let installed: URL
     init(installed: URL, running: Bool = true, quits: [Bool] = [true], stops: [Bool] = [true], healthy: Set<String>) {
         self.installed = installed; self.running = running; self.quits = quits; self.stops = stops; self.healthyVersions = healthy
     }
+    /// The process is there only once its own start has taken `appearsAfter` virtual seconds.
+    private var up: Bool {
+        if let only = appearsOnlyFor {
+            let onDisk = (try? BundleInfo.read(installed.path))?.version
+            if onDisk != only { return true }
+        }
+        if let delay = appearsAfter, let at = launchedAt { return clock() >= at + delay }
+        return running
+    }
     var control: AppControl {
         AppControl(
-            isRunning: { self.running },
-            quit: { self.events.append("quit"); let ok = self.quits.count > 1 ? self.quits.removeFirst() : self.quits[0]; if ok { self.running = false }; return ok },
-            launch: { self.events.append("launch"); self.running = true },
+            isRunning: { self.up },
+            quit: { self.events.append("quit"); let ok = self.quits.count > 1 ? self.quits.removeFirst() : self.quits[0]; if ok { self.running = false; self.launchedAt = nil }; return ok },
+            launch: { self.events.append("launch"); self.launchedAt = self.clock(); self.running = self.appearsAfter == nil },
             stopService: { self.events.append("stop"); return self.stops.count > 1 ? self.stops.removeFirst() : self.stops[0] },
             healthy: { expected in
                 let onDisk = (try? BundleInfo.read(self.installed.path))?.version
-                return self.running && onDisk == expected && self.healthyVersions.contains(expected)
+                return self.up && onDisk == expected && self.healthyVersions.contains(expected)
             },
-            healthTimeout: 0.3, pollInterval: 0.05,
+            healthTimeout: self.healthTimeout, pollInterval: 0.05,
             isTestInstance: { self.testInstance })
     }
 }
@@ -157,10 +174,13 @@ struct RecipeRig {
         shell = RecordingShell(mount: mount)
     }
     func run(_ app: FakeApp, expectedID: String? = nil, relaunchAfterInstall: Bool = true,
-             version: String = "1.2.3", fileManager: FileManager = .default) -> Result<RecipeResult, Error> {
+             version: String = "1.2.3", fileManager: FileManager = .default,
+             clock: @escaping () -> TimeInterval = Mono.now,
+             appearCeiling: TimeInterval = Recipe.appearCeiling) -> Result<RecipeResult, Error> {
         Result { try Recipe.appDmg(shell: shell, installedPath: installed.path, artifactPath: "/tmp/x.dmg", feedVersion: version,
                                    expectedBundleID: expectedID, stateDir: state.path, app: "foo", control: app.control,
-                                   relaunchAfterInstall: relaunchAfterInstall, fileManager: fileManager) }
+                                   relaunchAfterInstall: relaunchAfterInstall, appearCeiling: appearCeiling,
+                                   fileManager: fileManager, clock: clock) }
     }
     var rollback: URL { state.appendingPathComponent("rollback-foo/Foo.app") }
     var journal: URL { state.appendingPathComponent("install-foo.json") }
@@ -221,6 +241,43 @@ func recipeTests() {
                "a relative data directory is a test instance")
         expect(LiveControl.isTestLaunch(["/x/X", "--data-dir", "~/run-1"]), "a home-relative data directory is a test instance")
         expect(LiveControl.isTestLaunch(["/x/X", "./tmp/run-1"]), "a relative positional path is a test instance")
+    }
+    // A Gateway-class restart longer than the health ceiling is not a rollback (2026-11-17): the
+    // health clock starts when the new process appears, not when the quit began. 0.1.50 measured
+    // 127 s quit-to-healthy against a 120 s window and rolled a same-version reinstall back.
+    do {
+        let rig = RecipeRig("slowstart")
+        let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
+        app.healthTimeout = 120
+        app.appearsAfter = 127
+        var now: TimeInterval = 0
+        let clock = { now += 5; return now }
+        app.clock = clock
+        // The per-app setting carries it: the Gateway is allowed longer than the default to appear.
+        let res = try? rig.run(app, clock: clock, appearCeiling: 180).get()
+        expect(res?.status == "updated", "a 127 s start is not rolled back (got \(res?.status ?? "nil"))")
+        expect(app.events.contains("launch"), "the slow app was relaunched")
+        expect(res?.reason?.contains("timings:") == true && res?.reason?.contains("appeared") == true,
+               "the result carries the step timings (\(res?.reason ?? "nil"))")
+    }
+    // A process that never appears is its own failure, not a health-check rollback (2026-11-17):
+    // its own status, the ceiling it used in the words, the previous bundle put back, and the
+    // timings say the process never appeared.
+    do {
+        let rig = RecipeRig("neverappears")
+        let app = FakeApp(installed: rig.installed, healthy: ["1.0.0"])
+        app.healthTimeout = 5
+        app.appearsAfter = 100_000
+        app.appearsOnlyFor = "1.2.3"   // the new version never appears; the restored one does
+        var now: TimeInterval = 0
+        let clock = { now += 5; return now }
+        app.clock = clock
+        let res = try? rig.run(app, clock: clock).get()
+        expect(res?.status == "did_not_start", "a process that never appears has its own status (got \(res?.status ?? "nil"))")
+        expect(marker(rig.installed) == "1.0.0", "the previous bundle is restored when the new one never started")
+        expect(res?.reason?.contains("did not start within 120 s") == true,
+               "the reason names the ceiling it used (\(res?.reason ?? "nil"))")
+        expect(res?.reason?.contains("did-not-appear") == true, "the timings say the process never appeared")
     }
     // A caller that asks for no relaunch leaves the app closed; the agent itself always relaunches.
     do {
@@ -346,6 +403,8 @@ func recipeTests() {
         let res = try? rig.run(app).get()
         expect(res?.status == "rolled_back", "R17 unhealthy new version -> rolled_back (got \(res?.status ?? "error"))")
         expect(marker(rig.installed) == "1.0.0", "R17 the previous bundle is restored")
+        expect(res?.reason?.contains("not healthy within") == true && res?.reason?.contains("timings:") == true,
+               "R17 the result says why it rolled back and carries the timings (\(res?.reason ?? "nil"))")
     }
     // R6: an unhealthy version that refuses to stop blocks the rollback and keeps both bundles.
     do {
@@ -1429,7 +1488,12 @@ func round2Tests(only: Int? = nil) {
         var actual = LiveControl.gateway(rig.installed.path, shell: menuShell, port: port, quitWait: 0.1)
         expect(actual.healthy("1.0.0"), "R2-6 genuine in-bundle listener passes identity health")
         // Preserve live quit and service stop; launch/health after promotion are fake desktop actions.
-        actual.launch = {}
+        // The fake launch is also what makes the relaunched process "appear": the real processes this
+        // test uses are gone by then, and an install waits for a process it stopped to come back.
+        var launched = false
+        let liveRunning = actual.isRunning
+        actual.isRunning = { launched || (liveRunning() ?? false) }
+        actual.launch = { launched = true }
         actual.healthy = { version in (try? BundleInfo.read(rig.installed.path).version) == version }
         let result = try? Recipe.appDmg(shell: rig.shell, installedPath: rig.installed.path, artifactPath: "/tmp/fake.dmg",
                                         feedVersion: "1.2.3", expectedBundleID: "com.example.foo", stateDir: rig.state.path,
