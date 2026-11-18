@@ -144,6 +144,18 @@ func feedNetworkTests() {
         refusal.atsHosts = ["100.82.91.102"]
         var refusalMemory = AgentMemory()
         refusalMemory.feedNetwork = FeedNetwork(feedURLs: ["http://100.82.91.102:8790/release.json"])
+        // FN44 a newly saved address is used by the very next check, no restart: the mirrors cached
+        // for the address it replaced must not lead. Once that address has answered, they may again.
+        var savedMemory = AgentMemory()
+        savedMemory.feedNetwork = FeedNetwork(feedURLs: [mirror])
+        savedMemory.lastGoodFeedURL = "http://100.64.0.9/release.json"
+        let afterSave = try Agent.feedSources(config: noNetwork, memory: savedMemory, serverBase: origin)
+        expect(afterSave.first == URL(string: upstream)!,
+               "FN44 the newly saved address is tried first, ahead of mirrors cached for the old one (\(afterSave))")
+        savedMemory.lastGoodFeedURL = noNetwork.feedURL
+        let settled = try Agent.feedSources(config: noNetwork, memory: savedMemory, serverBase: origin)
+        expect(settled.first == URL(string: mirror)!,
+               "FN44 once the saved address has answered, mirrors lead again (\(settled))")
         expectThrows("FN42 the refusal is one plain sentence naming the bare IP, never Foundation's text",
                      contains: "bare IP") {
             _ = try Agent.selectFeed(http: refusal, serverBase: URL(string: "http://100.82.91.102")!,

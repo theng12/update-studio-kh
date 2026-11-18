@@ -2,6 +2,25 @@ import Foundation
 
 /// Space reclaim tests: a leftover staged copy is removed; a superseded rollback copy is retired
 /// into this Mac's own trash rather than deleted.
+/// A FileManager that refuses to remove anything: the shape of a tree the system will not unlink.
+final class StubbornRemoval: FileManager, @unchecked Sendable {
+    override func removeItem(at URL: URL) throws {
+        throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)
+    }
+}
+
+/// A shell that refuses the two commands `Space.remove` uses to force a removal, so a leftover
+/// really does survive it. Everything else (ditto, hdiutil) is the rig's own shell.
+struct NoRemovalShell: Shell {
+    let inner: RecordingShell
+    func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+        if executable == "/bin/rm" || executable == "/bin/chmod" || executable == "/usr/bin/chflags" {
+            return ShellResult(exitCode: 1, stdout: "", stderr: "operation not permitted")
+        }
+        return try inner.run(executable, arguments: arguments, timeout: timeout)
+    }
+}
+
 /// Everything under this Mac's own trash, however deep: `Trash.move` buckets by timestamp.
 func trashed(in state: URL) -> [URL] {
     let root = Trash.root(in: state)
@@ -111,5 +130,58 @@ func spaceReclaimTests() {
         let ours = PlainFailure.sentence(khuFail("the previous rollback copy was in the way, so the app was left where it was"), app: "hub")
         expect(ours.hasPrefix("hub could not be installed") && ours.contains("rollback copy was in the way"),
                "SR5 a recipe's own sentence is passed through and still names the app (\(ours))")
+    }
+    // SR6: a tree whose folders are 0555 is really removed. Hub ships one (1071 read-only folders,
+    // 7867 read-only files), and `chflags nouchg` alone left it behind while reporting success, so
+    // every retry copied into it and failed with "ditto: … Permission denied" for ever.
+    do {
+        let root = tmpDir("sr6-readonly")
+        let bundle = root.appendingPathComponent("Studio Hub.app")
+        let inner = bundle.appendingPathComponent("Contents/Resources/runtimes/music-yue2/bin")
+        try! fm.createDirectory(at: inner, withIntermediateDirectories: true)
+        try! Data("payload".utf8).write(to: inner.appendingPathComponent("mx_1m"))
+        // The real shape: read-only files inside read-only folders.
+        try! fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: inner.appendingPathComponent("mx_1m").path)
+        // The bundle's own tree is read-only; its parent is writable, exactly as /Applications is.
+        for dir in [inner, inner.deletingLastPathComponent(), inner.deletingLastPathComponent().deletingLastPathComponent(),
+                    bundle.appendingPathComponent("Contents/Resources"), bundle.appendingPathComponent("Contents"),
+                    bundle] {
+            try! fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        }
+        expect(fm.fileExists(atPath: bundle.path), "SR6 precondition: the 0555 bundle exists")
+        let freed = Space.remove(bundle, shell: SystemShell(), fileManager: fm)
+        expect(!fm.fileExists(atPath: bundle.path), "SR6 a 0555 tree is removed, not left behind")
+        expect(freed > 0, "SR6 the removal reports the bytes it freed (\(freed))")
+    }
+    // SR7: when a leftover staging copy genuinely cannot be cleared, the install refuses in one
+    // sentence naming it — it never copies into the leftover and loops on ditto's stderr.
+    do {
+        let rig = RecipeRig("sr7-staging")
+        let staged = rig.installed.deletingLastPathComponent()
+            .appendingPathComponent(".\(rig.installed.lastPathComponent).khu-staging")
+        makeApp(staged, version: "0.0.1", marker: "leftover")
+        // A staging copy that will not go: removal is refused by the file system, and the shell
+        // that would force it is the rig's recording shell, which runs nothing.
+        let stubborn = StubbornRemoval()
+        let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
+        // The removal must really fail: neither the file manager nor the forcing shell may clear it,
+        // which is the state a 0555 tree was in before Space.remove learned to strip mode bits.
+        let shell = NoRemovalShell(inner: rig.shell)
+        let freed = Space.remove(staged, shell: shell, fileManager: stubborn)
+        expect(freed == 0 && fm.fileExists(atPath: staged.path),
+               "SR7 precondition: the leftover survives a refused removal")
+        let result = Result { try Recipe.appDmg(shell: shell, installedPath: rig.installed.path, artifactPath: "/tmp/x.dmg",
+                                                feedVersion: "1.2.3", expectedBundleID: nil, stateDir: rig.state.path,
+                                                app: "foo", control: app.control, fileManager: stubborn) }
+        guard case .failure(let error) = result else {
+            let status = (try? result.get())?.status ?? "?"
+            expect(false, "SR7 a leftover that cannot be cleared refuses the install (\(status))")
+            return
+        }
+        let said = "\(error)"
+        expect(said.contains("unfinished copy") && said.contains(staged.lastPathComponent),
+               "SR7 the refusal names the leftover in one sentence (\(said))")
+        expect(!said.contains("Permission denied") && !said.contains("ditto:"),
+               "SR7 the row does not paste ditto's stderr (\(said))")
     }
 }

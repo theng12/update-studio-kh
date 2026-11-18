@@ -389,6 +389,9 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     public var feedPublishedAt: String?
     public var feedSHA256: String?
     public var feedNetwork: FeedNetwork?
+    /// The saved address the last successful check used. A newly saved address differs, so the next
+    /// check tries it first rather than the mirrors cached for the address it replaced.
+    public var lastGoodFeedURL: String?
     /// app → "version|status|reason" of the last refused or failed attempt already written to the
     /// local log, so a refusal repeated every cycle is said once, not every 5 minutes.
     public var refusalsSaid: [String: String]?
@@ -766,6 +769,8 @@ public enum Agent {
         }
         let artifactBase = selected.base
         memory.feedNetwork = feed.network ?? config.network
+        // The address this checked succeeded on: from here, mirrors may lead again.
+        memory.lastGoodFeedURL = config.feedURL
         let artifactFallbacks = try feedSources(config: config, memory: memory, serverBase: serverBase)
             .map { $0.deletingLastPathComponent() }.filter { $0 != artifactBase }
         try remember()

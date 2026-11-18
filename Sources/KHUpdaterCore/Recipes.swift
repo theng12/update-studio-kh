@@ -326,6 +326,12 @@ public enum Recipe {
     /// always before anything running is stopped. `ditto` carries the bundle's own signature over.
     static func stage(_ paths: Paths, from source: String, info: BundleInfo, shell: Shell, fileManager fm: FileManager) throws {
         if fm.fileExists(atPath: paths.staged.path) { _ = Space.remove(paths.staged, shell: shell, fileManager: fm) }
+        // Copying into a leftover tree is what made the loop: `ditto` then fails on the first
+        // read-only file inside it, every retry fails the same way, and the row never changes.
+        // Refusing here names the leftover instead, once.
+        guard !fm.fileExists(atPath: paths.staged.path) else {
+            throw khuFail("an unfinished copy of the new app was left beside it and could not be cleared (\(paths.staged.path)); nothing was changed — move it aside by hand and try again")
+        }
         let copy = try shell.run("/usr/bin/ditto", arguments: [source, paths.staged.path], timeout: 900)
         guard copy.exitCode == 0, let stagedInfo = try? BundleInfo.read(paths.staged.path), stagedInfo == info,
               stagedInfo.executableIsRunnable(in: paths.staged.path) else {

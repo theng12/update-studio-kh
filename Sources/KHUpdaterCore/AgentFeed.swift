@@ -66,7 +66,11 @@ extension Agent {
         // entry in a pushed list must not leave every Mac with no feed at all.
         var sources = (network?.feedURLs ?? []).compactMap { try? FeedNetwork.feedURL($0) }
         sources.removeAll { $0 == original }
-        if isHost { sources.insert(original, at: 0) } else { sources.append(original) }
+        // The address the person saved is what the very next check uses, without a restart. Mirrors
+        // lead only when this Mac already reached the publisher at that same saved address; a newly
+        // saved one has not been reached yet, so it goes first until it answers once.
+        let mirrorsLead = !isHost && (memory.lastGoodFeedURL == nil || memory.lastGoodFeedURL == config.feedURL)
+        if !mirrorsLead { sources.insert(original, at: 0) } else { sources.append(original) }
         return sources
     }
 

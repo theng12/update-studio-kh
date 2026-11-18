@@ -82,15 +82,28 @@ public enum Space {
         return total
     }
 
-    /// Remove one file or bundle, clearing the immutable flag first. Returns the bytes freed, and 0
-    /// when it is still there.
+    /// Remove one file or bundle, clearing the flags that stop a removal first: the immutable flag
+    /// AND read-only mode bits. Returns the bytes freed, and 0 when it is still there.
+    ///
+    /// The mode bits matter: Hub ships `Contents/Resources/runtimes/music-yue2` as 0544/0555 (1071
+    /// read-only folders, 7867 read-only files), and `unlink` inside a 0555 folder fails for the
+    /// owner too. `chflags nouchg` alone left that tree in place while reporting success, so the
+    /// next `ditto` into it failed with "Permission denied" and the install looped for ever
+    /// (2026-11-17, the owner's 1409 Mac).
     @discardableResult
     public static func remove(_ url: URL, shell: Shell = SystemShell(), fileManager fm: FileManager = .default) -> UInt64 {
         guard fm.fileExists(atPath: url.path) else { return 0 }
         let bytes = size(of: url, fileManager: fm)
         _ = try? shell.run("/usr/bin/chflags", arguments: ["-R", "nouchg", url.path], timeout: 120)
+        // `/bin/chmod`: this macOS has no /usr/bin/chmod, and a wrong path would silently no-op.
+        _ = try? shell.run("/bin/chmod", arguments: ["-R", "u+w", url.path], timeout: 300)
         do { try fm.removeItem(at: url) }
         catch { _ = try? shell.run("/bin/rm", arguments: ["-rf", url.path], timeout: 900) }
+        guard fm.fileExists(atPath: url.path) else { return bytes }
+        // The fallback can still meet a tree whose owner bits would not change: it must not report
+        // success, and the caller decides — most callers keep going, `Recipe.stage` refuses.
+        _ = try? shell.run("/bin/chmod", arguments: ["-R", "u+w", url.path], timeout: 300)
+        _ = try? shell.run("/bin/rm", arguments: ["-rf", url.path], timeout: 900)
         return fm.fileExists(atPath: url.path) ? 0 : bytes
     }
 

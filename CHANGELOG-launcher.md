@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.58 — 2026-11-18
+
+- An app whose files are read-only (Hub ships a folder of them) can be updated again. Clearing an unfinished copy only knew how to drop a file's "locked" flag, not its read-only mode, so the copy stayed, the new app was written on top of it, and every retry failed the same way — a loop that never ended. Clearing now unlocks the files too, and if a copy still cannot be cleared the row says so once and stops, instead of failing over and over on a message about permissions.
+- Settings → This Mac shows the Mac's own name, with the enrolment id underneath as detail.
+
 ## 0.1.57 — 2026-11-18
 
 - The window now says one plain sentence when the publisher cannot be reached, instead of a block of system error text. An address macOS refuses is named as what it is: a bare IP, which must be the publisher's host name — the thing to change — rather than a network fault to wait out.
