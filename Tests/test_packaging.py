@@ -545,6 +545,49 @@ try:
                            capture_output=True, text=True)
     check(found.returncode == 0 and found.stdout.strip() == "build/Studio Launcher KH.app/Contents/Resources/khu-agent/bin/khu",
           "inside a built tree it names the helper the DMG ships (%s)" % (found.stdout.strip() or found.stderr.strip()))
+    # On the release host bin/khu is a copy that fell behind base/current (2026-11-18), so
+    # release-push runs the current pointer and falls back to the copy only when it has none.
+    push = packaging / "release-push.sh"
+    push_bin = work / "push-bin"
+    push_bin.mkdir()
+    (push_bin / "ssh").write_text(
+        '#!/bin/bash\nfor last; do :; done\nHOME="$FAKE_REMOTE_HOME" exec /bin/sh -c "$last"\n')
+    (push_bin / "scp").write_text("#!/bin/bash\nexit 0\n")
+    (push_bin / "ssh").chmod(0o755)
+    (push_bin / "scp").chmod(0o755)
+    remote_home = work / "push-remote-home"
+    kh = remote_home / "Library/KHUpdater"
+    (kh / "base/versions/0.1.62").mkdir(parents=True)
+    (kh / "bin").mkdir()
+    khu_body = '#!/bin/bash\nprintf "%s\\n" "$0" >> "$FAKE_KHU_LOG"\nexit 0\n'
+    for helper in (kh / "base/versions/0.1.62/khu", kh / "bin/khu"):
+        helper.write_text(khu_body)
+        helper.chmod(0o755)
+    (kh / "base/current").symlink_to("versions/0.1.62/khu")
+    dmg, changelog, khu_calls = work / "push.dmg", work / "push.md", work / "push-khu-calls"
+    dmg.write_text("dmg")
+    changelog.write_text("changes")
+    push_env = {**fake_env, "PATH": f"{push_bin}:{fake_env['PATH']}", "KHU_RELEASE_HOST": "fixture@127.0.0.1",
+                "KHU_RELEASE_KEY": "/dev/null", "KHU_RELEASE_STAGE": "release-stage",
+                "FAKE_REMOTE_HOME": str(remote_home), "FAKE_KHU_LOG": str(khu_calls)}
+
+    def push_run():
+        if khu_calls.exists():
+            khu_calls.unlink()
+        result = run(push, "gateway", "9.9.9", dmg, changelog, env=push_env)
+        return result, (khu_calls.read_text().strip() if khu_calls.exists() else "")
+
+    _, called = push_run()
+    check(called.endswith("base/current"),
+          "release-push publishes with the host's current helper, not a stale bin/khu copy (%s)" % called)
+    (kh / "base/current").unlink()
+    _, called = push_run()
+    check(called.endswith("bin/khu"),
+          "release-push falls back to bin/khu when the host has no current pointer (%s)" % called)
+    (kh / "bin/khu").unlink()
+    result, called = push_run()
+    check(result.returncode != 0 and called == "",
+          "with neither helper the remote command fails and release-push exits non-zero (rc=%d)" % result.returncode)
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

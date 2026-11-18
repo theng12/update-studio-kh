@@ -29,7 +29,8 @@ SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "$HOST")
 "${SSH[@]}" "mkdir -p ~/$STAGE/changelogs"
 scp -i "$KEY" -o BatchMode=yes "$DMG" "$HOST:$STAGE/$BASE"
 scp -i "$KEY" -o BatchMode=yes "$LOG" "$HOST:$STAGE/changelogs/$APP.md"
-"${SSH[@]}" "K=\$HOME/Library/KHUpdater; \"\$K/bin/khu\" publish --feed \"\$K/feed\" --key \"\$K/keys/private.key\" \
+# base/current moves with the agent's own updates; bin/khu is a copy that can fall behind.
+"${SSH[@]}" "K=\$HOME/Library/KHUpdater; H=\"\$K/base/current\"; [ -x \"\$H\" ] || H=\"\$K/bin/khu\"; \"\$H\" publish --feed \"\$K/feed\" --key \"\$K/keys/private.key\" \
   --app '$APP' --version '$VERSION' --artifact \"\$HOME/$STAGE/$BASE\" --changelog \"\$HOME/$STAGE/changelogs/$APP.md\" \
   ${KIND:+--kind '$KIND'}"
 

@@ -60,6 +60,9 @@ open http://127.0.0.1:8790/        # the status page (loopback only)
 ~/Library/KHUpdater/bin/khu publish ... --app updater --version 1.0.1 --artifact build/khu --kind updater --changelog CHANGELOG-launcher.md
 ```
 
+`packaging/release-push.sh` publishes on the release host with `~/Library/KHUpdater/base/current` — the helper the
+agent itself keeps current — and falls back to `bin/khu` only when that pointer is missing; the copy can be an older version.
+
 Every KH app release includes a four-SSD refresh before closeout: refresh KH-STUDIO-ATLAS, KH-STUDIO-NOVA and KH-STUDIO-UGREEN from the released artifacts, and KH-STUDIO-TERRA too whenever it is attached (a detached TERRA is reported as not refreshed, not as a release failure). TERRA is a full install drive (previously hand-maintained); its Hub `model-library/`, `optional-models/`, `voices/` and `Extras/` folders are model content, not installers — the release refresh must never rotate, delete or re-hash them, only the app DMGs, the helper/app bundle and the index; update each SSD’s `apps.json`, installer checksums, version notes and setup helpers; read back and hash every copied installer and helper; keep the current and one previous version, moving older material to restorable `_trash`; leave all four SSDs mounted. A missing drive or failed copy is an unfinished release step and must be reported. ORICO is the owner's Time Machine drive and is never used for a release refresh or accessed by agents. Update Studio owns serialized SSD writes across app releases.
 
 The one-click SSD action reads the current `apps.json` each time it starts. App identities, versions, installer paths, sizes and checksums come from that refreshed index, rather than a fixed version list in Launcher. The same click therefore handles future released app versions after the SSD refresh. It still keeps newer installed versions, preserves pauses and never installs absent optional apps.
