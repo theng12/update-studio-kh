@@ -1,10 +1,10 @@
 import AppKit
 import CoreGraphics
 
-/// The agent's menu-bar icon: no Dock icon and no app to manage. It lives in the agent's own
-/// process, so it arrives with the updater's self-update. The agent loop runs on its own thread;
-/// this owns the main thread.
-final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
+/// The agent's icon: a Dock icon as well as the menu-bar one, so a closed window is never gone
+/// with no way back. It lives in the agent's own process, so it arrives with the updater's
+/// self-update. The agent loop runs on its own thread; this owns the main thread.
+final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchecked Sendable {
     let lock = NSLock()
     var apps: [HelperApp] = []
     var lastError: String?
@@ -41,7 +41,10 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
     static var available: Bool { CGSessionCopyCurrentDictionary() != nil && ProcessInfo.processInfo.environment["KHU_NO_MENU"] == nil }
 
     func start() {
-        NSApplication.shared.setActivationPolicy(.accessory)
+        // A Dock icon, so the window is reachable after the red button: without it the only way
+        // back was the menu-bar icon, which is easy to miss (owner, 2026-11-18).
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.delegate = self
         LauncherMenus.install()
         // KHU_MENU_SHOW=light|dark opens the menu after the first run, for screenshots; nobody sets it in real use.
         if let look = ProcessInfo.processInfo.environment["KHU_MENU_SHOW"] {
@@ -70,6 +73,15 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
             }
         }
         NSApp.run()
+    }
+
+    // MARK: the Dock icon
+
+    /// A click on the Dock icon after Close: the window comes back, and is made again when it was
+    /// released. True says this call handled the reopen.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return true
     }
 
     // MARK: the agent loop's side
@@ -209,7 +221,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         _ = action("Quit Studio Launcher KH", #selector(quitApp))
     }
 
-    /// The status item has no Dock icon, so this is the only obvious way to stop it.
+    /// The agent has no window to close in place of stopping it, so this is the plainest way.
     @objc private func quitApp() { NSApp.terminate(nil) }
 
     /// The same free, optional donation the page offers, opened in the browser.

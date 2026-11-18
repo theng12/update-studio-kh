@@ -16,13 +16,18 @@ public enum HelperBundle {
         public var executableName: String
         public var version: String?
         public var icon: URL?
+        /// The agent's own Dock icon, so its window is reachable after Close; the other bundles
+        /// made here are headless and stay out of the Dock.
+        public var dockIcon: Bool
 
-        public init(name: String, bundleID: String, executableName: String, version: String? = nil, icon: URL? = nil) {
+        public init(name: String, bundleID: String, executableName: String, version: String? = nil,
+                    icon: URL? = nil, dockIcon: Bool = false) {
             self.name = name
             self.bundleID = bundleID
             self.executableName = executableName
             self.version = version
             self.icon = icon
+            self.dockIcon = dockIcon
         }
     }
 
@@ -58,6 +63,8 @@ public enum HelperBundle {
         """ } ?? ""
         // The feed is HTTP on the tailnet; inside a bundle macOS applies ATS, unlike the bare
         // binary this replaces. The Launcher's own Info.plist carries the same exception.
+        // The agent's bundle carries no LSUIElement: its Dock icon is the one obvious way back to
+        // its window after Close (owner, 2026-11-18). The menu-bar icon stays as well.
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -71,7 +78,7 @@ public enum HelperBundle {
         <key>CFBundlePackageType</key><string>APPL</string>
         \(versionKeys)
         <key>LSMinimumSystemVersion</key><string>13.0</string>
-        <key>LSUIElement</key><true/>
+        \(spec.dockIcon ? "" : "<key>LSUIElement</key><true/>")
         <key>NSAppTransportSecurity</key><dict><key>NSExceptionDomains</key><dict><key>ts.net</key><dict><key>NSIncludesSubdomains</key><true/><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict></dict></dict>
         </dict>
         </plist>

@@ -109,9 +109,12 @@ public struct StubSwitcher: @unchecked Sendable {
     private func ensureHelperBundle(for version: String, binary: URL) throws {
         let executable: URL
         do {
+            // The icon travels with every new version's bundle: it is what the Dock shows.
+            let icon = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/AppIcon.icns")
             executable = try HelperBundle.ensure(
                 HelperBundle.Spec(name: "Studio Launcher KH Helper", bundleID: "com.khupdater.agent",
-                                  executableName: HelperBundle.helperExecutable, version: version),
+                                  executableName: HelperBundle.helperExecutable, version: version,
+                                  icon: fileManager.fileExists(atPath: icon.path) ? icon : nil, dockIcon: true),
                 source: binary, out: try layout.helperBundle(for: version), fileManager: fileManager)
         } catch {
             throw khuFail("cannot build the helper bundle for \(version): \(error); nothing was switched")

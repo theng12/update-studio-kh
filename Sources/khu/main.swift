@@ -62,7 +62,7 @@ struct KHUMain {
               ssd-update --volume <path>   (update or repair installed apps from an SSD)
               ssd-index --volume <path> [--feed <dir>] [--changelog <id>=<repo or CHANGELOG.md>]...   (writes <path>/apps.json)
               connect --kit <dir> --machine <id> --code <pairing code>
-              helper-bundle --out <app> --name <shown> --id <bundle id> --exec <binary> --executable <name> --version <v> [--icon <icns>]
+              helper-bundle --out <app> --name <shown> --id <bundle id> --exec <binary> --executable <name> --version <v> [--icon <icns>] [--dock]
             """.utf8))
             exit(64)
         }
@@ -107,6 +107,7 @@ struct KHUMain {
         case "helper-bundle":
             var out: String?, shown: String?, bundleID: String?, source: String?
             var executableName: String?, bundleVersion: String?, icon: String?
+            var dockIcon = false
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -117,6 +118,7 @@ struct KHUMain {
                 case "--executable": executableName = value("--executable", &i)
                 case "--version": bundleVersion = value("--version", &i)
                 case "--icon": icon = value("--icon", &i)
+                case "--dock": dockIcon = true
                 default: usage()
                 }
                 i += 1
@@ -125,7 +127,7 @@ struct KHUMain {
             do {
                 let executable = try HelperBundle.ensure(
                     .init(name: shown, bundleID: bundleID, executableName: executableName, version: bundleVersion,
-                          icon: icon.map { URL(fileURLWithPath: $0) }),
+                          icon: icon.map { URL(fileURLWithPath: $0) }, dockIcon: dockIcon),
                     source: URL(fileURLWithPath: source), out: URL(fileURLWithPath: out))
                 print(executable.path)
             } catch { fail("\(error)") }

@@ -226,11 +226,11 @@ try:
     check(job["ProgramArguments"] == [str(helper / "Contents/MacOS/Studio Launcher KH Helper"), "--base", str(base)]
           and str(home) in job["StandardOutPath"] and "__HOME__" not in str(job),
           "plist safely encodes paths with spaces and XML characters")
-    check(helper_info.get("LSUIElement") is True
+    check("LSUIElement" not in helper_info
           and helper_info.get("CFBundleDisplayName") == "Studio Launcher KH Helper"
           and helper_info.get("CFBundleIdentifier") == "com.khupdater.agent"
           and os.access(helper / "Contents/MacOS/Studio Launcher KH Helper", os.X_OK),
-          "the launchd job runs from a named, icon-carrying helper bundle instead of a bare binary")
+          "the launchd job runs from a named, icon-carrying helper bundle with a Dock icon, not a bare binary")
     check((helper / "Contents/MacOS/Studio Launcher KH Helper").read_bytes() == (home / "Library/KHUpdater/bin/khu-stub").read_bytes(),
           "the helper bundle wraps the supervisor stub, not the agent binary")
     ats = helper_info.get("NSAppTransportSecurity", {})

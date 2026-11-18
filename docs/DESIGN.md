@@ -450,7 +450,8 @@ counter once.
 it), carrying the nonce the stub gave this child.
 
 **The menu-bar icon (0.1.2).** In a logged-in session the agent shows a menu-bar icon from its own
-process (no Dock icon, no second app): each app's version and state, Update now, Check for Updates
+process (no second app; since 0.1.63 it keeps a Dock icon too, so a closed window can be reopened
+by clicking it): each app's version and state, Update now, Check for Updates
 Now, an Automatic switch per app and a 24-hour pause, stored in `state/helper.json`. Each switch has
 its time; the agent reports them on `/status` and the publisher keeps whichever change, the Mac's or
 the page's, is later. The signed `/commands` reply carries `automaticAt` so the agent applies the

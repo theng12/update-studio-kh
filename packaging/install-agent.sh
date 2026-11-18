@@ -48,11 +48,11 @@ helper_bundle() {
     if [[ -f "$KIT/AppIcon.icns" ]]; then
         "$KIT/bin/khu" helper-bundle --out "$out" --name "Studio Launcher KH Helper" \
             --id com.khupdater.agent --exec "$source" --executable "Studio Launcher KH Helper" \
-            --version "$VERSION" --icon "$KIT/AppIcon.icns" >/dev/null
+            --version "$VERSION" --icon "$KIT/AppIcon.icns" --dock >/dev/null
     else
         "$KIT/bin/khu" helper-bundle --out "$out" --name "Studio Launcher KH Helper" \
             --id com.khupdater.agent --exec "$source" --executable "Studio Launcher KH Helper" \
-            --version "$VERSION" >/dev/null
+            --version "$VERSION" --dock >/dev/null
     fi
 }
 COMMITTED=false

@@ -286,7 +286,7 @@ public final class StubRunner: @unchecked Sendable {
         do {
             let spec = HelperBundle.Spec(name: "Studio Launcher KH Helper", bundleID: "com.khupdater.agent",
                                          executableName: HelperBundle.helperExecutable, version: version,
-                                         icon: FileManager.default.fileExists(atPath: icon.path) ? icon : nil)
+                                         icon: FileManager.default.fileExists(atPath: icon.path) ? icon : nil, dockIcon: true)
             return try HelperBundle.ensure(spec, source: binary, out: layout.helperBundle(for: version))
         } catch {
             log("could not name \(version) in a helper bundle: \(error); running it by path")
