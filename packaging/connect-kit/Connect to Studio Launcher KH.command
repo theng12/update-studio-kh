@@ -70,9 +70,12 @@ if [ -n "${KH_UPDATER_PYTHON:-}" ]; then
   PY="$KH_UPDATER_PYTHON"
 else
   PY=""
-  for candidate in "/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3" \
+  for candidate in "/Applications/Hub Studio KH.app/Contents/Resources/runtimes/voice/bin/python3" \
+                   "$HOME/Applications/Hub Studio KH.app/Contents/Resources/runtimes/voice/bin/python3" \
+                   "/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3" \
                    "$HOME/Applications/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3" \
                    "/usr/bin/python3" \
+                   "$HERE/../Hub Studio KH/Hub Studio KH.app/Contents/Resources/runtimes/voice/bin/python3" \
                    "$HERE/../Hub Studio KH/Studio Hub.app/Contents/Resources/runtimes/voice/bin/python3"; do
     [ -x "$candidate" ] || continue
     # `/usr/bin/python3` is present on a Mac with no developer tools and only prints a prompt to

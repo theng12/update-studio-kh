@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Install, enrol and activate KH Updater on this Mac, from the SSD kit.
+"""Install, enrol and activate Studio Launcher KH on this Mac, from the SSD kit.
 
-**This is the same client Studio Hub runs**, not a second one.
+**This is the same client Hub Studio KH runs**, not a second one.
 `components/hub/backend/khu_agent.py`'s `Bootstrap.install / enrol / activate` is mirrored here
 step for step: the same `~/Library/KHUpdater` layout, the same config fields in the same order,
 the same `com.khupdater.agent.plist` launchd label, the same publisher checks. That matters because
-the two paths can both run on one Mac - Studio Hub auto-installs the agent on Hub Macs, and this kit
+the two paths can both run on one Mac - Hub Studio KH auto-installs the agent on Hub Macs, and this kit
 installs it on Macs that run only Story Studio or only GatewayKH. Whichever runs first installs;
 the other finds it already there and does nothing. Two clients that produced *similar* installs
 would give two different answers to "is the agent installed on this Mac".
 
-It is a copy and not an import because the kit has to work where no Studio Hub is installed to
+It is a copy and not an import because the kit has to work where no Hub Studio KH is installed to
 import from.
 
 Three deliberate differences, all of them about being a one-shot run started by a person rather
@@ -52,7 +52,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 #: Exactly what `khu_agent.KIT_FILES` accepts. The two readers must agree byte for byte, so the
-#: drive's `khu-agent/` is also a valid kit for Studio Hub should one ever be copied into a bundle.
+#: drive's `khu-agent/` is also a valid kit for Hub Studio KH should one ever be copied into a bundle.
 KIT_FILES = {"VERSION", "bin/khu", "bin/khu-stub", "install-agent.sh",
              "com.khupdater.agent.plist", "agent-config.example.json", "publisher.json"}
 LAUNCHD_LABEL = "com.khupdater.agent"
