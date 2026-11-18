@@ -144,6 +144,47 @@ try:
     check("khu-universal" not in launcher_sh and "build/khu-x86" not in launcher_sh
           and "build/khu launcher-bundle" in launcher_sh,
           "launcher consumes the shared universal build/khu without re-merging slices")
+    check("if [ -L _trash ]" not in launcher_sh and "KHU_TRASH:-$HOME/Desktop/_trash/update-studio-kh" in launcher_sh
+          and "KHU_TRASH:-$HOME/Desktop/_trash/update-studio-kh" in (ROOT / "packaging/record-dist.sh").read_text()
+          and "/_trash" in (ROOT / ".gitignore").read_text(),
+          "packaging uses the Desktop trash path directly instead of a checkout _trash symlink")
+
+    # Trash path guard: build-launcher.sh creates a missing KHU_TRASH dir and refuses a non-directory.
+    trash_repo = work / "trash-repo"
+    (trash_repo / "packaging").mkdir(parents=True)
+    (trash_repo / "build").mkdir()
+    shutil.copyfile(ROOT / "packaging/build-launcher.sh", trash_repo / "packaging/build-launcher.sh")
+    (trash_repo / "packaging/build-launcher.sh").chmod(0o755)
+    (trash_repo / "packaging/build-agent-kit.sh").write_text("#!/bin/bash\nexit 99\n")
+    (trash_repo / "packaging/build-agent-kit.sh").chmod(0o755)
+    (trash_repo / "build/khu").write_text("#!/bin/sh\nexit 0\n")
+    (trash_repo / "build/khu").chmod(0o755)
+    trash_pub = work / "trash-pub.json"
+    trash_pub.write_text("{}\n")
+    trash_file = work / "not-a-dir"
+    trash_file.write_text("file\n")
+    bad_trash = run(trash_repo / "packaging/build-launcher.sh", "0.1.61", trash_pub,
+                    env={**fake_env, "KHU_TRASH": str(trash_file)})
+    check(bad_trash.returncode == 1 and "exists and is not a directory" in bad_trash.stderr
+          and not (trash_repo / "_trash").exists(),
+          "build-launcher stops with one plain sentence when the trash path is not a directory")
+    new_trash = work / "created-trash/nested"
+    mk_trash = run(trash_repo / "packaging/build-launcher.sh", "0.1.61", trash_pub,
+                   env={**fake_env, "KHU_TRASH": str(new_trash)})
+    check(mk_trash.returncode == 99 and new_trash.is_dir() and not (trash_repo / "_trash").exists(),
+          "build-launcher creates a missing trash directory without creating a checkout _trash link")
+
+    # Shared Tools paths: no retired Developer-root shortcut in release-proof.py or docs/INSTALL.md.
+    proof_py = (ROOT / "packaging/release-proof.py").read_text()
+    install_md = (ROOT / "docs/INSTALL.md").read_text()
+    check("~/Developer/portfolio" not in proof_py
+          and "Developer/Shared Tools/portfolio/test-policy/projects.json" in proof_py
+          and "Developer/Shared Tools/portfolio/bin/testctl" in proof_py,
+          "release-proof.py defaults point at Shared Tools/portfolio")
+    check("~/Developer/kh-shared-ui" not in install_md and "~/Developer/portfolio" not in install_md
+          and "~/Developer/Shared Tools/kh-shared-ui" in install_md
+          and "~/Developer/Shared Tools/portfolio/bin/testctl" in install_md,
+          "docs/INSTALL.md names Shared Tools folders only")
 
     kit = work / "Agent Kit"
     builder = ROOT / "packaging/build-agent-kit.sh"

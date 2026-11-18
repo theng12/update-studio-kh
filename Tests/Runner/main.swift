@@ -1366,8 +1366,8 @@ func r28MonotonicWait() {
 final class R2Client: HTTPClient, @unchecked Sendable {
     let inner: InProcessClient
     var commands: Data?
-    /// When set, the status answer is exactly these bytes; otherwise it is an older publisher's
-    /// `{}`, which the agent must fall back from to `/commands` (0.1.61's folded orders).
+    /// When set, the status answer is exactly these bytes; otherwise `/status` goes to `inner`
+    /// so tests that check `state.lastSeen` or the live `/status` path see the real server.
     var status: Data?
     var transient = false
     var corrupt = false
@@ -1378,7 +1378,7 @@ final class R2Client: HTTPClient, @unchecked Sendable {
         return try inner.get(url, headers: headers)
     }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
-        if url.path == "/status" { return (status ?? Data("{}".utf8), 200) }
+        if url.path == "/status", let status { return (status, 200) }
         return try inner.post(url, headers: headers, body: body)
     }
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
@@ -1598,6 +1598,8 @@ func round2Tests(only: Int? = nil) {
         let stale = CommandsReply(machine: "mac1", at: ISO.string(Date().addingTimeInterval(-7200)), commands: [order], automatic: [:])
         let unsigned = JSON.encode(good)
         let badSig = r2Sign(good, Signing.generateKeyPair().privateKey)
+        // Exercise the `/commands` fallback path as against an older publisher answering `{}`.
+        client.status = Data("{}".utf8)
         for (name, body) in [("unsigned", unsigned), ("bad signature", badSig), ("another machine", r2Sign(wrongMac, rig.pair.privateKey)), ("stale", r2Sign(stale, rig.pair.privateKey))] {
             client.commands = body
             expectThrows("R2-8 \(name) orders refused") { _ = try Agent.runOnce(config: cfg, http: client) }
@@ -1608,7 +1610,7 @@ func round2Tests(only: Int? = nil) {
         client.status = r2Sign(wrongMac, rig.pair.privateKey)
         client.commands = r2Sign(good, rig.pair.privateKey)
         expectThrows("R2-8 a signed status reply for another Mac is refused") { _ = try Agent.runOnce(config: cfg, http: client) }
-        client.status = nil
+        client.status = Data("{}".utf8)
         client.commands = r2Sign(good, rig.pair.privateKey)
         let accepted = try? Agent.runOnce(config: cfg, http: client)
         expect(accepted?.commandsRun == 1 && client.attempts == 1, "R2-8 fresh publisher-signed orders accepted once")
@@ -1759,6 +1761,7 @@ func round2Tests(only: Int? = nil) {
         try! StateStore.update(in: rig.state) { $0.machines["mac1"]!.pending = [ServerCommand(id: "lost-ack", machine: "mac1", app: "demo")] }
         let client = R2Client(rig.server)
         let retained = r2Sign(CommandsReply(machine: "mac1", commands: [ServerCommand(id: "lost-ack", machine: "mac1", app: "demo")], automatic: [:]), rig.pair.privateKey)
+        client.status = Data("{}".utf8)
         client.commands = retained
         let result = try? Agent.runOnce(config: cfg, http: client)
         let after = try! AtomicFile.readJSON(AgentMemory.self, from: file)!

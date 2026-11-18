@@ -1060,8 +1060,12 @@ public enum Agent {
             // never "refused", never "waiting" for ever.
             if res.status == Agent.waitingForClose {
                 let days = config.waitForCloseDays ?? 14
-                let since = memory.waiting?[item.app]?.since ?? ISO.string(now)
-                if item.explicit, let start = ISO.date(since), now.timeIntervalSince(start) > Double(days) * 86_400 {
+                // The ceiling measures a wait that already existed. Judging the timestamp this run
+                // just made let a 0-day ceiling refuse a first wait on the spot (the ISO string
+                // rounds below `now`, so the interval read as positive).
+                let prior = memory.waiting?[item.app]?.since
+                let since = prior ?? ISO.string(now)
+                if item.explicit, let start = prior.flatMap(ISO.date), now.timeIntervalSince(start) > Double(days) * 86_400 {
                     res = RecipeResult(status: "refused", reason: "\(res.reason ?? "") It waited \(days) days for \(item.app) to close; send the order again to keep waiting.")
                 } else {
                     memory.waiting = (memory.waiting ?? [:]).merging([item.app: .init(since: since, reason: res.reason ?? "")]) { _, new in new }

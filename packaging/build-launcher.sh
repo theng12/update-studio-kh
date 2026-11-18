@@ -13,7 +13,7 @@ APP="build/Studio Launcher KH.app"; DMG="build/Studio-Launcher-KH-$VERSION.dmg";
 # the checkout made `mkdir -p` fail ENOTDIR once the owner emptied the trash (Story 1.4.410's gate,
 # 2026-11-18). KHU_TRASH points a test at a temp dir, so a run never writes the owner's trash.
 TRASH="${KHU_TRASH:-$HOME/Desktop/_trash/update-studio-kh}"
-if [ -e "$TRASH" ] && [ ! -d "$TRASH" ]; then
+if { [ -e "$TRASH" ] || [ -L "$TRASH" ]; } && [ ! -d "$TRASH" ]; then
   echo "The trash path $TRASH exists and is not a directory; move it out of the way and build again." >&2
   exit 1
 fi

@@ -129,7 +129,7 @@ Terminal, or log in and run the installer again.
 The local smoke check is `python3 -I Tests/test_packaging.py` after `./build.sh build`; it uses only
 temporary homes and a stand-in `launchctl` first on `PATH`, and never opens an app.
 
-Release checks use the Developer-owned `~/Developer/portfolio/bin/testctl` policy for `kh-updater`.
+Release checks use the Developer-owned `~/Developer/Shared Tools/portfolio/bin/testctl` policy for `kh-updater`.
 Use `testctl plan kh-updater` before the coordinated gate and `testctl run kh-updater <lane>` for
 the chosen configured lane. The policy must point at the exact release checkout; the supported
 `--config` option can select a temporary copy with only that checkout path changed (resolve the
