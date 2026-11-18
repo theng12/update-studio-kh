@@ -171,7 +171,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         let showsAll = UserDefaults.standard.bool(forKey: "com.khupdater.menuShowsAllApps")
             || list.filter { $0.managed }.count <= 8
         let needingAction: (HelperApp) -> Bool = { app in
-            [HelperApp.updateAvailable, HelperApp.failed, HelperApp.needsAttention, HelperApp.notInstalled].contains(app.status)
+            [HelperApp.updateAvailable, HelperApp.downloaded, HelperApp.failed, HelperApp.needsAttention, HelperApp.notInstalled].contains(app.status)
         }
         for app in list where app.managed && (showsAll || needingAction(app)) {
             let status = busy == app.app ? HelperApp.updating : (pending.contains(app.app) ? HelperApp.receiving : app.status)
@@ -182,7 +182,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
             let sub = NSMenu()
             sub.autoenablesItems = false
             if let reason = app.reason { note(Self.short(reason), to: sub) }
-            if app.installable, let available = app.available, [HelperApp.updateAvailable, HelperApp.failed, HelperApp.notInstalled].contains(app.status) {
+            if app.installable, let available = app.available, [HelperApp.updateAvailable, HelperApp.downloaded, HelperApp.failed, HelperApp.notInstalled].contains(app.status) {
                 action("Update now to \(available)", #selector(updateNow(_:)), app.app, to: sub).isEnabled = busy == nil
             }
             action("Automatic updates", #selector(toggleAutomatic(_:)), app.app, to: sub).state = app.automatic ? .on : .off

@@ -933,6 +933,24 @@ public enum Agent {
                 todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false, false))
             }
         }
+        // A downloaded update keeps its own wait: the next run installs it once its app is closed,
+        // even with Automatic off — the click or the order was this Mac's own. Only for an app still
+        // behind the feed; the same ceiling ends the wait, and the row is a plain Update available again.
+        let waitDays = config.waitForCloseDays ?? 14
+        for (app, wait) in (memory.waiting ?? [:]).sorted(by: { $0.key < $1.key }) {
+            guard !todo.contains(where: { $0.app == app }) else { continue }
+            if let start = ISO.date(wait.since), now.timeIntervalSince(start) > Double(waitDays) * 86_400 {
+                memory.waiting?[app] = nil
+                result.notes.append("\(app): the downloaded update waited \(waitDays) days to be installed; the wait has ended")
+                continue
+            }
+            guard config.apps[app] != nil, let entry = feed.apps[app], let current = installed[app],
+                  VersionCompare.isNewer(entry.version, than: current) else {
+                memory.waiting?[app] = nil
+                continue
+            }
+            todo.append((app, "auto-\(app)-wait-\(UUID().uuidString)", ServerCommand.update, false, false))
+        }
         // A skip is a decision, not silence: every feed app left behind says why, once, with the
         // origin of the rule that stopped it — never only `updates=0` in a log nobody can explain.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key }) {
@@ -1020,15 +1038,14 @@ public enum Agent {
                 // owner's Launcher on 2026-11-17 and named nothing they could act on.
                 res = RecipeResult(status: "install_failed", reason: PlainFailure.sentence(error, app: item.app))
             }
-            // A build that predates its hold installs the first time the app is closed: the order
+            // A downloaded update waiting for its app to close: nothing is reported yet, so an order
             // stays pending and is tried again each run, up to its own ceiling (then it is refused,
-            // terminal). The person at this Mac can close the app now, so their request is answered.
+            // terminal). This Mac's own request is answered now — ready, with what it waits for —
+            // never "refused", never "waiting" for ever.
             if res.status == Agent.waitingForClose {
                 let days = config.waitForCloseDays ?? 14
                 let since = memory.waiting?[item.app]?.since ?? ISO.string(now)
-                if item.manual {
-                    res.status = "refused"
-                } else if item.explicit, let start = ISO.date(since), now.timeIntervalSince(start) > Double(days) * 86_400 {
+                if item.explicit, let start = ISO.date(since), now.timeIntervalSince(start) > Double(days) * 86_400 {
                     res = RecipeResult(status: "refused", reason: "\(res.reason ?? "") It waited \(days) days for \(item.app) to close; send the order again to keep waiting.")
                 } else {
                     memory.waiting = (memory.waiting ?? [:]).merging([item.app: .init(since: since, reason: res.reason ?? "")]) { _, new in new }
@@ -1143,8 +1160,17 @@ public enum Agent {
             // app's own identity, so the Launcher can offer the right action.
             let hasOffer = entry?.ssd != nil || entry?.initialSSD != nil || feed.apps[app] != nil
             let manual = only && hasOffer && entry?.bundleID != nil && entry?.bundleName != nil
-            let (status, reason) = HelperApp.status(installed: installed, available: available, statusOnly: only, manual: manual,
+            var (status, reason) = HelperApp.status(installed: installed, available: available, statusOnly: only, manual: manual,
                                                     last: last, consecutiveFailures: consecutiveFailures)
+            // A finished download with its app still open is ready, not behind and not failed: the
+            // row says the one thing it waits for. Why the hold was refused stays in the log and on
+            // the fleet page's sub-line, where there is room for it.
+            if memory.waiting?[app] != nil, !only,
+               let available, let installed, VersionCompare.isNewer(available, than: installed),
+               [HelperApp.updateAvailable, HelperApp.failed].contains(status) {
+                status = HelperApp.downloaded
+                reason = "Downloaded — waiting for \(app) to close; it installs by itself then."
+            }
             // The row's value and the origin shown beside it are one answer, not two rules: an app
             // that updates itself, or one this Mac does not manage, has no switch to explain.
             let auto: HelperSettings.AutomaticDecision? = only || cfg == nil ? nil
@@ -1383,7 +1409,10 @@ public enum Agent {
             }
             guard reply.safe else {
                 let names = (reply.unsettled ?? []).joined(separator: ", ")
-                return (endpoint, nil, RecipeResult(status: "refused", reason: "\(app) could not settle its work (still in flight: \(names)); nothing was changed and it keeps running."))
+                // Busy, not broken: an app with work in flight is a wait, so the caller can say the
+                // update is ready and install as soon as it is closed.
+                return (endpoint, nil, RecipeResult(status: waitingForClose,
+                    reason: "\(app) is still working (in flight: \(names)); nothing was changed and it keeps running."))
             }
             return (endpoint, reply.summary, nil)
         } catch {
@@ -1674,7 +1703,9 @@ public enum Agent {
             if order < 0 { return RecipeResult(status: "refused", reason: "the feed has \(entry.version), older than \(current) here; no downgrade") }
         }
 
-        if let refusal = acquireHold() { return refusal }
+        // Bytes first, hold second: the app keeps working while its update downloads and is only
+        // paused for the swap itself. Nothing is replaced by a download, so the hold still comes
+        // before any byte of the install.
         let artifact: URL
         do {
             artifact = try download(entry, app: app, serverBase: serverBase, stateDir: stateDir, http: http, fallbacks: artifactFallbacks,
@@ -1689,6 +1720,13 @@ public enum Agent {
             // Transport, not artifact: nothing here says the bytes are bad, so it is not a version
             // this Mac has rejected — the next run downloads it again.
             return RecipeResult(status: "download_failed", reason: "\(error)")
+        }
+        // A running app that cannot settle is no longer a refusal: its update is downloaded and
+        // checked, and installs by itself once the app is closed. Ready, not stuck.
+        if let refusal = acquireHold() {
+            guard refusal.status == waitingForClose else { return refusal }
+            return RecipeResult(status: waitingForClose,
+                                reason: "\(app) \(entry.version) is downloaded and checked; it installs by itself once \(app) is closed.")
         }
         DownloadControl.updateProgress("installing")
         // One journaled app-dmg path for every recipe that installs a bundle: the plain ones and a

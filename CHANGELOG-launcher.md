@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.60 — 2026-11-18
+
+- An update now downloads and checks itself while the app keeps working, and the app is only paused for the swap itself. The row reads Downloaded — waiting for the app to close; it installs by itself then — instead of failing or telling you to come back later.
+- As soon as the app closes, the next check installs the update from the bytes it already has and reopens the app. The same file is never downloaded twice, and an older downloaded file is cleared away when a newer one replaces it.
+- An app that is busy when its update is ready is no longer refused: it waits, with the same 14-day ceiling, and the order stays pending until it can install. A failed download never leaves a row saying Downloaded.
+
 ## 0.1.59 — 2026-11-18
 
 - A helper switch now judges whether checks are actually accepted by Update Studio, instead of trusting a running process alone: every check writes its outcome and keeps the last accepted time across runs, and the stub rolls back a switch only if a Mac that was reporting before the switch gets no accepted check within 15 minutes. An already-silent offline Mac keeps its version instead of ping-ponging.

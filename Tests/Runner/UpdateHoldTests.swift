@@ -157,7 +157,9 @@ func updateHoldTests() {
         return (r, feed, feed.apps[id]!, cfg, client, app, state, mount)
     }
 
-    // UH2 a safe hold is taken before the artifact and resumed after the install.
+    // UH2 the bytes are fetched first, the app is only held for the swap itself, and it is resumed
+    // after the install. Nothing is replaced by a download, so the hold still comes before any byte
+    // of the install.
     do {
         let f = rig("hold-safe", hold: holdURL)
         f.client.replies = [safeReply(inFlight: 2)]
@@ -165,13 +167,15 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
-        expect(result?.status == "updated" && f.client.calls == ["hold", "artifact", "resume"],
-               "UH2 a safe hold comes before any byte and is resumed after the install (\(f.client.calls))")
+        expect(result?.status == "updated" && f.client.calls == ["artifact", "hold", "resume"],
+               "UH2 the download precedes the hold, which still precedes the swap, and the hold is resumed (\(f.client.calls))")
         expect((result?.reason ?? "").contains("held (2 jobs in flight; new work paused 120 s)"),
                "UH2 the result says how much work was held (\(result?.reason ?? "nil"))")
     }
 
-    // UH3 an unsafe reply is retried once and then refused: nothing is downloaded, the app is resumed.
+    // UH3 an unsafe reply is retried once and then refused: nothing is installed, the app is resumed.
+    // The bytes were already fetched: a download replaces nothing, and refusing it now answers the
+    // order before anything is paused.
     do {
         let f = rig("hold-unsafe", hold: holdURL)
         f.client.replies = [unsafeReply(["render-7"]), unsafeReply(["render-7", "tts-3"])]
@@ -180,9 +184,9 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
         expect(result?.status == "refused" && (result?.reason ?? "").contains("render-7")
-               && (result?.reason ?? "").contains("tts-3") && !f.client.calls.contains("artifact"),
-               "UH3 an unsafe reply is refused with the unsettled names and nothing is downloaded")
-        expect(f.client.calls == ["hold", "hold", "resume"], "UH3 the retry and the resume are the only calls (\(f.client.calls))")
+               && (result?.reason ?? "").contains("tts-3") && !f.app.events.contains("quit"),
+               "UH3 an unsafe reply is refused with the unsettled names and the app is never quit")
+        expect(f.client.calls == ["artifact", "hold", "hold", "resume"], "UH3 the retry and the resume are the only hold calls (\(f.client.calls))")
     }
 
     // UH4 an app that does not answer is refused and resumed, never installed over.
@@ -192,11 +196,11 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
-        expect(result?.status == "refused" && !f.client.calls.contains("artifact") && f.client.calls.last == "resume",
+        expect(result?.status == "refused" && !f.app.events.contains("quit") && f.client.calls.last == "resume",
                "UH4 an unreachable hold refuses the install and resumes (\(f.client.calls))")
     }
 
-    // UH5 a running app with no hold endpoint is unsupported: refused before any byte, no quit.
+    // UH5 a running app with no hold endpoint is unsupported: refused before the swap, no quit.
     do {
         let f = rig("hold-unsupported", hold: nil, recipe: "app-dmg")
         let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
@@ -204,8 +208,8 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
         expect(result?.status == "refused" && (result?.reason ?? "").contains("does not name an update-hold endpoint")
-               && f.client.calls.isEmpty && !f.app.events.contains("quit"),
-               "UH5 an app the feed gives no endpoint is refused before any byte and never quit")
+               && !f.client.calls.contains("hold") && !f.app.events.contains("quit"),
+               "UH5 an app the feed gives no endpoint is refused before the swap and never quit")
     }
 
     // UH6 an app that is not running needs no hold.
@@ -250,7 +254,7 @@ func updateHoldTests() {
                                   control: { _, _ in f.app.control })
         } catch { quitFailure = "\(error)" }
         expect(quitFailure.contains("did not quit"), "UH8 a refused quit aborts the install (\(quitFailure))")
-        expect(f.client.calls == ["hold", "artifact", "hold", "resume"],
+        expect(f.client.calls == ["artifact", "hold", "hold", "resume"],
                "UH8 the hold is renewed at the boundary and resumed after the abort (\(f.client.calls))")
     }
 
@@ -331,8 +335,8 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
         expect(result?.status == "refused" && (result?.reason ?? "").contains("credential")
-               && !f.client.calls.contains("artifact") && !f.app.events.contains("quit"),
-               "UH25 a missing token stops before download, quit or replace (\(result?.reason ?? "nil"))")
+               && !f.app.events.contains("quit"),
+               "UH25 a missing token stops before quit or replace (\(result?.reason ?? "nil"))")
         setenv("KHU_HOLD_TOKEN_FILE", tokenPath, 1)
     }
     do { // UH26 a wrong token is refused by the endpoint, before any byte.
@@ -341,8 +345,8 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
-        expect(result?.status == "refused" && !f.client.calls.contains("artifact") && f.app.events.isEmpty,
-               "UH26 a wrong token stops before any download or quit")
+        expect(result?.status == "refused" && f.app.events.isEmpty,
+               "UH26 a wrong token stops before any quit")
     }
     do { // UH27 rotation mid-run: the next request reads the new file value and is accepted.
         let f = rig("hold-rotate-mid", hold: holdURL, recipe: "app-dmg", running: true)
@@ -375,7 +379,7 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
-        expect(result?.status == "refused" && !f.client.calls.contains("artifact") && f.app.events.isEmpty,
+        expect(result?.status == "refused" && f.app.events.isEmpty,
                "UH28 a rotated-away token is no longer accepted, and the install stops")
     }
     do { // UH29 positive: the current token is accepted; safe, quit, replace, relaunch, resume.
@@ -388,7 +392,7 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, manual: true)
         expect(result?.status == "updated" && f.app.events.contains("quit") && f.app.events.contains("launch")
-               && f.client.calls == ["hold", "artifact", "hold", "resume"],
+               && f.client.calls == ["artifact", "hold", "hold", "resume"],
                "UH29 the held install quits, replaces and relaunches (\(f.client.calls), \(f.app.events))")
         expect((result?.reason ?? "").contains("held (2 jobs in flight"),
                "UH29 the reply's in-flight work is named (\(result?.reason ?? "nil"))")
@@ -538,6 +542,66 @@ func updateHoldTests() {
                "UH37 past its ceiling the wait ends refused with the reason (\(ended?.lastResults?["demo"]?.reason ?? "nil"))")
     }
 
+    // UH53 the 0.1.60 change, end to end and with Automatic off: the bytes are fetched while the app
+    // keeps working, the row reads Downloaded with what it waits for, and the very next run installs
+    // it once the app is closed — no second request, and the same bytes are never fetched again.
+    do {
+        let f = rig("wait-download-first", hold: holdURL, recipe: "app-dmg", running: true)
+        var cfg = f.cfg
+        cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        cfg.apps["demo"]?.automatic = false
+        f.client.replies = [unsafeReply(["render-7"]), unsafeReply(["render-7"])]
+        let run = { (requested: Set<String>) -> AgentRunResult? in
+            try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                               control: { _, _ in f.app.control }, requested: requested, appFolders: [])
+        }
+        let first = run(["demo"])
+        let row = first?.apps.first { $0.app == "demo" }
+        expect(row?.status == HelperApp.downloaded && (row?.reason ?? "").contains("waiting for demo to close"),
+               "UH53 a finished download with its app open reads Downloaded, not failed (\(row?.status ?? "nil"); \(row?.reason ?? ""))")
+        expect(f.client.count("artifact") == 1 && f.client.calls.first == "artifact" && f.app.running,
+               "UH53 the bytes come first and the app is never quit (\(f.client.calls))")
+        f.app.running = false
+        let second = run([])
+        expect(second?.updates == 1 && f.client.count("artifact") == 1,
+               "UH53 the next run installs the downloaded update without fetching it again (\(f.client.calls))")
+        expect((try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0" && f.app.events.contains("launch"),
+               "UH53 the app on disk is the new version and was reopened (\(f.app.events))")
+    }
+
+    // UH54 the wait has the same ceiling when nothing is left to re-issue it: past it the wait ends
+    // quietly and the row is a plain update again, never a stuck Downloaded row.
+    do {
+        let f = rig("wait-ceiling", hold: holdURL, recipe: "app-dmg", running: true)
+        var cfg = f.cfg
+        cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        cfg.apps["demo"]?.automatic = false
+        cfg.waitForCloseDays = 0
+        f.client.replies = [unsafeReply(["render-7"]), unsafeReply(["render-7"])]
+        _ = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                               control: { _, _ in f.app.control }, requested: ["demo"], appFolders: [])
+        let again = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                       control: { _, _ in f.app.control }, appFolders: [])
+        let row = again?.apps.first { $0.app == "demo" }
+        expect(again?.notes.contains { $0.contains("the wait has ended") } == true
+               && row?.status == HelperApp.updateAvailable && f.app.running,
+               "UH54 past the ceiling the wait ends and the row is a plain update again (\(row?.status ?? "nil"))")
+    }
+
+    // UH55 a download that fails never leaves a waiting row: nothing was downloaded, so nothing waits.
+    do {
+        let f = rig("wait-download-fails", hold: holdURL, recipe: "app-dmg", running: true)
+        var cfg = f.cfg
+        cfg.token = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        cfg.apps["demo"]?.automatic = false
+        f.client.artifacts[f.entry.file] = nil   // the artifact is not on the publisher
+        let run = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                     control: { _, _ in f.app.control }, requested: ["demo"], appFolders: [])
+        let row = run?.apps.first { $0.app == "demo" }
+        expect(row?.status != HelperApp.downloaded && !f.client.calls.contains("hold") && f.app.running,
+               "UH55 a failed download leaves no waiting row and never holds the app (\(row?.status ?? "nil"); \(f.client.calls))")
+    }
+
     // UH38 end to end: a feed entry published with holdSince, a running build below it answering
     // 401. The order waits, this Mac's log and the owner page's row say "waiting for close", and
     // nothing anywhere calls it a credential refusal.
@@ -559,7 +623,7 @@ func updateHoldTests() {
         expect(f.entry.holdSince == "1.5.0" && machine?.pending.count == 1 && machine?.lastResults?["demo"] == nil
                && waitNotes.count == 1 && !notes.contains { $0.contains("(credential)") }
                && page.contains("Waiting for demo to close</span>") && page.contains("predates its update hold (first in 1.5.0)")
-               && !page.contains("refused the update hold (credential)") && !f.client.calls.contains("artifact"),
+               && !page.contains("refused the update hold (credential)") && f.app.events.isEmpty,
                "UH38 a build below the published holdSince answering 401 reads waiting for close on the Mac and the page, never credential (notes \(waitNotes.count), pending \(machine?.pending.count ?? -1))")
     }
 
@@ -608,8 +672,8 @@ func updateHoldTests() {
                                       http: g.client, shell: RecordingShell(mount: g.mount),
                                       control: { _, _ in g.app.control }, quitOldBuild: true)
         expect(refused?.status == "refused" && (refused?.reason ?? "").contains("credential") && refused?.quitWithoutHold == false
-               && !f.app.events.contains("quit") && !f.client.calls.contains("artifact")
-               && held?.status == "updated" && g.client.calls.first == "hold" && held?.quitWithoutHold == false,
+               && !f.app.events.contains("quit")
+               && held?.status == "updated" && g.client.calls.first == "artifact" && held?.quitWithoutHold == false,
                "UH40 at or past holdSince the hold path is unchanged (\(refused?.reason ?? "nil"); \(g.client.calls))")
     }
 
@@ -645,8 +709,7 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, quitOldBuild: false)
         expect(result?.status == Agent.waitingForClose && result?.quitWithoutHold == false
-               && !f.app.events.contains("quit") && !f.app.events.contains("launch")
-               && !f.client.calls.contains("artifact") && f.app.running,
+               && !f.app.events.contains("quit") && !f.app.events.contains("launch") && f.app.running,
                "UH42 quitOldBuilds: false means no quit and the order keeps waiting (\(result?.status ?? "nil"))")
     }
 
@@ -834,7 +897,7 @@ func updateHoldTests() {
                                         control: { _, _ in f.app.control })
         let reason = result?.reason ?? ""
         expect(result?.status == Agent.waitingForClose && reason.contains("no update-hold endpoint")
-               && reason.contains("one normal install") && !f.client.calls.contains("artifact"),
+               && reason.contains("one normal install"),
                "UH19 an absent endpoint names the bootstrap install (\(reason))")
     }
 
@@ -962,7 +1025,7 @@ func updateHoldTests() {
         let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: f.cfg,
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount), control: { _, _ in exits })
-        expect(result?.status == "updated" && f.client.calls == ["hold", "artifact", "resume"],
+        expect(result?.status == "updated" && f.client.calls == ["artifact", "hold", "resume"],
                "UH14 an app that exited needs no boundary renewal (\(f.client.calls))")
         expect(!f.app.events.contains("quit"), "UH14 a non-running app is not quit")
     }

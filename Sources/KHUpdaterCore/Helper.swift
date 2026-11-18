@@ -163,16 +163,17 @@ public struct HelperApp: Sendable, Equatable {
 
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
                       receiving = "Receiving update…", failed = "Failed", needsAttention = "Needs attention",
-                      updatesItself = "Updates itself", notInstalled = "Not installed", notInFeed = "Not in the feed"
+                      downloaded = "Downloaded", updatesItself = "Updates itself", notInstalled = "Not installed",
+                      notInFeed = "Not in the feed"
 
     /// Default retry ceiling for a row before it stops offering Update all / primary Update.
     public static let failureCeiling = 3
 
     /// True when "Update all" includes this row: managed, feed-driven, not retired, and either
-    /// behind the offered version or failed below the retry ceiling.
+    /// behind the offered version, failed below the retry ceiling, or downloaded and waiting.
     public static func updateAllEligible(_ app: HelperApp) -> Bool {
         app.managed && !app.statusOnly && app.retired == nil && app.available != nil
-            && (app.status == updateAvailable || app.status == failed)
+            && (app.status == updateAvailable || app.status == failed || app.status == downloaded)
     }
 
     /// One state per app, and nothing this Mac cannot vouch for reads as fine.

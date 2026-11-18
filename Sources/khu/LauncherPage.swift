@@ -130,7 +130,7 @@ function plain(r){if(!r)return '';const t=r.toLowerCase();
  return (first||text).replace(/[.;,]+$/,'')+'.'}
 function installed(a){return a.installed!=null&&a.managed}
 function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Receiving update…':['Receiving update…','info'],
- 'Failed':['Failed','bad'],'Needs attention':['Needs attention','bad'],'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
+ 'Downloaded':['Downloaded','info'],'Failed':['Failed','bad'],'Needs attention':['Needs attention','bad'],'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
  if(!a.managed)return el('span',{class:'chip'},a.available?'Not installed':'Not available');return el('span',{class:'chip '+m[1]},m[0])}
 function versionLine(a){if(a.installed&&a.available&&a.installed!=a.available&&a.status!='Updates itself')return el('span',{class:'ver'},a.installed+' → ',el('b',{},a.available));
  const v=a.installed||a.available;return v?el('span',{class:'ver'},el('b',{},v)):null}
@@ -143,11 +143,11 @@ function mainAction(a){if(a.status=='Updating…'||a.status=='Receiving update�
   if(a.manuallyInstallable&&a.available&&!a.installed)return ['Install','install','primary'];
   // The agent already compared the versions: only a real offer becomes a button, so a newer or
   // incomparable installed build keeps "Updates itself" instead of a dead Update.
-  if(a.manuallyInstallable&&a.available&&(a.status=='Update available'||a.status=='Failed'))return ['Update','update','primary'];
+  if(a.manuallyInstallable&&a.available&&(a.status=='Update available'||a.status=='Failed'||a.status=='Downloaded'))return ['Update','update','primary'];
   return a.setup?['Open Setup Folder','setup','']:(a.open?['Open','open','']:null);
  }
  if(!a.managed||a.installed==null)return a.available?['Install','install','primary']:null;
- if((a.status=='Update available'||a.status=='Failed')&&a.available)return ['Update','update','primary'];
+ if((a.status=='Update available'||a.status=='Failed'||a.status=='Downloaded')&&a.available)return ['Update','update','primary'];
  return a.open&&!a.helper?['Open','open','']:null}
 function progress(a){const p=a.progress||{},box=el('div',{class:'prog','data-prog':a.id});
  box.append(el('span',{class:'line num'}),el('div',{class:'bar'},el('i')));paint(box,p);
@@ -256,7 +256,7 @@ function render(state){if(state)Object.assign(S,state);
 function move(){document.querySelectorAll('[data-prog]').forEach(n=>{const a=S.apps.find(x=>x.id==n.getAttribute('data-prog'));paint(n,(a&&a.progress)||{})})}
 function draw(){const active=document.activeElement||{},fk=active.id,selection=[active.selectionStart,active.selectionEnd];
  const [list,hidden]=visible(),mine=list.filter(installed),others=list.filter(a=>!installed(a));
- const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.available&&(a.status=='Update available'||a.status=='Failed')).length;
+ const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.available&&(a.status=='Update available'||a.status=='Failed'||a.status=='Downloaded')).length;
  $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
  $('vgrid').setAttribute('aria-pressed',view=='grid');$('vlist').setAttribute('aria-pressed',view=='list');$('sort').value=sort;
  const m=$('main');m.replaceChildren();
