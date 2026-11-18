@@ -4,8 +4,8 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 0.1.58 — 2026-11-18
 
-- An app whose files are read-only (Hub ships a folder of them) can be updated again. Clearing an unfinished copy only knew how to drop a file's "locked" flag, not its read-only mode, so the copy stayed, the new app was written on top of it, and every retry failed the same way — a loop that never ended. Clearing now unlocks the files too, and if a copy still cannot be cleared the row says so once and stops, instead of failing over and over on a message about permissions.
-- Settings → This Mac shows the Mac's own name, with the enrolment id underneath as detail.
+- An update could get stuck saying the same thing over and over: a copy left behind by the first attempt could not be cleared, so every retry ran into it and failed the same way, and the row never changed. This version clears that leftover itself and installs on the next try, with nothing to do by hand. If a copy ever really cannot be cleared, the row says so once and stops repeating.
+- A newly saved Update Studio address is used by the very next check, without restarting the app.
 
 ## 0.1.57 — 2026-11-18
 
