@@ -51,7 +51,7 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>]
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
@@ -131,6 +131,7 @@ struct KHUMain {
             } catch { fail("\(error)") }
         case "publish":
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
+            var keep: Int?
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil
             var i = 1
             while i < args.count {
@@ -149,6 +150,12 @@ struct KHUMain {
                 case "--main-mac-only": mainOnly = true
                 case "--hold-url": hold = value("--hold-url", &i)
                 case "--hold-since": holdSince = value("--hold-since", &i)
+                case "--keep":
+                    let text = value("--keep", &i)
+                    guard let number = Int(text), number >= FeedPublisher.KeepCount.defaultsTo else {
+                        fail("--keep must be a whole number of versions, at least \(FeedPublisher.KeepCount.defaultsTo)")
+                    }
+                    keep = number
                 case "--tagline": words.tagline = value("--tagline", &i); wordsGiven = true
                 case "--description": words.description = value("--description", &i); wordsGiven = true
                 case "--accent": words.accent = value("--accent", &i); wordsGiven = true
@@ -167,10 +174,14 @@ struct KHUMain {
             }
             do {
                 let notes = try ReleaseNotes.forRelease(changelog: URL(fileURLWithPath: changelog), version: v, extra: extra)
-                try FeedPublisher.publish(feedDir: URL(fileURLWithPath: f), keyFile: URL(fileURLWithPath: k), app: a,
+                let feedDir = URL(fileURLWithPath: f)
+                // The keep count is a setting beside the feed: a --keep given now is saved for the
+                // publishes that follow, exactly like a setting saved by hand.
+                if let keep { try FeedPublisher.KeepCount.set(keep, in: feedDir) }
+                try FeedPublisher.publish(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
-                                          holdURL: hold, holdSince: holdSince)
+                                          holdURL: hold, holdSince: holdSince, keep: keep)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "unpublish":

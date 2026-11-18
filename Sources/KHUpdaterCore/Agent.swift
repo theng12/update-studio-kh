@@ -237,9 +237,9 @@ public enum TransferMeter {
 }
 
 /// When this process should start again in place. Both bounds live here so the arithmetic is in one
-/// place: an idle run is the feed, the status report and the orders check — three transfers every
-/// five minutes, 864 a day — so 500 lasts about fourteen hours and caps the process at roughly 500
-/// ports and 20 MB, instead of the ~864 ports and ~35 MB a day it would otherwise add.
+/// place: an idle run is the feed and the status report (the orders ride in that reply since 0.1.61)
+/// — two transfers every five minutes, 576 a day — so 500 lasts about twenty hours and caps the
+/// process at roughly 500 ports and 20 MB, instead of the ~576 ports and ~25 MB a day it would add.
 public enum AgentRecycle {
     public static let afterTransfers = 500
     public static let afterSeconds: TimeInterval = 24 * 3600
@@ -737,9 +737,15 @@ public enum Agent {
         if let inventory = MacInventory.collect(now: now, shell: shell).asJSONObject() {
             report["inventory"] = inventory
         }
+        // What this agent can carry out, so the publisher withholds orders it would misread — and,
+        // from 0.1.61, hands the rest back in this same reply instead of a second transfer.
+        report["capabilities"] = AgentCapability.all.joined(separator: ",")
         let statusBody = try JSONSerialization.data(withJSONObject: report)
         let statusCode: Int?
-        do { statusCode = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody).1 }
+        var statusReply: Data?
+        do {
+            (statusReply, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
+        }
         catch {
             // A refused address is a sentence for the person, never Foundation's own text: this one
             // reaches the Launcher window unchanged, and "Code=-1022 … /status" told nobody anything.
@@ -868,25 +874,34 @@ public enum Agent {
         // 5. Orders, signed by the publisher's key and naming this Mac and the moment it signed.
         // This Mac says which order actions it can carry out; the publisher withholds the rest, so
         // an agent that does not understand a rollback is never handed one to misread.
+        // 0.1.61: they ride in the status reply, so an idle run is two transfers, not three. A
+        // publisher that answered only `{}` is older; that answer is not a SignedReply, and this
+        // Mac asks /commands as it always did — one route serves both generations.
         var orders = CommandsReply(machine: config.machine, commands: [], automatic: [:])
         if publisherAvailable {
-            let response: (Data, Int)?
-            do {
-                response = try http.get(serverBase.appendingPathComponent("commands")
-                    .appendingQuery("machine", config.machine)
-                    .appendingQuery("capabilities", [AgentCapability.ownerRollback, AgentCapability.vendorInstall,
-                                                     AgentCapability.launch].joined(separator: ",")), headers: headers)
-            } catch {
-                if blockedByTransportSecurity(error) {
-                    throw khuFail(plainUnreachable(serverBase.appendingPathComponent("commands"), error: error))
+            var reply = statusReply
+            if let data = reply, (try? JSON.decode(SignedReply.self, from: data)) == nil { reply = nil }
+            if reply == nil {
+                let response: (Data, Int)?
+                do {
+                    response = try http.get(serverBase.appendingPathComponent("commands")
+                        .appendingQuery("machine", config.machine)
+                        .appendingQuery("capabilities", AgentCapability.all.joined(separator: ",")), headers: headers)
+                } catch {
+                    if blockedByTransportSecurity(error) {
+                        throw khuFail(plainUnreachable(serverBase.appendingPathComponent("commands"), error: error))
+                    }
+                    guard memory.feedNetwork?.feedURLs.isEmpty == false else { throw error }
+                    response = nil; publisherAvailable = false
+                    result.notes.append("publisher orders unavailable; only local requests can run")
                 }
-                guard memory.feedNetwork?.feedURLs.isEmpty == false else { throw error }
-                response = nil; publisherAvailable = false
-                result.notes.append("publisher orders unavailable; only local requests can run")
+                if let response {
+                    guard response.1 == 200 else { throw khuFail("orders were refused (\(response.1))") }
+                    reply = response.0
+                }
             }
-            if let response {
-                guard response.1 == 200 else { throw khuFail("orders were refused (\(response.1))") }
-                let signed = try JSON.decode(SignedReply.self, from: response.0)
+            if let reply {
+                let signed = try JSON.decode(SignedReply.self, from: reply)
                 let publisherKey = try Signing.loadPublicKey(base64: config.publicKey)
                 guard let ordersBody = signed.replyData, let signature = signed.signatureData,
                       Signing.verify(ordersBody, signature: signature, publicKey: publisherKey) else {

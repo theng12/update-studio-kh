@@ -17,6 +17,24 @@ public enum FeedPublisher {
         return try JSON.decode(Feed.self, from: data).validated()
     }
 
+    /// How many verified versions of each app the feed keeps: the owner's setting, next to the feed,
+    /// 2 — the current version and its previous — unless it says otherwise. A value below 2 is
+    /// refused when it is set and never used when read: a rollback needs the previous one.
+    public enum KeepCount {
+        public static let defaultsTo = 2
+        public static func file(in feedDir: URL) -> URL { feedDir.appendingPathComponent("retention-settings.json") }
+        public static func keep(in feedDir: URL) -> Int {
+            let saved = (try? AtomicFile.readJSON([String: Int].self, from: file(in: feedDir)))?["keep"]
+            return max(saved ?? defaultsTo, defaultsTo)
+        }
+        public static func set(_ keep: Int, in feedDir: URL) throws {
+            guard keep >= defaultsTo else {
+                throw khuFail("a feed keeps at least \(defaultsTo) verified versions (current + previous), not \(keep)")
+            }
+            try AtomicFile.writeJSON(["keep": keep], to: file(in: feedDir))
+        }
+    }
+
     private struct Retention: Decodable {
         struct Entry: Decodable { var current: FeedApp; var previous: FeedApp? }
         var apps: [String: Entry]
@@ -93,7 +111,8 @@ public enum FeedPublisher {
     /// nothing is injected (`## Feed`), never the operator's Trash from a fixture feed in `Tests`.
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
-                               meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil, now: Date = Date(),
+                               meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
+                               keep: Int? = nil, now: Date = Date(),
                                retireArtifact: ((URL) throws -> Void)? = nil) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
@@ -192,9 +211,9 @@ public enum FeedPublisher {
             // whose artifacts were retired long ago. Rotated from the file on disk, before the new
             // release replaces it, and before the keep-set is read below.
             try rotateRollbackRelease(in: feedDir)
-            // Owner rule: keep the latest three verified versions in the feed. `release` + `previous`
-            // cover two; the retiring `previous` generation becomes the third and stays pinned here.
-            try rotatePriors(from: retiringPriors, in: feedDir)
+            // `release` + `previous` cover two of the kept versions; the retiring `previous`
+            // generations beyond that stay pinned in priors.json, up to the owner's keep count.
+            try rotatePriors(from: retiringPriors, in: feedDir, keeping: max(keep ?? KeepCount.keep(in: feedDir), KeepCount.defaultsTo))
             // Every pin this signed release carries, plus what the retention ledger still holds
             // as a recovery copy, read before the commit so an unreadable ledger refuses the
             // publish itself rather than quietly retiring the pins it names.
@@ -294,27 +313,31 @@ public enum FeedPublisher {
         _ = try? fm.removeItem(at: temporary)
     }
 
-    /// Feed retention keeps current + previous + one prior = three verified versions. The partner
-    /// of `release.json` that is about to be replaced becomes the prior; only its artifact files are
-    /// pinned, and only the newest two are kept. Never a name `release`/`previous` already covers.
-    private static func rotatePriors(from previous: [String: FeedApp]?, in dir: URL) throws {
+    /// Generations that have left `previous` but are still kept, newest first; a generation is its
+    /// artifact and icon. Never a name `release`/`previous` already covers.
+    private static func rotatePriors(from previous: [String: FeedApp]?, in dir: URL, keeping keep: Int) throws {
         var priors = priorMap(in: dir)
+        let older = max(keep - 2, 0)
         if let previous {
-            // Per app: other apps keep their own prior generation untouched by this publish.
+            // Per app: other apps keep their own prior generations untouched by this publish.
             for (app, entry) in previous {
-                priors[app] = [entry.file] + (entry.icon.map { [$0] } ?? [])
+                let generation = [entry.file] + (entry.icon.map { [$0] } ?? [])
+                priors[app] = Array(([generation] + (priors[app] ?? [])).prefix(older))
+                if priors[app]?.isEmpty == true { priors.removeValue(forKey: app) }
             }
         }
-        try AtomicFile.writeJSON(priors, to: dir.appendingPathComponent("priors.json"))
+        _ = try AtomicFile.writeJSON(priors, to: dir.appendingPathComponent("priors.json"))
     }
 
-    private static func priorMap(in dir: URL) -> [String: [String]] {
+    private static func priorMap(in dir: URL) -> [String: [[String]]] {
         let url = dir.appendingPathComponent("priors.json")
-        guard let data = try? Data(contentsOf: url), let priors = try? JSON.decode([String: [String]].self, from: data) else { return [:] }
-        return priors
+        guard let data = try? Data(contentsOf: url) else { return [:] }
+        if let generations = try? JSON.decode([String: [[String]]].self, from: data) { return generations }
+        // 0.1.60 and earlier wrote one flat generation per app.
+        return (try? JSON.decode([String: [String]].self, from: data))?.mapValues { [$0] } ?? [:]
     }
 
-    private static func priorNames(in dir: URL) -> Set<String> { Set(priorMap(in: dir).values.flatMap { $0 }) }
+    private static func priorNames(in dir: URL) -> Set<String> { Set(priorMap(in: dir).values.flatMap { $0.flatMap { $0 } }) }
 
     /// The artifacts a mirror's rollback release still names. A missing or unreadable file keeps
     /// nothing (and blocks nothing): the next mirror sync rewrites it.

@@ -312,6 +312,56 @@ public final class FeedServer: @unchecked Sendable {
     static func text(_ status: Int, _ message: String) -> HTTPResponse { HTTPResponse(status, "text/plain; charset=utf-8", message) }
     static let ok = HTTPResponse(200, "application/json", "{}")
 
+    /// The orders this Mac can carry out, signed with the key every agent is pinned to: the one
+    /// reply both `GET /commands` (older agents) and `POST /status` (0.1.61+) send, so a Mac that
+    /// has just reported is not made to ask again. nil when this publisher has no signing key or
+    /// the reply cannot be signed.
+    private func ordersReply(machine: String, ms: MachineState, capabilities names: Set<String>, now: Date) -> HTTPResponse? {
+        guard let commandKey else { return nil }
+        // A rollback order is withheld from an agent that does not say it understands one: an
+        // older agent would carry the same order out as an update.
+        let deliverable = ms.pending.filter {
+            switch $0.action {
+            case ServerCommand.update: return true
+            case ServerCommand.rollback: return names.contains(AgentCapability.ownerRollback)
+            // A launch order is withheld from an agent that cannot start an app: an older agent
+            // would refuse it, and the order would sit pending for ever.
+            case ServerCommand.launch: return names.contains(AgentCapability.launch)
+            case ServerCommand.vendorInstall:
+                guard names.contains(AgentCapability.vendorInstall), let payload = $0.vendor,
+                      ms.vendorAssignments?[payload.entry.id] == true,
+                      let catalog = try? VendorCatalog.load(from: VendorCatalog.url(in: stateDir.path)),
+                      let preferences = try? VendorPreferences.load(stateDir),
+                      !preferences.retired.contains(payload.entry.id),
+                      payload.byteCap == preferences.byteCap,
+                      var current = catalog.entries.first(where: { $0.id == payload.entry.id }) else { return false }
+                current.enabled = true
+                return current == payload.entry
+            default: return names.contains(AgentCapability.ownerRollback)
+            }
+        }
+        // Signed with the key every agent is pinned to, and naming this Mac and the moment it was
+        // made: a forged or replayed reply is refused at the Mac.
+        let body = JSON.encode(CommandsReply(machine: machine, commands: deliverable, automatic: ms.automatic,
+                                              automaticAt: ms.automaticSet?.mapValues(\.at)), pretty: false)
+        guard let signature = try? Signing.sign(body, with: commandKey) else { return nil }
+        // One line per handout so an operator can tell whether a Mac fetched its orders and how far
+        // the signed-at drifted from the server's clock (a large gap means the Mac will refuse the
+        // reply as stale). The gap is between now and the newest order's createdAt, since that is
+        // what the agent will compare against its own clock.
+        if !deliverable.isEmpty {
+            let ids = deliverable.map(\.id).joined(separator: ",")
+            let newestAt = deliverable.compactMap { ISO.date($0.createdAt) }.max() ?? now
+            let gap = Int(abs(now.timeIntervalSince(newestAt)))
+            let audit: [String: Any] = ["at": ISO.string(now), "machine": machine,
+                                        "ids": ids, "gap_s": gap]
+            if let data = try? JSONSerialization.data(withJSONObject: audit, options: [.sortedKeys]) {
+                FileHandle.standardError.write(Data("commands-handout ".utf8) + data + Data("\n".utf8))
+            }
+        }
+        return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
+    }
+
     /// The first byte a `Range: bytes=<start>-` header asks for. Only the agent's own open-ended
     /// form is honoured; anything else is served whole, which every client already handles.
     static func rangeStart(_ header: String?) -> Int64? {
@@ -656,6 +706,10 @@ public final class FeedServer: @unchecked Sendable {
             }
             let inventory = MacInventory.read(body["inventory"])
             if case .refused(let reason) = inventory { return Self.text(400, reason) }
+            // 0.1.61+: the agent names what it can carry out here too, so its orders can ride back
+            // in this reply. Absent from older agents, which keep asking `GET /commands`.
+            let advertised = Self.parsedCapabilities(body["capabilities"] as? String)
+            if case .refused(let message) = advertised { return Self.text(400, message) }
             let reportedName = body["display_name"] as? String
             if let reportedName, !MacName.valid(reportedName) {
                 return Self.text(400, "send a valid Mac name (at most \(MacName.maxCharacters) characters)")
@@ -688,14 +742,24 @@ public final class FeedServer: @unchecked Sendable {
                 ms.pausedUntil = pausedUntil
                 ms.waiting = waiting
                 ms.lastSeen = ISO.string(Date())
+                // Record what this agent says it can carry out, exactly as /commands does; a report
+                // that names none changes nothing on the record.
+                let names: Set<String>
+                if case .named(let list) = advertised {
+                    names = Set(list); ms.capabilities = list
+                } else {
+                    names = []
+                }
                 state.machines[machine] = ms
-                return Self.ok
+                // The orders ride with this reply (0.1.61), so an idle run is two transfers, not
+                // three. A publisher with no signing key, or an older agent, still gets a plain `{}`.
+                return ordersReply(machine: machine, ms: ms, capabilities: names, now: Date()) ?? Self.ok
             }
         }
         if req.method == "GET" && req.path == "/commands" {
             guard let machine = req.query["machine"] else { return Self.text(400, "missing machine") }
             guard let token = machineToken(req) else { return Self.text(401, "missing token") }
-            guard let commandKey else {
+            guard commandKey != nil else {
                 return Self.text(503, "this publisher has no signing key, so it will not send orders: start `khu serve` with --key")
             }
             let advertised = Self.parsedCapabilities(req.query["capabilities"])
@@ -720,51 +784,8 @@ public final class FeedServer: @unchecked Sendable {
                 } else {
                     names = []
                 }
-                // A rollback order is withheld from an agent that does not say it understands one:
-                // an older agent would carry the same order out as an update.
-                let deliverable = ms.pending.filter {
-                    switch $0.action {
-                    case ServerCommand.update: return true
-                    case ServerCommand.rollback: return names.contains(AgentCapability.ownerRollback)
-                    // A launch order is withheld from an agent that cannot start an app: an older
-                    // agent would refuse it, and the order would sit pending for ever.
-                    case ServerCommand.launch: return names.contains(AgentCapability.launch)
-                    case ServerCommand.vendorInstall:
-                        guard names.contains(AgentCapability.vendorInstall), let payload = $0.vendor,
-                              ms.vendorAssignments?[payload.entry.id] == true,
-                              let catalog = try? VendorCatalog.load(from: VendorCatalog.url(in: stateDir.path)),
-                              let preferences = try? VendorPreferences.load(stateDir),
-                              !preferences.retired.contains(payload.entry.id),
-                              payload.byteCap == preferences.byteCap,
-                              var current = catalog.entries.first(where: { $0.id == payload.entry.id }) else { return false }
-                        current.enabled = true
-                        return current == payload.entry
-                    default: return names.contains(AgentCapability.ownerRollback)
-                    }
-                }
-                // Signed with the key every agent is pinned to, and naming this Mac and the moment
-                // it was made: a forged or replayed reply is refused at the Mac.
-                let now = Date()
-                let body = JSON.encode(CommandsReply(machine: machine, commands: deliverable, automatic: ms.automatic,
-                                                       automaticAt: ms.automaticSet?.mapValues(\.at)), pretty: false)
-                guard let signature = try? Signing.sign(body, with: commandKey) else {
-                    return Self.text(500, "could not sign the orders")
-                }
-                // One line per handout so an operator can tell whether a Mac fetched its orders and
-                // how far the signed-at drifted from the server's clock (a large gap means the Mac
-                // will refuse the reply as stale). The gap is between now and the newest order's
-                // createdAt, since that is what the agent will compare against its own clock.
-                if !deliverable.isEmpty {
-                    let ids = deliverable.map(\.id).joined(separator: ",")
-                    let newestAt = deliverable.compactMap { ISO.date($0.createdAt) }.max() ?? now
-                    let gap = Int(abs(now.timeIntervalSince(newestAt)))
-                    let audit: [String: Any] = ["at": ISO.string(now), "machine": machine,
-                                                "ids": ids, "gap_s": gap]
-                    if let data = try? JSONSerialization.data(withJSONObject: audit, options: [.sortedKeys]) {
-                        FileHandle.standardError.write(Data("commands-handout ".utf8) + data + Data("\n".utf8))
-                    }
-                }
-                return HTTPResponse(200, "application/json", data: JSON.encode(SignedReply(reply: body, signature: signature), pretty: false))
+                return ordersReply(machine: machine, ms: ms, capabilities: names, now: Date())
+                    ?? Self.text(500, "could not sign the orders")
             }
         }
         if req.method == "POST" && (req.path.hasPrefix("/commands/") || req.path.hasPrefix("/automatic/")) && req.path.hasSuffix("/result") {
@@ -1237,6 +1258,7 @@ public final class FeedServer: @unchecked Sendable {
             + "<div class=setting><div><h3>Publisher address</h3><p class=sub>Other Macs reach this Update Studio through Tailscale. Launcher carries this address and the trusted key.</p></div><div>\(destination)<p class=sub>Listener addresses are set in this Mac’s publisher configuration. Changing this display would not change the listener.</p></div></div>"
             + "<div class=setting><div><h3>Pairing protection</h3><p class=sub>The code is protected against repeated wrong attempts.</p></div><div>\(lockStatus)<a href=#connect>View code and connect a Mac</a><p class=sub>Already connected Macs keep their connection and Automatic choices.</p></div></div>"
             + "<div class=setting><div><h3>Automatic updates</h3><p class=sub>Every Mac keeps its own choices.</p></div><div><p>New Launcher connections start with Launcher automatic updates on. Other apps follow that Mac’s saved settings.</p><p class=sub>Use the Automatic control beside an app in a Mac’s details to change its effective setting. Existing choices are never reset by connecting.</p><a href=#macs>Manage choices in Macs</a></div></div>"
+            + "<div class=setting><div><h3>Feed retention</h3><p class=sub>How many verified versions of each app the feed keeps: the current one and its previous, plus any older ones you choose.</p></div><div><p>Keeping <b>\(FeedPublisher.KeepCount.keep(in: feedDir))</b> versions of each app.</p><p class=sub>Set with <code>khu publish --keep N</code>. Nothing already pinned is removed until the next publish.</p></div></div>"
             + "<div class=setting><div><h3>Appearance</h3><p class=sub>System matches this Mac. Light and Dark force that look. Default uses the look Update Studio KH was designed with.</p></div>"
             + "<div><div class=themes role=group aria-label=Appearance><button type=button data-appearance=system aria-pressed=true>System</button><button type=button data-appearance=light aria-pressed=false>Light</button><button type=button data-appearance=dark aria-pressed=false>Dark</button></div></div></div></div></section>"
 

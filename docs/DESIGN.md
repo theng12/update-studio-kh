@@ -128,7 +128,11 @@ one slow or stalled Mac never holds up the others.
 - `POST /status`, `GET /commands?machine=<id>[&capabilities=<a,b>]`, `POST /commands/<id>/result` — per-Mac bearer
   token (stored as sha256 only). `GET /commands` answers with `SignedReply` (the reply and its
   Ed25519 signature in ONE body), signed with `--key`, naming the Mac and the moment it was made;
-  the agent refuses one it cannot verify, one for another Mac, or one not fresh. A result
+  the agent refuses one it cannot verify, one for another Mac, or one not fresh. Since 0.1.61 the
+  same signed orders ride in the `POST /status` answer (the report body may name `capabilities`), so
+  an idle run is the feed and the status report, two transfers; an agent that meets a status answer
+  which is not a `SignedReply` — every publisher before 0.1.61 answered `{}` — asks `GET /commands`
+  exactly as before, and older agents ignore the status body and keep asking that route. A result
   acknowledges an order by id only when it is pending for this Mac and the body's app matches.
   Unknown IDs return 404 without changing state; the agent treats this as an already absent order.
   Automatic results use `POST /automatic/auto-<id>/result`, which never clears pending orders.
@@ -139,7 +143,7 @@ one slow or stalled Mac never holds up the others.
   bounded names and values; a result keeps its order id, `status` and `reason` within their own
   bounds, at most one result per app (the map is keyed by app) and at most `maxApps` apps — a Mac
   that keeps naming new ones evicts the oldest, so what one Mac can write never depends on how long
-  it runs. `/commands` is bounded too: the `capabilities` names an agent advertises are at most
+  it runs. `/commands` and the `/status` body are bounded too: the `capabilities` names an agent advertises are at most
   `ReportPolicy.maxCapabilities` short names and `maxCapabilitiesQueryBytes` in all, refused above
   that instead of stored, and a request that names **no** `capabilities` parameter at all changes
   nothing on the record — the Hub asks this route with a stored token to learn whether the publisher

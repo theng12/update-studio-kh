@@ -64,7 +64,7 @@ Every KH app release includes a four-SSD refresh before closeout: refresh KH-STU
 
 The one-click SSD action reads the current `apps.json` each time it starts. App identities, versions, installer paths, sizes and checksums come from that refreshed index, rather than a fixed version list in Launcher. The same click therefore handles future released app versions after the SSD refresh. It still keeps newer installed versions, preserves pauses and never installs absent optional apps.
 
-Publishing commits the signed current and previous installer references before retiring unreferenced artifacts and icons to macOS Trash. Existing `artifact-retention.json` recovery pins also remain protected: an older recovery copy is still referenced until that ledger is safely refreshed. The next normal publication retries retirement after those references are released or a Trash failure is resolved. This can temporarily retain more than two installer versions while legacy recovery is required; publication does not silently drop those recovery references.
+Publishing commits the signed current and previous installer references before retiring unreferenced artifacts and icons to macOS Trash. The feed keeps two verified versions of each app by default — the current one and its previous — and that count is a setting beside the feed: `khu publish --keep N` saves it for the publishes that follow, values below 2 are refused, and the publisher's Settings page shows the count in use. Existing `artifact-retention.json` recovery pins also remain protected: an older recovery copy is still referenced until that ledger is safely refreshed. The next normal publication retries retirement after those references are released or a Trash failure is resolved. This can temporarily retain more than the kept count while legacy recovery is required; publication does not silently drop those recovery references.
 
 Those version numbers are examples: use the app’s new version and exact installer path. A version not newer than the feed's is refused (`--allow-same` exists, but never use it to replace an accepted installer with different application bytes).
 
@@ -142,7 +142,7 @@ defines no lanes, and refuses receipts for another checkout or a changed log. Pa
 update/rollback and intended-machine evidence remain separate required release checks; a test
 receipt never claims those passed. `Tests/test_release_proof.py` checks the collector itself.
 
-Shared UI release inputs are versioned under `packaging/shared-ui` so the scoped test receipt covers them and isolated builds need no Developer-folder path. At release preparation, compare those three files with `~/Developer/kh-shared-ui` and refresh any changed inputs before the gate. `packaging/generate-ui.py` compiles the shared notes and layout values into the helper; both screens consume that compiled data.
+Shared UI release inputs are versioned under `packaging/shared-ui` so the scoped test receipt covers them and isolated builds need no Developer-folder path. At release preparation, compare those three files with `~/Developer/Shared Tools/kh-shared-ui` and refresh any changed inputs before the gate. `packaging/generate-ui.py` compiles the shared notes and layout values into the helper; both screens consume that compiled data.
 
 Both native app packagers use `KHU_SIGN_IDENTITY`, defaulting to the existing
 `KH Studio Local Signing` identity. A missing identity fails packaging; ad-hoc signing is refused.

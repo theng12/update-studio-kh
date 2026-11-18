@@ -259,6 +259,8 @@ public enum AgentCapability {
     public static let vendorInstall = "vendor-install-v1"
     /// An agent that can start an installed app on this Mac when the owner asks from the publisher.
     public static let launch = "launch-v1"
+    /// Everything this agent understands: the one list `/status` and `/commands` advertise.
+    public static let all = [ownerRollback, vendorInstall, launch]
 }
 
 /// One install result as the page shows it: which app, the version it was on, the version the feed

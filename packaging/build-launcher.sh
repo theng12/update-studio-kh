@@ -9,10 +9,16 @@ IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
 [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ && -f "$PUB" && -x build/khu ]] || { echo "usage: $0 <version> <publisher.json> (after ./build.sh build)" >&2; exit 2; }
 APP="build/Studio Launcher KH.app"; DMG="build/Studio-Launcher-KH-$VERSION.dmg"; KIT="build/launcher-kit"
-# The owner may empty their trash at any time, which leaves this repo's `_trash` link dangling and
-# makes `mkdir -p _trash` fail the build. Create what the link points at.
-if [ -L _trash ]; then mkdir -p "$(readlink _trash)"; else mkdir -p _trash; fi
-for old in "$APP" "$DMG" "$KIT"; do if [ -e "$old" ]; then mv "$old" "_trash/$(basename "$old").$(date +%s)"; fi; done
+# Retired build output goes to the one trash, on the Desktop, as a real path. A `_trash` symlink in
+# the checkout made `mkdir -p` fail ENOTDIR once the owner emptied the trash (Story 1.4.410's gate,
+# 2026-11-18). KHU_TRASH points a test at a temp dir, so a run never writes the owner's trash.
+TRASH="${KHU_TRASH:-$HOME/Desktop/_trash/update-studio-kh}"
+if [ -e "$TRASH" ] && [ ! -d "$TRASH" ]; then
+  echo "The trash path $TRASH exists and is not a directory; move it out of the way and build again." >&2
+  exit 1
+fi
+mkdir -p "$TRASH"
+for old in "$APP" "$DMG" "$KIT"; do if [ -e "$old" ]; then mv "$old" "$TRASH/$(basename "$old").$(date +%s)"; fi; done
 # build/khu and build/khu-stub are already universal (./build.sh build); merging a duplicate
 # slice again would only re-derive them, so the kit takes them as built.
 packaging/build-agent-kit.sh "$VERSION" "$KIT" >/dev/null
@@ -51,8 +57,8 @@ if ! out=$(hdiutil verify "$DMG" 2>&1); then
   echo "hdiutil verify failed for $DMG: ${out##*$'\n'}" >&2
   exit 1
 fi
-mv "$TMP" "_trash/launcher-dmg-staging.$(date +%s)"
+mv "$TMP" "$TRASH/launcher-dmg-staging.$(date +%s)"
 echo "built $APP and $DMG (agent $(lipo -archs "$KIT/bin/khu"))"
 packaging/record-dist.sh copy "Studio Launcher KH" "$VERSION" "$DMG"
 # Build output is not an archive: keep the latest two per app, retire the rest recoverably.
-python3 -B -I packaging/rotate-build.py build
+python3 -B -I packaging/rotate-build.py build --trash "$TRASH"

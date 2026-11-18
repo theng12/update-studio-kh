@@ -33,9 +33,9 @@ case "$MODE" in
     if [ ! -f "$DIST/$APP-$VERSION.dmg" ]; then
       echo "dist has no $APP-$VERSION.dmg; run the copy step first" >&2; exit 2
     fi
-    # The repo _trash may be the owner's unified Desktop trash behind a link. Resolve it once, on
-    # purpose, so the ledger names a real path and the move never runs through a symlink.
-    REAL_TRASH=$(/usr/bin/python3 -I -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$ROOT/_trash")
+    # The one trash is on the Desktop, resolved as a real path: no `_trash` link or folder lives in
+    # the checkout. KHU_TRASH points a test at a temp dir.
+    REAL_TRASH=$(/usr/bin/python3 -I -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${KHU_TRASH:-$HOME/Desktop/_trash/update-studio-kh}")
     TRASH_DIR="$REAL_TRASH/$(date +%Y-%m-%d) dist"
 mkdir -p "$TRASH_DIR"
     PIN=$(mktemp -t khu-dist-pins)

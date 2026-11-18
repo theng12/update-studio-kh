@@ -19,14 +19,16 @@ func publisherRetentionTests() {
     }
     /// Publishes from `root/src-<source>`, so two apps sharing bytes share a source name and
     /// therefore one content-addressed artifact, exactly as two real DMGs of identical bytes would.
+    /// `keep` defaults to 3 here because the cases below were written around three generations;
+    /// a case that judges the setting itself passes `keep:` (nil is the product's own default).
     func publish(_ dir: URL, _ app: String, _ version: String, _ bytes: String,
                  source: String = "artifact.bin", kind: String = "fake-for-tests",
-                 meta: ((String) throws -> AppMeta)? = nil,
+                 meta: ((String) throws -> AppMeta)? = nil, keep: Int? = 3,
                  retire: ((URL) throws -> Void)? = nil) throws {
         let src = root.appendingPathComponent("src-" + source)
         try Data(bytes.utf8).write(to: src)
         try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: app, version: version, artifact: src,
-                                  kind: kind, allowSame: false, meta: meta, retireArtifact: retire)
+                                  kind: kind, allowSame: false, meta: meta, keep: keep, retireArtifact: retire)
     }
     func meta(_ version: String, icon: Data) -> ((String) throws -> AppMeta) {
         { _ in AppMeta(name: "Media Studio KH", bundleID: "com.t.media", bundleName: "Media Studio KH.app",
@@ -242,4 +244,47 @@ func publisherRetentionTests() {
         expect(!stored(dir).contains(pinned.file) && stored(dir).count == 3,
                "RET three generations remain in artifacts after the default retirement")
     } catch { expect(false, "RET default destination: \(error)") }
+
+    // 7. The number kept is a setting, not a constant: the default keeps the current version and
+    // its previous and retires anything older; a higher count keeps exactly that many; a value below
+    // 2 is refused; and the Settings page shows the count the next publish will use.
+    do {
+        let dir = feedDir("keep-default")
+        var moved: [String] = []
+        let retire: (URL) throws -> Void = { file in moved.append(file.lastPathComponent)
+            _ = try Trash.move(file, into: root.appendingPathComponent("system-trash-keep-default")) }
+        for (version, bytes) in [("1.0.0", "k1"), ("1.0.1", "k2"), ("1.0.2", "k3")] {
+            try publish(dir, "media", version, bytes, keep: nil, retire: retire)
+        }
+        let kept = try FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)!
+        expect(kept.apps["media"]?.version == "1.0.2" && kept.previous?["media"]?.version == "1.0.1",
+               "RET keep=2 (the default) keeps the current version and its previous")
+        expect(stored(dir).count == 2 && moved.count == 1,
+               "RET keep=2 keeps exactly two installers and retires the third (kept \(stored(dir).count), moved \(moved.count))")
+
+        let four = feedDir("keep-four")
+        var fourMoved: [String] = []
+        let fourRetire: (URL) throws -> Void = { file in fourMoved.append(file.lastPathComponent)
+            _ = try Trash.move(file, into: root.appendingPathComponent("system-trash-keep-four")) }
+        try FeedPublisher.KeepCount.set(4, in: four)
+        for (version, bytes) in [("1.0.0", "f1"), ("1.0.1", "f2"), ("1.0.2", "f3"), ("1.0.3", "f4")] {
+            try publish(four, "media", version, bytes, keep: nil, retire: fourRetire)
+        }
+        expect(stored(four).count == 4 && fourMoved.isEmpty,
+               "RET keep=4 keeps four installers (kept \(stored(four).count))")
+        try publish(four, "media", "1.0.4", "f5", keep: nil, retire: fourRetire)
+        expect(stored(four).count == 4 && fourMoved.count == 1,
+               "RET the fifth generation retires the oldest at keep=4 (kept \(stored(four).count))")
+
+        expectThrows("RET a keep count below 2 is refused", contains: "at least 2") {
+            try FeedPublisher.KeepCount.set(1, in: four)
+        }
+
+        let shown = Rig("keep-settings")
+        try FeedPublisher.KeepCount.set(3, in: shown.feed)
+        let page = String(decoding: shown.server.handleRequest(HTTPRequest(method: "GET", path: "/",
+            headers: ["host": "127.0.0.1:8790"]), remote: "127.0.0.1").data, as: UTF8.self)
+        expect(page.contains("Feed retention") && page.contains("Keeping <b>3</b>"),
+               "RET the keep count is shown in Settings with the other settings")
+    } catch { expect(false, "RET keep setting: \(error)") }
 }

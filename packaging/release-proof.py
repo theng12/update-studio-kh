@@ -55,9 +55,9 @@ def collect(config, repo, started_at, testctl, check=checked, lanes=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path.home() / "Developer/portfolio/test-policy/projects.json")
+    parser.add_argument("--config", type=Path, default=Path.home() / "Developer/Shared Tools/portfolio/test-policy/projects.json")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent)
-    parser.add_argument("--testctl", type=Path, default=Path.home() / "Developer/portfolio/bin/testctl")
+    parser.add_argument("--testctl", type=Path, default=Path.home() / "Developer/Shared Tools/portfolio/bin/testctl")
     parser.add_argument("--started-at", required=True, help="UTC release gate start; older matching evidence is labelled skipped-unchanged")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--lane", action="append", help="Collect only this existing shared lane; repeat for more lanes")

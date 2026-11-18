@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.61 — 2026-11-18
+
+- Each check now gets its update orders back in the same reply as its status report, so this Mac makes one fewer transfer every five minutes. A Mac still on an older version keeps asking for its orders separately, and that request is answered exactly as before.
+- The update feed keeps two versions of each app — the current one and the one before it — and that number is now a setting (`khu publish --keep N`) instead of being fixed. The Settings page shows the count in use.
+- Building the app no longer depends on a trash link inside the project folder: retired build files go to the one trash on the Desktop, and a stray file where that trash should be stops the build with one plain sentence.
+- Two old folder names in the release tooling and the install guide now point at the real Shared Tools folders.
+
 ## 0.1.60 — 2026-11-18
 
 - An update now downloads and checks itself while the app keeps working, and the app is only paused for the swap itself. The row reads Downloaded — waiting for the app to close; it installs by itself then — instead of failing or telling you to come back later.
