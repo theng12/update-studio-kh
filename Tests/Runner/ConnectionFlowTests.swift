@@ -452,18 +452,20 @@ func connectionFlowTests() {
             }
             expect((try! fm.attributesOfItem(atPath: file.path))[.posixPermissions] as? Int == 0o600,
                    "CF13 renewed credentials stay private")
-            // No code typing: an open allow-a-Mac window re-pairs too; without one the publisher
-            // explains what is missing and nothing changes.
+            // No code typing: without a window the publisher explains what is missing; with one it
+            // still refuses, because this Mac is already enrolled (audit, 2026-11-18).
             let noCodeBefore = try! Data(contentsOf: file)
             expectThrows("CF13b an empty code with no window gets the publisher's explanation", contains: "pairing code") {
                 _ = try Connect.repair(configFile: file, code: "", confirmed: true, http: client)
             }
             expect((try! Data(contentsOf: file)) == noCodeBefore, "CF13b the refused no-code attempt changes nothing")
             r.openWindow(30)
-            let noCode = try? Connect.repair(configFile: file, code: "", confirmed: true, http: client)
-            let afterNoCode = (try! JSONSerialization.jsonObject(with: try! Data(contentsOf: file))) as! [String: Any]
-            expect(noCode == "repair-mac" && (afterNoCode["token"] as? String) != token,
-                   "CF13c Pair again with no code succeeds while the publisher's allow-a-Mac window is open")
+            let windowBefore = try! Data(contentsOf: file)
+            expectThrows("CF13c Pair again with no code is refused even with a window open", contains: "already in use") {
+                _ = try Connect.repair(configFile: file, code: "", confirmed: true, http: client)
+            }
+            expect((try! Data(contentsOf: file)) == windowBefore && r.machines["repair-mac"]?.tokenHash == Enrolment.sha256Hex(token),
+                   "CF13c the refusal leaves this Mac's sign-in exactly as it was")
         }
     }
 

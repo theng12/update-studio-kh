@@ -91,7 +91,12 @@ final class RecordingShell: Shell, @unchecked Sendable {
         }
         if executable == "/usr/bin/ditto" {
             if dittoThrows { throw khuFail("timeout running /usr/bin/ditto") }
-            if let code = dittoExit { return ShellResult(exitCode: code, stdout: "", stderr: "disk full") }
+            if let code = dittoExit {
+                // A copy that leaves nothing behind: the completeness check refuses it whatever
+                // the exit code says.
+                if arguments.count > 1 { _ = try? FileManager.default.removeItem(atPath: arguments[1]) }
+                return ShellResult(exitCode: code, stdout: "", stderr: "ditto: copy stopped")
+            }
         }
         return try SystemShell().run(executable, arguments: arguments, timeout: timeout)
     }
@@ -1114,9 +1119,12 @@ func agentAndServerTests() {
         // Same published_at, different signed content.
         let release = try! JSONDecoder().decode(Release.self, from: Data(contentsOf: FeedPublisher.releaseFile(in: rigH.feed)))
         var feed = try! JSONDecoder().decode(Feed.self, from: release.feedData!)
+        // Different packaging (notes only) at the same published_at is the same release (0.1.64)
+        // and is accepted; a different artifact at that instant is still refused.
         feed.apps["h"]?.notes = "changed"
+        feed.apps["h"]?.sha256 = String(repeating: "d", count: 64)
         try! FeedPublisher.saveFeed(feed, to: rigH.feed, key: rigH.pair.privateKey)
-        expectThrows("R25 a different feed with an equal published_at is refused", contains: "same published_at") {
+        expectThrows("R25 a different artifact with an equal published_at is refused", contains: "different artifact identity") {
             _ = try Agent.runOnce(config: cfgH, http: c)
         }
         feed.published_at = ISO.string(Date().addingTimeInterval(10 * 24 * 3600))
@@ -1564,11 +1572,15 @@ func round2Tests(only: Int? = nil) {
         actual.isRunning = { launched || (liveRunning() ?? false) }
         actual.launch = { launched = true }
         actual.healthy = { version in (try? BundleInfo.read(rig.installed.path).version) == version }
-        let result = try? Recipe.appDmg(shell: rig.shell, installedPath: rig.installed.path, artifactPath: "/tmp/fake.dmg",
-                                        feedVersion: "1.2.3", expectedBundleID: "com.example.foo", stateDir: rig.state.path,
-                                        app: "foo", control: actual)
-        expect(result?.status == "updated" && !process.isRunning && !menu.isRunning && rig.shell.calls.contains("fake menu quit") && marker(rig.installed) == "1.2.3",
-               "R2-6 complete Gateway recipe quits menubar and stops genuine embedded listener (\(result?.status ?? "error"))")
+        var gatewayError = ""
+        let result: RecipeResult
+        do {
+            result = try Recipe.appDmg(shell: rig.shell, installedPath: rig.installed.path, artifactPath: "/tmp/fake.dmg",
+                                       feedVersion: "1.2.3", expectedBundleID: "com.example.foo", stateDir: rig.state.path,
+                                       app: "foo", control: actual)
+        } catch { gatewayError = " (\(error))"; result = RecipeResult(status: "error") }
+        expect(result.status == "updated" && !process.isRunning && !menu.isRunning && rig.shell.calls.contains("fake menu quit") && marker(rig.installed) == "1.2.3",
+               "R2-6 complete Gateway recipe quits menubar and stops genuine embedded listener (\(result.status)\(gatewayError))")
 
     }
     run(7) {
@@ -2789,7 +2801,7 @@ func launcherTests() {
         let khu = URL(fileURLWithPath: "build/khu").standardizedFileURL.path
         let art = rig.artifact("w.zip", "w").path
         func publish(_ more: [String]) -> ShellResult? {
-            try? SystemShell().run(khu, arguments: ["publish", "--feed", rig.feed.path, "--key", rig.key.path, "--app", "w", "--version", "1.2.0", "--artifact", art, "--kind", "fake-for-tests"] + more, timeout: 10)
+            try? SystemShell().run(khu, arguments: ["publish", "--feed", rig.feed.path, "--key", rig.key.path, "--app", "w", "--version", "1.2.0", "--artifact", art, "--kind", "fake-for-tests", "--new-app"] + more, timeout: 10)
         }
         let quiet = publish([]), typed = publish(["--notes", "- typed"]), wrong = publish(["--changelog", changelog("old.md", "## 1.1.0 — 2026-10-01\n- Older\n").path])
         expect(quiet?.exitCode != 0 && quiet?.stderr.contains("needs --changelog") == true, "W5 publish with no changelog is refused")
@@ -3144,16 +3156,17 @@ func pairingTests() {
                "PC4 the new token reports normally")
         expect(r.machines["mac-a"]?.history?.contains { $0.status == "paired again" } == true,
                "PC4 the replacement is kept as an audit line on the Mac's page")
-        // An open allow-a-Mac window re-pairs an existing Mac with no code typed (owner, 2026-11-13).
+        // An open allow-a-Mac window enrols a NEW Mac; it must never take over one that is enrolled
+        // (audit, 2026-11-18): anything on the tailnet reaches /enrol while a window is open.
         r.openWindow(30)
         let windowClaim = enrolPost(server, machine: "mac-a", nonce: enrolNonce())
-        let third = enrolReply(windowClaim, key: r.rig.pair.privateKey)
-        expect(windowClaim.status == 200 && third?.token != second?.token,
-               "PC4 an open window re-pairs an existing Mac with no code typed")
-        expect(enrolStatusPost(server, machine: "mac-a", token: second!.token, body: ["machine": "mac-a"]).status == 401,
-               "PC4 the window re-pair revokes the previous token too")
-        expect(r.machines["mac-a"]?.history?.filter { $0.status == "paired again" }.count == 2,
-               "PC4 both replacements are audited")
+        expect(windowClaim.status == 409,
+               "PC4 an open window cannot replace an enrolled Mac")
+        expect(enrolStatusPost(server, machine: "mac-a", token: second!.token, body: ["machine": "mac-a"]).status == 200,
+               "PC4 the enrolled Mac keeps the token it had")
+        expect(r.machines["mac-a"]?.history?.filter { $0.status == "paired again" }.count == 1,
+               "PC4 only the code replacement is audited")
+        expect(r.window?.enrolled == 0, "PC4 the refused claim spends no window slot")
         expect(post(server, "mac-c", wrong(p)).status == 403 && post(server, "mac-a", wrong(p)).status == 403,
                "PC4 a wrong code never says which ids are enrolled")
         // A lost reply can still be resent by the same claim before it reports.
@@ -3255,7 +3268,7 @@ func enrolWindowTests() {
     }
 
     // E3. Without a code or an open window an enrolled Mac is refused and its token is not rotated;
-    // an open window re-pairs it with no code typed (owner, 2026-11-13).
+    // an open window enrols a NEW Mac and never takes over one that is already enrolled.
     do {
         let r = EnrolRig("e3-taken")
         let real = try! Enrolment.enrol(stateDir: r.rig.state, machine: "mac1")
@@ -3270,12 +3283,14 @@ func enrolWindowTests() {
             headers: ["authorization": "Bearer \(real)"], body: Data(#"{"machine":"mac1"}"#.utf8)), remote: "100.64.0.9")
         expect(use.status == 200, "E3 the Mac's real token still works after a tailnet device tried to take its place")
         r.openWindow(30)
-        let claim = enrolReply(enrolPost(r.server, machine: "mac1", nonce: enrolNonce()), key: r.rig.pair.privateKey)
-        expect(claim != nil && r.machines["mac1"]?.tokenHash == claim.map { Enrolment.sha256Hex($0.token) },
-               "E3 an open window re-pairs the enrolled Mac, and the new token is stored")
-        expect(enrolStatusPost(r.server, machine: "mac1", token: real, body: ["machine": "mac1"]).status == 401,
-               "E3 the re-paired Mac's old token stops working")
-        expect(r.window?.enrolled == 0, "E3 a replacement spends no window slot")
+        let claim = enrolPost(r.server, machine: "mac1", nonce: enrolNonce())
+        expect(claim.status == 409 && r.machines["mac1"]?.tokenHash == hash,
+               "E3 an open window cannot take over the enrolled Mac (\(claim.status))")
+        expect(enrolStatusPost(r.server, machine: "mac1", token: real, body: ["machine": "mac1"]).status == 200,
+               "E3 the enrolled Mac keeps working through a window it did not ask for")
+        expect(r.window?.enrolled == 0, "E3 the refused claim spends no window slot")
+        expect(enrolPost(r.server, machine: "mac-new", nonce: enrolNonce()).status == 200,
+               "E3 the same window still enrols a genuinely new Mac")
         _ = try? Enrolment.enrol(stateDir: r.rig.state, machine: "mac1")
         expect(r.machines["mac1"]?.tokenHash != hash,
                "E3 re-enrolment on the publisher itself is what rotates a token")
@@ -3902,15 +3917,13 @@ func enrolWindowTests() {
         expect(enrolStatusPost(r.server, machine: "retry-mac", token: firstToken,
                                body: ["machine": "retry-mac"]).status == 401,
                "E22 the token only the lost reply carried no longer works")
-        // Owner, 2026-11-13: an open window re-pairs an existing Mac with no code typed; closing it
-        // refuses, and an owner-enrolled Mac is likewise only re-minted while a window is open.
+        // Audit 2026-11-18: a window enrols a new Mac; it cannot re-mint an enrolled one.
         let third = enrolPost(r.server, machine: "retry-mac", nonce: enrolNonce())
-        let thirdToken = enrolReply(third, key: r.rig.pair.privateKey)?.token ?? ""
-        expect(third.status == 200 && thirdToken != againToken,
-               "E22 with the window open a different nonce re-pairs the Mac")
+        expect(third.status == 409,
+               "E22 with the window open a different nonce is refused, not re-minted")
         expect(enrolStatusPost(r.server, machine: "retry-mac", token: againToken,
-                               body: ["machine": "retry-mac"]).status == 401,
-               "E22 the re-paired Mac's previous token stops working")
+                               body: ["machine": "retry-mac"]).status == 200,
+               "E22 the Mac keeps the token it already holds")
         try! EnrolmentWindow.close(stateDir: r.rig.state)
         expect(enrolPost(r.server, machine: "retry-mac", nonce: n).status == 403,
                "E22 with the window closed nothing is re-minted")
@@ -4204,6 +4217,20 @@ struct RunnerMain {
         expect(!Signing.verify(data, signature: sig, publicKey: Signing.generateKeyPair().privateKey.publicKey), "sig wrong key")
         expectThrows("traversal refused") { _ = try SafeName.component("../etc", what: "x") }
 
+        if ProcessInfo.processInfo.environment["CC_ONLY"] != nil {
+            copyCompletenessTests()
+            rollbackRetirementTests()
+            mirrorOnlyTests()
+            mirrorFeedTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["MF_ONLY"] != nil {
+            mirrorFeedTests()
+        mirrorOnlyTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if let only = ProcessInfo.processInfo.environment["R2_ONLY"] {
             round2Tests(only: Int(only))
             if only == "28" { r28MonotonicWait() }
@@ -4268,6 +4295,9 @@ r41HealthMustHold()
         spaceReclaimTests()
         launchOrderTests()
         healthRequirementTests()
+        mirrorFeedTests()
+        copyCompletenessTests()
+        rollbackRetirementTests()
         print("TESTS: \(passed) passed, \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

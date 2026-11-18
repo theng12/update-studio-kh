@@ -83,8 +83,9 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         case .repair(_, let plan):
             intro = Self.wrap("Your current sign-in file will be preserved in ~/Library/KHUpdater/_trash, and this Mac "
                 + "keeps its name, its apps and its pinned key. Type the pairing code shown in Update Studio KH "
-                + "on the controller Mac, under Connect a Mac — or leave it empty while that Mac has its "
-                + "allow-a-Mac window open. Nothing is sent until you press Pair again.")
+                + "on the controller Mac, under Connect a Mac. This Mac is already enrolled, so an allow-a-Mac "
+                + "window on that Mac does not apply to it: the code is what reclaims its name. "
+                + "Nothing is sent until you press Pair again.")
             destination.stringValue = plan.feedURL
             destination.isEditable = false
             destination.isBezeled = false
@@ -188,8 +189,9 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         let confirm = NSAlert()
         confirm.messageText = "Pair again with Update Studio?"
         confirm.informativeText = "Your current sign-in file will be preserved in ~/Library/KHUpdater/_trash, and this Mac "
-            + "keeps its name, its apps and its pinned key. A pairing code from Update Studio, or an open "
-            + "allow-a-Mac window on the publisher, is required, and nothing is sent unless you continue."
+            + "keeps its name, its apps and its pinned key. A pairing code from Update Studio is required — an open "
+            + "allow-a-Mac window only helps when the publisher does not already list this Mac — and nothing is sent "
+            + "unless you continue."
         confirm.addButton(withTitle: "Continue")
         confirm.addButton(withTitle: "Cancel")
         guard confirm.runModal() == .alertFirstButtonReturn else { return .cancelled }
@@ -282,8 +284,9 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             machine = nameField.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
             guard !machine.isEmpty else { show("Type the name for this Mac.", color: .systemRed, spinning: false); return }
         case .repair(_, let plan):
-            // Empty is allowed: the publisher's open allow-a-Mac window authorises the pairing,
-            // and it answers with its own sentence when no window is open either.
+            // Empty is allowed: it works only when the publisher no longer lists this Mac and its
+            // allow-a-Mac window is open; an enrolled Mac is refused with the publisher's own
+            // sentence, which names the pairing code.
             code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
             machine = plan.machine
         }

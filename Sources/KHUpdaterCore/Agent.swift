@@ -402,6 +402,10 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     public var updaterArtifacts: [String: String]?
     public var feedPublishedAt: String?
     public var feedSHA256: String?
+    /// The artifact identity of the feed seen at `feedPublishedAt` (see `Feed.artifactIdentity`);
+    /// absent on a Mac upgraded from a build that only remembered `feedSHA256`, which is then
+    /// treated as unknown so the first check after the upgrade never refuses an unchanged feed.
+    public var feedArtifactIdentity: String?
     public var feedNetwork: FeedNetwork?
     /// The saved address the last successful check used. A newly saved address differs, so the next
     /// check tries it first rather than the mirrors cached for the address it replaced.
@@ -504,6 +508,17 @@ public enum Agent {
         guard let caseSensitive = (try? URL(fileURLWithPath: real)
             .resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]))?.volumeSupportsCaseSensitiveNames else { return real }
         return caseSensitive ? real : real.lowercased()
+    }
+
+    /// Whether an app with this feed id is installed in one of the Applications folders, by bundle
+    /// id from the signed feed's own entry — a bundle the config does not name still counts.
+    static func installedHere(_ app: String, feed: Feed) -> Bool {
+        // Unknown identity means "cannot tell", and a copy is never retired on a guess.
+        guard let bundleID = feed.apps[app]?.bundleID else { return true }
+        return Catalog.applicationFolders.contains { folder in
+            ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+                .contains { $0.hasSuffix(".app") && (try? BundleInfo.read(folder.appendingPathComponent($0).path))?.identifier == bundleID }
+        }
     }
 
     public static func runOnce(config: AgentConfig, http: HTTPClient = URLSessionHTTPClient(), shell: Shell = SystemShell(),
@@ -783,6 +798,7 @@ public enum Agent {
                                   executable: executable, serverBase: serverBase, now: now, installing: installing, appFolders: appFolders, reinstall: reinstall, rollbacks: rollbacks, initialSSD: initialSSD, previousResult: result)
         }
         let feed = selected.feed
+        if let note = selected.note { result.notes.append(note) }
         for (app, version) in memory.offlineRollbacks ?? [:] {
             if let entry = feed.apps[app], entry.version == version { memory.rejected[app] = entry.sha256 }
             memory.offlineRollbacks?[app] = nil
@@ -799,8 +815,12 @@ public enum Agent {
             do {
                 let status: String
                 if role?.enabled == true {
+                    // Only the apps this Mac has: a worker Mac that never runs Hub has no reason to
+                    // keep 4.2 GB of every app's pair. Its own list, plus what is installed here.
+                    let mine = Set(config.apps.keys).union(installed.keys)
                     _ = try FeedMirror.sync(releaseData: selected.release, sourceBase: artifactBase,
-                        root: FeedHostRole.feedDirectory(in: stateDir), publicKey: config.publicKey, http: http, now: now)
+                        root: FeedHostRole.feedDirectory(in: stateDir), publicKey: config.publicKey, http: http,
+                        now: now, only: mine.isEmpty ? nil : mine)
                     // This helper serves the feed itself: the separate job it used to install did
                     // not come back after a reboot, while the agent did. Any job left from before
                     // is retired here, so one process owns the feed and it starts with this one.
@@ -1150,6 +1170,27 @@ public enum Agent {
             let swept = Space.pruneTrash(in: stateDir, keeping: kept, shell: shell)
             if !swept.isEmpty { result.notes.append(swept.words) }
         }
+        // A rollback copy is this Mac's own fallback for an app it runs; one left for an app this
+        // Mac neither manages nor has buys nothing and can be gigabytes (4.2 GB of Hub measured on
+        // a worker Mac, 2026-11-18). It is retired into this Mac's own trash, never deleted, and
+        // never touched while that app has an unresolved install or a journal.
+        do {
+            let rollbacks = ((try? FileManager.default.contentsOfDirectory(at: stateDir, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.lastPathComponent.hasPrefix("rollback-") }
+            var retired: [String] = []
+            for folder in rollbacks {
+                let app = String(folder.lastPathComponent.dropFirst("rollback-".count))
+                // "Runs it" is the bundle being here — configured and installed, or found in an
+                // Applications folder — not merely named by a config. An unresolved install keeps
+                // everything it has.
+                guard installed[app] == nil, !installedHere(app, feed: feed),
+                      !Recipe.isUnresolved(stateDir: stateDir.path, app: app) else { continue }
+                if (try? Trash.move(folder, into: Trash.root(in: stateDir))) != nil { retired.append(app) }
+            }
+            if !retired.isEmpty {
+                result.notes.append("retired the rollback copy of \(retired.sorted().joined(separator: ", ")), which this Mac does not run; it is in this Mac's own trash")
+            }
+        }
         return result
     }
 
@@ -1265,7 +1306,10 @@ public enum Agent {
         guard let name = entry?.icon, let sha = entry?.iconSha256, let safe = try? SafeName.component(name, what: "icon") else { return nil }
         let file = stateDir.appendingPathComponent("icons").appendingPathComponent(safe)
         if (try? Signing.sha256Hex(fileAt: file).hex) == sha { return file.path }
-        guard let (data, code) = try? http.get(serverBase.appendingPathComponent("artifacts").appendingPathComponent(safe), headers: [:]),
+        // A mirror feed keeps its icon beside the artifact it names; otherwise both sit beside the feed.
+        let source = entry?.url.flatMap(URL.init(string:))?.deletingLastPathComponent()
+            ?? serverBase.appendingPathComponent("artifacts")
+        guard let (data, code) = try? http.get(source.appendingPathComponent(safe), headers: [:]),
               code == 200, data.count < 1 << 20, Signing.sha256Hex(data) == sha else { return nil }
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: file, options: .atomic)
@@ -1277,25 +1321,39 @@ public enum Agent {
     }
 
     static func checkedFeed(_ releaseData: Data, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> Feed {
+        try checkFeed(releaseData, config: config, memory: &memory, now: now).feed
+    }
+
+    /// The refusal is decided on what the feed *offers*, not on its bytes: a mirror copy names
+    /// different artifact URLs and carries no `network` block, so it must count as the same release
+    /// at the same `published_at`. The note says which of the two cases was hit.
+    static func checkFeed(_ releaseData: Data, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> (feed: Feed, note: String?) {
         let release = try JSON.decode(Release.self, from: releaseData)
         let pub = try Signing.loadPublicKey(base64: config.publicKey)
         guard let feedData = release.feedData, let signature = release.signatureData,
               Signing.verify(feedData, signature: signature, publicKey: pub) else { throw khuFail("invalid feed signature") }
         let feed = try JSON.decode(Feed.self, from: feedData).validated()
         let published = feed.publishedAt!
+        let identity = Signing.sha256Hex(Data(feed.artifactIdentity.utf8))
         let sha = Signing.sha256Hex(feedData)
         guard published <= now.addingTimeInterval(futureSlack) else {
             throw khuFail("feed is dated \(feed.published_at), in the future; refused (check the publisher's clock)")
         }
+        var note: String?
         if let seen = memory.feedPublishedAt.flatMap(ISO.date) {
             if published < seen { throw khuFail("feed rollback refused: published_at is older than one already seen") }
-            if published == seen, let seenSHA = memory.feedSHA256, seenSHA != sha {
-                throw khuFail("feed refused: a different feed carries the same published_at as one already seen")
+            if published == seen, let seenIdentity = memory.feedArtifactIdentity, seenIdentity != identity {
+                throw khuFail("feed refused: a different feed carries the same published_at as one already seen, "
+                              + "with different artifact identity (a feed differing only in artifact URLs or network settings is the same release)")
+            }
+            if published == seen, memory.feedArtifactIdentity == identity, memory.feedSHA256 != sha {
+                note = "same artifacts as the feed already seen at \(feed.published_at), packaged differently (artifact URLs or network settings); accepted — different packaging"
             }
         }
         memory.feedPublishedAt = feed.published_at
         memory.feedSHA256 = sha
-        return feed
+        memory.feedArtifactIdentity = identity
+        return (feed, note)
     }
 
     /// How long a remote launch waits for the app's own process to appear; `launchWaitSeconds`
@@ -1881,7 +1939,7 @@ public enum Agent {
     /// from, so a source that does not have the patch cannot cost the next one its chance.
     private static func download(_ entry: FeedApp, app: String, serverBase: URL, stateDir: URL, http: HTTPClient,
                                  fallbacks: [URL], base: URL?, freeSpace: (URL) -> UInt64? = Space.freeBytes,
-                                 reserveBytes: UInt64 = Space.defaultReserveBytes) throws -> URL {
+                                 reserveBytes: UInt64 = Space.defaultReserveBytes, ownURL: Bool = true) throws -> URL {
         let name = try SafeName.component(entry.file, what: "artifact name")
         let dir = stateDir.appendingPathComponent("downloads").appendingPathComponent(app)
         let fm = FileManager.default
@@ -1931,9 +1989,12 @@ public enum Agent {
             }
         }
         let phase = triedPatch ? "full-fallback" : "downloading"
+        // An entry that names its own signed address (a mirror) is fetched from there; a fallback
+        // source has its own artifacts folder, so it is asked for the file by name instead.
+        let source = ownURL ? entry.location(beside: serverBase)
+                            : serverBase.appendingPathComponent("artifacts").appendingPathComponent(name)
         func fetch() throws -> Int {
-            try http.download(serverBase.appendingPathComponent("artifacts").appendingPathComponent(name),
-                              headers: [:], to: part, limit: entry.bytes, phase: phase)
+            try http.download(source, headers: [:], to: part, limit: entry.bytes, phase: phase)
         }
         do {
             var code = try fetch()
@@ -1962,7 +2023,7 @@ public enum Agent {
             if let next = fallbacks.first {
                 return try download(entry, app: app, serverBase: next, stateDir: stateDir, http: http,
                                     fallbacks: Array(fallbacks.dropFirst()), base: base,
-                                    freeSpace: freeSpace, reserveBytes: reserveBytes)
+                                    freeSpace: freeSpace, reserveBytes: reserveBytes, ownURL: false)
             }
             throw error
         }

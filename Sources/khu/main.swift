@@ -51,7 +51,8 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--new-app]
+              retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
@@ -135,12 +136,14 @@ struct KHUMain {
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
             var keep: Int?
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil
+            var newApp = false
             var i = 1
             while i < args.count {
                 switch args[i] {
                 case "--feed": feed = value("--feed", &i)
                 case "--key": key = value("--key", &i)
                 case "--app": app = value("--app", &i)
+                case "--new-app": newApp = true
                 case "--version": version = value("--version", &i)
                 case "--artifact": artifact = value("--artifact", &i)
                 case "--kind": kind = value("--kind", &i)
@@ -177,6 +180,12 @@ struct KHUMain {
             do {
                 let notes = try ReleaseNotes.forRelease(changelog: URL(fileURLWithPath: changelog), version: v, extra: extra)
                 let feedDir = URL(fileURLWithPath: f)
+                // A mistyped id would become a second app beside the real one ("printer" beside
+                // "printer-studio") and reach every Mac as an unknown app. The feed's own ids and
+                // this fleet's ids are known; a genuinely new app says so with --new-app.
+                guard FeedPublisher.isKnownApp(a, in: feedDir, allowNew: newApp) else {
+                    fail("\(a) is not an app this fleet publishes (\(FeedPublisher.fleetApps.sorted().joined(separator: ", ")), or one the feed already names); if it is genuinely new, publish it once with --new-app")
+                }
                 // The keep count is a setting beside the feed: a --keep given now is saved for the
                 // publishes that follow, exactly like a setting saved by hand.
                 if let keep { try FeedPublisher.KeepCount.set(keep, in: feedDir) }
@@ -186,7 +195,10 @@ struct KHUMain {
                                           holdURL: hold, holdSince: holdSince, keep: keep)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
-        case "unpublish":
+        case "unpublish", "retire":
+            // Retire is the same removal under the name its purpose has: the entry leaves the
+            // signed feed, the published artifacts stay on disk, and a mis-keyed duplicate
+            // ("printer" beside "printer-studio") is cleared here.
             var feed: String?, key: String?, app: String?
             var i = 1
             while i < args.count {
@@ -201,7 +213,9 @@ struct KHUMain {
             guard let feed, let key, let app else { usage() }
             do {
                 try FeedPublisher.unpublish(feedDir: URL(fileURLWithPath: feed), keyFile: URL(fileURLWithPath: key), app: app)
-                print("removed \(app) from the feed")
+                print(args[0] == "retire"
+                      ? "retired \(app): its entry is gone from the feed and its published artifacts stay on disk"
+                      : "removed \(app) from the feed")
             } catch { fail("\(error)") }
         case "network":
             var feed: String?, key: String?, file: String?

@@ -57,7 +57,13 @@ func feedMirrorTests() {
         _ = try sync(release2)
         expect(fm.fileExists(atPath: root.appendingPathComponent("artifacts/" + first.apps["fixture"]!.file).path), "FM previous artifact retained")
         expectThrows("FM rollback refused", contains: "rollback") { _ = try sync(release1) }
-        var conflicting = second; conflicting.apps["fixture"]?.notes = "changed"
+        // Same artifacts, different packaging (notes only) at one published_at is the same release
+        // (0.1.64); a genuinely different artifact at that instant is still refused.
+        var repackaged = second; repackaged.apps["fixture"]?.notes = "changed"
+        let repackagedBody = JSON.encode(repackaged)
+        let repackagedRelease = JSON.encode(Release(feed: repackagedBody, signature: try Signing.sign(repackagedBody, with: key)))
+        expect((try? sync(repackagedRelease)) != nil, "FM same-date feed with only different packaging is accepted")
+        var conflicting = second; conflicting.apps["fixture"]?.sha256 = String(repeating: "e", count: 64)
         let changedBody = JSON.encode(conflicting)
         let changedRelease = JSON.encode(Release(feed: changedBody, signature: try Signing.sign(changedBody, with: key)))
         expectThrows("FM same-date changed feed refused", contains: "same published_at") { _ = try sync(changedRelease) }
@@ -208,4 +214,36 @@ func feedMirrorTests() {
             _ = try FeedPublisher.withPreviousInstallers(current, in: publisher)
         }
     } catch { expect(false, "FM mirror checks: \(error)") }
+}
+
+/// A mirror keeps only the apps this Mac is asked for and still serves the whole signed feed.
+func mirrorOnlyTests() {
+    let root = tmpDir("feed-mirror-only")
+    let key = Curve25519.Signing.PrivateKey()
+    let publicKey = key.publicKey.rawRepresentation.base64EncodedString()
+    let origin = URL(string: "http://127.0.0.1:8790")!
+    let now = Date()
+    let http = MirrorClient()
+    do {
+        // Only the apps this Mac has are mirrored; the feed it serves is still the whole release.
+        let limitedRoot = tmpDir("mirror-only")
+        let bytes = Data("installer 11".utf8)
+        http.files["fixture-11.dmg"] = bytes
+        let fixture = FeedApp(version: "1.0.11", file: "fixture-11.dmg", sha256: Signing.sha256Hex(bytes),
+                              bytes: Int64(bytes.count), kind: "app-dmg")
+        let other = FeedApp(version: "1.0.0", file: "other.dmg", sha256: Signing.sha256Hex(Data("other installer".utf8)),
+                            bytes: 15, kind: "app-dmg")
+        http.files["other.dmg"] = Data("other installer".utf8)
+        let feed = Feed(published_at: ISO.string(now.addingTimeInterval(11)), apps: ["fixture": fixture, "other": other])
+        let body = JSON.encode(feed)
+        let release = JSON.encode(Release(feed: body, signature: try Signing.sign(body, with: key)))
+        let kept = try FeedMirror.sync(releaseData: release, sourceBase: origin, root: limitedRoot, publicKey: publicKey,
+                                       http: http, now: now, only: ["fixture"],
+                                       retireArtifact: { _ = try Trash.move($0, into: limitedRoot.appendingPathComponent("fixture-system-trash")) })
+        let served = try Data(contentsOf: limitedRoot.appendingPathComponent("release.json"))
+        let stored = (try? fm.contentsOfDirectory(atPath: limitedRoot.appendingPathComponent("artifacts").path)) ?? []
+        expect(kept.apps["other"] != nil && served == release
+               && stored.contains("fixture-11.dmg") && !stored.contains("other.dmg"),
+               "FM a mirror keeps only the apps it is asked for and still serves the whole signed feed")
+    } catch { expect(false, "FM mirror-only: \(error)") }
 }

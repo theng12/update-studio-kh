@@ -8,7 +8,12 @@ public enum BindAddress {
     /// resolves to nothing on the tailnet fails with the reason, so the publisher stops loudly
     /// instead of serving where nobody can reach it.
     public static func resolve(_ value: String) throws -> String {
-        if value == "0.0.0.0" || value == "127.0.0.1" || FeedServer.isTailnet(value) { return value }
+        // 0.0.0.0 would serve the feed on every network this Mac is on, including a shared local
+        // one. The feed is unauthenticated, so the address must be the tailnet or this Mac.
+        if value == "0.0.0.0" {
+            throw khuFail("0.0.0.0 would serve the feed on every network this Mac is on; name this Mac's tailnet address or \"auto\"")
+        }
+        if value == "127.0.0.1" || FeedServer.isTailnet(value) { return value }
         if value == "auto" {
             guard let ip = MacInventory.interfaceAddresses().tailscaleIPv4 else {
                 throw khuFail("this Mac has no tailnet address right now (is Tailscale running?), so the publisher cannot bind \"auto\"")

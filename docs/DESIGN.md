@@ -43,6 +43,21 @@ The feed (schema 1):
 
 Versions are dotted numbers only (`1.4.355`); anything else is refused, never compared as zero.
 
+Optional `url` on a signed app entry names an absolute `https` artifact address, used instead of
+`<feed base>/artifacts/<file>` (0.1.64, for a GitHub-mirrored feed). `http`, relative addresses,
+`file:` and embedded credentials are refused in `Feed.validated()`. An entry without `url` is
+fetched exactly as before. The artifact fetch follows HTTPS redirects (GitHub answers 302 to
+`objects.githubusercontent.com`): an unauthenticated request may follow one to any host; a request
+that carried `Authorization`, and every vendor (`officialHosts`) request, still refuses redirects.
+The feed fetch itself carries the token, so it still refuses one. The icon sits beside the named
+artifact when `url` is present.
+
+Two feeds naming the same artifacts at the same `published_at` are equivalent — a mirror copy
+differs in bytes (absolute URLs, no `network`), so the rollback guard compares a sorted identity of
+`(app, version, sha256, bytes)` over `apps` and `previous`, not the raw feed hash. A different
+artifact at the same `published_at` is still refused ("different artifact identity"); the same
+artifacts packaged differently are accepted and the run note says so.
+
 Unreleased incremental delivery: an optional `delta` on a signed app entry names `file`, `sha256`,
 `bytes`, `baseSHA256` and `baseBytes`. The publisher builds a bounded copy/literal `KHUD1` patch
 from the exact displaced full installer and publishes it only when it is smaller than the target.
@@ -90,8 +105,14 @@ Ordinary app publications preserve them. The private key stays with the original
 
 An enabled host mirrors the original publisher's exact signed release, verifies each artifact's
 signed size and hash and each signed icon hash, then publishes the release atomically. A failed
-sync keeps the last working release. Current and previous artifact sets stay; older copies move
-to `_trash`. Its per-user `com.khupdater.feed-host` LaunchAgent runs `khu serve --feed-only`;
+sync keeps the last working release. Since 0.1.64 it keeps installers only for the apps that Mac
+has (its own configured list plus what is installed) — 4.2 GB of twelve apps became Hub's pair on
+a worker Mac; the feed it serves is still the whole signed release, and a client asking for an app
+that host does not keep gets 404 and falls back to the publisher, as it always could. Current and
+previous artifact sets stay; older copies move to `_trash`. A rollback copy is likewise kept only
+where this Mac runs the app: one left for an app this Mac neither configures nor has is retired to
+this Mac's own trash, never while it has an unresolved install. Its per-user
+`com.khupdater.feed-host` LaunchAgent runs `khu serve --feed-only`;
 that server exposes only release and artifact downloads, with no enrolment or control routes.
 Disabling the role stops only that job and retires its plist. No SSH, network configuration or
 firewall changes are part of this role; a macOS permission request needs the owner's decision.
@@ -508,9 +529,19 @@ Other apps require a pinned Apple Team ID with evidence and a valid vendor signa
 
 1. recover any interrupted install for the app;
 2. attach the DMG (plist output), require exactly one `.app`, the feed's exact version, the
-   expected bundle identifier (`bundleID` in the config, else the installed app's), and a
-   runnable executable; copy it with `ditto` into `.<name>.khu-staging` beside the installed
-   app and check the copy — all before anything is stopped; detach by the device ID captured from that attach, never a volume path;
+   expected bundle identifier (`bundleID` in the config, else the installed app's), the same
+   signing identity (`Identifier|TeamIdentifier`) as the installed app when there is one — a valid
+   signature on any bundle is not enough — and a runnable executable; copy it with `ditto` into
+   `.<name>.khu-staging` beside the installed app and check the copy — all before anything is
+   stopped; detach by the device ID captured from that attach, never a volume path. **The copy is
+   judged complete, never by `ditto`'s exit code** (measured 2026-11-19: 27.2.1 returns 0 for a
+   complete copy, 27.0.1 returns 1 for the same copy and once stopped partway, 26.6.2 stopped on a
+   symlink's xattr): every entry the source has, the same version and identifier, a runnable
+   executable. An incomplete copy is cleared, the image re-attached and copied once more (4 of 5
+   copies completed on the measured Mac; the agent's next run covers the rest). `Not a directory`,
+   `No such file` and `I/O error` are a broken source and are fatal on the first attempt. A copy
+   that starts with no source likewise re-attaches: the image was measured detaching itself
+   between attach and copy;
 3. write the install journal (naming both paths, the target version and any active owned service
    labels, so recovery can prove which side it found); quit the app and stop its service, in that
    order. A refusal keeps the installed bundle and requests restart of what was stopped;
@@ -681,11 +712,13 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
 - **An open enrolment window is not a proof of identity, and this is what it does not protect
   against:** any device that can reach the tailnet address while a window is open can claim a *new*
   machine id and get a token. It cannot reopen the window and cannot reach the owner's route from
-  off this Mac. A claim carrying the current **pairing code** or arriving while the owner has an
-  **open window** can replace an existing Mac's enrolment by design (owner, 2026-11-13); what bounds
-  that is the code's own secrecy (per-address attempt rate and lockout, replaceable with New code),
-  and the window's end time (240 minutes at most, opened deliberately, closed by hand or by the
-  clock). The `EnrolPolicy.maxPerWindow` cap counts new ids only; the page lists every Mac enrolled
+  off this Mac. A claim carrying the current **pairing code** can replace an existing Mac's
+  enrolment (owner, 2026-11-13); what bounds that is the code's own secrecy (per-address attempt
+  rate and lockout, replaceable with New code). An **open window** enrols a new Mac only: since
+  0.1.64 it cannot take over or re-mint a Mac that already has a record (audit, 2026-11-18 — a
+  tailnet device with the DMG and a window could otherwise impersonate an enrolled Mac and receive
+  its orders). The window still ends by itself (240 minutes at most), closed by hand or by the
+  clock. The `EnrolPolicy.maxPerWindow` cap counts new ids only; the page lists every Mac enrolled
   through a window with its time, and Remove Mac drops any of them in one click.
 - During an open window a device on the tailnet can learn **whether a given machine id is already
   enrolled**: an id with a record answers 409 (without the pairing code) and one without is enrolled.
@@ -693,6 +726,7 @@ again. Each spawn and exit clears the previous child's heartbeat. Live waits use
   its apps, its orders — is answered to anything but that Mac's own token. The one record that can
   be re-minted over the network without the code is one that has never reported, and only by
   repeating the nonce it enrolled with; with the current pairing code any record can be replaced.
+  A window alone cannot re-mint any record.
   That Mac
   may still be holding the token it was sent — its agent has not run yet — so the honest statement is
   that a re-mint displaces **no token the publisher has evidence was used**: a Mac that has reported

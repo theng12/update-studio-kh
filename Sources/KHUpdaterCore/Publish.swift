@@ -81,6 +81,17 @@ public enum FeedPublisher {
         return try? JSON.decode(Feed.self, from: data)
     }
 
+    /// The app ids this fleet publishes. A publish is checked against these and against the ids
+    /// the feed already names, so a typo ("printer" beside "printer-studio") cannot create a second
+    /// entry; a genuinely new app is published once with `--new-app`.
+    public static let fleetApps: Set<String> = Set(AppNames.names.keys).union(["launcher"])
+
+    /// Whether a publish may name `app` in `feedDir`. `allowNew` is the CLI's explicit statement
+    /// that this is a genuinely new app, not a mistyped one.
+    public static func isKnownApp(_ app: String, in feedDir: URL, allowNew: Bool = false) -> Bool {
+        allowNew || fleetApps.contains(app) || (loadFeed(from: feedDir)?.apps[app] != nil)
+    }
+
     /// Removes one app key from the signed feed — used to repair a mis-keyed duplicate entry.
     /// Artifacts stay on disk so the next publish's retention pass decides what is unreferenced.
     public static func unpublish(feedDir: URL, keyFile: URL, app: String) throws {

@@ -9,6 +9,8 @@ extension Agent {
         let feed: Feed
         let release: Data
         let base: URL
+        /// Something worth saying about how this feed was judged; nil when nothing was unusual.
+        var note: String?
     }
 
     static func transportUnavailable(_ error: Error) -> Bool {
@@ -99,9 +101,10 @@ extension Agent {
             }
             do {
                 var candidate = memory
-                let feed = try checkedFeed(release, config: config, memory: &candidate, now: now)
+                let checked = try checkFeed(release, config: config, memory: &candidate, now: now)
                 memory = candidate
-                return SelectedFeed(feed: feed, release: release, base: source.deletingLastPathComponent())
+                return SelectedFeed(feed: checked.feed, release: release, base: source.deletingLastPathComponent(),
+                                    note: checked.note)
             } catch { refusal = error }
         }
         throw refusal ?? lastError

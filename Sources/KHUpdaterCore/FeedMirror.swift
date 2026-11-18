@@ -7,8 +7,12 @@ public enum FeedMirror {
         var limit: Int64 { bytes ?? 1_048_576 }
     }
 
+    /// `only` names the apps this Mac actually has: a mirror then keeps those apps' installers and
+    /// no others, which is what turns 4.2 GB of twelve apps into Hub's pair on a worker Mac. The
+    /// feed it serves is still the whole signed release (byte-identical); a client that asks for an
+    /// app the mirror does not keep answers 404 and falls back to the publisher, as it always could.
     public static func sync(releaseData: Data, sourceBase: URL, root: URL, publicKey: String,
-                            http: HTTPClient, now: Date = Date(),
+                            http: HTTPClient, now: Date = Date(), only: Set<String>? = nil,
                             retireArtifact: (URL) throws -> Void = {
                                 try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
                             }) throws -> Feed {
@@ -30,16 +34,17 @@ public enum FeedMirror {
             let prior = try priorData.map { try verified($0, publicKey: publicKey, now: now) }
             if let baseline = old ?? prior {
                 guard incoming.publishedAt! >= baseline.publishedAt! else { throw khuFail("mirror feed rollback refused") }
-                if incoming.publishedAt == baseline.publishedAt, let baselineData = oldData ?? priorData,
-                   try JSON.decode(Release.self, from: baselineData).feedData != JSON.decode(Release.self, from: releaseData).feedData {
+                // Same artifacts packaged differently (a re-signed mirror copy) is the same release.
+                if incoming.publishedAt == baseline.publishedAt, baseline.artifactIdentity != incoming.artifactIdentity {
                     throw khuFail("mirror refused a different feed with the same published_at")
                 }
             }
-            let wanted = try items(in: incoming)
-            let entries = Array(incoming.apps.values) + Array((incoming.previous ?? [:]).values)
+            let wanted = try items(in: incoming, only: only)
+            let entries = try (Array(incoming.apps) + Array(incoming.previous ?? [:]))
+                .filter { only?.contains($0.key) ?? true }.map(\.value)
             let required = Set(entries.flatMap { [$0.file] + ($0.icon.map { [$0] } ?? []) })
             let optional = Set(entries.compactMap { $0.delta?.file }).subtracting(required)
-            let oldItems = try (old ?? prior).map(items(in:)) ?? [:]
+            let oldItems = try (old ?? prior).map { try items(in: $0) } ?? [:]
             // Published names are content-addressed; never change bytes an existing release names.
             for (name, item) in wanted {
                 if let existing = oldItems[name], existing != item {
@@ -76,7 +81,7 @@ public enum FeedMirror {
                 let changed = old != incoming
                 let keptPrevious = changed ? (old ?? prior) : prior
                 let protected = incoming.previous != nil ? Set(wanted.keys)
-                    : Set(wanted.keys).union(try keptPrevious.map { Set(try items(in: $0).keys) } ?? [])
+                    : Set(wanted.keys).union(try keptPrevious.map { Set(try items(in: $0, only: only).keys) } ?? [])
                 let stored = try fm.contentsOfDirectory(at: artifacts, includingPropertiesForKeys: nil)
                 for file in stored { try noSymlink(file) }
                 let retired = stored.filter { !protected.contains($0.lastPathComponent) }
@@ -113,7 +118,7 @@ public enum FeedMirror {
         return feed
     }
 
-    private static func items(in feed: Feed) throws -> [String: Item] {
+    private static func items(in feed: Feed, only: Set<String>? = nil) throws -> [String: Item] {
         var result: [String: Item] = [:]
         func add(_ name: String, sha: String, bytes: Int64?) throws {
             _ = try SafeName.component(name, what: "mirror artifact")
@@ -121,7 +126,8 @@ public enum FeedMirror {
             if let existing = result[name], existing != item { throw khuFail("conflicting signed mirror artifact: \(name)") }
             result[name] = item
         }
-        for entry in Array(feed.apps.values) + Array((feed.previous ?? [:]).values) {
+        for entry in (Array(feed.apps) + Array(feed.previous ?? [:]))
+            .filter({ only?.contains($0.key) ?? true }).map(\.value) {
             try add(entry.file, sha: entry.sha256, bytes: entry.bytes)
             if let icon = entry.icon, let sha = entry.iconSha256 {
                 try add(icon, sha: sha, bytes: nil)

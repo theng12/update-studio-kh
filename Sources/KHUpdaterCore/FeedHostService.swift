@@ -31,7 +31,18 @@ public enum FeedHostService {
     }
 
     /// Starts serving this Mac's mirror if it is not already, and reports what is true in one line.
-    public static func ensure(role: FeedHostRole, stateDir: URL) -> String {
+    public static func ensure(role given: FeedHostRole, stateDir: URL) -> String {
+        // The role arrives from a persisted signed block as well as a fresh feed; it is validated
+        // here as well as at publication, so a hand-edited copy cannot start a LAN listener.
+        // shortcut: port 0 means "the system picks one" for a fixture's own server; it is checked
+        // as a valid port and cannot open a listener on a port anyone could guess.
+        let role: FeedHostRole
+        do {
+            var probe = given
+            if probe.port == 0 { probe.port = 1 }
+            _ = try probe.validated()
+            role = given
+        } catch { return "feed hosting is off: \(error)" }
         let feedDir = FeedHostRole.feedDirectory(in: stateDir)
         guard FileManager.default.fileExists(atPath: feedDir.appendingPathComponent("release.json").path) else {
             return "feed hosting is on but this Mac has no published mirror yet; nothing is served"

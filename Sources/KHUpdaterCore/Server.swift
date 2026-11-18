@@ -575,17 +575,19 @@ public final class FeedServer: @unchecked Sendable {
                 }
                 window = open
             }
-            // A Mac this publisher already has a record of is replaced by the valid pairing code,
-            // by an OPEN ENROLMENT WINDOW (the owner's deliberate allow-a-Mac action, so a
-            // same-tailnet Mac re-pairs with no code typing), or by its own retry: a window-enrolled
-            // Mac resending the same machine and nonce because the signed reply was lost. A claim
-            // with neither a code nor an open window is still refused.
+            // A window-enrolled Mac resending the same machine and nonce because the signed reply
+            // was lost is not a replacement. A claim with neither a code nor an open window is
+            // still refused.
             let retry = state.machines[machine].map { record in
                 (record.enrolmentSource == MachineState.windowSource || record.enrolmentSource == MachineState.pairingSource)
                     && record.lastSeen == nil && record.enrolNonceHash == Enrolment.sha256Hex(nonce)
             } ?? false
-            guard state.machines[machine] == nil || retry || pairedByCode || window != nil else {
-                return Self.text(409, "This Mac's name is already in use. Enter the pairing code from Update Studio KH on this Mac's Pair again screen, or open an enrolment window on the publisher, to reclaim it.")
+            // An existing record is replaced only by the pairing code (or by its own lost-reply
+            // resend): an open window enrols a NEW Mac and never takes over one that is enrolled.
+            // Anything on the tailnet can reach this route, so a window must not be enough to
+            // impersonate a Mac that is already here and receive its orders.
+            guard state.machines[machine] == nil || retry || pairedByCode else {
+                return Self.text(409, "This Mac's name is already in use. Enter the pairing code from Update Studio KH on this Mac's Pair again screen to reclaim it.")
             }
             let replaced = state.machines[machine]
             // A resend and a replacement are not new Macs: neither spends a window slot.
@@ -603,12 +605,11 @@ public final class FeedServer: @unchecked Sendable {
             }
             Enrolment.store(token, for: machine, at: now, source: window == nil ? MachineState.pairingSource : MachineState.windowSource,
                             nonce: nonce, in: &state)
-            if pairedByCode || window != nil, replaced?.tokenHash != nil, var record = state.machines[machine] {
+            if pairedByCode, replaced?.tokenHash != nil, var record = state.machines[machine] {
                 // The new token revoked the earlier one by replacing its hash; keep an audit line on
                 // the Mac's own page so a replacement is visible, never silent.
-                let how = pairedByCode ? "the pairing code" : "the open enrolment window"
                 let audit = HistoryEntry(app: "Update Studio", from: nil, to: nil, status: "paired again",
-                                         reason: "\(how) replaced this Mac's earlier sign-in", at: ISO.string(now))
+                                         reason: "the pairing code replaced this Mac's earlier sign-in", at: ISO.string(now))
                 record.history = Array(([audit] + (record.history ?? [])).prefix(HistoryEntry.kept))
                 state.machines[machine] = record
             }

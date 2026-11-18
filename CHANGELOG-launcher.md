@@ -2,6 +2,17 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.64 — 2026-11-19
+
+- A feed entry can now carry its own full web address for the installer, so the same update can be downloaded from a mirror (for example GitHub) as well as from the publisher. An ordinary entry with no address works exactly as before, the address must be a plain secure one with no sign-in detail, and the size and checksum checks are unchanged. A mirror download may follow a normal web redirect; anything carrying a sign-in, and the update feed itself, still may not.
+- Two copies of the same release are no longer treated as a conflict. A mirror copy differs only in where its installers sit, so the check now compares which apps, versions, checksums and sizes a feed offers. Two feeds naming the same installers are the same release; a different installer under the same date is still refused, and the message now says which case it was.
+- An open enrolment window now takes only genuinely new Macs. It can no longer take over a Mac that is already enrolled — the pairing code is the one way to claim an existing name. A Mac that is already set up keeps working and never loses its sign-in.
+- A host address of 0.0.0.0 is refused for feed hosting, and the hosting setting is checked again when serving starts, so a hand-edited setting cannot put the feed on a local network.
+- An update now has to be the same signed app that is already installed, not merely any signed app with the right name.
+- `khu retire --app <id>` removes an app's entry from the update feed and keeps its published installers on disk. Publishing refuses an app name the fleet does not know unless the new app is stated with `--new-app`, so a mistyped name cannot appear as a second app.
+- Installing a large app no longer depends on the copy tool's own verdict, which disagrees between macOS versions and can stop halfway: the copy is judged by what arrived — the same number of files as the installer, the right version and name, a runnable app — and an incomplete copy is cleared, the installer re-opened and the copy tried once more. A copy that cannot read the installer says so plainly instead of retrying.
+- A Mac that hosts the update feed now keeps installers only for the apps it actually has, and no longer keeps a rollback copy of an app it does not run. On a worker Mac that was 8.4 GB of files nothing on that Mac could use; both moves go to this Mac's own trash, never away.
+
 ## 0.1.63 — 2026-11-18
 
 - Studio Launcher KH now has a Dock icon. Closing its window with the red button used to leave nothing to click — the only way back was the small icon in the menu bar — and now a click on the Dock icon brings the window straight back. The menu-bar icon stays exactly as it was.

@@ -35,6 +35,16 @@ public struct FeedApp: Codable, Sendable, Equatable {
     /// The first version published with this `holdURL`. A build older than it predates the hold, so
     /// its 401/403/404 there means "no endpoint yet", not a refused credential. nil when unknown.
     public var holdSince: String?
+    /// An absolute `https` address for this artifact, used instead of `<feed base>/artifacts/<file>`.
+    /// A mirror feed names its own artifact addresses; the whole envelope is signed, so this is
+    /// covered by the publisher's signature. nil keeps the old relative behaviour exactly.
+    public var url: String?
+
+    /// Where this artifact is fetched from: its own signed address when it names one, else beside
+    /// the feed it came from.
+    public func location(beside base: URL) -> URL {
+        url.flatMap(URL.init(string:)) ?? base.appendingPathComponent("artifacts").appendingPathComponent(file)
+    }
 
     public init(version: String, file: String, sha256: String, bytes: Int64, kind: String, notes: String? = nil) {
         self.version = version; self.file = file; self.sha256 = sha256
@@ -77,6 +87,27 @@ public struct Feed: Codable, Sendable, Equatable {
 
     public var publishedAt: Date? { ISO.date(published_at) }
 
+    /// What this feed actually offers, one sorted line per artifact in `apps` and `previous`. Two
+    /// feeds naming the same artifacts are equivalent whatever their URLs or `network` block say —
+    /// which is what a mirror feed is — while a different artifact at the same `published_at` is not.
+    public var artifactIdentity: String {
+        func lines(_ entries: [String: FeedApp], _ mark: String) -> [String] {
+            entries.map { mark + $0.key + "|" + $0.value.version + "|" + $0.value.sha256 + "|" + String($0.value.bytes) }.sorted()
+        }
+        return (lines(apps, "app:") + lines(previous ?? [:], "previous:")).joined(separator: "\n")
+    }
+
+    /// An entry's optional absolute artifact address, refused unless it is a plain `https` URL with
+    /// no sign-in detail: an `http` address, a relative one, `file:` or embedded credentials would
+    /// all let a signed feed fetch bytes from somewhere a client never agreed to.
+    public static func artifactURL(_ text: String, app: String) throws -> URL {
+        guard let url = URL(string: text), url.scheme?.lowercased() == "https",
+              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil else {
+            throw khuFail("\(app)'s artifact address must be an absolute https URL with no sign-in detail, not \(text)")
+        }
+        return url
+    }
+
     /// A signed feed is still refused when it is not one this build understands.
     public func validated() throws -> Feed {
         guard schema == Feed.supportedSchema else { throw khuFail("feed schema \(schema) is not supported") }
@@ -88,6 +119,9 @@ public struct Feed: Codable, Sendable, Equatable {
             _ = try SafeName.component(entry.file, what: "artifact name")
             guard VersionCompare.isValid(entry.version) else { throw khuFail("\(app) has an invalid version \(entry.version)") }
             guard entry.sha256.count == 64, entry.bytes > 0 else { throw khuFail("\(app) has no usable sha256/size") }
+            if let url = entry.url {
+                _ = try Feed.artifactURL(url, app: app)
+            }
             // Optional delivery must never block the independently signed full installer.
             if let delta = entry.delta,
                (try? delta.validated()) == nil || delta.file == entry.file || delta.bytes >= entry.bytes {

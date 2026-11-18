@@ -215,8 +215,9 @@ public enum Recipe {
 
         // 2. Verify and stage while the old app keeps running.
         let (mount, device) = try attach(shell, artifactPath)
+        var detachedDevice = device
         var mounted = true
-        defer { if mounted { _ = detach(shell, device) } }
+        defer { if mounted { _ = detach(shell, detachedDevice) } }
         let source = try singleApp(in: mount, fileManager: fm)
         let info: BundleInfo
         do { info = try BundleInfo.read(source) }
@@ -228,16 +229,33 @@ public enum Recipe {
         if let want = expectedBundleID ?? installedInfo?.identifier, info.identifier != want {
             throw ArtifactFailure(description: "DMG holds \(info.identifier), this Mac's app is \(want); nothing was changed")
         }
+        // The update must be the same signed app this Mac already runs — the expected signing
+        // identity, not merely a bundle whose signature validates. That is the local question a
+        // writable config key cannot answer: any signed bundle can carry the right name. A bundle
+        // that carries no signing identity at all is not this check's case; the feed's signed
+        // SHA-256 and the staged signature check remain its proof.
+        if installedInfo != nil, let installedIdentity = signingIdentity(installedPath, shell: shell),
+           let sourceIdentity = signingIdentity(source, shell: shell), sourceIdentity != installedIdentity {
+            throw ArtifactFailure(description: "the DMG's app is signed as \(sourceIdentity), and the app installed here is \(installedIdentity); nothing was changed")
+        }
         guard info.executableIsRunnable(in: source) else { throw ArtifactFailure(description: "the DMG's app has no runnable executable; nothing was changed") }
 
-        try stage(paths, from: source, info: info, shell: shell, fileManager: fm)
+        // A copy that starts with no source, or that finds the image gone, re-attaches it: the
+        // image was measured detaching itself between attach and copy. The re-attached device is
+        // detached by the defer below through `detachedDevice`.
+        try stage(paths, from: source, info: info, shell: shell, fileManager: fm, reattach: {
+            _ = detach(shell, device)
+            let again = try attach(shell, artifactPath)
+            detachedDevice = again.device
+            return try singleApp(in: again.mount, fileManager: fm)
+        })
         do { try verifyStaged?(paths.staged.path) }
         catch {
             _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
             throw error
         }
         mounted = false
-        let detachNote = detach(shell, device)  // the staged copy is all that is needed from here
+        let detachNote = detach(shell, detachedDevice)  // the staged copy is all that is needed from here
 
         // The person at this Mac may have started the app while its installer was being fetched and
         // staged. Stopping it now is the one thing this route promised not to do, so the second look
@@ -326,20 +344,63 @@ public enum Recipe {
 
     /// Copy a verified bundle into the staging path beside the installed one and check the copy —
     /// always before anything running is stopped. `ditto` carries the bundle's own signature over.
-    static func stage(_ paths: Paths, from source: String, info: BundleInfo, shell: Shell, fileManager fm: FileManager) throws {
-        if fm.fileExists(atPath: paths.staged.path) { _ = Space.remove(paths.staged, shell: shell, fileManager: fm) }
-        // Copying into a leftover tree is what made the loop: `ditto` then fails on the first
-        // read-only file inside it, every retry fails the same way, and the row never changes.
-        // Refusing here names the leftover instead, once.
-        guard !fm.fileExists(atPath: paths.staged.path) else {
-            throw khuFail("an unfinished copy of the new app was left beside it and could not be cleared (\(paths.staged.path)); nothing was changed — move it aside by hand and try again")
-        }
-        let copy = try shell.run("/usr/bin/ditto", arguments: [source, paths.staged.path], timeout: 900)
-        guard copy.exitCode == 0, let stagedInfo = try? BundleInfo.read(paths.staged.path), stagedInfo == info,
-              stagedInfo.executableIsRunnable(in: paths.staged.path) else {
+    ///
+    /// `ditto`'s exit code is not the signal (measured 2026-11-19 on one Hub bundle: macOS 27.2.1
+    /// returns 0 for a complete copy, 27.0.1 returns 1 for the same complete copy and once stopped
+    /// partway, 26.6.2 stopped on a symlink). Completeness is: every entry the source has, the same
+    /// version and identifier, a runnable executable. An incomplete copy is cleared, re-attached
+    /// and copied once more (4 of 5 copies complete on the measured Mac, so one retry takes an
+    /// install from 80% to 96%; the agent's next run covers the rest). `Not a directory`,
+    /// `No such file` and `I/O error` are a broken source, not flakiness: they stay fatal.
+    ///
+    /// `reattach` returns a fresh mount path, or throws; it is called only when a retry needs it.
+    static func stage(_ paths: Paths, from source: String, info: BundleInfo, shell: Shell, fileManager fm: FileManager,
+                      reattach: (() throws -> String)? = nil) throws {
+        var from = source
+        var attempts = 0
+        var lastSaid = ""
+        while true {
+            attempts += 1
+            if fm.fileExists(atPath: paths.staged.path) { _ = Space.remove(paths.staged, shell: shell, fileManager: fm) }
+            // Copying into a leftover tree is what made the loop: `ditto` then fails on the first
+            // read-only file inside it, every retry fails the same way, and the row never changes.
+            guard !fm.fileExists(atPath: paths.staged.path) else {
+                throw khuFail("an unfinished copy of the new app was left beside it and could not be cleared (\(paths.staged.path)); nothing was changed — move it aside by hand and try again")
+            }
+            let (wantEntries, _) = entryCount(from)
+            let copy = try shell.run("/usr/bin/ditto", arguments: [from, paths.staged.path], timeout: 900)
+            let stagedInfo = try? BundleInfo.read(paths.staged.path)
+            let (gotEntries, _) = entryCount(paths.staged.path)
+            let complete = stagedInfo == info && stagedInfo?.executableIsRunnable(in: paths.staged.path) == true
+                && wantEntries > 0 && gotEntries == wantEntries
+            if complete { return }
+            lastSaid = "copied \(gotEntries) of \(wantEntries) entries, \(copy.stderr.split(separator: "\n").count) stderr line(s)"
             _ = Space.remove(paths.staged, shell: shell, fileManager: fm)
-            throw khuFail("copying the new app failed (\(copy.stderr.prefix(200))); nothing was changed")
+            if copy.stderr.contains("Not a directory") || copy.stderr.contains("No such file")
+                || copy.stderr.contains("Input/output error") || copy.stderr.contains("I/O error") {
+                throw khuFail("copying the new app could not read its source (\(copy.stderr.prefix(200))); nothing was changed")
+            }
+            guard attempts == 1 else {
+                throw khuFail("copying the new app failed twice (\(lastSaid)); nothing was changed")
+            }
+            // The image was measured detaching itself between attach and copy; a copy that starts
+            // with no source copies nothing. Re-attach before the one retry when the caller can.
+            if let reattach { from = try reattach() }
         }
+    }
+
+    /// How many entries a bundle tree holds, and its size; nil-safe (0) when it cannot be walked.
+    static func entryCount(_ path: String) -> (entries: Int, bytes: UInt64) {
+        guard let walk = FileManager.default.enumerator(at: URL(fileURLWithPath: path),
+                                                        includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                                                        options: [], errorHandler: { _, _ in true }) else { return (0, 0) }
+        var entries = 0, bytes: UInt64 = 0
+        for case let url as URL in walk {
+            entries += 1
+            if let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), values.isRegularFile == true,
+               let size = values.fileSize { bytes += UInt64(max(0, size)) }
+        }
+        return (entries, bytes)
     }
 
     /// The code signature identity of a bundle (`Identifier|TeamIdentifier`), read from `codesign -dvv`

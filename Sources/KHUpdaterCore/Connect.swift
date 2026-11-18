@@ -162,7 +162,7 @@ public enum Connect {
             let part = staging.appendingPathComponent("helper.part")
             let code: Int
             do {
-                code = try http.download(feedURL.deletingLastPathComponent().appendingPathComponent("artifacts").appendingPathComponent(entry.file),
+                code = try http.download(entry.location(beside: feedURL.deletingLastPathComponent()),
                                          headers: [:], to: part, limit: entry.bytes)
             } catch let error as URLError where [.notConnectedToInternet, .cannotConnectToHost, .cannotFindHost, .timedOut, .networkConnectionLost].contains(error.code) {
                 try Trash.move(staging, into: library.appendingPathComponent("_trash"))
