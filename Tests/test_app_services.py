@@ -524,7 +524,9 @@ class AppServiceRecipeTests(unittest.TestCase):
 
     @staticmethod
     def _trash(directory: Path):
-        trash = REPO / "_trash" / "test-tmp"
+        # The owner may empty their trash at any time, leaving this repo's `_trash` link dangling:
+        # create what the link points at, not the link itself.
+        trash = (REPO / "_trash" / "test-tmp").resolve()
         trash.mkdir(parents=True, exist_ok=True)
         directory.rename(trash / (directory.name + "." + uuid.uuid4().hex))
 

@@ -100,8 +100,12 @@ def sample(pid):
 
 
 def retire(directory):
-    """House rule: scratch moves into the repository's own _trash, never away."""
-    trash = REPO / "_trash" / "test-tmp"
+    """House rule: scratch moves into the repository's own _trash, never away.
+
+    The owner may empty their trash at any time, which leaves the repo's `_trash` link dangling,
+    so create what it points at rather than the link itself.
+    """
+    trash = (REPO / "_trash" / "test-tmp").resolve()
     trash.mkdir(parents=True, exist_ok=True)
     directory.rename(trash / (directory.name + "." + uuid.uuid4().hex))
 

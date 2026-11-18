@@ -68,7 +68,8 @@ def main() -> int:
     # Evidence is kept only when something failed; a passing run retires its scratch like the others.
     if ok:
         import shutil
-        trash = REPO / "_trash/test-tmp"
+        # The owner may empty their trash at any time, leaving the repo's `_trash` link dangling.
+        trash = (REPO / "_trash/test-tmp").resolve()
         trash.mkdir(parents=True, exist_ok=True)
         shutil.move(str(root), str(trash / root.name))
     else:

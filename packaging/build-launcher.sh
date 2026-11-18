@@ -9,7 +9,9 @@ IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
 [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ && -f "$PUB" && -x build/khu ]] || { echo "usage: $0 <version> <publisher.json> (after ./build.sh build)" >&2; exit 2; }
 APP="build/Studio Launcher KH.app"; DMG="build/Studio-Launcher-KH-$VERSION.dmg"; KIT="build/launcher-kit"
-mkdir -p _trash
+# The owner may empty their trash at any time, which leaves this repo's `_trash` link dangling and
+# makes `mkdir -p _trash` fail the build. Create what the link points at.
+if [ -L _trash ]; then mkdir -p "$(readlink _trash)"; else mkdir -p _trash; fi
 for old in "$APP" "$DMG" "$KIT"; do if [ -e "$old" ]; then mv "$old" "_trash/$(basename "$old").$(date +%s)"; fi; done
 # build/khu and build/khu-stub are already universal (./build.sh build); merging a duplicate
 # slice again would only re-derive them, so the kit takes them as built.
