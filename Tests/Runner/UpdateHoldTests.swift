@@ -183,9 +183,9 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
-        expect(result?.status == "refused" && (result?.reason ?? "").contains("render-7")
+        expect(result?.status == Agent.waitingForClose && (result?.reason ?? "").contains("render-7")
                && (result?.reason ?? "").contains("tts-3") && !f.app.events.contains("quit"),
-               "UH3 an unsafe reply is refused with the unsettled names and the app is never quit")
+               "UH3 an unsafe reply waits for close with the unsettled names, and the app is never quit")
         expect(f.client.calls == ["artifact", "hold", "hold", "resume"], "UH3 the retry and the resume are the only hold calls (\(f.client.calls))")
     }
 
@@ -449,8 +449,8 @@ func updateHoldTests() {
                                         serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
-        expect(result?.status == "updated" && f.client.calls.first == "hold",
-               "UH32 the exact admin drain holds before the byte (\(f.client.calls))")
+        expect(result?.status == "updated" && f.client.calls.first == "artifact" && f.client.calls.contains("hold"),
+               "UH32 the exact admin drain holds before the swap (\(f.client.calls))")
     }
 
     // UH35 the feed records the first version that published a hold address and carries it on.

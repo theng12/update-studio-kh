@@ -201,6 +201,7 @@ public enum Recipe {
     public static func appDmg(shell: Shell, installedPath: String, artifactPath: String, feedVersion: String,
                               expectedBundleID: String?, stateDir: String, app: String, control: AppControl,
                               refuseIfRunning: Bool = false, relaunchAfterInstall: Bool = true,
+                              relaunchIfClosed: Bool = false,
                               appearCeiling: TimeInterval = Recipe.appearCeiling,
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil,
@@ -250,6 +251,7 @@ public enum Recipe {
         return try promoteAndSettle(paths: paths, targetVersion: feedVersion, installedInfo: installedInfo,
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
                                     refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall,
+                                    relaunchIfClosed: relaunchIfClosed,
                                     clock: clock, appearCeiling: appearCeiling, beforeStop: beforeStop)
     }
 
@@ -425,7 +427,7 @@ public enum Recipe {
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false,
-                                 relaunchAfterInstall: Bool = true,
+                                 relaunchAfterInstall: Bool = true, relaunchIfClosed: Bool = false,
                                  clock: @escaping () -> TimeInterval = Mono.now,
                                  appearCeiling: TimeInterval = Recipe.appearCeiling,
                                  beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
@@ -614,7 +616,10 @@ public enum Recipe {
             return finish(settled(RecipeResult(status: "updated",
                 reason: wasRunning ? "it was closed for the update and left closed" : "it was left stopped")))
         }
-        guard wasRunning || journal.previousVersion == nil else {
+        // A waiting update installs on the tick after its app is closed, and reopens it: the person
+        // was told it would install by itself, so it comes back rather than arriving silently closed.
+        let reopens = wasRunning || relaunchIfClosed
+        guard reopens || journal.previousVersion == nil else {
             return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
         }
         control.launch()
@@ -625,7 +630,7 @@ public enum Recipe {
         // had already nearly expired).
         mark("appear-ceiling \(Int(appearCeiling))s")
         // Only a process this install stopped has to come back; a first install has none to wait for.
-        let appeared = !wasRunning || waitForRunning(control, clock: clock, ceiling: appearCeiling)
+        let appeared = !reopens || waitForRunning(control, clock: clock, ceiling: appearCeiling)
         mark(appeared ? "appeared" : "did-not-appear")
         mark("health-window \(Int(control.healthTimeout))s")
         if appeared, waitHealthy(control, version: targetVersion, clock: clock) {

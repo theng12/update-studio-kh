@@ -1015,7 +1015,8 @@ public enum Agent {
                     res = try install(app: item.app, feed: feed, installed: current, config: config,
                                       serverBase: artifactBase, stateDir: stateDir, http: http, shell: shell, control: control, local: local,
                                       force: reinstall.contains(item.app), artifactFallbacks: artifactFallbacks, manual: item.manual,
-                                      catalogEntry: entry, quitOldBuild: item.explicit && config.quitOldBuilds != false)
+                                      catalogEntry: entry, quitOldBuild: item.explicit && config.quitOldBuilds != false,
+                                      relaunchIfClosed: memory.waiting?[item.app] != nil)
                 case ServerCommand.launch:
                     res = launchOrdered(app: item.app, config: config, shell: shell, wait: Agent.launchWait(config))
                 case ServerCommand.vendorInstall:
@@ -1537,7 +1538,8 @@ public enum Agent {
     static func install(app: String, feed: Feed, installed: String?, config: AgentConfig, serverBase: URL, stateDir: URL,
                         http: HTTPClient, shell: Shell, control: (String, AppConfig) -> AppControl,
                         local: CatalogEntry.Local? = nil, force: Bool = false, artifactFallbacks: [URL] = [],
-                        manual: Bool = false, catalogEntry: CatalogEntry? = nil, quitOldBuild: Bool = false) throws -> RecipeResult {
+                        manual: Bool = false, catalogEntry: CatalogEntry? = nil, quitOldBuild: Bool = false,
+                        relaunchIfClosed: Bool = false) throws -> RecipeResult {
         guard let cfg = config.apps[app] else { throw khuFail("\(app) is not configured on this Mac") }
         // An app that updates itself is never installed by KH Updater on its own: Automatic and a
         // remote order leave it alone. Only a choice made here, at this Mac, may install it.
@@ -1722,11 +1724,13 @@ public enum Agent {
             return RecipeResult(status: "download_failed", reason: "\(error)")
         }
         // A running app that cannot settle is no longer a refusal: its update is downloaded and
-        // checked, and installs by itself once the app is closed. Ready, not stuck.
+        // checked, and installs by itself once the app is closed. Ready, not stuck — and the hold's
+        // own words (why it could not pause, or that this build predates its hold) are kept.
         if let refusal = acquireHold() {
             guard refusal.status == waitingForClose else { return refusal }
-            return RecipeResult(status: waitingForClose,
-                                reason: "\(app) \(entry.version) is downloaded and checked; it installs by itself once \(app) is closed.")
+            var out = refusal
+            out.reason = (out.reason.map { $0 + " " } ?? "") + "\(entry.version) is downloaded and checked; it installs by itself once \(app) is closed."
+            return out
         }
         DownloadControl.updateProgress("installing")
         // One journaled app-dmg path for every recipe that installs a bundle: the plain ones and a
@@ -1747,6 +1751,7 @@ public enum Agent {
             return try refusedQuit { withHoldNote(try Recipe.appDmg(shell: shell, installedPath: cfg.bundlePath, artifactPath: artifact.path, feedVersion: entry.version,
                                                   expectedBundleID: cfg.bundleID, stateDir: stateDir.path, app: app, control: traced(control(app, cfg)),
                                                   refuseIfRunning: itself, relaunchAfterInstall: true,
+                                                  relaunchIfClosed: relaunchIfClosed,
                                                   appearCeiling: TimeInterval(cfg.appearCeilingSeconds ?? Int(Recipe.appearCeiling)),
                                                   beforeStop: beforeStop)) }
         }
