@@ -1366,6 +1366,9 @@ func r28MonotonicWait() {
 final class R2Client: HTTPClient, @unchecked Sendable {
     let inner: InProcessClient
     var commands: Data?
+    /// When set, the status answer is exactly these bytes; otherwise it is an older publisher's
+    /// `{}`, which the agent must fall back from to `/commands` (0.1.61's folded orders).
+    var status: Data?
     var transient = false
     var corrupt = false
     var attempts = 0
@@ -1375,7 +1378,8 @@ final class R2Client: HTTPClient, @unchecked Sendable {
         return try inner.get(url, headers: headers)
     }
     func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
-        try inner.post(url, headers: headers, body: body)
+        if url.path == "/status" { return (status ?? Data("{}".utf8), 200) }
+        return try inner.post(url, headers: headers, body: body)
     }
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
         attempts += 1
@@ -1599,6 +1603,12 @@ func round2Tests(only: Int? = nil) {
             expectThrows("R2-8 \(name) orders refused") { _ = try Agent.runOnce(config: cfg, http: client) }
         }
         expect(client.attempts == 0, "R2-8 refused order replies trigger no download")
+        // The same rules on the folded path: a status answer signed for another Mac is refused,
+        // never quietly replaced by a good `/commands` answer.
+        client.status = r2Sign(wrongMac, rig.pair.privateKey)
+        client.commands = r2Sign(good, rig.pair.privateKey)
+        expectThrows("R2-8 a signed status reply for another Mac is refused") { _ = try Agent.runOnce(config: cfg, http: client) }
+        client.status = nil
         client.commands = r2Sign(good, rig.pair.privateKey)
         let accepted = try? Agent.runOnce(config: cfg, http: client)
         expect(accepted?.commandsRun == 1 && client.attempts == 1, "R2-8 fresh publisher-signed orders accepted once")

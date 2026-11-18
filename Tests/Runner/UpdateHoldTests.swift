@@ -578,14 +578,20 @@ func updateHoldTests() {
         cfg.apps["demo"]?.automatic = false
         cfg.waitForCloseDays = 0
         f.client.replies = [unsafeReply(["render-7"]), unsafeReply(["render-7"])]
-        _ = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
-                               control: { _, _ in f.app.control }, requested: ["demo"], appFolders: [])
+        let first = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
+                                       control: { _, _ in f.app.control }, requested: ["demo"], appFolders: [])
+        let firstRow = first?.apps.first { $0.app == "demo" }
+        expect(firstRow?.status == HelperApp.downloaded,
+               "UH54 the first run leaves a downloaded update waiting (\(firstRow?.status ?? "nil"); \(firstRow?.reason ?? ""))")
+        // A minute later than the first run, so a zero-day ceiling is unambiguously past, whatever
+        // the machine's load does to how fast the two runs follow each other.
         let again = try? Agent.runOnce(config: cfg, http: f.client, shell: RecordingShell(mount: f.mount),
-                                       control: { _, _ in f.app.control }, appFolders: [])
+                                       control: { _, _ in f.app.control }, now: Date().addingTimeInterval(60),
+                                       appFolders: [])
         let row = again?.apps.first { $0.app == "demo" }
         expect(again?.notes.contains { $0.contains("the wait has ended") } == true
                && row?.status == HelperApp.updateAvailable && f.app.running,
-               "UH54 past the ceiling the wait ends and the row is a plain update again (\(row?.status ?? "nil"))")
+               "UH54 past the ceiling the wait ends and the row is a plain update again (\(row?.status ?? "nil"); notes \(again?.notes ?? []); running \(f.app.running))")
     }
 
     // UH55 a download that fails never leaves a waiting row: nothing was downloaded, so nothing waits.
