@@ -47,6 +47,16 @@ public final class StubRunner: @unchecked Sendable {
         self.now = now
     }
 
+    /// The helper's own report, from the state dir its config file names. Nil when the config or
+    /// the report is not there yet: an absent report is never read as a failure.
+    public func agentReport() -> AgentReport? {
+        guard let flag = childArguments.firstIndex(of: "--config"), flag + 1 < childArguments.count,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: childArguments[flag + 1])),
+              let config = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let stateDir = config["stateDir"] as? String else { return nil }
+        return AgentReport.read(stateDir: URL(fileURLWithPath: stateDir))
+    }
+
     public func loadState() -> StubState { StubState.load(from: layout.stateFile) }
 
     public func save(_ supervisor: StubSupervisor) {
@@ -160,7 +170,7 @@ public final class StubRunner: @unchecked Sendable {
                 // Cannot even launch: counted as a crash, so three of them roll back like any other.
                 supervisor.recordExit(code: 127, at: now())
                 save(supervisor)
-                if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed()), rollBack(reason) { continue }
+                if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed(), report: agentReport()), rollBack(reason) { continue }
                 if waitOrShutdown(restartDelay) {
                     log("shutdown requested; not retrying the child")
                     return Self.shutdownExitCode
@@ -194,7 +204,7 @@ public final class StubRunner: @unchecked Sendable {
                     switchMono = nil
                     save(supervisor)
                 }
-                if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed()),
+                if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed(), report: agentReport()),
                    switcher.usablePrevious() != nil {
                     stop(child)
                     if shutdownSignal.requested {
@@ -203,7 +213,7 @@ public final class StubRunner: @unchecked Sendable {
                     }
                     rolledBack = rollBack(reason)
                     break
-                } else if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed()) {
+                } else if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed(), report: agentReport()) {
                     _ = rollBack(reason)  // only logs: there is nothing to fall back to
                 }
             }
@@ -220,7 +230,7 @@ public final class StubRunner: @unchecked Sendable {
             let status = child.terminationStatus
             supervisor.recordExit(code: status, at: now())
             save(supervisor)
-            if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed()), rollBack(reason) {
+            if case .switchBack(let reason) = supervisor.decide(at: now(), elapsed: elapsed(), report: agentReport()), rollBack(reason) {
                 continue
             }
             if status == 0 { return 0 }

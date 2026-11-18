@@ -441,8 +441,9 @@ public enum Recipe {
         let wasRunning = control.isRunning() ?? true
         // A test/hidden instance (extra launch arguments or an isolated HOME) is not the owner's
         // app: it may be replaced, but it is never relaunched into the owner's profile afterwards.
-        // An unattended install never relaunches either: an app that activates itself on launch
-        // would otherwise take the owner's desktop, whatever flags `open` was given.
+        // Any other app that was running is relaunched after the swap and health-checked, so an
+        // unattended update comes back by itself — `relaunchAfterInstall` is the caller's choice
+        // (the agent passes this Mac's `relaunchAfterwards`; only a test instance is excluded).
         let testInstance = wasRunning && control.isTestInstance()
         let mayRelaunch = relaunchAfterInstall && !testInstance
         // An app that updates itself came up between the staging look and here: this route proves no

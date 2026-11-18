@@ -171,18 +171,12 @@ final class HelperMenu: NSObject, NSMenuDelegate, @unchecked Sendable {
         let showsAll = UserDefaults.standard.bool(forKey: "com.khupdater.menuShowsAllApps")
             || list.filter { $0.managed }.count <= 8
         let needingAction: (HelperApp) -> Bool = { app in
-            [HelperApp.updateAvailable, HelperApp.failed, HelperApp.notInstalled].contains(app.status)
+            [HelperApp.updateAvailable, HelperApp.failed, HelperApp.needsAttention, HelperApp.notInstalled].contains(app.status)
         }
         for app in list where app.managed && (showsAll || needingAction(app)) {
             let status = busy == app.app ? HelperApp.updating : (pending.contains(app.app) ? HelperApp.receiving : app.status)
             let row = NSMenuItem(title: "\(app.name.isEmpty ? AppNames.display(app.app) : app.name)   \(app.installed ?? "—") · \(status)", action: nil, keyEquivalent: "")
             menu.addItem(row)
-            // A retired app says so and offers nothing: it is listed only where its bundle still is.
-            if app.retired != nil {
-                row.title = "\(app.name)   \(app.installed ?? "—") · Retired"
-                row.isEnabled = false
-                continue
-            }
             // An observed-only app has no switch: a status line only.
             guard !app.statusOnly else { row.isEnabled = false; continue }
             let sub = NSMenu()

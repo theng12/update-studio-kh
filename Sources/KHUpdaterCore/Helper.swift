@@ -162,33 +162,48 @@ public struct HelperApp: Sendable, Equatable {
     public var retired: String?
 
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
-                      receiving = "Receiving update…", failed = "Failed", updatesItself = "Updates itself",
-                      notInstalled = "Not installed", notInFeed = "Not in the feed"
+                      receiving = "Receiving update…", failed = "Failed", needsAttention = "Needs attention",
+                      updatesItself = "Updates itself", notInstalled = "Not installed", notInFeed = "Not in the feed"
+
+    /// Default retry ceiling for a row before it stops offering Update all / primary Update.
+    public static let failureCeiling = 3
+
+    /// True when "Update all" includes this row: managed, feed-driven, not retired, and either
+    /// behind the offered version or failed below the retry ceiling.
+    public static func updateAllEligible(_ app: HelperApp) -> Bool {
+        app.managed && !app.statusOnly && app.retired == nil && app.available != nil
+            && (app.status == updateAvailable || app.status == failed)
+    }
 
     /// One state per app, and nothing this Mac cannot vouch for reads as fine.
     public static func status(installed: String?, available: String?, statusOnly: Bool, manual: Bool = false,
-                              last: (status: String, reason: String)?) -> (String, String?) {
+                              last: (status: String, reason: String)?,
+                              consecutiveFailures: Int = 0, failureCeiling: Int = HelperApp.failureCeiling) -> (String, String?) {
+        func failure(_ reason: String) -> (String, String?) {
+            let terminal = failureCeiling > 0 && consecutiveFailures >= failureCeiling
+            return (terminal ? needsAttention : failed, reason)
+        }
         if statusOnly {
             // An app that updates itself is still installed by hand when the person asks for it: the
             // state says what is true on this Mac, not who would do it.
             guard manual, let available else { return (updatesItself, nil) }
             // A version already on disk can still be unsettled (its service did not come back).
-            if let last, ["install_failed", "unresolved"].contains(last.status) { return (failed, last.reason) }
+            if let last, ["install_failed", "unresolved"].contains(last.status) { return failure(last.reason) }
             let behind = installed.map { VersionCompare.isNewer(available, than: $0) } ?? true
-            if behind, let last, failures.contains(last.status) { return (failed, last.reason) }
+            if behind, let last, failures.contains(last.status) { return failure(last.reason) }
             if installed == nil { return (notInstalled, nil) }
             return behind ? (updateAvailable, nil) : (updatesItself, nil)
         }
         guard let available else { return (installed == nil ? notInstalled : notInFeed, nil) }
         // The new version may be on disk while its install is unresolved: never "Up to date" then.
-        if let last, ["install_failed", "unresolved"].contains(last.status) { return (failed, last.reason) }
+        if let last, ["install_failed", "unresolved"].contains(last.status) { return failure(last.reason) }
         let behind = installed.map { VersionCompare.isNewer(available, than: $0) } ?? true
-        if behind, let last, failures.contains(last.status) { return (failed, last.reason) }
+        if behind, let last, failures.contains(last.status) { return failure(last.reason) }
         if installed == nil { return (notInstalled, nil) }
         return behind ? (updateAvailable, nil) : (upToDate, nil)
     }
-    static let failures: Set<String> = ["failed", "install_failed", "rolled_back", "rollback_failed", "rollback_unhealthy",
-                                        "rollback_blocked", "download_failed", "refused", "unresolved"]
+    public static let failures: Set<String> = ["failed", "install_failed", "rolled_back", "rollback_failed", "rollback_unhealthy",
+                                               "rollback_blocked", "download_failed", "refused", "unresolved"]
 }
 
 public enum AppNames {

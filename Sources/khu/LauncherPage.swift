@@ -50,7 +50,7 @@ td{padding:9px 14px;border-bottom:1px solid var(--line2);vertical-align:middle}t
 td .head img,td .ph{width:32px;height:32px;border-radius:8px}td .name{font-size:13.5px}td.act{width:1%;white-space:nowrap;text-align:right}td.act .btn+.btn{margin-left:6px}
 footer{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 18px;font-size:12px;color:var(--sub);background:var(--bg);border-top:1px solid var(--line)}
 footer .link{background:none;border:0;color:var(--accent);padding:0;cursor:pointer;white-space:nowrap}footer .stat{font-size:12px;color:var(--sub);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}footer .stat.err{color:var(--bad);font-weight:550}
-footer .btn.icon{width:26px;height:26px;min-height:26px}footer .btn.icon.upd{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+footer .btn{height:26px;min-height:26px;padding:0 10px;font-size:12px}footer .btn.icon{width:26px;padding:0}footer .btn.icon.upd{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .pill{display:inline-flex;align-items:center;gap:5px;height:26px;min-height:26px;min-width:0;padding:0 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:11px;font-weight:550;cursor:pointer;white-space:nowrap;flex:none}
 .pill:hover{border-color:var(--field)}.pill .v{font:10px/1 ui-monospace,Menlo,monospace;color:var(--sub);font-variant-numeric:tabular-nums}
 header .link{background:none;border:0;color:var(--accent);padding:0 4px;cursor:pointer;font-size:12px;white-space:nowrap}
@@ -95,7 +95,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
 </header>
 <main id=main></main>
-<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon" id=check title="Check for updates" aria-label="Check for updates"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=link id=fleet style="margin-left:auto" title="See the whole fleet on the publisher, and act on it">Fleet…</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
+<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon" id=check title="Check for updates" aria-label="Check for updates"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="See the whole fleet on the publisher, and act on it">Fleet…</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
@@ -115,7 +115,7 @@ function plain(r){if(!r)return '';const t=r.toLowerCase();
  if(t.includes('does not match its checksum'))return 'The copy on the SSD doesn’t match its checksum, so it wasn’t used. Try the SSD again or update from the feed.';
  if(t.includes('dmg holds')||t.includes('this mac\'s app is'))return 'The installer holds a different app than the one on this Mac. Nothing was changed.';
  if(t.includes('cancelled on this mac'))return 'Cancelled. Nothing was changed.';
- if(t.includes('did not finish')||t.includes('download')||t.includes('could not connect')||t.includes('timed out'))return 'The download didn’t finish. Check the network and try Update again.';
+ if(t.includes('the install did not finish, and the system gave no reason'))return 'The download didn’t finish. Check the network and try Update again.';
  if(t.includes('not healthy')||t.includes('rolled back'))return 'The new version didn’t start properly, so the previous version is running again.';
  // The Mac's own sentence, kept whole when it is short enough to read. Otherwise its first clause
  // is kept, cut only at a real boundary — never inside parentheses (a job label such as
@@ -129,14 +129,12 @@ function plain(r){if(!r)return '';const t=r.toLowerCase();
  const first=text.slice(0,end).trim();
  return (first||text).replace(/[.;,]+$/,'')+'.'}
 function installed(a){return a.installed!=null&&a.managed}
-function chip(a){if(a.retired)return el('span',{class:'chip'},'Retired');const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Receiving update…':['Receiving update…','info'],
- 'Failed':['Failed','bad'],'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
+function chip(a){const m={'Up to date':['Installed','ok'],'Update available':['Update available','warn'],'Updating…':['Updating','info'],'Receiving update…':['Receiving update…','info'],
+ 'Failed':['Failed','bad'],'Needs attention':['Needs attention','bad'],'Not installed':['Not installed',''],'Updates itself':['Updates itself',''],'Not in the feed':['Installed','ok']}[a.status]||[a.status,''];
  if(!a.managed)return el('span',{class:'chip'},a.available?'Not installed':'Not available');return el('span',{class:'chip '+m[1]},m[0])}
 function versionLine(a){if(a.installed&&a.available&&a.installed!=a.available&&a.status!='Updates itself')return el('span',{class:'ver'},a.installed+' → ',el('b',{},a.available));
  const v=a.installed||a.available;return v?el('span',{class:'ver'},el('b',{},v)):null}
 function mainAction(a){if(a.status=='Updating…'||a.status=='Receiving update…')return null;
- // A retired app gets no Update or Install: it is shown so its owner can see it and remove it.
- if(a.retired)return a.open?['Open','open','']:null;
  // Nothing is offered when the agent has no recipe it would really run for this app.
  if(!a.installable&&!a.statusOnly&&!a.managed)return null;
  if(a.statusOnly){
@@ -222,7 +220,7 @@ function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor
  const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget)openDetail(a.id)}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
-  (a.retired||a.reason)?el('div',{class:'reason'},(a.retrying&&!a.retired?'Last attempt: ':'')+plain(a.retired||a.reason)):null,
+  a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
@@ -245,6 +243,8 @@ const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,w
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
+ const macLabel=S.connection?.displayName||S.connection?.machine;
+ $('mac').textContent=macLabel?'Apps for '+macLabel:'Apps for this Mac';
  $('wnver').textContent=S.version?'v'+S.version:'';
  const u=S.apps.find(a=>a.id=='updater'&&a.status=='Update available'&&a.available&&!a.statusOnly);
  $('update').hidden=!u;if(u){$('update').title='Studio Launcher KH Helper '+u.available;$('update').setAttribute('aria-label','Studio Launcher KH Helper to '+u.available)}
@@ -256,7 +256,7 @@ function render(state){if(state)Object.assign(S,state);
 function move(){document.querySelectorAll('[data-prog]').forEach(n=>{const a=S.apps.find(x=>x.id==n.getAttribute('data-prog'));paint(n,(a&&a.progress)||{})})}
 function draw(){const active=document.activeElement||{},fk=active.id,selection=[active.selectionStart,active.selectionEnd];
  const [list,hidden]=visible(),mine=list.filter(installed),others=list.filter(a=>!installed(a));
- const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.status=='Update available').length;
+ const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.available&&(a.status=='Update available'||a.status=='Failed')).length;
  $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
  $('vgrid').setAttribute('aria-pressed',view=='grid');$('vlist').setAttribute('aria-pressed',view=='list');$('sort').value=sort;
  const m=$('main');m.replaceChildren();
@@ -282,8 +282,8 @@ function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remo
  if(a.open&&!a.helper){add('Open',()=>post({action:'open',app:a.id}));add('Show in Finder',()=>post({action:'finder',app:a.id}))}
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
  if(a.canRollBack)add('Roll back to the previous version',()=>post({action:'rollback',app:a.id}));
- if(a.status=='Failed'&&a.reason)add('Copy error report',()=>post({action:'copyReport',app:a.id}));
- if(a.managed&&!a.statusOnly&&!a.retired){items.push(el('hr'));const why='automatic-origin-'+a.id;
+ if((a.status=='Failed'||a.status=='Needs attention')&&a.reason)add('Copy error report',()=>post({action:'copyReport',app:a.id}));
+ if(a.managed&&!a.statusOnly){items.push(el('hr'));const why='automatic-origin-'+a.id;
   items.push(el('button',{role:'menuitemcheckbox','aria-checked':a.automatic,'aria-describedby':a.automaticOrigin?why:null,onclick:()=>{m.remove();post({action:'automatic',app:a.id,on:!a.automatic})}},el('span',{class:'check'},a.automatic?svg('M3.5 8.5l3 3 6-7'):''),'Update automatically'));
   // The words come from the agent's own decision, so this line can never disagree with the switch.
   // Clearing this Mac's switch is not offered: the controller keeps the last value it was told, so
@@ -353,7 +353,7 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  const chInput=el('input',{id:'addr',type:'text',value:addrDraft===null?(c.destination||''):addrDraft,placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address',oninput:e=>{addrDraft=e.target.value}});
  const connSection=el('section',{},el('h4',{},'Connection'),
   el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},c.destination)),
-  el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.machine)),
+  el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.displayName&&c.machine&&c.displayName!==c.machine?c.displayName+' ('+c.machine+')':(c.displayName||c.machine||''))),
   connStatus(),
   el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection')),
   // Offered only after a check the publisher refused with 401/403 (pairAvailable); the

@@ -3,8 +3,45 @@ import Foundation
 import Darwin
 #endif
 
-/// A feed client that answers the app's update-hold endpoint from a script and records the order of
-/// hold, artifact and resume calls, so a test can prove the hold really precedes any byte.
+/// A real loopback hold endpoint that takes `delay` seconds to answer, so a test can measure what
+/// the client actually waits for instead of what it claims to.
+private final class SlowHoldServer: @unchecked Sendable {
+    let fd: Int32
+    let port: Int
+    var endpoint: URL? {
+        URL(string: "http://127.0.0.1:\(port)/api/maintenance/hold")
+    }
+    init(delay: TimeInterval, body: String) {
+        let sock = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        fd = sock
+        var one: Int32 = 1
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        _ = withUnsafePointer(to: &addr) { Darwin.bind(sock, UnsafeRawPointer($0).assumingMemoryBound(to: sockaddr.self), socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        _ = Darwin.listen(sock, 4)
+        var bound = sockaddr_in(); var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &bound) { getsockname(sock, UnsafeMutableRawPointer($0).assumingMemoryBound(to: sockaddr.self), &len) }
+        port = Int(UInt16(bigEndian: bound.sin_port))
+        Thread { [sock, body] in
+            let client = Darwin.accept(sock, nil, nil)
+            guard client >= 0 else { return }
+            var buffer = [UInt8](repeating: 0, count: 2048)
+            _ = Darwin.read(client, &buffer, buffer.count)
+            Thread.sleep(forTimeInterval: delay)
+            let payload = Data(body.utf8)
+            var response = Data("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: \(payload.count)\r\n\r\n".utf8)
+            response.append(payload)
+            response.withUnsafeBytes { _ = Darwin.write(client, $0.baseAddress, $0.count) }
+            Darwin.close(client)
+        }.start()
+    }
+    func stop() { Darwin.close(fd) }
+}
+
+
 private final class HoldClient: HTTPClient, @unchecked Sendable {
     let inner: InProcessClient
     var artifacts: [String: Data] = [:]
@@ -801,7 +838,7 @@ func updateHoldTests() {
                "UH19 an absent endpoint names the bootstrap install (\(reason))")
     }
 
-    // UH20 a slow endpoint stays a timeout: the bootstrap wording is only for a refused connection.
+    // UH20 a slow endpoint names its hold timeout: never reported as an absent endpoint or a generic error.
     do {
         let f = rig("hold-timeout", hold: holdURL, recipe: "app-dmg", running: true)
         f.client.postError = URLError(.timedOut)
@@ -810,18 +847,22 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control })
         let reason = result?.reason ?? ""
-        expect(result?.status == "refused" && !reason.contains("no update-hold endpoint"),
-               "UH20 a timeout is not reported as an absent endpoint (\(reason))")
+        expect(result?.status == "refused" && !reason.contains("no update-hold endpoint")
+               && reason.contains("did not answer its update hold within 35 s")
+               && reason.contains("asked to settle for 20 s"),
+               "UH20 a timeout names the update-hold timeout and both numbers, not an absent endpoint (\(reason))")
     }
 
-    // UH11 the hold request is bounded by the contract's 30 s window, not the client's 60 s.
+    // UH11 the hold request is allowed the settle window plus its answer margin — never clamped
+    // back to the app's own 20 s, which is the race that lost a real 20.2 s refusal.
     do {
         final class SlowClient: HTTPClient, @unchecked Sendable {
             var seen: TimeInterval = 0
+            var seenURL: URL?
             func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { (Data(), 200) }
             func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) { (Data(), 500) }
             func post(_ url: URL, headers: [String: String], body: Data, timeout: TimeInterval) throws -> (Data, Int) {
-                seen = timeout
+                seen = timeout; seenURL = url
                 return (Data(), 500)
             }
             func delete(_ url: URL, headers: [String: String]) throws -> (Data, Int) { (Data(), 200) }
@@ -830,10 +871,50 @@ func updateHoldTests() {
         let client = SlowClient()
         let endpoint = UpdateHold.trusted(holdURL)!
         let started = Date()
-        _ = try? UpdateHold.begin(endpoint, http: client, deadline: Date().addingTimeInterval(UpdateHold.ceiling))
-        expect(client.seen > 0 && client.seen <= UpdateHold.ceiling && Date().timeIntervalSince(started) < 2,
-               "UH11 the hold POST carries a bounded deadline (\(client.seen) s)")
+        _ = try? UpdateHold.begin(endpoint, http: client, deadline: Date().addingTimeInterval(UpdateHold.answerAllowance))
+        expect(client.seen > UpdateHold.settleWindow && client.seen <= UpdateHold.answerAllowance
+               && Date().timeIntervalSince(started) < 2,
+               "UH11 the hold POST carries the settle window plus its margin, not the window (\(client.seen) s)")
+        // A renew (timeout_s=0) asks for no settle but stays bounded the same way.
+        _ = try? UpdateHold.begin(endpoint, http: client, timeoutS: 0)
+        expect(client.seenURL?.query?.contains("timeout_s=0") == true && client.seen <= UpdateHold.answerAllowance,
+               "UH11 a renew sends timeout_s=0 and is still bounded (\(client.seenURL?.query ?? "nil"))")
         UpdateHold.resume(endpoint, http: client)
+    }
+
+    // UH51 a real endpoint that settles for 20.2 s and refuses reaches the caller as the app's own
+    // answer: the client's allowance sits above the app's window, so the refusal is not lost to -1001.
+    do {
+        // The Launcher's own credential lives in this Mac's state; a test never writes there.
+        let tokenFile = tmpDir("uh51-token").appendingPathComponent("hold-token").path
+        setenv("KHU_HOLD_TOKEN_FILE", tokenFile, 1)
+        defer { unsetenv("KHU_HOLD_TOKEN_FILE") }
+        let server = SlowHoldServer(delay: 20.2, body: #"{"safe":false,"unsettled":["job-a","job-b"]}"#)
+        let endpoint = server.endpoint!
+        defer { server.stop() }
+        let reply = try? UpdateHold.begin(endpoint, http: URLSessionHTTPClient(),
+                                          deadline: Date().addingTimeInterval(UpdateHold.answerAllowance))
+        expect(reply?.safe == false && reply?.unsettled == ["job-a", "job-b"],
+               "UH51 a 20.2 s refusal arrives whole instead of timing out (\(reply?.unsettled ?? []))")
+    }
+
+    // UH52 an endpoint that never answers ends as the typed timeout, at the allowance and not before.
+    do {
+        let tokenFile = tmpDir("uh52-token").appendingPathComponent("hold-token").path
+        setenv("KHU_HOLD_TOKEN_FILE", tokenFile, 1)
+        defer { unsetenv("KHU_HOLD_TOKEN_FILE") }
+        let server = SlowHoldServer(delay: 36, body: #"{"safe":true}"#)
+        let endpoint = server.endpoint!
+        defer { server.stop() }
+        let started = Date()
+        var timedOut = false
+        do {
+            _ = try UpdateHold.begin(endpoint, http: URLSessionHTTPClient(),
+                                     deadline: Date().addingTimeInterval(UpdateHold.answerAllowance))
+        } catch { timedOut = UpdateHold.timedOut(error) }
+        let took = Date().timeIntervalSince(started)
+        expect(timedOut && took >= UpdateHold.settleWindow && took < UpdateHold.answerAllowance + 5,
+               "UH52 a silent endpoint ends as the typed timeout at the allowance (\(Int(took)) s)")
     }
 
     // UH12 an app opened while the installer was prepared is refused at the boundary when it has no
@@ -958,5 +1039,25 @@ func updateHoldTests() {
         feed.apps["a"] = entry
         let validated = try? feed.validated()
         expect(validated?.apps["a"]?.holdURL == nil, "UH9 a remote hold endpoint is dropped from the signed feed")
+    }
+
+    // UH50 the Fleet page counts how many enrolled Macs are still below holdSince on the force path.
+    do {
+        let f = rig("fleet-hold-count", hold: holdURL, recipe: "app-dmg", running: false, holdSince: "0.6.240")
+        _ = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
+        _ = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac2")
+        try! StateStore.update(in: f.rig.state) { st in
+            st.machines["mac1"]?.installed["demo"] = "0.6.235"
+            st.machines["mac2"]?.installed["demo"] = "0.6.240"
+        }
+        let htmlBefore = f.rig.server.statusHTML()
+        expect(htmlBefore.contains("1 Mac below hold (0.6.240; temporary force path)"),
+               "UH50 Fleet counts Macs still below holdSince on the temporary force path")
+        try! StateStore.update(in: f.rig.state) { st in
+            st.machines["mac1"]?.installed["demo"] = "0.6.240"
+        }
+        let htmlAfter = f.rig.server.statusHTML()
+        expect(htmlAfter.contains("0 Macs below hold (0.6.240; ready to retire force path)"),
+               "UH50 Fleet says when zero Macs remain below holdSince")
     }
 }

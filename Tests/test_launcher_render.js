@@ -535,30 +535,40 @@ for (const handler of [...(document.handlers.keydown || [])]) handler({ key: 'Es
 assert(document.activeElement && document.activeElement.id === 'gear',
   'R17b focus falls back to the connected Settings button, never the body');
 assert.notEqual(document.activeElement, document.body, 'R17b focus is never left on the body');
-// A retired app stays visible only so its owner can remove it: marked Retired, no Update or Install,
-// no Automatic switch, and its own Uninstall… still offered.
+// Failed rows below the ceiling count toward Update all and show their real failure reason;
+// Needs attention (terminal after ceiling) stops offering Update all or primary Update, while
+// More keeps Copy error report.
 run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
-render(state([row({ id:'kh-updater-app', name:'Update Studio KH', status:'Up to date', installed:'1.0.42', available:'1.0.42',
-                    retired:'Update Studio KH is retired into Studio Launcher KH.' })]));
-const retiredCard = document.querySelector('.card');
-assert.match(retiredCard.textContent, /Retired/, 'the retired row says Retired, not Up to date');
-assert.match(retiredCard.textContent, /retired into Studio Launcher KH/, 'it says what happened to it');
-assert(![...retiredCard.querySelectorAll('button')].some(b => /Update|Install/.test(b.textContent)),
-  'a retired app offers no Update or Install');
-posts.length = 0;
-retiredCard.querySelector('button[title="More"]').fire('click');
-const retiredMenu = document.querySelector('.menu').textContent;
-assert.doesNotMatch(retiredMenu, /Update automatically/, 'a retired app has no Automatic switch');
-assert.match(retiredMenu, /Uninstall…/, 'removing it stays a person\'s own click');
+render(state([
+  row({ id: 'a1', name: 'App One', status: 'Update available', installed: '1.0', available: '2.0' }),
+  row({ id: 'a2', name: 'App Two', status: 'Failed', installed: '1.0', available: '2.0', reason: 'App Two did not answer its update hold in time' }),
+  row({ id: 'a3', name: 'App Three', status: 'Needs attention', installed: '1.0', available: '2.0', reason: 'App Three failed: HTTP 404 from download mirror' }),
+], { connection: { destination: 'http://100.64.0.7:8790/release.json', machine: 'mac-id-1', displayName: 'Edit Suite 1103', checking: false } }));
+assert.equal(document.getElementById('all').textContent, 'Update all (2)', 'Update all counts Failed rows below ceiling, not Needs attention');
+assert.equal(document.getElementById('mac').textContent, 'Apps for Edit Suite 1103', 'header names This Mac from displayName');
+const holdTimeoutPlain = run('plain("demo did not answer its update hold within 35 s (it was asked to settle for 20 s); nothing was changed.")');
+assert.match(holdTimeoutPlain, /update hold/, 'hold timeout is not hidden as a download failure');
+assert.doesNotMatch(holdTimeoutPlain, /download didn’t finish/, 'hold timeout keeps its real reason');
+const mirror404Plain = run('plain("download mirror returned HTTP 404")');
+assert.match(mirror404Plain, /HTTP 404/, 'a download HTTP failure is not overwritten by a generic download-did-not-finish message');
+const terminalCard = document.querySelectorAll('.card').find(c => c.textContent.includes('App Three'));
+assert.match(terminalCard.textContent, /Needs attention/, 'terminal card shows Needs attention');
+assert(![...terminalCard.querySelectorAll('button')].some(b => b.textContent === 'Update'), 'terminal card offers no primary Update button');
+terminalCard.querySelector('button[title="More"]').fire('click');
+assert.match(document.querySelector('.menu').textContent, /Copy error report/, 'terminal card keeps Copy error report in More');
 document.querySelectorAll('.menu').forEach(x => x.remove());
+run('settingsOpen=true;drawSettings()');
+assert.match(document.querySelector('.scrim.s .sheet').textContent, /Edit Suite 1103 \(mac-id-1\)/, 'Settings This Mac shows displayName alongside machine id');
+run('settingsOpen=false;closeLayers()');
 
-// The publisher's fleet view lives in this app now (Update Studio KH.app is retired): the footer
-// offers it, and one click asks the helper to open it — the page itself reaches no network.
+// The publisher's fleet view lives in this app now: the footer offers Fleet… as a proper button,
+// and one click asks the helper to open it — the page itself reaches no network.
 run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
 render(state([row({ status: 'Up to date', installed: '0.1.53', available: '0.1.53' })], { version: '0.1.53' }));
 posts.length = 0;
 const fleetButton = document.getElementById('fleet');
 assert(fleetButton, 'the footer offers the fleet');
+assert(markup.includes('<button class=btn id=fleet'), 'Fleet… is a proper .btn button in the markup');
 fleetButton.fire('click');
 assert.equal(posts.length, 1, 'one click sends exactly one message');
 assert.equal(posts[0].action, 'fleet', 'Fleet asks the helper to open the publisher page');

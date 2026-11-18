@@ -2,6 +2,15 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.59 — 2026-11-18
+
+- A helper switch now judges whether checks are actually accepted by Update Studio, instead of trusting a running process alone: every check writes its outcome and keeps the last accepted time across runs, and the stub rolls back a switch only if a Mac that was reporting before the switch gets no accepted check within 15 minutes. An already-silent offline Mac keeps its version instead of ping-ponging.
+- Feed hosting can now run inside the helper when the signed network settings enable it for a Mac (switched off in this release by default), serving the exact signed feed bytes and coming back with the agent after a reboot.
+- Asking an app to hold for an update now waits for its 20 s settle window plus 15 s for its answer, so a slow "still busy, these jobs are in flight" answer arrives instead of a bare timeout; one that never answers says "did not answer its update hold within 35 s (it was asked to settle for 20 s)". The page also stops rewriting timeouts, connection refusals or HTTP failures into "The download didn't finish."
+- Update all now counts Failed rows so retryable updates run together, while a row that fails three consecutive times for the same offered version enters Needs attention and stops retrying automatically until a new version arrives or you inspect Copy error report.
+- Fleet now shows how many Macs are still below each app's hold-capable version on the temporary force path, and the Launcher footer presents Fleet… as a button, removes the Retired Update Studio row from the app list, names This Mac from its display name, and guards direct self-updater calls against downgrades.
+- Note: folding signed orders into the status reply to save a transfer is not in this version and remains queued for a later release.
+
 ## 0.1.58 — 2026-11-18
 
 - An update could get stuck saying the same thing over and over: a copy left behind by the first attempt could not be cleared, so every retry ran into it and failed the same way, and the row never changed. This version clears that leftover itself and installs on the next try, with nothing to do by hand. If a copy ever really cannot be cleared, the row says so once and stops repeating.

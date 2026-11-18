@@ -120,7 +120,9 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                          "menuBarWhenClosed": settings.menuBarWhenClosed ?? true,
                          "retireHelpers": cleanup?.enabled ?? false, "helperCleanupAvailable": cleanup != nil,
                          "helperHealthySeconds": cleanup?.healthySeconds ?? 0],
-            "connection": ["destination": helper.config.feedURL, "machine": helper.config.machine, "checking": connectionBusy,
+            "connection": ["destination": helper.config.feedURL, "machine": helper.config.machine,
+                           "displayName": MacName.current(expectedMachine: helper.config.machine) as Any,
+                           "checking": connectionBusy,
                            "checkedAt": connectionUI.checkedAt as Any, "ok": connectionUI.ok as Any, "note": connectionUI.note as Any,
                            "serverNote": connectionUI.serverNote as Any, "serverOk": connectionUI.serverOk as Any,
                            "pairAvailable": connectionUI.pairAvailable],
@@ -228,7 +230,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         case "rollback":
             if confirm("Roll back \(app?.name ?? id)?", "It goes back to the version this Mac kept before the last update.", "Roll Back") { helper.request("rollback:" + id) }
         case "updateAll":
-            for a in all where a.managed && !a.statusOnly && a.status == HelperApp.updateAvailable { helper.request(a.app) }
+            for a in all where HelperApp.updateAllEligible(a) { helper.request(a.app) }
         case "open": if let p = app?.bundlePath { NSWorkspace.shared.open(URL(fileURLWithPath: p)) }
         case "finder": if let p = app?.bundlePath { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)]) }
         case "setup": if let f = app?.setupFolder { NSWorkspace.shared.open(URL(fileURLWithPath: f)) }

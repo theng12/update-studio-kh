@@ -424,10 +424,19 @@ struct KHUMain {
                         print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
                         for note in r.notes { print("note: \(note)") }
                         menu?.finished(r, error: nil)
+                        // What this check actually did, beside the memory: "running" and "reaching
+                        // the publisher" are different facts, and only the second one counts.
+                        AgentReport.record(kind: r.statusPosted ? "ok" : "unreachable",
+                                           reason: r.statusPosted ? nil : (r.feedError ?? "no report reached the publisher"),
+                                           stateDir: URL(fileURLWithPath: cfg.stateDir), now: Date())
                         if r.restartRequested { print("updater switched to a new version; exiting so the stub starts it"); exit(0) }
                     } catch {
                         FileHandle.standardError.write(Data("agent error: \(error)\n".utf8))
                         menu?.finished(nil, error: "\(error)")
+                        // A failed check is recorded, never silence: the row and the fleet can say
+                        // when this Mac last reached the publisher and why it has not since.
+                        AgentReport.record(kind: Agent.blockedByTransportSecurity(error) ? "refused" : "error",
+                                           reason: "\(error)", stateDir: URL(fileURLWithPath: cfg.stateDir), now: Date())
                     }
                     if cfg.once { break }
                     // Between runs, never inside one: nothing is downloading, installing or holding.

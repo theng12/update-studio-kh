@@ -104,18 +104,27 @@ public enum UpdateHold {
     /// credential or the address is wrong, instead of a generic answer.
     public struct Refused: Error, Equatable { public let status: Int }
 
-    /// The contract's ceiling: no wait on an app may outlast one settle window.
-    public static let ceiling: TimeInterval = 30
+    /// What we ask the app to settle for: the app's own wait, and the contract's window.
+    public static let settleWindow: TimeInterval = 20
 
-    /// Pauses dispatch and waits for the app's bounded settle. `timeoutS` never exceeds the
-    /// contract's 30 s ceiling; 0 renews an existing hold without waiting. The request itself is
-    /// bounded too: `deadline` caps how much of the window is left, so a silent endpoint fails
-    /// closed inside 30 s instead of inheriting the client's 60 s/600 s defaults.
+    /// How long past that window the app may take to put its answer on the wire. A request capped
+    /// at the window itself gives the app no time to answer, which is how a real 20.2 s refusal
+    /// reached the log as a bare -1001.
+    public static let answerMargin: TimeInterval = 15
+
+    /// The HTTP client's allowance for one hold request: the settle window plus the app's answer
+    /// margin. Bounded again only by the caller's own `deadline`, never clamped back to the window.
+    public static let answerAllowance: TimeInterval = settleWindow + answerMargin
+
+    /// Pauses dispatch and waits for the app's bounded settle. `timeoutS` is what the app is asked
+    /// to settle for, never more than `settleWindow`; 0 renews an existing hold without waiting.
+    /// `deadline` is the caller's own deadline (an install's window), not the contract's: with no
+    /// deadline the request gets `answerAllowance`.
     public static func begin(_ endpoint: URL, http: HTTPClient, timeoutS: Int = 20, pauseS: Int = 120,
                              deadline: Date? = nil) throws -> Reply {
-        let timeout = max(0, min(30, timeoutS))
+        let timeout = max(0, min(Int(settleWindow), timeoutS))
         let url = endpoint.appendingQuery("timeout_s", "\(timeout)").appendingQuery("pause_s", "\(max(1, pauseS))")
-        let wait = max(1, min(ceiling, deadline?.timeIntervalSinceNow ?? ceiling))
+        let wait = max(1, min(answerAllowance, deadline?.timeIntervalSinceNow ?? answerAllowance))
         let (data, code) = try http.post(url, headers: credentialHeaders(), body: Data(), timeout: wait)
         guard code == 200 else { throw Refused(status: code) }
         guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
@@ -134,9 +143,19 @@ public enum UpdateHold {
         return ns.domain == NSURLErrorDomain && codes.contains(ns.code)
     }
 
+    /// A timeout means the endpoint is present, but the app did not settle or answer inside the
+    /// hold window — distinct from an absent endpoint so the failure names the hold timeout.
+    public static func timedOut(_ error: Error) -> Bool {
+        // Our own client's read deadline is enforced before URLSession's, so it reports its own type.
+        if error is TransferTimeout { return true }
+        if let urlError = error as? URLError { return urlError.code == .timedOut }
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut
+    }
+
     /// Best effort: the pause is in-memory and expires by itself, so a failed DELETE never leaves
     /// an app that has stopped taking work.
     public static func resume(_ endpoint: URL, http: HTTPClient) {
-        _ = try? http.delete(endpoint, headers: credentialHeaders(), timeout: ceiling)
+        _ = try? http.delete(endpoint, headers: credentialHeaders(), timeout: answerAllowance)
     }
 }

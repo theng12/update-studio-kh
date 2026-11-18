@@ -2627,13 +2627,8 @@ func launcherTests() {
         expect(r1 != nil && r1?.apps.contains { $0.app == "kh-updater-app" } == false, "L9 the control window is not offered on a Mac that does not have it")
         _ = makeApp(apps.appendingPathComponent("U.app"), version: "1.0.4", id: "com.t.ctl")
         let r2 = try? Agent.runOnce(config: agentConfig(rig, token: token, apps: [:]), http: InProcessClient(server: rig.server), ssd: [ssd([control])], appFolders: [apps])
-        expect(r2?.apps.contains { $0.app == "kh-updater-app" && $0.installed == "1.0.4" } == true, "L9 it is listed on a Mac that already has it")
-        // It is listed so its owner can see it and remove it — marked retired, with nothing on offer.
-        let retiredRow = r2?.apps.first { $0.app == "kh-updater-app" }
-        expect(retiredRow?.retired?.contains("retired into Studio Launcher KH") == true
-               && retiredRow?.installable == false && retiredRow?.automatic == false && retiredRow?.automaticOrigin == nil
-               && retiredRow?.manuallyInstallable == false,
-               "L9 a Mac that still has the retired app sees it once, marked retired, with no update or switch")
+        expect(r2 != nil && r2?.apps.contains { $0.app == "kh-updater-app" } == false,
+               "L9 a retired app is removed from the Launcher list even when its bundle is still on disk")
     }
     // L5. Publishing records the app's own name, bundle ID and icon; a DMG of another version is refused.
     do {
@@ -2933,10 +2928,55 @@ func helperTests() {
         expect(hub?.statusOnly == false && hub?.automatic == true && hub?.status == HelperApp.notInFeed,
                "H5 a legacy hub recipe is a managed app with its switch, never a self-updating stub")
         let failed = HelperApp.status(installed: "1.0.0", available: "2.0.0", statusOnly: false, last: ("rolled_back", "not healthy"))
+        let terminal = HelperApp.status(installed: "1.0.0", available: "2.0.0", statusOnly: false,
+                                        last: ("rolled_back", "not healthy"), consecutiveFailures: HelperApp.failureCeiling)
         let current = HelperApp.status(installed: "2.0.0", available: "2.0.0", statusOnly: false, last: ("failed", "old"))
         expect(failed.0 == HelperApp.failed && failed.1 == "not healthy" && current.0 == HelperApp.upToDate && current.1 == nil
+               && terminal.0 == HelperApp.needsAttention && terminal.1 == "not healthy"
                && HelperApp.status(installed: nil, available: nil, statusOnly: false, last: nil).0 == HelperApp.notInstalled,
-               "H5 a failure shows with its reason until the app is current")
+               "H5 a failure shows with its reason until the app is current, and reaches Needs attention at the ceiling")
+        var failedRow = HelperApp(app: "demo", installed: "1.0.0", available: "2.0.0", statusOnly: false, automatic: false, status: HelperApp.failed, reason: "boom")
+        expect(HelperApp.updateAllEligible(failedRow), "H5b failed rows below ceiling count toward Update all")
+        failedRow.status = HelperApp.needsAttention
+        expect(!HelperApp.updateAllEligible(failedRow), "H5b terminal Needs attention rows do not count toward Update all")
+
+        // H5c Agent.snapshot counts consecutive failures per offered version and resets on a new release,
+        // and installUpdater refuses a direct downgrade.
+        let rigC = Rig("ceiling")
+        try? rigC.publish("demo", "2.0.0", rigC.artifact("d2.dmg", "d2"))
+        let feedC = try! FeedPublisher.loadVerifiedFeed(from: rigC.feed, publicKey: rigC.pair.privateKey.publicKey)!
+        var memC = AgentMemory()
+        for idx in 1...HelperApp.failureCeiling {
+            memC.done["cmd-\(idx)"] = AgentMemory.Done(app: "demo", status: "failed", reason: "attempt \(idx)",
+                                                       at: "2026-11-18T00:0\(idx):00Z", sent: true, version: "2.0.0")
+        }
+        let cfgC = agentConfig(rigC, token: "unused", apps: ["demo": AppConfig(bundlePath: rigC.root.appendingPathComponent("D.app").path, recipe: "fake-for-tests")])
+        _ = makeApp(URL(fileURLWithPath: cfgC.apps["demo"]!.bundlePath), version: "1.0.0", id: "com.example.demo")
+        let snapTerminal = Agent.snapshot(config: cfgC, feed: feedC, catalog: [], orders: CommandsReply(machine: "mac1", commands: [], automatic: [:]),
+                                          helper: HelperSettings(), memory: memC, executable: nil,
+                                          http: InProcessClient(server: rigC.server), serverBase: URL(string: "http://pub.test")!,
+                                          stateDir: URL(fileURLWithPath: cfgC.stateDir))
+        expect(snapTerminal.first?.status == HelperApp.needsAttention, "H5c three consecutive failures put the row in Needs attention")
+        try? rigC.publish("demo", "2.0.1", rigC.artifact("d21.dmg", "d21"))
+        let feedC2 = try! FeedPublisher.loadVerifiedFeed(from: rigC.feed, publicKey: rigC.pair.privateKey.publicKey)!
+        let snapNewer = Agent.snapshot(config: cfgC, feed: feedC2, catalog: [], orders: CommandsReply(machine: "mac1", commands: [], automatic: [:]),
+                                       helper: HelperSettings(), memory: memC, executable: nil,
+                                       http: InProcessClient(server: rigC.server), serverBase: URL(string: "http://pub.test")!,
+                                       stateDir: URL(fileURLWithPath: cfgC.stateDir))
+        expect(snapNewer.first?.status == HelperApp.failed && snapNewer.first.map(HelperApp.updateAllEligible) == true,
+               "H5c a newer offered version resets the ceiling and the row is retryable again")
+        let baseStub = rigC.root.appendingPathComponent("stub")
+        let layoutStub = StubLayout(base: baseStub)
+        let curBin = try! layoutStub.binary(for: "0.1.59")
+        try! fm.createDirectory(at: curBin.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! "#!/bin/sh\nexit 0\n".write(to: curBin, atomically: true, encoding: .utf8)
+        chmod(curBin.path, 0o755)
+        try! StubSwitcher(layout: layoutStub).install(version: "0.1.59")
+        var cfgStub = cfgC; cfgStub.stubBase = baseStub.path
+        let olderEntry = FeedApp(version: "0.1.58", file: "khu", sha256: String(repeating: "a", count: 64), bytes: 1, kind: "updater")
+        let downStub = try? Agent.installUpdater(olderEntry, artifact: curBin, config: cfgStub)
+        expect(downStub?.status == "refused" && (downStub?.reason ?? "").contains("no downgrade"),
+               "H5d installUpdater refuses a direct downgrade (\(downStub?.reason ?? "nil"))")
     }
     // H6. A report with too many switches is refused and changes nothing.
     do {
@@ -4018,6 +4058,7 @@ struct RunnerMain {
             controllerHandoffTests()
             feedMirrorTests()
             feedHostRuntimeTests()
+            feedHostTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -4067,6 +4108,7 @@ struct RunnerMain {
             supportTests()
             stubTests()
             stubPruneTests()
+            reportTests()
             helperRenameTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
@@ -4166,6 +4208,8 @@ struct RunnerMain {
         gatewayIdentityTests()
         stubTests()
         stubPruneTests()
+        reportTests()
+        feedHostTests()
         publisherTests()
         agentAndServerTests()
         socketTests()

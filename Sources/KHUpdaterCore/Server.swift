@@ -245,6 +245,10 @@ final class RateLimiter: @unchecked Sendable {
 }
 
 public final class FeedServer: @unchecked Sendable {
+    /// The socket `listen()` opened, so a server started inside the helper can be stopped again:
+    /// closing it makes `serve` return at its next accept (EBADF).
+    private let listeningFD = NSLock()
+    private var listenSocket: Int32?
     public let feedDir: URL
     public let stateDir: URL
     public let bind: String
@@ -1242,6 +1246,17 @@ public final class FeedServer: @unchecked Sendable {
         // app, and a row with an Update button would keep offering the one that is gone.
         let feedRows = (feed?.apps ?? [:]).filter { RetiredApps.note($0.key) == nil }.sorted { name($0.key) < name($1.key) }.map { app, entry -> String in
             let behind = state.machines.filter { Self.updateAvailable($0.value, app: app, feed: feed, now: now) }.count
+            let belowHoldNote: String
+            if let since = entry.holdSince {
+                let belowHold = state.machines.values.filter { ms in
+                    ms.tokenHash != nil && ms.installed[app].map { VersionCompare.isNewer(since, than: $0) } == true
+                }.count
+                belowHoldNote = belowHold > 0
+                    ? "<div class=sub>\(belowHold) Mac\(belowHold == 1 ? "" : "s") below hold (\(h(since)); temporary force path)</div>"
+                    : "<div class=sub>0 Macs below hold (\(h(since)); ready to retire force path)</div>"
+            } else {
+                belowHoldNote = ""
+            }
             // The agent reads its own changelog entry when the feed has no notes.
             let own = app == "updater"
                 ? Changelog.launcher.components(separatedBy: "\n## ").dropFirst().first { $0.hasPrefix(entry.version + " ") }
@@ -1252,7 +1267,7 @@ public final class FeedServer: @unchecked Sendable {
             let action = behind == 0 ? "<span class=sub>No Mac needs it</span>"
                 : "<form method=post action=/api/update-all data-confirm=\"Update \(h(name(app))) to \(h(entry.version)) on \(behind) Mac\(behind == 1 ? "" : "s")?\"><input type=hidden name=app value=\"\(h(app))\"><button class=primary>Update \(behind) Mac\(behind == 1 ? "" : "s")</button></form>"
             return "<tr><td class=name>\(h(name(app)))</td><td class=num>\(h(entry.version))</td><td class=num>\(h(sizes.string(fromByteCount: entry.bytes)))</td>"
-                + "<td>\(notes)</td><td class=actions>\(action)</td></tr>"
+                + "<td>\(notes)\(belowHoldNote)</td><td class=actions>\(action)</td></tr>"
         }.joined()
             // The apps that update themselves are not in the feed: the newest version any Mac reports.
             + ["story", "hub", "gateway"].filter { feed?.apps[$0] == nil }.map { app -> String in
@@ -1537,7 +1552,21 @@ public final class FeedServer: @unchecked Sendable {
         }
         guard bound == 0 else { close(fd); throw khuFail("cannot listen on \(bind):\(port) (errno \(errno))") }
         guard Darwin.listen(fd, 64) == 0 else { close(fd); throw khuFail("listen failed on \(bind):\(port)") }
+        listeningFD.lock(); listenSocket = fd; listeningFD.unlock()
         return fd
+    }
+
+    /// The port actually bound (the `port` given may be 0 to let the system choose).
+    public func boundPort() -> Int? {
+        listeningFD.lock(); let fd = listenSocket; listeningFD.unlock()
+        guard let fd else { return nil }
+        return Self.boundPort(fd)
+    }
+
+    /// Stops this server. A serving thread returns on its own at the next accept.
+    public func stopListening() {
+        listeningFD.lock(); let fd = listenSocket; listenSocket = nil; listeningFD.unlock()
+        if let fd { Darwin.close(fd) }
     }
 
     public static func boundPort(_ fd: Int32) -> Int {

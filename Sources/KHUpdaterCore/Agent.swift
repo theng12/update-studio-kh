@@ -60,6 +60,14 @@ struct DeliveryMismatch: Error, CustomStringConvertible {
     let description: String
 }
 
+/// The client's own deadline ran out before the peer finished. Typed, not just text, so a caller can
+/// name what it was waiting for — a hold that never answered is not a torn download.
+public struct TransferTimeout: Error, CustomStringConvertible, Sendable {
+    public let path: String
+    public let seconds: Int
+    public var description: String { "\(path) did not finish within \(seconds) s; it was stopped" }
+}
+
 public struct URLSessionHTTPClient: HTTPClient {
     /// Feed, status and command replies are small; anything bigger is refused, not buffered.
     public var smallLimit = 8 << 20
@@ -211,7 +219,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         }
         TransferMeter.record()
         if cancelled { throw khuFail("cancelled on this Mac; nothing was changed") }
-        guard finished else { throw khuFail("\(url.path) did not finish within \(Int(deadline)) s; it was stopped") }
+        guard finished else { throw TransferTimeout(path: url.path, seconds: Int(deadline)) }
         if let error = sink.error { throw error }
         return sink
     }
@@ -374,6 +382,12 @@ public struct AgentMemory: Codable, Sendable, Equatable {
         public var reason: String
         public var at: String
         public var sent: Bool
+        /// Version that was offered when this attempt ran, so a newer release resets the row's
+        /// retry ceiling without waiting for a manual clear.
+        public var version: String?
+        public init(app: String, status: String, reason: String, at: String, sent: Bool, version: String? = nil) {
+            self.app = app; self.status = status; self.reason = reason; self.at = at; self.sent = sent; self.version = version
+        }
     }
     public var done: [String: Done] = [:]
     /// app → sha256 of an artifact that failed or was rolled back here; Automatic skips it until
@@ -677,7 +691,7 @@ public enum Agent {
         if FileManager.default.fileExists(atPath: hostStatusFile.path) {
             var host = (try? AtomicFile.readJSON([String: String].self, from: hostStatusFile)) ?? [:]
             if host["error"] == nil, let old = host["status"], old.hasPrefix("failed:") { host["error"] = old }
-            let observed = FeedHostRuntime.status(shell: shell)
+            let observed = FeedHostService.isServing ? "serving in this helper" : FeedHostRuntime.status(shell: shell)
             let status = observed + (host["error"] == nil ? "" : "; setup failed")
             host["status"] = status
             host["checked_at"] = ISO.string(now)
@@ -777,12 +791,22 @@ public enum Agent {
         let role = memory.feedNetwork?.hosts[config.machine]
         if role?.enabled == true || FileManager.default.fileExists(atPath: stateDir.appendingPathComponent("feed-host-status.json").path) {
             do {
+                let status: String
                 if role?.enabled == true {
                     _ = try FeedMirror.sync(releaseData: selected.release, sourceBase: artifactBase,
                         root: FeedHostRole.feedDirectory(in: stateDir), publicKey: config.publicKey, http: http, now: now)
+                    // This helper serves the feed itself: the separate job it used to install did
+                    // not come back after a reboot, while the agent did. Any job left from before
+                    // is retired here, so one process owns the feed and it starts with this one.
+                    status = FeedHostService.ensure(role: role!, stateDir: stateDir)
+                    _ = try? FeedHostRuntime.reconcile(role: nil, stateDir: stateDir, executable: nil, shell: shell)
+                } else {
+                    // Hosting is off here: be sure nothing is still serving from an earlier run.
+                    let stopped = FeedHostService.stop()
+                    let hostExecutable = FeedHostRuntime.executable(stubBase: config.stubBase, fallback: executable)
+                    let job = try FeedHostRuntime.reconcile(role: nil, stateDir: stateDir, executable: hostExecutable, shell: shell)
+                    status = FeedHostService.isServing ? stopped : job
                 }
-                let hostExecutable = FeedHostRuntime.executable(stubBase: config.stubBase, fallback: executable)
-                let status = try FeedHostRuntime.reconcile(role: role, stateDir: stateDir, executable: hostExecutable, shell: shell)
                 try AtomicFile.writeJSON(["status": status, "checked_at": ISO.string(now)], to: hostStatusFile)
                 result.notes.append("feed host: " + status)
             } catch {
@@ -1054,7 +1078,8 @@ public enum Agent {
             } else if let refusal {
                 result.notes.append(refusal)
             }
-            let done = AgentMemory.Done(app: item.app, status: res.status, reason: res.reason ?? "", at: ISO.string(Date()), sent: false)
+            let done = AgentMemory.Done(app: item.app, status: res.status, reason: res.reason ?? "", at: ISO.string(Date()),
+                                        sent: false, version: feed.apps[item.app]?.version)
             memory.done[item.id] = done
             try remember()  // recorded before it is reported: a crash here re-reports, never re-installs
             if delivered(post(item.id, done)) { memory.done[item.id]?.sent = true; try remember() }
@@ -1100,16 +1125,26 @@ public enum Agent {
             let entry = catalog.first { $0.id == app }
             let info = cfg?.recipe == "updater" ? nil : cfg.flatMap { try? BundleInfo.read($0.bundlePath) }
             let installed = cfg?.recipe == "updater" ? selfVersion(config: config, executable: executable) : info?.version
-            let last = memory.done.values.filter { $0.app == app }.max { $0.at < $1.at }.map { ($0.status, $0.reason) }
+            let appDone = memory.done.values.filter { $0.app == app }.sorted { $0.at > $1.at }
+            let last = appDone.first.map { ($0.status, $0.reason) }
             // An app its SSD marks as updating itself is shown that way, whatever this Mac's recipe.
             let only = updatesItself(app: app, recipe: cfg?.recipe, entry: entry)
             let available = cfg?.recipe == "updater" ? feed.apps[app]?.version : (entry?.available ?? feed.apps[app]?.version)
+            // Count consecutive failures for the currently offered version; a newer offered version
+            // or a non-failure result clears the ceiling so a real fix can still be tried.
+            var consecutiveFailures = 0
+            for entry in appDone {
+                if let offered = available, let recorded = entry.version, recorded != offered { break }
+                guard HelperApp.failures.contains(entry.status) else { break }
+                consecutiveFailures += 1
+            }
             // An app that updates itself is never installed by KH Updater on its own, but the person
             // at this Mac may install or update it by choosing it: that needs an installer and the
             // app's own identity, so the Launcher can offer the right action.
             let hasOffer = entry?.ssd != nil || entry?.initialSSD != nil || feed.apps[app] != nil
             let manual = only && hasOffer && entry?.bundleID != nil && entry?.bundleName != nil
-            let (status, reason) = HelperApp.status(installed: installed, available: available, statusOnly: only, manual: manual, last: last)
+            let (status, reason) = HelperApp.status(installed: installed, available: available, statusOnly: only, manual: manual,
+                                                    last: last, consecutiveFailures: consecutiveFailures)
             // The row's value and the origin shown beside it are one answer, not two rules: an app
             // that updates itself, or one this Mac does not manage, has no switch to explain.
             let auto: HelperSettings.AutomaticDecision? = only || cfg == nil ? nil
@@ -1171,9 +1206,9 @@ public enum Agent {
             }
             return row
         }.filter { row in
-            // Offered only where it can be installed; the control window only where it already is;
-            // a retired app only where its bundle still exists (a Mac that never had it stays as it is).
-            guard row.retired == nil || row.installed != nil else { return false }
+            // Retired apps are removed from the Launcher UI entirely, even when their bundle is
+            // still on disk; offered apps only where installable, and mainMacOnly where installed.
+            guard RetiredApps.note(row.app) == nil, row.retired == nil else { return false }
             return (row.managed || row.available != nil) && !(row.installed == nil && catalog.first { $0.id == row.app }?.mainMacOnly == true)
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -1337,11 +1372,13 @@ public enum Agent {
         guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
             return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. Update it by hand."))
         }
-        let window = Date().addingTimeInterval(UpdateHold.ceiling)
+        let window = Date().addingTimeInterval(UpdateHold.answerAllowance)
         do {
             var reply = try UpdateHold.begin(endpoint, http: http, deadline: window)
-            if !reply.safe, window.timeIntervalSinceNow > 3 {
-                Thread.sleep(forTimeInterval: 2)   // one retry, only with time left in the window
+            // A second settle is worth asking for only when a whole window still fits: a retry that
+            // runs out mid-wait replaces the app's honest "still unsettled" answer with a timeout.
+            if !reply.safe, window.timeIntervalSinceNow > UpdateHold.settleWindow + 3 {
+                Thread.sleep(forTimeInterval: 2)
                 reply = try UpdateHold.begin(endpoint, http: http, deadline: window)
             }
             guard reply.safe else {
@@ -1378,6 +1415,10 @@ public enum Agent {
                     reason: "Waiting for \(app) to close: its installed build has no update-hold endpoint, so it needs one normal install while \(app) is closed, which happens on the first run that finds it closed. Nothing was changed.")
                 out.predatesHold = true
                 return (endpoint, nil, out)
+            }
+            if UpdateHold.timedOut(error) {
+                return (endpoint, nil, RecipeResult(status: "refused",
+                    reason: "\(app) did not answer its update hold within \(Int(UpdateHold.answerAllowance)) s (it was asked to settle for \(Int(UpdateHold.settleWindow)) s); nothing was changed."))
             }
             return (endpoint, nil, RecipeResult(status: "refused", reason: "\(error)"))
         }
@@ -1940,6 +1981,10 @@ public enum Agent {
     static func installUpdater(_ entry: FeedApp, artifact: URL, config: AgentConfig) throws -> RecipeResult {
         guard let base = config.stubBase else { throw khuFail("no stub layout is configured on this Mac") }
         let layout = StubLayout(base: URL(fileURLWithPath: base))
+        if let current = layout.currentBinary(),
+           let order = VersionCompare.compare(entry.version, StubLayout.version(of: current)), order < 0 {
+            return RecipeResult(status: "refused", reason: "the feed has \(entry.version), older than \(StubLayout.version(of: current)) here; no downgrade")
+        }
         let binary = try layout.binary(for: entry.version)
         let fm = FileManager.default
         if fm.fileExists(atPath: binary.path) {

@@ -53,8 +53,18 @@ public struct StubPolicy: Sendable, Equatable {
     public var crashWindow: TimeInterval
     public var crashLimit: Int
     public var heartbeatGrace: TimeInterval
-    public init(crashWindow: TimeInterval = 5 * 60, crashLimit: Int = 3, heartbeatGrace: TimeInterval = 2 * 60) {
+    /// How long a newly switched-in version has to get one check accepted by the publisher before
+    /// it counts as broken — but only on a Mac that was reporting shortly before the switch. A
+    /// heartbeat proves the process runs; it says nothing about reaching the publisher, which is how
+    /// 15 Macs stayed quiet for 9.5 h with a live, beating helper.
+    public var reportGrace: TimeInterval
+    /// How recently the previous version must have reported, for a silent new one to count against
+    /// it. A Mac that was already silent (offline, nothing published) is never rolled back for it.
+    public var reportedRecently: TimeInterval
+    public init(crashWindow: TimeInterval = 5 * 60, crashLimit: Int = 3, heartbeatGrace: TimeInterval = 2 * 60,
+                reportGrace: TimeInterval = 15 * 60, reportedRecently: TimeInterval = 60 * 60) {
         self.crashWindow = crashWindow; self.crashLimit = crashLimit; self.heartbeatGrace = heartbeatGrace
+        self.reportGrace = reportGrace; self.reportedRecently = reportedRecently
     }
 }
 
@@ -108,7 +118,7 @@ public struct StubSupervisor: Sendable {
 
     /// `elapsed` is the time since the switch on a monotonic clock when the caller has one (the
     /// switch happened in this process); otherwise wall-clock time since `switched_at` is used.
-    public func decide(at date: Date, elapsed: TimeInterval? = nil) -> StubDecision {
+    public func decide(at date: Date, elapsed: TimeInterval? = nil, report: AgentReport? = nil) -> StubDecision {
         guard let switched = state.switchedAt else { return .keepRunning }
         let sinceSwitch = elapsed ?? date.timeIntervalSince(switched)
 
@@ -118,6 +128,19 @@ public struct StubSupervisor: Sendable {
         }
         if sinceSwitch >= policy.heartbeatGrace, state.heartbeatAt == nil {
             return .switchBack(reason: "no heartbeat from the new version within \(Int(policy.heartbeatGrace)) s of the switch")
+        }
+        // A live, beating helper that has not had one check accepted since the switch is the case
+        // the process rules cannot see. Only judged when this Mac was reporting before the switch:
+        // an offline Mac must never be rolled back for staying offline.
+        if sinceSwitch >= policy.reportGrace,
+           let reported = report.flatMap({ ISO.date($0.lastOkAt ?? "") }) {
+            let silentSinceSwitch = reported < switched
+            let wasReporting = reported >= switched.addingTimeInterval(-policy.reportedRecently)
+            if silentSinceSwitch && wasReporting {
+                let last = report?.at ?? "never"
+                return .switchBack(reason: "no check was accepted by the publisher within \(Int(policy.reportGrace / 60)) min of the switch, "
+                                   + "and this Mac had been reporting until it (last attempt \(last))")
+            }
         }
         return .keepRunning
     }
