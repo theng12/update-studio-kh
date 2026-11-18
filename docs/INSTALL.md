@@ -171,8 +171,9 @@ An agent may host verified downloads when its exact enrolled machine ID has an e
 signed `network` settings. Publish those settings with `khu network --feed <feed-dir> --key
 <existing-key-file> --config <network.json>` on the original publisher only. The JSON has ordered
 `feedURLs` and a `hosts` dictionary; each host role has `enabled`, `bind` and `port`. Use the chosen
-Mac's existing tailnet address; client URLs end in `/release.json`, with the original publisher
-last. Publish the host role first, verify that its mirror serves the signed feed and artifacts,
+Mac's existing tailnet address or its Tailscale DNS name (`…ts.net`); client URLs end in
+`/release.json`, with the original publisher last. Publish the host role first, verify that its
+mirror serves the signed feed and artifacts,
 then publish the preferred client URLs. Do not guess a machine ID from its display name.
 
 The agent mirrors every signed artifact and icon before publishing its local feed, then manages

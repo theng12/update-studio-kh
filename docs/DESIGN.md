@@ -81,8 +81,10 @@ Tests substitute a temporary Trash destination. The owner enables Finder's 30-da
 Trash settings and stable application payloads are not changed by this operation.
 
 Optional `network` settings inside those signed bytes contain ordered `feedURLs` and `hosts`,
-keyed by enrolled machine ID. Host roles start off; enabled roles name an existing tailnet bind
-address and port. `khu network --feed <dir> --key <keyfile> --config <network.json>` verifies the
+keyed by enrolled machine ID. Each `feedURL` is plain HTTP ending in `/release.json` at a tailnet
+address, loopback, or a Tailscale DNS name (`*.ts.net`) — the only host name macOS fetches
+unencrypted, resolved on each request. Host roles start off; enabled roles name an existing
+tailnet bind address and port. `khu network --feed <dir> --key <keyfile> --config <network.json>` verifies the
 existing feed, validates these settings and signs the next publication under `publish.lock`.
 Ordinary app publications preserve them. The private key stays with the original publisher.
 

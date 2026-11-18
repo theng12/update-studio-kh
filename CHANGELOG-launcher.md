@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.62 — 2026-11-18
+
+- A download mirror can now be named by its Tailscale host name — the `something…ts.net` name Tailscale shows for that Mac — which is the one kind of name macOS will download an unencrypted feed from. Before, a mirror had to be named by a bare tailnet IP, and macOS refuses those every time, so a mirror could be set up and never actually used. Every other rule is unchanged: plain HTTP ending in `/release.json`, no sign-in detail in the address, a port from 1 to 65535, and a tailnet address, this Mac, or a `ts.net` name.
+
 ## 0.1.61 — 2026-11-18
 
 - Each check now gets its update orders back in the same reply as its status report, so this Mac makes one fewer transfer every five minutes. A Mac still on an older version keeps asking for its orders separately, and that request is answered exactly as before.

@@ -272,4 +272,13 @@ func feedNetworkTests() {
            "FN40 an address literal is told apart from a host name")
     expect((try? FeedNetwork.feedURL("http://127.0.0.1:8790/release.json")) != nil,
            "FN40 loopback stays usable for this Mac's own publisher")
+    // FN45 a mirror named by its Tailscale DNS name is the one host name macOS will fetch plain
+    // HTTP from, so it is accepted and kept a name; every other name stays refused.
+    expect((try? FeedNetwork.feedURL("http://theng-mac-studio-m1-max-32.tail093f2c.ts.net:8790/release.json")) != nil,
+           "FN45 a Tailscale DNS name is accepted as a mirror")
+    for refused in ["http://example.com:8790/release.json", "http://example.ts.net.evil.com/release.json"] {
+        expectThrows("FN45 a name outside ts.net is still refused", contains: "feed address") {
+            _ = try FeedNetwork.feedURL(refused)
+        }
+    }
 }

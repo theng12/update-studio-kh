@@ -111,11 +111,19 @@ public struct FeedNetwork: Codable, Sendable, Equatable {
     public static func feedURL(_ text: String) throws -> URL {
         guard let url = URL(string: text), url.scheme == "http", url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil, url.path == "/release.json",
-              let host = url.host, FeedServer.isTailnet(host) || host == "127.0.0.1",
+              let host = url.host, FeedServer.isTailnet(host) || host == "127.0.0.1" || isMagicDNS(host),
               url.port.map({ (1...65535).contains($0) }) ?? true else {
-            throw khuFail("feed address must be an HTTP release.json on the existing tailnet or loopback")
+            throw khuFail("feed address must be an HTTP release.json on the existing tailnet, its Tailscale DNS name or loopback")
         }
         return url
+    }
+
+    /// A Tailscale DNS name (`*.ts.net`), the one host name macOS will fetch plain HTTP from: the
+    /// app's ATS exception covers `ts.net` and its subdomains. Kept a name, resolved on every
+    /// request, so a Mac whose tailnet address moved is still reached.
+    public static func isMagicDNS(_ host: String) -> Bool {
+        let lower = host.lowercased()
+        return lower.hasSuffix(".ts.net") && BindAddress.isHostName(lower)
     }
 
     /// An IPv4 literal, which Tailscale also reports for a Mac's address.
