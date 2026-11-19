@@ -743,7 +743,7 @@ func updateHoldTests() {
     // config round-trip untouched, and an app with no probe must still decode (old configs work).
     do {
         let hub = "test -r \"$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db\" && [ \"$(sqlite3 -readonly \"$HOME/Library/Application Support/StudioHub Standalone/hub/hub.db\" \"select count(*) from batches\" 2>/dev/null)\" = 0 ]"
-        var cfg = AgentConfig(feedURL: "http://pub.test/release.json", publicKey: "k", stateDir: "/tmp/s",
+        var cfg = AgentConfig(feedURL: "http://100.64.0.7/release.json", publicKey: "k", stateDir: "/tmp/s",
                               machine: "mac1", token: "t")
         cfg.apps = ["hub": AppConfig(bundlePath: "/Applications/Hub Studio KH.app", recipe: "hub",
                                      automatic: true, bundleID: "local.studiohub.standalone", idleProbe: hub),

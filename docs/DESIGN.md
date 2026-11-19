@@ -352,6 +352,16 @@ Vendor installs share the same run lock, machine-bound signed-order validation, 
 
 `khu agent --config <file>`. One run at a time per Mac (`agent.lock`); a second refuses. Between runs, the long-lived helper re-reads only its saved address and token so an explicit address change or confirmed Pair again takes effect on the next check. A changed pinned key, machine ID or runtime path is refused; other running settings remain intact.
 
+**A public feed is read anonymously (0.1.67).** `FeedNetwork.feedURL` accepts an absolute `https`
+address whose path ends in `/release.json` (no credentials, query or fragment) beside today's plain
+`http` tailnet, MagicDNS and loopback forms. `FeedNetwork.authenticated(_:)` is the one rule for the
+token: only the publisher's own addresses pass; a public feed is fetched, and its installers
+downloaded, with no `Authorization` header, and the run posts no status, asks for no orders and
+reports no results. `Connect.destination` accepts a pasted `https` link, and `Connect.usePublicFeed`
+verifies that link's signature against the pinned key before installing a token-free config; a
+publisher's own address is refused there and stays on the pairing flow. The authenticated redirect
+refusal is unchanged.
+
 **The publisher key is pinned in the build (0.1.66).** `Sources/KHUpdaterCore/PinnedKey.swift` holds the
 fleet's Ed25519 public key as a constant compiled into the signed app and helper; every runtime
 verification — the feed, the orders reply, a hosted feed's mirror — uses it, and the config's

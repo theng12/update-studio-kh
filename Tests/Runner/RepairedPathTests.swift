@@ -14,7 +14,7 @@ func repairedPathTests() {
         let configFile = rig.root.appendingPathComponent("config.json")
         let stateDir = rig.root.appendingPathComponent("agent").path
         let saved = """
-        {"feedURL":"http://pub.test/release.json","publicKey":"\(rig.pair.publicKeyBase64)","stateDir":"\(stateDir)",\
+        {"feedURL":"http://100.64.0.7/release.json","publicKey":"\(rig.pair.publicKeyBase64)","stateDir":"\(stateDir)",\
         "machine":"mac1","token":"\(token)","intervalMinutes":5,"once":true,"note":"kept",\
         "apps":{"renamed":{"bundlePath":"/nonexistent/Old Name.app","recipe":"app-dmg","automatic":false}}}
         """

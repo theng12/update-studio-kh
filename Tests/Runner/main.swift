@@ -983,7 +983,7 @@ final class InProcessClient: HTTPClient, @unchecked Sendable {
 }
 
 func agentConfig(_ rig: Rig, token: String, apps: [String: AppConfig]) -> AgentConfig {
-    var cfg = AgentConfig(feedURL: "http://pub.test/release.json", publicKey: rig.pair.publicKeyBase64,
+    var cfg = AgentConfig(feedURL: "http://100.64.0.7/release.json", publicKey: rig.pair.publicKeyBase64,
                           stateDir: rig.root.appendingPathComponent("agent").path, machine: "mac1", token: token, apps: apps, once: true)
     cfg.stubBase = rig.root.appendingPathComponent("stub").path
     return cfg
@@ -4209,6 +4209,7 @@ struct RunnerMain {
         mirrorExportTests()
         neutralPublisherTests()
         pinnedKeyTests()
+        publicFeedTests()
         feedHostRuntimeTests()
         // Signing basics stay covered.
         let key = Signing.generateKeyPair()
@@ -4225,6 +4226,11 @@ struct RunnerMain {
             rollbackRetirementTests()
             mirrorOnlyTests()
             mirrorFeedTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["PF_ONLY"] != nil {
+            publicFeedTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }

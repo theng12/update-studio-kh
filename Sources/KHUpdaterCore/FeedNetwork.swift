@@ -114,13 +114,48 @@ public struct FeedNetwork: Codable, Sendable, Equatable {
         return self
     }
     public static func feedURL(_ text: String) throws -> URL {
-        guard let url = URL(string: text), url.scheme == "http", url.user == nil, url.password == nil,
-              url.query == nil, url.fragment == nil, url.path == "/release.json",
-              let host = url.host, FeedServer.isTailnet(host) || host == "127.0.0.1" || isMagicDNS(host),
+        let refusal = "feed address must be an HTTPS release.json on any host, or plain HTTP on the existing tailnet, "
+            + "its Tailscale DNS name or loopback — with no sign-in detail, query or fragment"
+        guard let url = URL(string: text), url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil,
+              let host = url.host, !host.isEmpty,
               url.port.map({ (1...65535).contains($0) }) ?? true else {
-            throw khuFail("feed address must be an HTTP release.json on the existing tailnet, its Tailscale DNS name or loopback")
+            throw khuFail(refusal)
         }
-        return url
+        switch url.scheme?.lowercased() {
+        case "http":
+            // Plain HTTP only where macOS allows it and only to the publisher's own addresses,
+            // at the one path this tool has always used.
+            guard url.path == "/release.json",
+                  FeedServer.isTailnet(host) || host == "127.0.0.1" || isMagicDNS(host) else { throw khuFail(refusal) }
+            return url
+        case "https":
+            // A public feed: read anonymously, so any host may serve it, and a site may put it in
+            // its own folder (`…/kh-releases/release.json`). The signature is the trust.
+            guard url.path.hasSuffix("/release.json"), isPublicHostName(host) else { throw khuFail(refusal) }
+            return url
+        default:
+            throw khuFail(refusal)
+        }
+    }
+
+    /// Whether a request to this address may carry this Mac's token. Only the publisher's own
+    /// addresses pass: its tailnet IPv4 address, its MagicDNS name, or this Mac's loopback. A public
+    /// feed is fetched and installed from anonymously — pasting a stranger's link must never send
+    /// this Mac's token to them.
+    public static func authenticated(_ url: URL) -> Bool {
+        guard let host = url.host else { return false }
+        return FeedServer.isTailnet(host) || host == "127.0.0.1" || isMagicDNS(host)
+    }
+
+    /// A name a public certificate can exist for: dotted, letters/digits/hyphens, no IP literal.
+    static func isPublicHostName(_ host: String) -> Bool {
+        let lower = host.lowercased()
+        guard lower.contains("."), !isAddressLiteral(lower) else { return false }
+        return lower.split(separator: ".").allSatisfy { label in
+            !label.isEmpty && label.first != "-" && label.last != "-"
+                && label.allSatisfy { $0.isLetter && $0.isASCII || $0.isNumber && $0.isASCII || $0 == "-" }
+        }
     }
 
     /// A Tailscale DNS name (`*.ts.net`), the one host name macOS will fetch plain HTTP from: the
