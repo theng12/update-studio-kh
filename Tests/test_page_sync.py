@@ -341,6 +341,17 @@ def case_retires_previous_after_the_checks_pass():
         fx.close()
 
 
+def case_artifact_hash_mismatch_refuses_before_upload():
+    fx = Fixture(two_apps(), beta_on_page(), dict(artifacts(), **{"aaa-Alpha Studio KH-1.0.1.dmg": b"wrong bytes"}))
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)])
+        check(r.returncode == 5, f"a local file that is not the feed's build must refuse (got {r.returncode})")
+        check("the feed says" in r.stdout, f"it must name both digests\n{r.stdout}")
+        check(fx.gh_calls() == [], f"nothing may be uploaded: {fx.gh_calls()}")
+    finally:
+        fx.close()
+
+
 def case_unaccepted_sha_touches_nothing():
     fx = Fixture(two_apps(), beta_on_page(), artifacts())
     try:
@@ -451,6 +462,7 @@ def case_usage_refusals():
 
 CASES = [case_happy_path_and_stored_name, case_digest_mismatch_retires_nothing,
          case_retires_previous_after_the_checks_pass,
+         case_artifact_hash_mismatch_refuses_before_upload,
          case_unaccepted_sha_touches_nothing, case_mirror_staleness_refuses,
          case_second_run_changes_nothing, case_app_without_icon_skips,
          case_all_mode_syncs_every_listed_app,
