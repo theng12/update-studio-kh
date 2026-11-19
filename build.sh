@@ -32,9 +32,15 @@ case "${1:-build}" in
   test)
     python3 -B -I Tests/test_startup_refusal.py --output "build/startup-refusal-$(uuidgen)"
     universal build/khu "${CORE[@]}" Sources/khu/*.swift
-    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -o build/khu-tests "${CORE[@]}" Tests/Runner/*.swift
+    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-tests "${CORE[@]}" Tests/Runner/*.swift
     ./build/khu-tests
     ;;
+  test-cli)
+    # For the Python fixtures that enrol a Mac against a key they generate: only a test build can
+    # name that key (`KHU_TEST_KEY`). Production `build.sh build` has no such switch.
+    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-test-cli "${CORE[@]}" Sources/khu/*.swift
+    echo "built build/khu-test-cli (test build: KHU_TEST_KEY names the key its fixtures sign with)"
+    ;;
   *)
-    echo "usage: $0 [build|test]" >&2; exit 2 ;;
+    echo "usage: $0 [build|test|test-cli]" >&2; exit 2 ;;
 esac

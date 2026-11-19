@@ -350,7 +350,21 @@ value it had when it was absent.
 
 Vendor installs share the same run lock, machine-bound signed-order validation, durable done/outbox and replay protection. An explicit signed vendor order is required; Automatic never installs an optional app. Source pages use the bounded HTTP client; initial requests and every redirect stay on the catalog's official HTTPS hosts. A local vendor receipt records the outcome and supplies Launcher rows; the verified-installer folder handoff is shown only while a person must act (`needs_admin`/`needs_person`), a `needs_admin` receipt resolves to installed once the matching bundle exists, and vendor apps report in the publisher's Other apps section only — never as a duplicate per-Mac feed row. Receipt-save errors preserve the actual install outcome and are reported separately. Accounts, sign-ins and licences are never read or changed.
 
-`khu agent --config <file>`. One run at a time per Mac (`agent.lock`); a second refuses. Between runs, the long-lived helper re-reads only its saved address and token so an explicit address change or confirmed Pair again takes effect on the next check. A changed pinned key, machine ID or runtime path is refused; other running settings remain intact. Each run:
+`khu agent --config <file>`. One run at a time per Mac (`agent.lock`); a second refuses. Between runs, the long-lived helper re-reads only its saved address and token so an explicit address change or confirmed Pair again takes effect on the next check. A changed pinned key, machine ID or runtime path is refused; other running settings remain intact.
+
+**The publisher key is pinned in the build (0.1.66).** `Sources/KHUpdaterCore/PinnedKey.swift` holds the
+fleet's Ed25519 public key as a constant compiled into the signed app and helper; every runtime
+verification — the feed, the orders reply, a hosted feed's mirror — uses it, and the config's
+`publicKey` is only compared with it. A saved settings file naming any other key is refused before
+anything is fetched, in one line naming both fingerprints (a short SHA-256 of each key) with what to
+do: run Connect with the current kit. The file is never rewritten and nothing is silently accepted.
+First setup, repair and SSD refresh also refuse a kit naming another key (`PinnedKey.requireKit`), so
+a Mac is never enrolled into a trust its own helper would refuse. A test build (`swiftc -D
+KHU_TESTS`, `./build.sh test-cli`) may name a fixture key with `KHU_TEST_KEY`; that branch is not
+compiled into a release, and `Tests/test_packaging.py` refuses a constant that is not a 32-byte key.
+The key itself does not change — this is where it is read from, not rotation.
+
+Each run:
 
 1. finish or undo any install a killed run left behind (the install journal);
 2. read installed versions, health and its own Automatic defaults;

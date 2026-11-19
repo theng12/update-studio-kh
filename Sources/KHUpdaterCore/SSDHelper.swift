@@ -21,7 +21,10 @@ public enum SSDHelper {
             }
             let kit = launcher.appendingPathComponent("Contents/Resources/khu-agent")
             let publisher = try Connect.publisher(kit: kit)
-            guard publisher.publicKey == config.publicKey else {
+            // The saved trust must be this build's pin, and the kit must name that same key.
+            try PinnedKey.require(config.publicKey)
+            try PinnedKey.requireKit(publisher.publicKey)
+            guard publisher.publicKey == PinnedKey.trusted(config.publicKey) else {
                 throw khuFail("The SSD's helper belongs to a different publisher; this Mac's saved trust was kept.")
             }
             let version = try String(contentsOf: kit.appendingPathComponent("VERSION"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)

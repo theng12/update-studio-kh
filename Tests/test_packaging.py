@@ -3,10 +3,12 @@
 
 launchd is a recording stub first on PATH, so no test reaches the real `gui` domain, the real
 ~/Library/LaunchAgents or the real agent."""
+import base64
 import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -148,6 +150,21 @@ try:
           and "KHU_TRASH:-$HOME/Desktop/_trash/update-studio-kh" in (ROOT / "packaging/record-dist.sh").read_text()
           and "/_trash" in (ROOT / ".gitignore").read_text(),
           "packaging uses the Desktop trash path directly instead of a checkout _trash symlink")
+
+    # The publisher key inside the build is the one input a rewritten trust file cannot change.
+    pin_src = (ROOT / "Sources/KHUpdaterCore/PinnedKey.swift").read_text()
+    match = re.search(r'public static let base64: String\? = "([^"]+)"', pin_src)
+    try:
+        pin_bytes = base64.b64decode(match.group(1), validate=True) if match else b""
+    except (ValueError, TypeError):
+        pin_bytes = b""
+    check(len(pin_bytes) == 32 and pin_src.count("public static let base64") == 1,
+          "the app pins one real 32-byte publisher key (never a placeholder)")
+    release_branch = pin_src.split("#else", 1)[-1]
+    check(pin_src.count('environment["KHU_TEST_KEY"]') == 1
+          and "KHU_TEST_KEY" not in release_branch
+          and "ProcessInfo.processInfo.environment" not in release_branch,
+          "a fixture key can override the pin only inside #if KHU_TESTS")
 
     # Trash path guard: build-launcher.sh creates a missing KHU_TRASH dir and refuses a non-directory.
     trash_repo = work / "trash-repo"

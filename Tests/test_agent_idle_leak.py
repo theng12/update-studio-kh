@@ -39,7 +39,9 @@ import time
 import uuid
 
 REPO = Path(__file__).resolve().parents[1]
-KHU = REPO / "build" / "khu"
+# The fixture signs with a key it generates, which is not the fleet key pinned in a release build,
+# so this suite runs the test build (`./build.sh test-cli`; `KHU_TEST_CLI` when the gate names one).
+KHU = Path(os.environ.get("KHU_TEST_CLI") or (REPO / "build" / "khu-test-cli"))
 VERSION = "9.9.99"
 SAMPLE_SECONDS = 30
 WINDOW_SECONDS = 600
@@ -131,10 +133,10 @@ def where(step, detail, scratch=None):
 def main():
     sys.stdout.reconfigure(line_buffering=True)
     if not KHU.exists():
-        print("building build/khu (./build.sh build) ...")
-        built = run([str(REPO / "build.sh"), "build"], timeout=900, cwd=str(REPO))
+        print("building build/khu-test-cli (./build.sh test-cli) ...")
+        built = run([str(REPO / "build.sh"), "test-cli"], timeout=900, cwd=str(REPO))
         if built.returncode != 0 or not KHU.exists():
-            print("FAIL: ./build.sh build failed")
+            print("FAIL: ./build.sh test-cli failed")
             print((built.stdout + built.stderr)[-2000:])
             return 1
 
@@ -193,7 +195,8 @@ def main():
         }, indent=2) + "\n", encoding="utf-8")
 
         environment = dict(os.environ, KHU_NO_MENU="1",
-                           KHU_HOLD_TOKEN_FILE=str(scratch / "hold-token"))
+                           KHU_HOLD_TOKEN_FILE=str(scratch / "hold-token"),
+                           KHU_TEST_KEY=public_key)
         agent_out = agent_log.open("w")
         agent = subprocess.Popen([str(KHU), "agent", "--config", str(config)],
                                  stdout=agent_out, stderr=subprocess.STDOUT,
