@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.71 — 2026-11-20
+
+- Update N Macs now says, in one log line each, every Mac it did not reach and why: not enrolled, not seen for N minutes, the app is not installed there, an order from N minutes ago is still unanswered, its last try N minutes ago failed, or it is already up to date. A sweep that reached fewer Macs than expected no longer looks the same as one that reached them all.
+- Which Macs are sent an order is unchanged: the page's count, the Update button and the log all read the same answer, so they cannot disagree.
+- A Mac held back by an open order or an unread failure is still held back exactly as in 0.1.70, and still only for 30 minutes.
+
 ## 0.1.70 — 2026-11-20
 
 - Update N Macs now reaches a Mac it was silently skipping. A Mac that held an order nobody answered, or whose last try failed, was left out of every future sweep for ever: the only thing that could clear it was a new result, and a new result needs an order. Both now stop counting once they are 30 minutes old, so the next sweep tries the Mac again. A young order and a recent failure still hold the Mac back exactly as before.

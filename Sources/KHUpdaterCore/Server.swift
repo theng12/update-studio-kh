@@ -919,10 +919,22 @@ public final class FeedServer: @unchecked Sendable {
                     }
                     if req.path == "/api/update-all" {
                         // Update every connected Mac whose copy of this app is behind the feed: the
-                        // same Macs the page counts as "Update available" for it.
+                        // same Macs the page counts as "Update available" for it. Every Mac this
+                        // sweep does NOT reach gets one log line naming why, so a Mac held back by an
+                        // open order or an unread failure is never indistinguishable from one nobody
+                        // considered (backlog item 9; the July–November silent sweep).
                         guard let app = f["app"], !app.isEmpty else { return Self.text(400, "send app") }
                         let feed = FeedPublisher.loadFeed(from: feedDir)
-                        for (machine, var ms) in state.machines where Self.updateAvailable(ms, app: app, feed: feed, now: Date()) {
+                        let now = Date()
+                        for (machine, var ms) in state.machines.sorted(by: { $0.key < $1.key }) {
+                            if let why = Self.skipReason(ms, app: app, feed: feed, now: now) {
+                                let skipped: [String: Any] = ["at": ISO.string(now), "machine": machine,
+                                                              "app": app, "why": why]
+                                if let data = try? JSONSerialization.data(withJSONObject: skipped, options: [.sortedKeys]) {
+                                    FileHandle.standardError.write(Data("sweep-skipped ".utf8) + data + Data("\n".utf8))
+                                }
+                                continue
+                            }
                             switch Self.queueOrder(&ms, machine: machine, app: app, action: ServerCommand.update) {
                             case .appended: createdOrders += 1
                             case .replacedStale: createdOrders += 1; skippedOrders += 1
@@ -1421,17 +1433,35 @@ public final class FeedServer: @unchecked Sendable {
     /// the Mac, the Mac gets no order, and no new result can clear it: a loop with no exit that ran
     /// for months (2026-11-20).
     static func updateAvailable(_ ms: MachineState, app: String, feed: Feed?, now: Date) -> Bool {
-        guard ms.tokenHash != nil, app != "story", app != "hub", isOnline(ms, now: now),
-              let installed = ms.installed[app], let offered = feed?.apps[app]?.version else { return false }
-        let isYoung = { (orders: [ServerCommand]) in
-            orders.contains { order in
-                // A corrupt timestamp counts as stale, exactly as it does in `queueOrder`.
-                ISO.date(order.createdAt).map { now.timeIntervalSince($0) <= orderRetryWindow } ?? false
-            }
+        skipReason(ms, app: app, feed: feed, now: now) == nil
+    }
+
+    /// The one answer behind `updateAvailable`, said out loud: why a sweep would not send this Mac
+    /// an order for `app`, or nil when it would. The page's chip and the bulk route's log both read
+    /// it, so a Mac held back is named with its reason instead of looking like one nobody considered
+    /// — an exclusion with no line in the log is how a whole fleet sat idle and looked healthy.
+    static func skipReason(_ ms: MachineState, app: String, feed: Feed?, now: Date) -> String? {
+        guard ms.tokenHash != nil else { return "not enrolled here" }
+        guard app != "story", app != "hub" else { return "\(app) is never swept" }
+        guard isOnline(ms, now: now) else {
+            let minutes = ms.lastSeen.flatMap(ISO.date).map { Int(now.timeIntervalSince($0) / 60) }
+            return minutes.map { "not seen for \($0) min" } ?? "never seen"
         }
-        guard !isYoung(ms.pending.filter { $0.app == app }) else { return false }
-        if failureToLookAt(ms.lastResults?[app], now: now) { return false }
-        return VersionCompare.isNewer(offered, than: installed)
+        guard let installed = ms.installed[app] else { return "\(app) is not installed here" }
+        guard let offered = feed?.apps[app]?.version else { return "the feed offers no \(app)" }
+        // A corrupt timestamp counts as stale, exactly as it does in `queueOrder`.
+        let young = ms.pending.first { order in
+            order.app == app && (ISO.date(order.createdAt).map { now.timeIntervalSince($0) <= orderRetryWindow } ?? false)
+        }
+        if let young, let at = ISO.date(young.createdAt) {
+            return "an order from \(Int(now.timeIntervalSince(at) / 60)) min ago is still unanswered"
+        }
+        if let result = ms.lastResults?[app], failureToLookAt(result, now: now) {
+            let minutes = ISO.date(result.at).map { Int(now.timeIntervalSince($0) / 60) } ?? 0
+            return "its last try \(minutes) min ago was \(result.status)"
+        }
+        guard VersionCompare.isNewer(offered, than: installed) else { return "up to date at \(installed)" }
+        return nil
     }
 
     /// A failure the owner has not had a chance to read yet: it holds the Mac back from a sweep
