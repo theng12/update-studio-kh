@@ -30,6 +30,9 @@ public struct HelperSettings: Codable, Sendable, Equatable {
     public var appearance: String?
     public var menuBarWhenClosed: Bool?
     public var hidden: [String]?
+    /// Rotating-log verbosity on this Mac: quiet, normal (the default) or verbose. AgentLog reads
+    /// it from helper.json, so a change takes effect on the next start without a rebuild.
+    public var logVerbosity: String?
     /// The version each app was last announced at, so one update is announced once.
     public var notified: [String: String]?
     /// Automatic installs happen unless the person chose "Manually" or switched them off.
