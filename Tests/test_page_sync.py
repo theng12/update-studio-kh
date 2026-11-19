@@ -460,6 +460,40 @@ def case_usage_refusals():
         fx.close()
 
 
+def case_feed_app_without_a_page_row_is_not_mirrored():
+    # The live feed carries apps the page has no row for (Hub, the updater helper). The mirror
+    # cannot name them, so step 8 must compare only the apps it carries — not the whole feed.
+    GAMMA_DMG = b"gamma installer bytes" * 20
+    doc = two_apps()
+    doc["apps"]["gamma"] = entry("3.0.0", "ggg-Gamma Studio KH-3.0.0.dmg", GAMMA_DMG)
+    fx = Fixture(doc, beta_on_page(), dict(artifacts(), **{"ggg-Gamma Studio KH-3.0.0.dmg": GAMMA_DMG}))
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)])
+        check(r.returncode == 0,
+              f"an app the page does not carry must not stop the mirror\n{r.stdout}\n{r.stderr}")
+        doc = fx.committed()
+        check(sorted(doc["apps"]) == ["alpha", "beta"],
+              f"only the apps the page carries reach the mirror: {sorted(doc['apps'])}")
+        check("gamma" not in doc["apps"], "a feed-only app is not named by the public copy")
+    finally:
+        fx.close()
+
+
+def case_bundle_id_naming_the_owner_is_not_a_leak():
+    # com.terranash.* is the app's bundle identifier, present inside every copy; it is not an
+    # address. The private-host scan must not refuse the real feed over it.
+    doc = two_apps()
+    doc["apps"]["alpha"]["bundleID"] = "com.terranash.alphastudiekh"
+    fx = Fixture(doc, beta_on_page(), artifacts())
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)])
+        check(r.returncode == 0, f"a bundle id is not a private host\n{r.stdout}\n{r.stderr}")
+        check(fx.committed()["apps"]["alpha"]["bundleID"] == "com.terranash.alphastudiekh",
+              "the mirror keeps the app's bundle id")
+    finally:
+        fx.close()
+
+
 CASES = [case_happy_path_and_stored_name, case_digest_mismatch_retires_nothing,
          case_retires_previous_after_the_checks_pass,
          case_artifact_hash_mismatch_refuses_before_upload,
@@ -467,6 +501,8 @@ CASES = [case_happy_path_and_stored_name, case_digest_mismatch_retires_nothing,
          case_second_run_changes_nothing, case_app_without_icon_skips,
          case_all_mode_syncs_every_listed_app,
          case_dry_run_performs_nothing, case_address_reports_not_served,
+         case_feed_app_without_a_page_row_is_not_mirrored,
+         case_bundle_id_naming_the_owner_is_not_a_leak,
          case_usage_refusals]
 
 if __name__ == "__main__":

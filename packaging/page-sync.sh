@@ -395,13 +395,19 @@ if mine["published_at"] != before["published_at"]:
           % (mine["published_at"], before["published_at"])); raise SystemExit(3)
 def identity(entries):
     return sorted("%s|%s|%s|%s" % (k, v["version"], v["sha256"], v["bytes"]) for k, v in entries.items())
-if identity(mine["apps"]) != identity(after["apps"]):
-    print("the mirror does not name the same artifacts as the feed"); raise SystemExit(3)
+# The feed carries apps the page has no row for (Hub, the updater helper); the mirror cannot name
+# them, so only the apps it carries are compared.
+if identity(mine["apps"]) != identity({a: after["apps"][a] for a in mine["apps"] if a in after["apps"]}):
+    print("the mirror does not name the feed's artifacts for the apps it carries"); raise SystemExit(3)
 if mine.get("previous"):
     print("the public copy carries a previous entry; it is built --current-only"); raise SystemExit(3)
 if mine.get("network"):
     print("the public copy carries a network block"); raise SystemExit(3)
-text = json.dumps(mine)
+# A bundle id is an identifier inside every copy of the app, not an address: com.terranash.* is
+# legitimate. Every other field is scanned for a private host.
+scanned = {k: v for k, v in mine.items() if k != "apps"}
+scanned["apps"] = {a: {k: v for k, v in e.items() if k != "bundleID"} for a, e in mine["apps"].items()}
+text = json.dumps(scanned)
 for pattern in (r"\.ts\.net", r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b",
                 r"(?i)terranash", r"(?i)macmini"):
     if re.search(pattern, text):
