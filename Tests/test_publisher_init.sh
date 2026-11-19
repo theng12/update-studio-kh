@@ -11,9 +11,10 @@ mkdir -p "$HOME_T" "$DRIVE"
 export KHU_TEST_ALLOW_LOCAL_BACKUP=1
 FAILS=0
 check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; FAILS=$((FAILS+1)); fi; }
-# --tailnet-host none keeps these checks on the numeric fallback, so they never depend on whether
-# this test Mac happens to be on a tailnet with MagicDNS.
-run() { "$INIT" --home "$HOME_T" --tailnet-host none "$@" >"$WORK/out" 2>&1; }
+# A kit is only ever built with the publisher's Tailscale name: a numeric address is refused because
+# macOS will not fetch plain http from one (2026-11-19). Passing the name explicitly keeps these
+# checks independent of whether this test Mac happens to be on a tailnet with MagicDNS.
+run() { "$INIT" --home "$HOME_T" --tailnet-host test-mac.tail4e72cf.ts.net "$@" >"$WORK/out" 2>&1; }
 K="$HOME_T/Library/KHUpdater"
 
 check "refuses without --backup-to" '! run --tailscale-ip 100.64.0.1'
@@ -32,8 +33,8 @@ check "publisher.json is exactly what Hub reads" 'python3 -I -c "
 import json,sys
 c=json.load(open(sys.argv[1]))
 assert set(c)=={\"feedURL\",\"enrolURL\",\"publicKey\",\"testAuthority\"}, c
-assert c[\"feedURL\"]==\"http://100.64.0.1:8790/release.json\"
-assert c[\"enrolURL\"]==\"http://100.64.0.1:8790/enrol\"
+assert c[\"feedURL\"]==\"http://test-mac.tail4e72cf.ts.net:8790/release.json\"
+assert c[\"enrolURL\"]==\"http://test-mac.tail4e72cf.ts.net:8790/enrol\"
 assert c[\"publicKey\"]==sys.argv[2] and c[\"testAuthority\"] is False
 " "$K/publisher.json" "$PUB"'
 P="$HOME_T/Library/LaunchAgents/com.khupdater.publisher.plist"
@@ -63,6 +64,17 @@ assert c[\"feedURL\"]==\"http://test-mac.tail4e72cf.ts.net:8790/release.json\", 
 assert c[\"enrolURL\"]==\"http://test-mac.tail4e72cf.ts.net:8790/enrol\", c
 " "$HOME_H/Library/KHUpdater/publisher.json"'
 check "the named job binds auto too" '[[ "$(/usr/bin/plutil -extract ProgramArguments json -o - "$HOME_H/Library/LaunchAgents/com.khupdater.publisher.plist")" == *"\"--bind\",\"127.0.0.1\",\"--bind\",\"auto\""* ]]'
+
+# A kit naming the publisher by its numeric address can never be fetched: macOS refuses plain http
+# to an IP (App Transport Security), so every Mac installed from it would fail every check. The
+# build fails instead — a note is not a guard (2026-11-19).
+HOME_N="$WORK/home-numeric"; DRIVE_N="$WORK/drive-numeric"; mkdir -p "$HOME_N" "$DRIVE_N"
+if "$INIT" --home "$HOME_N" --tailscale-ip 100.64.0.1 --tailnet-host none --backup-to "$DRIVE_N" >"$WORK/out-numeric" 2>&1; then
+  echo "FAIL a numeric-address kit is refused"; FAILS=$((FAILS+1))
+else
+  if grep -q "numeric IP" "$WORK/out-numeric"; then echo "ok   a numeric-address kit is refused with the reason"; else echo "FAIL the numeric refusal says why"; FAILS=$((FAILS+1)); fi
+fi
+check "a refused numeric kit writes no publisher.json" '[[ ! -e "$HOME_N/Library/KHUpdater/publisher.json" ]]'
 
 # $WORK stays in the system temp space (macOS clears it); nothing is deleted here.
 [[ $FAILS == 0 ]] && echo "PUBLISHER-INIT: all checks passed" || { echo "PUBLISHER-INIT: $FAILS failed"; exit 1; }

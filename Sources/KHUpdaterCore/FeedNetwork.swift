@@ -139,6 +139,15 @@ public struct FeedNetwork: Codable, Sendable, Equatable {
         }
     }
 
+    /// An address this app can never fetch: plain HTTP to a bare address literal, or one the
+    /// grammar refuses. **Write paths refuse it; read paths keep using `feedURL`**, so a Mac that
+    /// already carries one still tries it and says why, rather than stopping dead (2026-11-19: 41
+    /// of 43 in the fleet carry one, and a fatal read would have stranded them all).
+    public static func isUnusable(_ text: String) -> Bool {
+        guard let url = try? feedURL(text) else { return true }
+        return url.scheme?.lowercased() == "http" && isAddressLiteral(url.host ?? "")
+    }
+
     /// Whether a request to this address may carry this Mac's token. Only the publisher's own
     /// addresses pass: its tailnet IPv4 address, its MagicDNS name, or this Mac's loopback. A public
     /// feed is fetched and installed from anonymously — pasting a stranger's link must never send

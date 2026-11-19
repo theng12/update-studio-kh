@@ -117,22 +117,32 @@ def publisher_config(raw: dict, *, allow_test: bool = False) -> dict:
     if len(key) != 32:
         raise ValueError("invalid public key")
     import ipaddress
-    addresses = []
+    hosts = []
     # The publisher serves the feed and enrolment on ONE port (8790), not one each.
     for key_name, path in (("feedURL", "/release.json"), ("enrolURL", "/enrol")):
         parsed = urlsplit(raw[key_name])
-        address = ipaddress.ip_address(parsed.hostname or "")
-        # In test mode, accept loopback OR Tailscale; otherwise require the Tailscale range and
-        # port 8790.
+        host = (parsed.hostname or "").lower()
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            address = None
+        # A bare address can never be fetched: macOS refuses plain http to an IP (App Transport
+        # Security), and the app's own plist exempts only the tailnet's DNS name. Refusing it here
+        # means no kit carries one — loopback stays, for test mode only (2026-11-19).
+        if address is not None:
+            if not (allow_test and address.is_loopback):
+                raise ValueError("publisher feed address is a bare IP (%s); macOS refuses plain "
+                                 "http to an IP address — use the publisher's Tailscale name "
+                                 "ending in .ts.net" % host)
+        elif not host.endswith(".ts.net"):
+            raise ValueError("publisher feed address must be the publisher's Tailscale name "
+                             "ending in .ts.net, not %r" % host)
         if (parsed.scheme != "http" or parsed.username or parsed.password or parsed.query
                 or parsed.fragment or parsed.path != path
-                or (not allow_test and (address not in ipaddress.ip_network("100.64.0.0/10")
-                                        or parsed.port != 8790))
-                or (allow_test and not (address.is_loopback
-                                        or address in ipaddress.ip_network("100.64.0.0/10")))):
+                or (not allow_test and parsed.port != 8790)):
             raise ValueError("publisher must use its configured Tailscale address on port 8790")
-        addresses.append(address)
-    if addresses[0] != addresses[1]:
+        hosts.append(host)
+    if hosts[0] != hosts[1]:
         raise ValueError("publisher origins disagree")
     return raw
 

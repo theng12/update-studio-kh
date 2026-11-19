@@ -819,6 +819,13 @@ public enum Agent {
         memory.feedNetwork = feed.network ?? config.network
         // The address this checked succeeded on: from here, mirrors may lead again.
         memory.lastGoodFeedURL = config.feedURL
+        // Read is migrated, never refused: a saved address that can never work is replaced by the
+        // one that just answered, once, with before and after in the log. Only after this cycle
+        // succeeded through it — a Mac is never pointed at an address that has not answered.
+        let usedURL = selected.base.appendingPathComponent("release.json").absoluteString
+        if let repaired = repairFeedAddress(used: usedURL, config: config, file: configFile) {
+            result.notes.append("feed address repaired: \(repaired) → \(usedURL)")
+        }
         let artifactFallbacks = try feedSources(config: config, memory: memory, serverBase: serverBase)
             .map { $0.deletingLastPathComponent() }.filter { $0 != artifactBase }
         try remember()

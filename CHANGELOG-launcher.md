@@ -2,6 +2,17 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.69 — 2026-11-19
+
+- An address that can never work must never be written, installed or displayed as if it were fine. The kit builder now refuses to build a publisher address that is a numeric IP, and the installer refuses a kit carrying one — both fail loudly with the reason, instead of handing over a Mac that can never update.
+- 0.1.69 cannot make a working Mac stop working. An address already saved is still tried exactly as before, and fails with the same sentence it always did; only writing is refused.
+- A saved list of addresses that can never work no longer overrides a remembered address that can. A saved address that works always wins, even when it differs from the remembered one, so a deliberate change is never reverted.
+- A Mac that does have the publisher's Tailscale name available self-heals: after one successful check through the name, the saved address is replaced by it and the change is recorded once, with the old address and the new one. It is repaired only after that success, never before.
+- The menu shows a long message to the end: the line is cut at a whole word and the whole sentence is kept in its tooltip.
+- An update is only called finished when the app and its services are actually running. If the app is running but a start-at-login entry is not, the row says so and why, instead of showing a plain success.
+- On a Mac where an app's start-at-login item is stale, the app may need to be opened once after this update — opening it is what registers the item again.
+- Not repaired by this version: a Mac whose saved address is a numeric IP and which holds no publisher name anywhere cannot derive one. The fleet carrying that shape is repaired by hand, not by migration.
+
 ## 0.1.68 — 2026-11-19
 
 - The app list names its own facts: a column for the installed version, the latest one offered, the release date and the state, instead of one merged status line.

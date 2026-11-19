@@ -696,6 +696,13 @@ public enum Recipe {
         mark("health-window \(Int(control.healthTimeout))s")
         if appeared, waitHealthy(control, version: targetVersion, clock: clock) {
             mark("healthy")
+            // Installed and running — but an older start-at-login entry may still be unable to
+            // start, and that middle state is said rather than folded into a plain success. The
+            // app is what re-registers it, and opening it once is the whole recovery.
+            if !control.isTestInstance(), let label = LiveControl.staleAppTypeItems(installedPath, shell: SystemShell()).first {
+                return finish(settled(RecipeResult(status: "updated",
+                    reason: "installed and running; the start-at-login entry \(label) is not running — opening the app once re-registers it")))
+            }
             return finish(settled(RecipeResult(status: "updated")))
         }
 
@@ -1235,6 +1242,27 @@ public enum LiveControl {
             owned[label] = OwnedService(label: label, pid: pid, plist: file)
         }
         return owned
+    }
+
+    /// The app's start-at-login items that launchd still lists but cannot start. An app-type item
+    /// (`application.local.<bundle-id>.*`) records its code requirement when it is registered, so
+    /// after an update replaces the signed app the item can refuse to spawn ("needs LWCR update").
+    /// Only the app can register again — opening it once does — so this is **reported, never
+    /// repaired here**: removing the record would delete a working login path on an app that still
+    /// registers that way (2026-11-19).
+    static func staleAppTypeItems(_ installedPath: String, shell: Shell) -> [String] {
+        guard let info = try? BundleInfo.read(installedPath),
+              let listed = try? shell.run("/bin/launchctl", arguments: ["list"], timeout: 15),
+              listed.exitCode == 0 else { return [] }
+        let prefix = "application.local.\(info.identifier)."
+        var stale: [String] = []
+        for line in listed.stdout.split(separator: "\n") {
+            let fields = line.split(whereSeparator: { $0.isWhitespace })
+            guard fields.count == 3, let label = fields.last.map(String.init),
+                  label.hasPrefix(prefix), fields[0] == "-" else { continue }
+            stale.append(label)
+        }
+        return stale.sorted()
     }
 
     /// The pids of the app's own jobs, for the rules that only need "is this process the app or one

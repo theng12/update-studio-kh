@@ -94,7 +94,12 @@ elif [[ -z "$TAILNET_HOST" ]]; then
 fi
 FEED_HOST="${TAILNET_HOST:-$TAILSCALE_IP}"
 [[ "$FEED_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || fail "not a host name: $FEED_HOST" 2
-[[ -n "$TAILNET_HOST" ]] || echo "note: no MagicDNS name found; publisher.json keeps the numeric address" >&2
+# A kit is only ever built with an address macOS can fetch. Plain http to a numeric address is
+# refused inside every app (App Transport Security), so a kit naming one is born dead: fail the
+# build here rather than hand it to a Mac that can only fail every check, for ever.
+if [[ "$FEED_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  fail "no MagicDNS name for this Mac, so the kit's address would be the numeric IP $FEED_HOST — macOS refuses plain http to an IP address, and every Mac installed from this kit would fail every check. Name the publisher's Tailscale name with --tailnet-host <name>.ts.net, or join Tailscale on this Mac until 'tailscale status' shows one." 2
+fi
 FEED_URL="http://${FEED_HOST}:8790/release.json"
 ENROL_URL="http://${FEED_HOST}:8790/enrol"
 BIND="auto"
