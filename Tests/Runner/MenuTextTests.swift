@@ -18,4 +18,14 @@ func menuTextTests() {
     let oneWord = String(repeating: "x", count: 200)
     expect(MenuText.short(oneWord).count == 90 && MenuText.short(oneWord).hasSuffix("…"),
            "MT3 a single long word still fits the line instead of being dropped")
+
+    // MT4 the other half: a 200-character operator sentence reaches the menu intact — the line is
+    // shortened, and the item's tooltip carries every character, so nothing is lost.
+    let long = stuck + " " + String(repeating: "and nothing is lost ", count: 9)
+    let item = MenuText.item(long)
+    expect(long.count >= 200, "MT4 the fixture sentence is at least 200 characters (\(long.count))")
+    expect(item.title.hasSuffix("…") && long.hasPrefix(String(item.title.dropLast())),
+           "MT4 a 200-character sentence is shortened to one whole-word line (\(item.title))")
+    expect(item.tooltip == long, "MT4 the item carries the whole sentence, character for character")
+    expect(MenuText.item("short enough").tooltip == nil, "MT4 a line that fits needs no tooltip")
 }

@@ -51,7 +51,14 @@ extension Agent {
     static func effectiveNetwork(config: AgentConfig, memory: AgentMemory) -> FeedNetwork? {
         guard let saved = config.network else { return memory.feedNetwork }
         var merged = memory.feedNetwork ?? saved
-        merged.feedURLs = saved.feedURLs
+        // A saved list that can never work does not outrank one that can; a *usable* saved list
+        // always wins, even when it differs from memory, so an operator's deliberate change is
+        // never reverted by a stale block. Bounded on "unusable", never on "different".
+        if saved.feedURLs.isEmpty {
+            merged.feedURLs = saved.feedURLs
+        } else if saved.feedURLs.contains(where: { !FeedNetwork.isUnusable($0) }) {
+            merged.feedURLs = saved.feedURLs
+        }
         if !saved.hosts.isEmpty { merged.hosts = saved.hosts }
         merged.controller = saved.controller ?? merged.controller
         return merged

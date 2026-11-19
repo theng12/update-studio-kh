@@ -181,7 +181,10 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         if let until = settings.pausedUntil, settings.paused(at: Date()) {
             note("Automatic updates paused until \(Self.clock(until))")
         }
-        if let error { note("Last check failed: \(Self.short(error))", detail: "Last check failed: \(error)") }
+        if let error {
+            let line = MenuText.item("Last check failed: \(error)")
+            note(line.title, detail: line.tooltip)
+        }
         if list.isEmpty && error == nil { note("Checking…") }
         menu.addItem(.separator())
         // A fleet of many apps must not turn this menu into a wall of rows: by default only the
@@ -200,7 +203,10 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
             guard !app.statusOnly else { row.isEnabled = false; continue }
             let sub = NSMenu()
             sub.autoenablesItems = false
-            if let reason = app.reason { note(Self.short(reason), to: sub, detail: reason) }
+            if let reason = app.reason {
+                let line = MenuText.item(reason)
+                note(line.title, to: sub, detail: line.tooltip)
+            }
             if app.installable, let available = app.available, [HelperApp.updateAvailable, HelperApp.downloaded, HelperApp.failed, HelperApp.notInstalled].contains(app.status) {
                 action("Update now to \(available)", #selector(updateNow(_:)), app.app, to: sub).isEnabled = busy == nil
             }
@@ -304,9 +310,6 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         guard let d = ISO.date(iso) else { return iso }
         let f = DateFormatter(); f.dateFormat = "EEE HH:mm"; return f.string(from: d)
     }
-    /// A menu item's one line, cut at a whole word; the rule lives in `MenuText` so the suite can
-    /// hold it, and the whole sentence stays in the log and the item's tooltip.
-    static func short(_ text: String) -> String { MenuText.short(text) }
 }
 
 extension HelperMenu {

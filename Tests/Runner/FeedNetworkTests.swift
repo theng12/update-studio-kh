@@ -124,13 +124,16 @@ func feedNetworkTests() {
         noNetwork.network = nil
         // FN41b a config that names its own addresses still takes the host roles from memory: the
         // signed block is the only place they live, and dropping them would change who mirrors.
+        // The config's own usable address (a name, as a real one is) wins over a remembered mirror,
+        // and the cached host role still applies.
+        let namedUpstream = "http://publisher.tail4e72cf.ts.net:8790/release.json"
         var mirrored = config
-        mirrored.network = FeedNetwork(feedURLs: [upstream])
+        mirrored.network = FeedNetwork(feedURLs: [namedUpstream])
         var roleMemory = AgentMemory()
         roleMemory.feedNetwork = FeedNetwork(feedURLs: [mirror], hosts: ["client": FeedHostRole(enabled: true, bind: "100.64.0.2")])
         let whileMirroring = try Agent.feedSources(config: mirrored, memory: roleMemory, serverBase: origin)
-        expect(whileMirroring == [URL(string: upstream)!],
-               "FN41b config addresses win while the cached host role still applies (\(whileMirroring))")
+        expect(whileMirroring == [URL(string: upstream)!, URL(string: namedUpstream)!],
+               "FN41b config addresses win, and a host still reads the original first (\(whileMirroring))")
         var atsHttp = NetworkClient()
         atsHttp.atsHosts = ["100.82.91.102"]
         atsHttp.releases["100.64.0.1"] = try signed(feed, by: key)
@@ -189,8 +192,38 @@ func feedNetworkTests() {
         var blockConfig = literalConfig
         blockConfig.network = FeedNetwork(feedURLs: [literal])
         let blockSources = try Agent.feedSources(config: blockConfig, memory: namedMemory, serverBase: literalBase)
-        expect(blockSources == [URL(string: literal)!],
-               "FN47 a saved block of unusable addresses erases the usable remembered name (\(blockSources))")
+        expect(blockSources == [URL(string: name)!, URL(string: literal)!],
+               "FN47 a saved block of unusable addresses no longer erases a usable remembered name (\(blockSources))")
+        // FN48 the other direction, and the reason the rule is bounded: a usable saved address wins
+        // even when it differs from memory, so an operator's deliberate change is never reverted.
+        var changed = literalConfig
+        changed.feedURL = "http://other-mac.tail4e72cf.ts.net:8790/release.json"
+        changed.network = FeedNetwork(feedURLs: [changed.feedURL])
+        let changedSources = try Agent.feedSources(config: changed, memory: namedMemory, serverBase: literalBase)
+        expect(changedSources == [URL(string: changed.feedURL)!, URL(string: literal)!],
+               "FN48 a usable saved address beats a different remembered one (\(changedSources))")
+        // FN49–FN50 the repair on a successful cycle: the saved literal is replaced by the address
+        // that answered — only when it was genuinely unusable, and never touching other keys.
+        let repairFile = root.appendingPathComponent("repair-config.json")
+        var repairConfig = literalConfig
+        try! JSONSerialization.data(withJSONObject: ["feedURL": literal, "publicKey": config.publicKey,
+                                                     "machine": "client", "token": config.token,
+                                                     "apps": [String: Any]()])
+            .write(to: repairFile)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: repairFile.path)
+        let repaired = Agent.repairFeedAddress(used: name, config: repairConfig, file: repairFile)
+        let afterRepair = (try? JSONSerialization.jsonObject(with: Data(contentsOf: repairFile))) as? [String: Any]
+        expect(repaired == literal && afterRepair?["feedURL"] as? String == name,
+               "FN49 an unusable saved address is repaired to the one that answered (\(afterRepair?["feedURL"] ?? "nil"))")
+        let mode = ((try? FileManager.default.attributesOfItem(atPath: repairFile.path))?[.posixPermissions] as? NSNumber)?.uint16Value
+        expect(mode == 0o600, "FN49 the repaired file keeps its 0600 permissions (\(mode.map { String($0, radix: 8) } ?? "nil"))")
+        var usable = repairConfig
+        usable.feedURL = name
+        let untouched = Agent.repairFeedAddress(used: "http://another.tail4e72cf.ts.net:8790/release.json",
+                                                config: usable, file: repairFile)
+        let stillName = (try? JSONSerialization.jsonObject(with: Data(contentsOf: repairFile))) as? [String: Any]
+        expect(untouched == nil && stillName?["feedURL"] as? String == name,
+               "FN50 a usable saved address is never rewritten")
     } catch { expect(false, "FN source verification: \(error)") }
     do {
         let http = NetworkClient(); http.statusOffline = true

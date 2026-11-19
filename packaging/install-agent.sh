@@ -32,6 +32,14 @@ for field in feedURL publicKey machine token; do
     [[ -n "$value" && "$value" != *'__'* ]] || fail "Fill in $field before installing."
 done
 /usr/bin/plutil -extract apps json -expect dictionary -o /dev/null "$CONFIG" 2>/dev/null || fail 'Config needs an apps dictionary.'
+# An address macOS can never fetch must not be installed: plain http to a bare IP is refused inside
+# every app (App Transport Security), so a kit naming one installs a Mac that fails every check for
+# ever, silently. Fail here, loudly, at install (2026-11-19).
+FEED="$(/usr/bin/plutil -extract feedURL raw -expect string -o - "$CONFIG" 2>/dev/null)"
+case "$FEED" in
+    http://[0-9]*.[0-9]*.[0-9]*.[0-9]*/*)
+        fail "This kit's feed address is a bare IP ($FEED). macOS refuses plain http to an IP address, so this Mac would never update. Rebuild the kit on the publisher so it carries the Tailscale name (ending in .ts.net), or use the HTTPS feed address." ;;
+esac
 K="$DEST_HOME/Library/KHUpdater"
 PLIST="$DEST_HOME/Library/LaunchAgents/com.khupdater.agent.plist"
 CONFIG_PATH="$K/base/config.json"

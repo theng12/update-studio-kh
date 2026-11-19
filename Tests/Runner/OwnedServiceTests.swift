@@ -103,6 +103,18 @@ private final class ServiceRig {
 func ownedServiceTests() {
     let keepAlways: [String: Any] = ["KeepAlive": true]
 
+    // OS9: an app-type start-at-login entry that launchd lists but cannot start is reported, and
+    // nothing is removed: an app that still registers that way keeps a working login path, and
+    // only the app can register the record again.
+    do {
+        let rig = ServiceRig(policy: keepAlways)
+        let shell = LaunchdShell()
+        shell.list = { "- 0 application.local.com.example.foo.login\n4242 0 application.local.com.example.foo.ok\n- 0 application.local.com.other.app.x" }
+        let stale = LiveControl.staleAppTypeItems(rig.app.path, shell: shell)
+        expect(stale == ["application.local.com.example.foo.login"],
+               "OS9 only this app's loaded-but-dead start-at-login entry is reported (\(stale))")
+    }
+
     // OS1: an unconditional job is booted out (never signalled), and bootstrapped back afterwards.
     do {
         let rig = ServiceRig(policy: keepAlways)

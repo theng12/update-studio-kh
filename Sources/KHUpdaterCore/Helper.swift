@@ -225,6 +225,14 @@ public enum MenuText {
         guard let space = head.lastIndex(of: " ") else { return String(text.prefix(limit - 1)) + "…" }
         return String(head[..<space]) + "…"
     }
+
+    /// A menu line and the whole sentence behind it: the title is cut at a whole word and the
+    /// tooltip carries every character, so a long operator message reaches the menu intact instead
+    /// of ending mid-instruction (2026-11-19).
+    public static func item(_ text: String, limit: Int = 90) -> (title: String, tooltip: String?) {
+        let title = short(text, limit: limit)
+        return (title, title == text ? nil : text)
+    }
 }
 
 public enum AppNames {

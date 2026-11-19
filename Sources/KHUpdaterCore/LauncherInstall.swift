@@ -115,6 +115,31 @@ extension Agent {
         try? AtomicFile.write(out, to: file, permissions: mode?.uint16Value ?? 0o600)
     }
 
+    /// A saved address that can never be fetched is replaced by the one this check actually
+    /// reached — and **only after a cycle has succeeded through it**, so a Mac is never pointed at
+    /// an address that has not answered. Returns the old value when it wrote, nil when it did not.
+    @discardableResult
+    static func repairFeedAddress(used: String, config: AgentConfig, file: URL?) -> String? {
+        let fm = FileManager.default
+        guard let file, fm.fileExists(atPath: file.path),
+              FeedNetwork.isUnusable(config.feedURL), used != config.feedURL, !FeedNetwork.isUnusable(used),
+              let data = try? Data(contentsOf: file),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              root["feedURL"] as? String == config.feedURL else { return nil }
+        root["feedURL"] = used
+        // The same replacement inside a saved mirror list, when this Mac carries one: leaving a
+        // dead literal there would keep it as a source for ever.
+        if var network = root["network"] as? [String: Any], let list = network["feedURLs"] as? [String] {
+            network["feedURLs"] = list.map { FeedNetwork.isUnusable($0) ? used : $0 }
+            root["network"] = network
+        }
+        guard let out = try? JSONSerialization.data(withJSONObject: root,
+                                                    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return nil }
+        let mode = (try? fm.attributesOfItem(atPath: file.path))?[.posixPermissions] as? NSNumber
+        try? AtomicFile.write(out, to: file, permissions: mode?.uint16Value ?? 0o600)
+        return config.feedURL
+    }
+
     /// A Mac that was only just enrolled has nothing but the helper configured. Every app the signed
     /// feed names and this Mac already has is adopted by its bundle ID — never by a path, never with
     /// a hand edit — so a Hub-only mini updates through the Launcher on its first run.
