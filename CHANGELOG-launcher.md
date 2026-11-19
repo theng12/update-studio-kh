@@ -2,6 +2,15 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.68 — 2026-11-19
+
+- The app list names its own facts: a column for the installed version, the latest one offered, the release date and the state, instead of one merged status line.
+- One quiet line says an update is ready, and dismissing it keeps that version dismissed — it does not come back on the next launch.
+- A hand-installed copy of one of these apps is offered once, with its own location shown before anything changes. Managing it updates it where it is: nothing is moved, renamed or reinstalled over it, and no second copy is made. "Not now" is remembered.
+- The helper's own log keeps this run and the two before it in the app's data folder, and Settings shows where it is. Quiet, Normal or Verbose changes how much is recorded on the next start, with no rebuild.
+- `packaging/release-checksums.py` writes a `SHA256SUMS.txt` for a release page — sorted, the two-space form `shasum -c` reads, never listing itself — and checks each line against the signed feed, the page's own stored digest and a fresh download. The signed feed remains what this app trusts.
+- A grid view, remembered on this Mac and the default on a fresh install. A card carries the same facts and the same single action as a row, and the keyboard alone runs it: arrows move, Enter acts, Cmd+A picks every app with an action, Escape clears the pick.
+
 ## 0.1.67 — 2026-11-19
 
 - A Mac can be set up from a public feed link — the one printed on a download page. Paste it into Connect and no pairing code is needed: the link is read without this Mac's account token, its signature is checked against the key built into the app, and the Mac then installs only what that signed feed offers. It reports nothing to anyone, because there is no publisher to report to.

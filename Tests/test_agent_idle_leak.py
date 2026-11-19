@@ -147,6 +147,11 @@ def main():
     artifact = scratch / "khu-artifact"
     config = scratch / "config.json"
     agent_log = scratch / "agent.log"
+    # The agent writes its own rotating log beside the helper settings, not to stdout.
+    run_log = scratch / "agent-state" / "agent.log"
+
+    def runs_text():
+        return run_log.read_text() if run_log.exists() else ""
     server = agent = None
     serve_log = agent_out = None
     try:
@@ -204,16 +209,16 @@ def main():
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
             if agent.poll() is not None:
-                where("the first agent run (the agent exited)", agent_log.read_text(), scratch)
+                where("the first agent run (the agent exited)", runs_text() + agent_log.read_text(), scratch)
                 return 1
-            if "agent run:" in agent_log.read_text():
+            if "agent run:" in runs_text():
                 break
             time.sleep(0.5)
         else:
-            where("the first agent run (no 'agent run:' line within 180 s)", agent_log.read_text(), scratch)
+            where("the first agent run (no 'agent run:' line within 180 s)", runs_text() + agent_log.read_text(), scratch)
             return 1
         print("fixture: agent %d, feed on 127.0.0.1:%d, one cycle done" % (agent.pid, port))
-        for line in agent_log.read_text().splitlines()[:2]:
+        for line in runs_text().splitlines()[:2]:
             print("  | " + line)
 
         print("\n  t(s)   fds  net  threads   rss(KB)  footprint(KB)  ports")
@@ -222,7 +227,7 @@ def main():
         for index in range(WINDOW_SECONDS // SAMPLE_SECONDS + 1):
             if agent.poll() is not None:
                 print("FAIL: the agent exited during the sampling window (sample %d)" % index)
-                for line in agent_log.read_text().strip().splitlines()[-8:]:
+                for line in (runs_text() + agent_log.read_text()).strip().splitlines()[-8:]:
                     print("  | " + line)
                 print("evidence kept at %s" % scratch)
                 return 1
@@ -235,7 +240,7 @@ def main():
             if index < WINDOW_SECONDS // SAMPLE_SECONDS:
                 time.sleep(max(0, started + (index + 1) * SAMPLE_SECONDS - time.monotonic()))
 
-        runs = [line for line in agent_log.read_text().splitlines() if line.startswith("agent run:")]
+        runs = [line for line in runs_text().splitlines() if "agent run:" in line]
         if len(runs) != 1:
             print("FAIL: %d agent runs in the window, not one; the idle premise does not hold" % len(runs))
             return 1

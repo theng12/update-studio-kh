@@ -43,4 +43,14 @@ func adoptionTests() {
     expect(((try? fm.contentsOfDirectory(atPath: apps.path)) ?? []) == before
            && !fm.fileExists(atPath: apps.appendingPathComponent("Story Studio KH 2.app").path),
            "AD6 scanning and adopting never stage or move a second copy")
+
+    // The registration the Launcher writes when the person chooses "Manage it": the same discovery
+    // the agent runs, recording the copy's own path and its own kind of recipe.
+    let config = AgentConfig(feedURL: "http://127.0.0.1/release.json", publicKey: "fixture", stateDir: root.path,
+                             machine: "mac", token: "t", apps: [:], intervalMinutes: 60, once: false)
+    let discovered = Catalog.discover(config: config, known: known, folders: [apps])
+    expect(discovered["story"]?.bundlePath == handInstalled.path,
+           "AD7 adopting records the copy where it already is, never a new location")
+    expect(((try? fm.contentsOfDirectory(atPath: apps.path)) ?? []) == before,
+           "AD8 adopting itself copies nothing into the Applications folder")
 }

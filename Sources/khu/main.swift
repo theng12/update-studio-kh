@@ -464,6 +464,8 @@ struct KHUMain {
                     print("note: versions: \(pruned.summary)")
                 }
             }
+            // This run plus the previous two, in the app's own data folder (Launcher shows the path).
+            let agentLog = AgentLog(name: "agent", in: URL(fileURLWithPath: cfg.stateDir))
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
             let initialRequests = installs
             let startedAt = Date()
@@ -473,8 +475,11 @@ struct KHUMain {
                     do {
                         let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))
                         let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
-                        print("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)")
-                        for note in r.notes { print("note: \(note)") }
+                        agentLog.record("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)", at: .quiet)
+                        for note in r.notes { agentLog.record("note: \(note)") }
+                        if agentLog.verbosity == .verbose {
+                            for app in r.apps { agentLog.record("app \(app.app): \(app.installed ?? "not installed") → \(app.available ?? "—") \(app.status)", at: .verbose) }
+                        }
                         menu?.finished(r, error: nil)
                         // What this check actually did, beside the memory: "running" and "reaching
                         // the publisher" are different facts, and only the second one counts.

@@ -26,6 +26,11 @@ public struct AgentLog {
     public var path: String { url.path }
     public let verbosity: Verbosity
 
+    /// Where a run's log goes, without touching it: safe to show in a window.
+    public static func path(name: String, in directory: URL? = nil) -> String {
+        file(name, generation: 0, in: directory ?? dataFolder()).path
+    }
+
     public init(name: String, in directory: URL? = nil,
                 environment: [String: String] = ProcessInfo.processInfo.environment) {
         let folder = directory ?? Self.dataFolder()

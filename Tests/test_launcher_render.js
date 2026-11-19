@@ -572,4 +572,108 @@ assert(markup.includes('<button class=btn id=fleet'), 'Fleet… is a proper .btn
 fleetButton.fire('click');
 assert.equal(posts.length, 1, 'one click sends exactly one message');
 assert.equal(posts[0].action, 'fleet', 'Fleet asks the helper to open the publisher page');
-console.log('PASS: Launcher rendering, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback and the empty list’s reason');
+
+// F1–F6, 0.1.68: the list's own columns, one quiet notice per version, adoption offers, and the
+// grid — remembered per Mac, the same facts as a row, and usable from the keyboard alone.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;selected.clear();closeLayers();view="list";viewFromMac=true');
+render(state([
+  row({ id: 'a1', name: 'App One', status: 'Update available', installed: '1.0', available: '2.0', released: '2026-11-18T00:00:00Z' }),
+  row({ id: 'a2', name: 'App Two', status: 'Not installed', managed: true, installed: null, available: '2.0' }),
+]));
+const heads = [...document.querySelectorAll('thead th')].map(n => n.textContent);
+assert.deepEqual(heads.slice(0, 5), ['App', 'Installed', 'Latest', 'Released', 'State'],
+  'F1 the list names installed, latest, released and state columns, not a merged status');
+const cells = [...document.querySelectorAll('tbody tr')].map(r => [...r.children].map(c => c.textContent));
+assert.equal(cells[0][1], '1.0', 'F1 the installed column is the installed version');
+assert.equal(cells[0][2], '2.0', 'F1 the latest column is the offered version');
+assert.match(cells[0][3], /2026/, 'F1 the released column is the release date');
+assert.match(cells[0][4], /Update available/, 'F1 the state column keeps the one state');
+assert.equal(cells[1][1], 'Not installed', 'F1 "not installed" is a state in its own column, never blank');
+
+// F2 one quiet notice per app and version; dismissing it records that version and posts it.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers();view="grid"');
+render(state([row({ id: 'a1', name: 'App One', status: 'Update available' })],
+  { notices: [{ id: 'a1', name: 'App One', version: '2.0' }] }));
+const notice = document.querySelector('.notice');
+assert(notice, 'F2 a ready update gets one quiet notice');
+assert.equal(document.querySelectorAll('.notice').length, 1, 'F2 exactly one, never a count or a badge');
+assert.match(notice.textContent, /App One 2\.0 is ready/, 'F2 the notice names the app and version');
+posts.length = 0;
+notice.querySelectorAll('button').find(b => b.textContent === 'Dismiss').fire('click');
+assert.equal(posts[0].action, 'dismissNotice', 'F2 Dismiss records the notice');
+assert.equal(posts[0].app, 'a1', 'F2 …for this app');
+assert.equal(posts[0].version, '2.0', 'F2 …at this version, so it never returns for it');
+posts.length = 0;
+notice.querySelectorAll('button').find(b => b.textContent === 'Update').fire('click');
+confirmAction('Update');
+assert.equal(posts[0].action, 'update', 'F2 the notice offers the same update, after the page asks');
+assert.equal(posts[0].app, 'a1', 'F2 …for the app it names');
+render(state([row({ id: 'a1', name: 'App One', status: 'Update available' })], { notices: [] }));
+assert.equal(document.querySelector('.notice'), null, 'F2 no notices in the state, none on the page');
+
+// F5 a hand-installed copy is offered once: managing records it where it is, declining remembers.
+render(state([row({ id: 'a1', name: 'App One', status: 'Up to date' })],
+  { adoptions: [{ id: 'a1', bundleID: 'com.kh.appone', version: '1.0', name: 'App One', path: '/Applications/App One.app' }] }));
+const adopt = document.querySelector('.adopt');
+assert(adopt && /Installed by hand/.test(adopt.textContent), 'F5 a hand-installed copy is shown as such');
+assert.match(adopt.textContent, /\/Applications\/App One\.app/, 'F5 the copy\'s own location is named before anything changes');
+assert.match(adopt.textContent, /nothing is moved, renamed or reinstalled over it/, 'F5 it says what managing does not do');
+posts.length = 0;
+adopt.querySelectorAll('button').find(b => b.textContent === 'Manage it').fire('click');
+assert.equal(posts[0].action, 'adopt', 'F5 Manage it adopts that app id');
+assert.equal(posts[0].app, 'a1', 'F5 …at its own path');
+posts.length = 0;
+adopt.querySelectorAll('button').find(b => b.textContent === 'Not now').fire('click');
+assert.equal(posts[0].action, 'declineAdoption', 'F5 Not now is remembered as a decline');
+assert.equal(posts[0].app, 'a1', 'F5 …for that app');
+render(state([row({ id: 'a1', name: 'App One', status: 'Up to date' })], { adoptions: [] }));
+assert.equal(document.querySelector('.adopt'), null, 'F5 a declined or managed app is not offered again');
+
+// F6 the grid is the default, the choice is this Mac's, and the keyboard alone can act on it.
+run('settingsOpen=false;detail=null;whatsNewOpen=false;selected.clear();closeLayers();view="grid";viewFromMac=false');
+render(state([row({ id: 'a1', name: 'App One', status: 'Update available', installed: '1.0', available: '2.0', released: '2026-11-18T00:00:00Z' })],
+  { settings: { checkManually: false, autoInstall: true, notify: false, appearance: 'system', menuBarWhenClosed: true, retireHelpers: false, helperCleanupAvailable: true, helperHealthySeconds: 600, viewMode: 'grid' } }));
+assert(document.querySelector('.card'), 'F6 a fresh install opens as a grid');
+assert.match(document.querySelector('.card').textContent, /2\.0/, 'F6 a card carries the latest version');
+assert.match(document.querySelector('.card').textContent, /Update available/, 'F6 …and the same state a row shows');
+assert.equal(document.querySelectorAll('.card .btn.main').length, 1, 'F6 a card carries exactly one action');
+posts.length = 0;
+run('view="list"');document.getElementById('vgrid').fire('click');
+assert.equal(posts[0].action, 'setting', 'F6 choosing the grid is saved');
+assert.equal(posts[0].key, 'viewMode', 'F6 …as this Mac\'s own view setting');
+assert.equal(posts[0].value, 'grid', 'F6 …with the grid value');
+posts.length = 0;
+document.getElementById('vlist').fire('click');
+assert.equal(posts[0].value, 'list', 'F6 …and choosing the list is saved the same way');
+// The helper's saved value wins on the next launch, whichever the local storage says.
+run('view="list";viewFromMac=false');
+render(state([row({ id: 'a1', name: 'App One', status: 'Up to date' })],
+  { settings: { checkManually: false, autoInstall: true, notify: false, appearance: 'system', menuBarWhenClosed: true, retireHelpers: false, helperCleanupAvailable: true, helperHealthySeconds: 600, viewMode: 'grid' } }));
+assert(document.querySelector('.card'), 'F6 the grid saved on this Mac is what opens next launch');
+// Arrows move between cards, Enter opens the one that has focus, Cmd+A picks them all.
+run('view="grid";selected.clear()');
+render(state([
+  row({ id: 'a1', name: 'App One', status: 'Update available', available: '2.0' }),
+  row({ id: 'a2', name: 'App Two', status: 'Update available', available: '2.0' }),
+]));
+const cards = document.querySelectorAll('.card');
+const press = (node, key) => node.fire('keydown', { key, preventDefault() {}, stopPropagation() {} });
+press(cards[0], 'ArrowRight');
+assert.equal(document.activeElement, cards[1], 'F6 the right arrow moves focus to the next card');
+press(cards[1], 'ArrowLeft');
+assert.equal(document.activeElement, cards[0], 'F6 the left arrow moves back');
+press(cards[0], 'ArrowDown');
+assert.equal(document.activeElement, cards[1], 'F6 the down arrow moves too');
+const key = ev => (document.handlers.keydown || []).forEach(fn => fn(Object.assign(
+  { target: document.body, currentTarget: document.body, preventDefault() {}, stopPropagation() {} }, ev)));
+key({ key: 'a', metaKey: true });
+assert.equal(run('selected.size'), 2, 'F6 Cmd+A picks every card that has an action');
+assert(document.querySelectorAll('.card.selected').length === 2, 'F6 …and the cards show they are picked');
+posts.length = 0;
+key({ key: 'Enter' });
+confirmAction('Update');
+assert.equal(posts[0].action, 'updateAll', 'F6 Enter on the selection asks once, then updates all of it');
+key({ key: 'Escape' });
+assert.equal(run('selected.size'), 0, 'F6 Escape clears the selection');
+
+console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback and the empty list’s reason');
