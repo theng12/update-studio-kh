@@ -165,7 +165,7 @@ if os.environ.get("FAKE_KHU_BUMP"):
 class Fixture:
     """One run's world: a publisher home, a page, and the loopback server over both."""
 
-    def __init__(self, feed_doc, page_releases=None, artifacts=None, page_file=None):
+    def __init__(self, feed_doc, page_releases=None, artifacts=None):
         self.dir = Path(tempfile.mkdtemp(prefix="case-", dir=WORK))
         self.bin = self.dir / "bin"; self.bin.mkdir()
         self.pub = self.dir / "pub"; self.kh = self.pub / "Library" / "KHUpdater"
@@ -185,11 +185,6 @@ class Fixture:
         for name, data in (artifacts or {}).items():
             (self.kh / "feed" / "artifacts" / name).write_bytes(data)
         json.dump(page_releases or [], open(self.state / "releases.json", "w"))
-        if page_file is not None:
-            (self.state / "release.json").write_bytes(page_file)
-            for side in ("canonical", "raw"):
-                (self.page / side).mkdir()
-                (self.page / side / "release.json").write_bytes(page_file)
         self.httpd, self.port = self.serve()
 
     def write_exec(self, path, text):
@@ -220,7 +215,6 @@ class Fixture:
                "KHU_RAW_URL": self.url("page/raw/release.json"),
                "KHU_PUBLIC_WAIT": "5", "KHU_RELEASE_HOST": "fake-1301",
                "KHU_RELEASE_KEY": str(self.dir / "key"), "KHU_PUBLIC_REPO": "theng12/kh-releases"}
-        env.pop("KHU_PAGES_URL_OVERRIDE", None)
         env.update(extra_env or {})
         result = subprocess.run([str(SCRIPT), *args], capture_output=True, text=True, env=env)
         return result
