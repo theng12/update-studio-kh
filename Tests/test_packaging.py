@@ -38,6 +38,9 @@ case "$1" in
     fi
     # The job is no longer loaded: the marker is moved aside, never deleted.
     [[ -f "$FAKE_LAUNCHCTL_LOADED" ]] && mv "$FAKE_LAUNCHCTL_LOADED" "$FAKE_LAUNCHCTL_LOADED.off" ;;
+  list)
+    # A loaded job with a pid: the installer reads the pid rather than trusting bootstrap's exit code.
+    [[ -f "$FAKE_LAUNCHCTL_LOADED" ]] && printf '4242\t0\tcom.khupdater.agent\n'; exit 0 ;;
 esac
 """)
 (fake_bin / "launchctl").chmod(0o755)
@@ -49,6 +52,13 @@ fake_env = {**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
 
 def recorded():
     return [line.split("\t")[:-1] for line in calls.read_text().splitlines()] if calls.exists() else []
+
+
+def activation(prefix):
+    """The activation calls in order. The installer reads the job's pid back after bootstrap — once,
+    or twice when it also prints it — so any number of read-only `list` calls may follow."""
+    made = recorded()
+    return made[:len(prefix)] == prefix and all(call == ["list"] for call in made[len(prefix):])
 
 
 def check(condition, name):
@@ -223,8 +233,9 @@ try:
     result = run(installer, config, home)
     plist = home / "Library/LaunchAgents/com.khupdater.agent.plist"
     check(result.returncode == 0 and "started" in result.stdout, "install starts the agent")
-    check(recorded() == [["print", label], ["bootstrap", domain, str(plist)]],
-          "activation probes the job, then bootstraps this home's plist exactly once")
+    check(activation([["print", label], ["bootstrap", domain, str(plist)]])
+          and "pid 4242" in result.stdout,
+          "activation probes the job, bootstraps this home's plist once, and reads the running pid back")
     base = home / "Library/KHUpdater/base"
     installed_config = base / "config.json"
     saved = json.loads(installed_config.read_text())
@@ -328,7 +339,7 @@ try:
         old_plist = p.read_bytes()
         result = run(installer, config, h, "--repair")
         check(result.returncode == 0 and (k / "base/config.json").is_file(), tag + " finishes setup")
-        check(recorded() == [["print", label], ["bootout", label], ["bootstrap", domain, str(p)]],
+        check(activation([["print", label], ["bootout", label], ["bootstrap", domain, str(p)]]),
               tag + " stops the loaded job and starts exactly one replacement")
         check(any(x.read_bytes() == old_plist for x in (h / "Library/_trash").glob("repair-*/agent.plist")),
               tag + " preserves the replaced LaunchAgent")
@@ -424,7 +435,7 @@ try:
           and (k / "base/versions/1.0.0/khu").is_file() and (k / "bin/khu-stub").is_file()
           and (k / "state/downloads/keep").read_text() == "saved-app-data",
           "saved repair finishes the helper files and keeps the saved connection and data byte for byte")
-    check(recorded() == [["print", label], ["bootout", label], ["bootstrap", domain, str(p)]],
+    check(activation([["print", label], ["bootout", label], ["bootstrap", domain, str(p)]]),
           "saved repair stops the loaded job and starts exactly one replacement")
     check((k / "base/config.json").stat().st_mode & 0o777 == 0o600, "saved repair keeps the connection private")
 
@@ -432,9 +443,9 @@ try:
     h, k, p, saved_bytes = saved_repair_home("repair-saved-absent")
     result = run(installer, k / "base/config.json", h, "--repair-saved",
                  env={**fake_env, "FAKE_LAUNCHCTL_PRINT_EXIT": "113"})
-    check(result.returncode == 0 and recorded() == [["print", label], ["bootstrap", domain, str(p)]]
+    check(result.returncode == 0 and activation([["print", label], ["bootstrap", domain, str(p)]])
           and (k / "base/config.json").read_bytes() == saved_bytes,
-          "saved repair starts an explicitly absent job once and preserves its connection")
+          "saved repair starts an explicitly absent job once, reads its pid back and preserves its connection")
 
     reset_launchd("repair-saved-unknown")
     h, k, p, saved_bytes = saved_repair_home("repair-saved-unknown")

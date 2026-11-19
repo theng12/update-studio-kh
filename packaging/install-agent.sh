@@ -38,6 +38,23 @@ CONFIG_PATH="$K/base/config.json"
 LAUNCHCTL="$(command -v launchctl || true)"
 DOMAIN="gui/$(id -u)"
 JOB="$DOMAIN/com.khupdater.agent"
+JOB_LABEL="com.khupdater.agent"
+
+# A loaded job keeps the code requirement it was spawned with. Replacing bin/khu-stub or the helper
+# bundle changes the binary's CDHash, and launchd then refuses the next spawn ("needs LWCR update",
+# OS_REASON_CODESIGNING) however valid the file is. Only a real unload clears it; kickstart -k does
+# not. Read the pid back after bootstrap: an exit code alone is not proof the job runs.
+job_pid() {
+    [[ -n "$LAUNCHCTL" ]] || return 1
+    "$LAUNCHCTL" list 2>/dev/null | /usr/bin/awk -v l="$JOB_LABEL" '$3==l && $1+0>1 { print $1; exit }'
+}
+job_running() {
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if [[ -n "$(job_pid)" ]]; then return 0; fi
+        sleep 0.3
+    done
+    return 1
+}
 STAGE=""
 PROMOTED=false
 
@@ -177,11 +194,11 @@ if [[ "$REPAIR" == false ]]; then
     elif "$LAUNCHCTL" print "$JOB" >/dev/null 2>&1; then
         echo "Agent installed; launchd already has com.khupdater.agent loaded, so it was left alone."
         exit 0
-    elif OUTPUT="$("$LAUNCHCTL" bootstrap "$DOMAIN" "$PLIST" 2>&1)"; then
-        echo "Agent installed and started (launchd job com.khupdater.agent)."
+    elif OUTPUT="$("$LAUNCHCTL" bootstrap "$DOMAIN" "$PLIST" 2>&1)" && job_running; then
+        echo "Agent installed and started (launchd job com.khupdater.agent, pid $(job_pid))."
         exit 0
     else
-        REASON="${OUTPUT:-launchctl refused without a message}"
+        REASON="${OUTPUT:-launchd accepted the job but it is not running (no pid in launchctl list)}"
     fi
     # The install is finished and stays; only the start failed, and one command retries it.
     echo "Agent installed, but launchd did not start it: $REASON" >&2
@@ -313,11 +330,11 @@ mv "$STAGE" "$DEST_HOME/Library/_trash/"
 
 if [[ -z "$LAUNCHCTL" ]]; then
     REASON='launchctl was not found on this Mac'
-elif OUTPUT="$("$LAUNCHCTL" bootstrap "$DOMAIN" "$PLIST" 2>&1)"; then
-    echo "KH Updater is set up and its helper is running (launchd job com.khupdater.agent)."
+elif OUTPUT="$("$LAUNCHCTL" bootstrap "$DOMAIN" "$PLIST" 2>&1)" && job_running; then
+    echo "KH Updater is set up and its helper is running (launchd job com.khupdater.agent, pid $(job_pid))."
     exit 0
 else
-    REASON="${OUTPUT:-launchctl refused without a message}"
+    REASON="${OUTPUT:-launchd accepted the job but it is not running (no pid in launchctl list)}"
 fi
 # The files are in place and stay; only the start failed, so the reason is plain and no command
 # is asked of anyone.

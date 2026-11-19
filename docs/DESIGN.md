@@ -63,6 +63,13 @@ signed artifact's refuses the whole file (0.1.65). The default still demands a r
 all — the right answer for a page anyone can download from, whose older builds are often the ones
 a safety fix retired — and prints one line for each app whose previous was left out.
 
+An install reloads every launchd job the app owns — `bootout`, then `bootstrap` from its plist —
+rather than signalling a job and leaving it loaded (2026-11-19). launchd caches the code
+requirement a job was spawned with; replacing the signed binary changes its CDHash, and the cached
+requirement then refuses the next spawn (`spawn failed`, `OS_REASON_CODESIGNING`, "needs LWCR
+update") however valid the file is. `kickstart -k` re-spawns against the same cached requirement
+and is never used for this; the job must come back with a pid in `launchctl list`, not `-9`.
+
 Two feeds naming the same artifacts at the same `published_at` are equivalent — a mirror copy
 differs in bytes (absolute URLs, no `network`), so the rollback guard compares a sorted identity of
 `(app, version, sha256, bytes)` over `apps` and `previous`, not the raw feed hash. A different
