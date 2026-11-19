@@ -4209,6 +4209,7 @@ struct RunnerMain {
         mirrorExportTests()
         adoptionTests()
         logRotationTests()
+        menuTextTests()
         neutralPublisherTests()
         pinnedKeyTests()
         publicFeedTests()

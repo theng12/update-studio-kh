@@ -215,6 +215,18 @@ public struct HelperApp: Sendable, Equatable {
                                                "rollback_blocked", "download_failed", "refused", "unresolved"]
 }
 
+/// Text a menu-bar item can hold. The summary is cut at a whole word and the whole sentence is
+/// kept in the log and the item's tooltip: an explanation that stops inside a word ("use the
+/// publi…") reads as a fault of its own.
+public enum MenuText {
+    public static func short(_ text: String, limit: Int = 90) -> String {
+        guard text.count > limit else { return text }
+        let head = text.prefix(limit)
+        guard let space = head.lastIndex(of: " ") else { return String(text.prefix(limit - 1)) + "…" }
+        return String(head[..<space]) + "…"
+    }
+}
+
 public enum AppNames {
     // shortcut: display names for the apps this fleet runs; any other id shows as itself. App ids and bundle IDs stay.
     static let names = ["hub": "Hub Studio KH", "story": "Story Studio KH", "gateway": "Gateway Studio KH", "updater": "Studio Launcher KH Helper",

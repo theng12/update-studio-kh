@@ -162,7 +162,14 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         lock.lock(); let list = apps, error = lastError, busy = installingApp, pending = active.union(requested); lock.unlock()
         let settings = HelperSettings.load(from: stateDir)
         menu.removeAllItems()
-        func note(_ text: String, to target: NSMenu? = nil) { let i = NSMenuItem(title: text, action: nil, keyEquivalent: ""); i.isEnabled = false; (target ?? menu).addItem(i) }
+        /// A disabled line. `detail` is the whole sentence, shown on hover, so a line that has to be
+        /// short never hides what it is shortening.
+        func note(_ text: String, to target: NSMenu? = nil, detail: String? = nil) {
+            let i = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+            i.isEnabled = false
+            if let detail, detail != text { i.toolTip = detail }
+            (target ?? menu).addItem(i)
+        }
         func action(_ title: String, _ selector: Selector, _ app: String? = nil, to target: NSMenu? = nil) -> NSMenuItem {
             let i = NSMenuItem(title: title, action: selector, keyEquivalent: "")
             i.target = self; i.representedObject = app
@@ -174,7 +181,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         if let until = settings.pausedUntil, settings.paused(at: Date()) {
             note("Automatic updates paused until \(Self.clock(until))")
         }
-        if let error { note("Last check failed: \(Self.short(error))") }
+        if let error { note("Last check failed: \(Self.short(error))", detail: "Last check failed: \(error)") }
         if list.isEmpty && error == nil { note("Checking…") }
         menu.addItem(.separator())
         // A fleet of many apps must not turn this menu into a wall of rows: by default only the
@@ -193,7 +200,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
             guard !app.statusOnly else { row.isEnabled = false; continue }
             let sub = NSMenu()
             sub.autoenablesItems = false
-            if let reason = app.reason { note(Self.short(reason), to: sub) }
+            if let reason = app.reason { note(Self.short(reason), to: sub, detail: reason) }
             if app.installable, let available = app.available, [HelperApp.updateAvailable, HelperApp.downloaded, HelperApp.failed, HelperApp.notInstalled].contains(app.status) {
                 action("Update now to \(available)", #selector(updateNow(_:)), app.app, to: sub).isEnabled = busy == nil
             }
@@ -297,7 +304,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         guard let d = ISO.date(iso) else { return iso }
         let f = DateFormatter(); f.dateFormat = "EEE HH:mm"; return f.string(from: d)
     }
-    static func short(_ text: String) -> String { text.count > 90 ? String(text.prefix(89)) + "…" : text }
+    /// A menu item's one line, cut at a whole word; the rule lives in `MenuText` so the suite can
+    /// hold it, and the whole sentence stays in the log and the item's tooltip.
+    static func short(_ text: String) -> String { MenuText.short(text) }
 }
 
 extension HelperMenu {
