@@ -223,7 +223,9 @@ try:
     home.mkdir()
     config = work / "input.json"
     cfg = {
-        "feedURL": "http://127.0.0.1:8790/release.json", "publicKey": "fixture-public-key",
+        # The kit's own address, which 0.1.69's installer refuses when it names a bare IP
+        # (install-agent.sh:41): a fixture must be an address the installer would accept.
+        "feedURL": "http://publisher.tailnet.ts.net:8790/release.json", "publicKey": "fixture-public-key",
         "machine": "fixture-mac", "token": "fixture-secret-token", "once": True,
         "apps": {"updater": {"bundlePath": "", "recipe": "updater", "automatic": False},
                  "story": {"bundlePath": "/fixture/Story.app", "recipe": "story", "automatic": False},
