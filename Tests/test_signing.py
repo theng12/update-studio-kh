@@ -57,7 +57,7 @@ class SigningTests(unittest.TestCase):
         return subprocess.run(["/bin/bash", str(self.repo / script), *args],
                               env={**self.env, **env}, capture_output=True, text=True)
 
-    def launcher(self, **env):
+    def launcher(self, publisher=None, *extra, **env):
         build = self.repo / "build"
         build.mkdir(exist_ok=True)
         helper = build / "khu"
@@ -73,8 +73,8 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         (build / "khu-stub").write_text("signed fixture stub")
         (build / "khu-stub").chmod(0o755)
         pub = self.work / "publisher.json"
-        pub.write_text("{}")
-        return self.run_script("packaging/build-launcher.sh", "0.1.99", str(pub), **env)
+        pub.write_text(json.dumps(publisher or {}))
+        return self.run_script("packaging/build-launcher.sh", "0.1.99", str(pub), *extra, **env)
 
     def test_raw_binaries_signed_after_merge(self):
         result = self.run_script("build.sh", "build")
@@ -107,6 +107,26 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         kit = self.repo / "build/Studio Launcher KH.app/Contents/Resources/khu-agent"
         self.assertEqual((kit / "bin/khu-stub").read_text(), "signed fixture stub")
         self.assertIn("bin/khu", json.loads((kit / "MANIFEST.json").read_text())["files"])
+
+    def test_shipped_kit_keeps_the_key_but_not_the_address(self):
+        # A DMG anyone can download must not hand out the publisher's machine name.
+        publisher = {"feedURL": "http://100.64.0.7:8790/release.json",
+                     "enrolURL": "http://100.64.0.7:8790/enrol",
+                     "publicKey": "fixture-key", "testAuthority": False}
+        result = self.launcher(publisher)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        kit = self.repo / "build/Studio Launcher KH.app/Contents/Resources/khu-agent"
+        record = json.loads((kit / "publisher.json").read_text())
+        self.assertEqual(record, {"publicKey": "fixture-key", "testAuthority": False})
+        self.assertNotIn("8790", (kit / "publisher.json").read_text())
+
+    def test_kit_address_kept_only_when_asked(self):
+        publisher = {"feedURL": "http://100.64.0.7:8790/release.json",
+                     "enrolURL": "http://100.64.0.7:8790/enrol", "publicKey": "fixture-key"}
+        result = self.launcher(publisher, "--kit-address")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        kit = self.repo / "build/Studio Launcher KH.app/Contents/Resources/khu-agent"
+        self.assertEqual(json.loads((kit / "publisher.json").read_text()), publisher)
 
     def test_changed_kit_refused_before_dmg(self):
         result = self.launcher(TAMPER_KIT="1")

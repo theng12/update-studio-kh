@@ -74,10 +74,16 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         let destination = destinationField
         switch mode {
         case .firstRun(let kit, _):
+            let savedAddress = (try? Connect.publisher(kit: kit))?.feedURL ?? ""
             intro = Self.wrap("Choose the owned Mac running Update Studio KH. Studio Launcher sets up its helper from inside this app. "
-                + "Type that Mac’s address and the pairing code from Connect a Mac. The app’s pinned key still verifies the connection.")
-            // An edited address changes the route, never the kit's pinned publisher key.
-            destination.stringValue = (try? Connect.publisher(kit: kit))?.feedURL ?? "unknown"
+                + "Type that Mac’s address and the pairing code from Connect a Mac. The app’s pinned key still verifies the connection."
+                + (savedAddress.isEmpty
+                   ? "\n\nThis copy of Studio Launcher KH is not connected to an Update Studio yet: type the address of the Mac running it."
+                   : ""))
+            // An edited address changes the route, never the kit's pinned publisher key. A copy
+            // built for public download carries no address, so the field starts empty and sayable.
+            destination.stringValue = savedAddress
+            if savedAddress.isEmpty { destination.placeholderString = "Not connected yet — type the address" }
             destination.setAccessibilityLabel("Update Studio address")
             nameField.stringValue = Connect.proposedName()
         case .repair(_, let plan):
@@ -292,6 +298,9 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         }
         let destination = destinationField.stringValue
         if case .firstRun = mode {
+            guard !destination.trimmingCharacters(in: .whitespaces).isEmpty else {
+                show("Type the address of the Mac running Update Studio KH.", color: .systemRed, spinning: false); return
+            }
             do { _ = try Connect.destination(destination) }
             catch { show("\(error)", color: .systemRed, spinning: false); return }
         }

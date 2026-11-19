@@ -4,7 +4,9 @@ import Foundation
 /// reply comes before installation; incomplete local files select the installer's repair mode,
 /// and the same claim survives a failed install so another attempt can finish it.
 public enum Connect {
-    public struct Publisher: Codable, Sendable { public var feedURL: String; public var enrolURL: String; public var publicKey: String }
+    /// A kit built for public download carries the pinned key and no address; an absent address
+    /// means "not connected yet", never a broken kit.
+    public struct Publisher: Codable, Sendable { public var feedURL: String?; public var enrolURL: String?; public var publicKey: String }
     struct Manifest: Codable { struct Pin: Codable { var bytes: Int; var sha256: String }; var files: [String: Pin] }
 
     public static func isSetUp(home: URL) -> Bool {
@@ -55,10 +57,18 @@ public enum Connect {
         _ = try SafeName.component(machine, what: "name for this Mac")
         var pub = try publisher(kit: kit)
         if let typed {
-            pub.feedURL = try destination(typed)
-            pub.enrolURL = URL(string: pub.feedURL)!.deletingLastPathComponent().appendingPathComponent("enrol").absoluteString
+            let feed = try destination(typed)
+            pub.feedURL = feed
+            pub.enrolURL = URL(string: feed)!.deletingLastPathComponent().appendingPathComponent("enrol").absoluteString
         }
-        guard let enrolURL = URL(string: pub.enrolURL) else { throw khuFail("the kit's publisher address is not a URL") }
+        guard let feedText = pub.feedURL, let feedURL = URL(string: feedText) else {
+            throw khuFail("This copy of Studio Launcher KH is not connected to an Update Studio yet. "
+                + "Type the address of the Mac running it, shown on that Mac's Update Studio window.")
+        }
+        guard let enrolURL = URL(string: pub.enrolURL
+            ?? feedURL.deletingLastPathComponent().appendingPathComponent("enrol").absoluteString) else {
+            throw khuFail("the kit's publisher address is not a URL")
+        }
         // Keep the same claim after a failed local install, so retrying can recover its signed reply.
         let library = home.appendingPathComponent("Library")
         let claimFile = library.appendingPathComponent(".khu-connect-claim.json")
@@ -66,7 +76,7 @@ public enum Connect {
         struct Claim: Codable { var machine: String; var feedURL: String; var publicKey: String; var nonce: String }
         let savedClaim = (try? Data(contentsOf: claimFile)).flatMap { try? JSON.decode(Claim.self, from: $0) }
         let nonce: String
-        if let claim = savedClaim, claim.machine == machine, claim.feedURL == pub.feedURL,
+        if let claim = savedClaim, claim.machine == machine, claim.feedURL == feedText,
            claim.publicKey == pub.publicKey, claim.nonce.count == 64,
            claim.nonce.allSatisfy({ "0123456789abcdef".contains($0) }) {
             nonce = claim.nonce
@@ -75,7 +85,7 @@ public enum Connect {
             if FileManager.default.fileExists(atPath: claimFile.path) {
                 _ = try Trash.move(claimFile, into: library.appendingPathComponent("_trash"))
             }
-            let claim = Claim(machine: machine, feedURL: pub.feedURL, publicKey: pub.publicKey, nonce: nonce)
+            let claim = Claim(machine: machine, feedURL: feedText, publicKey: pub.publicKey, nonce: nonce)
             guard FileManager.default.createFile(atPath: claimFile.path, contents: JSON.encode(claim),
                                                  attributes: [.posixPermissions: 0o600]) else {
                 throw khuFail("This Mac could not save the connection attempt. Try connecting again.")
@@ -96,13 +106,13 @@ public enum Connect {
             throw khuFail("the publisher's reply was not signed by its key; nothing was installed")
         }
         let reply = try JSON.decode(EnrolReply.self, from: replyData)
-        guard reply.machine == machine, reply.nonce == nonce, reply.feedURL == pub.feedURL, reply.publicKey == pub.publicKey,
+        guard reply.machine == machine, reply.nonce == nonce, reply.feedURL == feedText, reply.publicKey == pub.publicKey,
               abs(now.timeIntervalSince1970 - Double(reply.issuedAt)) <= 300, reply.token.count >= 32 else {
             throw khuFail("the publisher's reply does not match this request; nothing was installed")
         }
         // Only the updater is listed: the helper finds the other apps by bundle ID on every run.
         let config: [String: Any] = [
-            "feedURL": pub.feedURL, "publicKey": pub.publicKey, "machine": machine, "token": reply.token,
+            "feedURL": feedText, "publicKey": pub.publicKey, "machine": machine, "token": reply.token,
             "stateDir": "set-by-installer", "intervalMinutes": 5, "once": false,
             "apps": ["updater": ["bundlePath": "", "recipe": "updater", "automatic": true]],
         ]
@@ -137,7 +147,9 @@ public enum Connect {
     /// local kit; a bad signature, refused request or mismatched download must stay an error.
     static func setupKit(_ kit: URL, publisher pub: Publisher, library: URL, http: HTTPClient) throws -> URL {
         guard try publisher(kit: kit).publicKey == pub.publicKey else { throw khuFail("the setup publisher does not match this kit's pin") }
-        guard let feedURL = URL(string: pub.feedURL) else { throw khuFail("the kit's feed address is not a URL") }
+        guard let feedText = pub.feedURL, let feedURL = URL(string: feedText) else {
+            throw khuFail("the kit's feed address is not a URL")
+        }
         let data: Data, status: Int
         do { (data, status) = try http.get(feedURL, headers: [:]) }
         catch let error as URLError where [.notConnectedToInternet, .cannotConnectToHost, .cannotFindHost, .timedOut, .networkConnectionLost].contains(error.code) {

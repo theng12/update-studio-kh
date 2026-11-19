@@ -2,6 +2,11 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.65 — 2026-11-19
+
+- A copy of Studio Launcher KH downloaded by anyone no longer carries the publisher's machine name inside it. The setup kit keeps the pinned key and leaves the address empty: the Connect window says the copy is not connected yet and asks for the address, then sets that Mac up exactly as before. A copy built with `--kit-address` still starts with the address filled in, so an SSD copy and a pairing-code install behave as they always did.
+- `khu mirror` writes a signed feed for a release page that stores its own file names, such as GitHub. Each installer keeps its exact version, size and checksum, its name becomes the name the release page actually holds (read from a small names file, never guessed), the publisher's own mirror addresses are left out, and the result is signed with the same key. It refuses a release-page file whose checksum is not the signed installer's, and prints every address it wrote with its size.
+
 ## 0.1.64 — 2026-11-19
 
 - A feed entry can now carry its own full web address for the installer, so the same update can be downloaded from a mirror (for example GitHub) as well as from the publisher. An ordinary entry with no address works exactly as before, the address must be a plain secure one with no sign-in detail, and the size and checksum checks are unchanged. A mirror download may follow a normal web redirect; anything carrying a sign-in, and the update feed itself, still may not.
