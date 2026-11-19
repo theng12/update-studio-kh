@@ -62,10 +62,13 @@ func orderQueueTests() {
     let afterRun = try! StateStore.read(in: rig.state).machines["mac1"]!
     expect(afterRun.pending.isEmpty, "OQ4 pending is empty after agent acknowledgement (still \(afterRun.pending.map(\.app)))")
 
-    // OQ5: the fleet route and a machine that already holds an order for that app. It skips such a
-    // machine — Server.swift:1357 requires `!ms.pending.contains { $0.app == app }` — so a stale
-    // order is left exactly as it is and the fleet route cannot clear or re-drive it. A machine with
-    // nothing pending is queued normally, which is what makes the two cases distinguishable.
+    // OQ5: the fleet route and a machine that already holds an order for that app.
+    // This used to assert the opposite — that a stale order was left exactly as it was, and the
+    // fleet route could neither clear nor re-drive it. That was the defect, written down as a
+    // passing test: a Mac holding a dead order could never be sent another one, because this route
+    // is the only place orders come from (2026-11-20). OQ5 now asserts the fix: past
+    // `orderRetryWindow` the dead order is replaced, and a machine with nothing pending is still
+    // queued once. BU1 in BulkUpdateTests covers the same behaviour through the same route.
     let rig5 = Rig("order-queue-fleet")
     try! rig5.publish("demo", "2.0.0", rig5.artifact("demo.zip", "bytes"))
     let token5 = try! Enrolment.enrol(stateDir: rig5.state, machine: "fleet-mac")
@@ -84,8 +87,8 @@ func orderQueueTests() {
                                                   headers: owner, body: Data(#"{"app":"demo"}"#.utf8)), remote: "127.0.0.1")
     expect(fr.status == 200, "OQ5 fleet update-all returns 200")
     let held = try! StateStore.read(in: rig5.state).machines["fleet-mac"]!
-    expect(held.pending.count == 1 && held.pending.first!.id == staleCmd.id,
-           "OQ5 a machine already holding an order is skipped, its stale order untouched (pending \(held.pending.count))")
+    expect(held.pending.count == 1 && held.pending.first!.id != staleCmd.id,
+           "OQ5 a machine holding a stale order gets a new one, and the dead order is gone (pending \(held.pending.count))")
     let free = try! StateStore.read(in: rig5.state).machines["fleet-free"]!
     let freePending = free.pending.filter { $0.app == "demo" && $0.action == ServerCommand.update }
     expect(freePending.count == 1, "OQ5 a machine with nothing pending is queued once (pending \(freePending.count))")
