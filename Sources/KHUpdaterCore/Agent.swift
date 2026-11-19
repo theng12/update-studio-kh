@@ -487,6 +487,8 @@ public enum Agent {
     }
 
     static func validate(_ config: AgentConfig) throws {
+        // The saved trust must be the key inside this build, before anything is fetched or installed.
+        try PinnedKey.require(config.publicKey)
         _ = try SafeName.component(config.machine, what: "machine id")
         _ = try config.network?.validated()
         var seen: [String: String] = [:]
@@ -819,7 +821,7 @@ public enum Agent {
                     // keep 4.2 GB of every app's pair. Its own list, plus what is installed here.
                     let mine = Set(config.apps.keys).union(installed.keys)
                     _ = try FeedMirror.sync(releaseData: selected.release, sourceBase: artifactBase,
-                        root: FeedHostRole.feedDirectory(in: stateDir), publicKey: config.publicKey, http: http,
+                        root: FeedHostRole.feedDirectory(in: stateDir), publicKey: PinnedKey.trusted(config.publicKey), http: http,
                         now: now, only: mine.isEmpty ? nil : mine)
                     // This helper serves the feed itself: the separate job it used to install did
                     // not come back after a reboot, while the agent did. Any job left from before
@@ -922,7 +924,7 @@ public enum Agent {
             }
             if let reply {
                 let signed = try JSON.decode(SignedReply.self, from: reply)
-                let publisherKey = try Signing.loadPublicKey(base64: config.publicKey)
+                let publisherKey = try Signing.loadPublicKey(base64: PinnedKey.trusted(config.publicKey))
                 guard let ordersBody = signed.replyData, let signature = signed.signatureData,
                       Signing.verify(ordersBody, signature: signature, publicKey: publisherKey) else {
                     throw khuFail("the orders were not signed by this publisher's key; refused")
@@ -1329,7 +1331,7 @@ public enum Agent {
     /// at the same `published_at`. The note says which of the two cases was hit.
     static func checkFeed(_ releaseData: Data, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> (feed: Feed, note: String?) {
         let release = try JSON.decode(Release.self, from: releaseData)
-        let pub = try Signing.loadPublicKey(base64: config.publicKey)
+        let pub = try Signing.loadPublicKey(base64: PinnedKey.trusted(config.publicKey))
         guard let feedData = release.feedData, let signature = release.signatureData,
               Signing.verify(feedData, signature: signature, publicKey: pub) else { throw khuFail("invalid feed signature") }
         let feed = try JSON.decode(Feed.self, from: feedData).validated()

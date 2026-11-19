@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.66 — 2026-11-19
+
+- The publisher's key is now built into the app and its helper, instead of being taken from a settings file on the Mac. Everything this Mac trusts — the update feed, update orders from the publisher, a hosted feed — is checked against that built-in key, so a program that can write files in your account can no longer point this Mac at its own publisher and push an install. If the saved settings name a different key, the helper refuses in one line that shows both keys and says to run Connect with the current kit; it never silently accepts one and never rewrites the file. A setup kit or SSD copy naming another key is refused the same way, before anything is sent. The key itself is unchanged — this changes where it is read from, not which key the fleet uses.
+
 ## 0.1.65 — 2026-11-19
 
 - A copy of Studio Launcher KH downloaded by anyone no longer carries the publisher's machine name inside it. The setup kit keeps the pinned key and leaves the address empty: the Connect window says the copy is not connected yet and asks for the address, then sets that Mac up exactly as before. A copy built with `--kit-address` still starts with the address filled in, so an SSD copy and a pairing-code install behave as they always did.

@@ -4208,6 +4208,7 @@ struct RunnerMain {
         feedMirrorTests()
         mirrorExportTests()
         neutralPublisherTests()
+        pinnedKeyTests()
         feedHostRuntimeTests()
         // Signing basics stay covered.
         let key = Signing.generateKeyPair()
@@ -4230,6 +4231,11 @@ struct RunnerMain {
         if ProcessInfo.processInfo.environment["MX_ONLY"] != nil {
             mirrorExportTests()
             neutralPublisherTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["PK_ONLY"] != nil {
+            pinnedKeyTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }

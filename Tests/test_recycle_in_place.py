@@ -18,7 +18,10 @@ import tempfile
 import time
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-KHU = REPO / "build/khu"
+# A fixture key is not the fleet key pinned in a release build, so this suite runs the test build
+# (`./build.sh test-cli`) when the gate names it and falls back to the release binary otherwise.
+KHU = pathlib.Path(os.environ.get("KHU_TEST_CLI") or (REPO / "build/khu"))
+TEST_KEY = "unused-here"
 SECONDS = 8
 MIN_RECYCLES = 2
 
@@ -35,7 +38,7 @@ def main() -> int:
         '{"feedURL":"http://127.0.0.1:1/release.json","publicKey":"unused-here",'
         '"stateDir":"%s","machine":"recycle-fixture","token":"t","intervalMinutes":1,"apps":{}}' % state
     )
-    env = dict(os.environ, KHU_NO_MENU="1", KHU_RECYCLE_TRANSFERS="2")
+    env = dict(os.environ, KHU_NO_MENU="1", KHU_RECYCLE_TRANSFERS="2", KHU_TEST_KEY=TEST_KEY)
     log = (root / "agent.log").open("wb")
     process = subprocess.Popen([str(KHU), "agent", "--config", str(config)],
                                stdout=log, stderr=subprocess.STDOUT, env=env)

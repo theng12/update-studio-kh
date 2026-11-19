@@ -56,6 +56,9 @@ public enum Connect {
         guard !isSetUp(home: home) else { throw khuFail("Studio Launcher KH is already set up on this Mac") }
         _ = try SafeName.component(machine, what: "name for this Mac")
         var pub = try publisher(kit: kit)
+        // First setup adopts the kit's key as this Mac's trust, so the kit must name the key sealed
+        // inside this copy; otherwise the helper it installs would refuse the saved config at once.
+        try PinnedKey.requireKit(pub.publicKey)
         if let typed {
             let feed = try destination(typed)
             pub.feedURL = feed
@@ -286,7 +289,12 @@ public enum Connect {
               config.stubBase.map({ URL(fileURLWithPath: $0).standardizedFileURL }) == base.standardizedFileURL else {
             throw khuFail("This Mac uses a different helper layout; its saved settings were left unchanged.")
         }
-        guard try publisher(kit: kit).publicKey == config.publicKey else {
+        // The saved trust must be this build's pin, and the kit must name that same key: repair
+        // never introduces a publisher this copy was not sealed for.
+        try PinnedKey.require(config.publicKey)
+        let kitKey = try publisher(kit: kit).publicKey
+        try PinnedKey.requireKit(kitKey)
+        guard kitKey == PinnedKey.trusted(config.publicKey) else {
             throw khuFail("This Launcher's setup kit belongs to a different Update Studio; this Mac's saved trust was kept. "
                 + "Open the Studio Launcher KH copy this Mac was set up with.")
         }
@@ -384,6 +392,7 @@ public enum Connect {
     }
 
     public static func check(config: AgentConfig, http: HTTPClient = URLSessionHTTPClient(), now: Date = Date()) throws {
+        try PinnedKey.require(config.publicKey)
         guard let feed = URL(string: config.feedURL) else { throw khuFail("this Mac's update address is not a URL") }
         let url = feed.deletingLastPathComponent().appendingPathComponent("commands")
             .appendingQuery("machine", config.machine)
@@ -406,7 +415,7 @@ public enum Connect {
         }
         guard let signed = try? JSON.decode(SignedReply.self, from: data),
               let body = signed.replyData, let signature = signed.signatureData,
-              let key = try? Signing.loadPublicKey(base64: config.publicKey),
+              let key = try? Signing.loadPublicKey(base64: PinnedKey.trusted(config.publicKey)),
               Signing.verify(body, signature: signature, publicKey: key) else {
             throw khuFail("the answer was not signed by this Mac's pinned key; this connection is not trusted")
         }
@@ -477,6 +486,7 @@ public enum Connect {
         guard let pinned = settings["publicKey"] as? String, !pinned.isEmpty else {
             throw khuFail("this Mac's updater settings hold no pinned key, so no address can be trusted from here")
         }
+        try PinnedKey.require(pinned)
         let feedURL = try destination(typed)
         guard let url = URL(string: feedURL) else { throw khuFail("that address is not a URL") }
         let data: Data, status: Int
@@ -487,7 +497,7 @@ public enum Connect {
         do { release = try JSON.decode(Release.self, from: data) }
         catch { throw khuFail("that address did not serve an update feed this tool understands") }
         guard let feedData = release.feedData, let signature = release.signatureData,
-              let key = try? Signing.loadPublicKey(base64: pinned),
+              let key = try? Signing.loadPublicKey(base64: PinnedKey.trusted(pinned)),
               Signing.verify(feedData, signature: signature, publicKey: key) else {
             throw khuFail("that address does not serve updates signed by this Mac's key. "
                 + "Another Update Studio needs its setup kit — a typed address alone cannot establish trust")
@@ -557,6 +567,8 @@ public enum Connect {
             throw khuFail("this Mac's updater settings do not hold a full sign-in, so there is nothing to pair again")
         }
         _ = try SafeName.component(machine, what: "name for this Mac")
+        // Pairing again keeps this Mac's trust, and that trust must be the key inside this build.
+        try PinnedKey.require(pin)
         return RepairPlan(machine: machine, feedURL: feed, publicKey: pin,
                           enrolURL: feedURL.deletingLastPathComponent().appendingPathComponent("enrol").absoluteString)
     }
@@ -607,7 +619,7 @@ public enum Connect {
         }
         let signed = try JSON.decode(SignedReply.self, from: data)
         guard let replyData = signed.replyData, let signature = signed.signatureData,
-              let key = try? Signing.loadPublicKey(base64: plan.publicKey),
+              let key = try? Signing.loadPublicKey(base64: PinnedKey.trusted(plan.publicKey)),
               Signing.verify(replyData, signature: signature, publicKey: key) else {
             throw khuFail("the publisher's reply was not signed by this Mac's pinned key; nothing was changed")
         }
@@ -623,7 +635,7 @@ public enum Connect {
         guard reply.feedURL == plan.feedURL else {
             throw khuFail("the publisher named \(reply.feedURL) in its reply, but this Mac's saved address is \(plan.feedURL); nothing was changed — check the address in Settings")
         }
-        guard reply.publicKey == plan.publicKey else {
+        guard reply.publicKey == PinnedKey.trusted(plan.publicKey) else {
             throw khuFail("the reply names a different publisher key than this Mac pins; nothing was changed")
         }
         guard abs(now.timeIntervalSince1970 - Double(reply.issuedAt)) <= 300 else {
