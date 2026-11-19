@@ -23,7 +23,13 @@ Mac pulls from it. A publish run on this Mac reaches nobody.
 3. `packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog>` copies the DMG and its
    changelog to the host's staging folder, publishes there with the host's own key, and reads the
    served feed back to prove the version it now offers.
-4. Macs pull from `http://100.82.91.102:8790/release.json`.
+4. `packaging/page-sync.sh --app <feed-app-id> --accepted <sha256> --repo <owner/name> --feed-url <url>`
+   carries an accepted release onto the public page: it reads the 1301 feed, refuses unless the
+   accepted sha256 is the feed's, uploads the artifact and its icon to the page's release tag, reads
+   the stored name and digest back, retires the row it replaced, rebuilds the signed mirror on 1301
+   with the feed re-read either side, and commits the exact `release.json` it then reads back from
+   both public addresses. `--all --accepted-file` does every listed app, `--dry-run` performs nothing.
+5. Macs pull from `http://100.82.91.102:8790/release.json`.
 
 Test installs on this Mac are expected and harmless: they prove download and update, they are not
 the release source.
