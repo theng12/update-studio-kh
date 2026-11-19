@@ -54,6 +54,7 @@ struct KHUMain {
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--new-app]
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
+              mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids>   (a signed feed naming a release page's own assets)
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
               remove --state <dir> --machine <id>
@@ -234,6 +235,30 @@ struct KHUMain {
                 let network = try JSON.decode(FeedNetwork.self, from: Data(contentsOf: URL(fileURLWithPath: file)))
                 try FeedPublisher.configureNetwork(feedDir: URL(fileURLWithPath: feed), keyFile: URL(fileURLWithPath: key), network: network)
                 print("signed feed host and download-address settings published")
+            } catch { fail("\(error)") }
+        case "mirror":
+            var feed: String?, key: String?, out: String?, base: String?, names: String?, apps: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--feed": feed = value("--feed", &i)
+                case "--key": key = value("--key", &i)
+                case "--out": out = value("--out", &i)
+                case "--base": base = value("--base", &i)
+                case "--names": names = value("--names", &i)
+                case "--apps": apps = value("--apps", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let feed, let key, let out, let base, let names, let apps else { usage() }
+            let ids = apps.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            do {
+                let written = try FeedMirror.export(feedDir: URL(fileURLWithPath: feed), keyFile: URL(fileURLWithPath: key),
+                                                    out: URL(fileURLWithPath: out), base: base,
+                                                    names: URL(fileURLWithPath: names), apps: ids)
+                for line in written { print("\(line.app) \(line.version): \(line.url) — \(line.bytes) bytes") }
+                print("signed mirror feed written to \(out) (\(written.count) installers)")
             } catch { fail("\(error)") }
         case "enrol":
             var state: String?, machine: String?

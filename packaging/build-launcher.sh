@@ -1,13 +1,23 @@
 #!/bin/bash
 # Builds build/Studio Launcher KH.app and build/Studio-Launcher-KH-<version>.dmg: the helper as an
-# app, with a universal agent kit (and this publisher's publisher.json) inside for the front door.
-# usage: packaging/build-launcher.sh <version> <publisher.json>   (run ./build.sh build first)
+# app, with a universal agent kit inside for the front door. The kit's publisher record keeps the
+# pinned key but, by default, no address: a DMG anyone can download must not hand out this
+# publisher's machine name. `--kit-address` keeps the address too, for a copy whose front door
+# starts with it filled in (the SSD copy).
+# usage: packaging/build-launcher.sh <version> <publisher.json> [--kit-address]   (run ./build.sh build first)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VERSION="${1:-}"; PUB="${2:-}"
+VERSION="${1:-}"; PUB="${2:-}"; shift $(( $# > 2 ? 2 : $# ))
+KIT_ADDRESS=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --kit-address) KIT_ADDRESS=1; shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
 IDENTITY="${KHU_SIGN_IDENTITY:-KH Studio Local Signing}"
 [ -n "$IDENTITY" ] && [ "$IDENTITY" != "-" ] || { echo 'A stable signing identity is required' >&2; exit 1; }
-[[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ && -f "$PUB" && -x build/khu ]] || { echo "usage: $0 <version> <publisher.json> (after ./build.sh build)" >&2; exit 2; }
+[[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ && -f "$PUB" && -x build/khu ]] || { echo "usage: $0 <version> <publisher.json> [--kit-address] (after ./build.sh build)" >&2; exit 2; }
 APP="build/Studio Launcher KH.app"; DMG="build/Studio-Launcher-KH-$VERSION.dmg"; KIT="build/launcher-kit"
 # Retired build output goes to the one trash, on the Desktop, as a real path. A `_trash` symlink in
 # the checkout made `mkdir -p` fail ENOTDIR once the owner emptied the trash (Story 1.4.410's gate,
@@ -22,7 +32,17 @@ for old in "$APP" "$DMG" "$KIT"; do if [ -e "$old" ]; then mv "$old" "$TRASH/$(b
 # build/khu and build/khu-stub are already universal (./build.sh build); merging a duplicate
 # slice again would only re-derive them, so the kit takes them as built.
 packaging/build-agent-kit.sh "$VERSION" "$KIT" >/dev/null
-cp "$PUB" "$KIT/publisher.json"
+# The kit keeps the pinned key (and any other field the publisher file carries); the address is
+# dropped unless this build is explicitly for a copy that should arrive pointed at a publisher.
+/usr/bin/python3 -I - "$PUB" "$KIT/publisher.json" "$KIT_ADDRESS" <<'PY'
+import json, sys
+source, kit_file, keep_address = sys.argv[1:]
+record = json.loads(open(source).read())
+if not keep_address:
+    record.pop("feedURL", None)
+    record.pop("enrolURL", None)
+open(kit_file, "w").write(json.dumps(record, indent=2, sort_keys=True) + "\n")
+PY
 /usr/bin/python3 -I -c '
 import hashlib, json, pathlib, sys
 kit = pathlib.Path(sys.argv[1])

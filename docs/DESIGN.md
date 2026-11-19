@@ -52,6 +52,14 @@ that carried `Authorization`, and every vendor (`officialHosts`) request, still 
 The feed fetch itself carries the token, so it still refuses one. The icon sits beside the named
 artifact when `url` is present.
 
+`khu mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids>`
+writes that mirror feed from the live one: each named file is looked up in the names table
+(`app id, tag, feed file, stored asset name, sha256` — the release page's own names, never guessed),
+the entry takes the stored name and a full address `--base/<tag>/<stored name>`, `sha256` and
+`bytes` are untouched, `network` and `delta` are left out, and the result is signed with the same
+key and read back before its addresses and sizes are printed. A names row whose checksum is not the
+signed artifact's refuses the whole file (0.1.65).
+
 Two feeds naming the same artifacts at the same `published_at` are equivalent — a mirror copy
 differs in bytes (absolute URLs, no `network`), so the rollback guard compares a sorted identity of
 `(app, version, sha256, bytes)` over `apps` and `previous`, not the raw feed hash. A different
@@ -269,6 +277,13 @@ token, and it is the only way a Mac gets a token without the owner touching the 
 - The Launcher's typed address accepts the publisher's **Tailscale name** and refuses a numeric IP
   with the reason: the app's ATS exception allows plain http only to `*.ts.net`, so an IP would be
   blocked inside the app before any request left it (the fleet defect fixed 2026-11-13).
+- The kit inside a publicly downloadable Launcher carries the pinned `publicKey` and **no address**
+  (0.1.65): `packaging/build-launcher.sh` drops `feedURL`/`enrolURL` unless the build says
+  `--kit-address`, so a public DMG never hands out this publisher's machine name. An address-less
+  record is "not connected yet", not a broken kit: `Connect.Publisher.feedURL`/`enrolURL` are
+  optional, the Connect window starts empty and asks for the address, and nothing is sent until one
+  is typed. `Connect` reads only the kit's copy — `~/Library/KHUpdater/publisher.json` is never read
+  by the Launcher — and a kit with an address behaves exactly as before.
 
 Launcher connection attempts are serialized per home. A pending claim keeps its machine, address,
 publisher key and nonce in a private local file until installation succeeds; a failed local install

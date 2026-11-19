@@ -1,6 +1,114 @@
 import Foundation
 
 public enum FeedMirror {
+    /// A release page holds its own names for the same bytes, so this feed is the publisher's live
+    /// feed restated for that page: every file it names is looked up in `names` (tab-separated app
+    /// id, tag, feed file, stored asset name, sha256) and replaced by the stored name, and the entry
+    /// carries that file's full address under `base`. Size and checksum are not touched, so the
+    /// release is the same one; `network` (the publisher's own hosts) and each patch (which the page
+    /// does not hold) are left out. Signed with the publisher's key. Returns the addresses written.
+    public static func export(feedDir: URL, keyFile: URL, out: URL, base: String, names: URL,
+                              apps: [String]) throws -> [(app: String, version: String, url: String, bytes: Int64)] {
+        let key = try Signing.loadPrivateKey(from: keyFile)
+        guard var feed = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey) else {
+            throw khuFail("nothing is published in \(feedDir.path)")
+        }
+        var root = base.trimmingCharacters(in: .whitespaces)
+        while root.hasSuffix("/") { root.removeLast() }
+        _ = try Feed.artifactURL(root + "/release.json", app: "the release page")
+        guard !apps.isEmpty else { throw khuFail("name at least one app to mirror") }
+
+        struct Row: Equatable { var tag: String; var name: String; var sha: String }
+        var rows: [String: Row] = [:]
+        let text = try String(contentsOf: names, encoding: .utf8)
+        let hex = CharacterSet(charactersIn: "0123456789abcdef")
+        for (index, line) in text.components(separatedBy: "\n").enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            let fields = line.components(separatedBy: "\t").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard fields.count == 5 else {
+                throw khuFail("\(names.lastPathComponent) line \(index + 1) is not five tab-separated fields (app id, tag, feed file, stored asset name, sha256)")
+            }
+            let sha = fields[4].lowercased()
+            // A first line of headings ("app  tag  feed file  stored asset  sha256") is skipped.
+            if rows.isEmpty, !(sha.count == 64 && sha.unicodeScalars.allSatisfy({ hex.contains($0) })) { continue }
+            guard sha.count == 64, sha.unicodeScalars.allSatisfy({ hex.contains($0) }) else {
+                throw khuFail("\(names.lastPathComponent) line \(index + 1) has no 64-character sha256")
+            }
+            _ = try SafeName.component(fields[1], what: "release tag")
+            _ = try SafeName.component(fields[0], what: "app id")
+            _ = try SafeName.component(fields[3], what: "stored asset name")
+            let row = Row(tag: fields[1], name: fields[3], sha: sha)
+            let key = fields[0] + "\u{0}" + fields[2]
+            if let existing = rows[key], existing != row {
+                throw khuFail("\(names.lastPathComponent) names \(fields[0]) \(fields[2]) twice with different assets")
+            }
+            rows[key] = row
+        }
+
+        func mirrored(_ app: String, _ entry: inout FeedApp) throws -> String {
+            guard let row = rows[app + "\u{0}" + entry.file] else {
+                throw khuFail("\(names.lastPathComponent) has no row for \(app)'s \(entry.file); nothing was written")
+            }
+            guard row.sha == entry.sha256.lowercased() else {
+                throw khuFail("the release page's \(entry.file) is not the signed installer (sha256 \(row.sha), the feed says \(entry.sha256)); nothing was written")
+            }
+            if let icon = entry.icon {
+                guard let iconRow = rows[app + "\u{0}" + icon] else {
+                    throw khuFail("\(names.lastPathComponent) has no row for \(app)'s icon \(icon); nothing was written")
+                }
+                guard iconRow.sha == (entry.iconSha256 ?? "").lowercased() else {
+                    throw khuFail("the release page's \(icon) is not the signed icon; nothing was written")
+                }
+                entry.icon = iconRow.name
+            }
+            entry.file = row.name
+            entry.delta = nil
+            entry.url = root + "/" + encoded(row.tag) + "/" + encoded(row.name)
+            guard let url = entry.url else { throw khuFail("\(app)'s address could not be formed; nothing was written") }
+            return url
+        }
+
+        var current: [String: FeedApp] = [:]
+        var chosen: [String: String] = [:]
+        for app in apps {
+            guard var entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
+            chosen[app] = try mirrored(app, &entry)
+            current[app] = entry
+        }
+        var previous: [String: FeedApp] = [:]
+        for app in apps {
+            guard var entry = feed.previous?[app] else { continue }
+            _ = try mirrored(app, &entry)
+            previous[app] = entry
+        }
+        feed.apps = current
+        feed.previous = previous.isEmpty ? nil : previous
+        feed.network = nil
+        let signed = try feed.validated()
+        let data = JSON.encode(signed)
+        try AtomicFile.writeJSON(Release(feed: data, signature: try Signing.sign(data, with: key)), to: out)
+        // Read back what was written: the same release, signed with the publisher's key, now naming
+        // the release page's addresses.
+        guard let written = try AtomicFile.readJSON(Release.self, from: out), let body = written.feedData,
+              let signature = written.signatureData,
+              Signing.verify(body, signature: signature, publicKey: key.publicKey) else {
+            throw khuFail("the signed feed written to \(out.path) does not verify; nothing was handed out")
+        }
+        let back = try JSON.decode(Feed.self, from: body).validated()
+        guard back.network == nil, back.artifactIdentity == signed.artifactIdentity else {
+            throw khuFail("the signed feed written to \(out.path) does not read back as this release")
+        }
+        return apps.sorted().compactMap { app in
+            back.apps[app].flatMap { entry in chosen[app].map { (app, entry.version, $0, entry.bytes) } }
+        }
+    }
+
+    /// A release page's own asset name, as one URL path piece.
+    private static func encoded(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? text
+    }
+
     private struct Item: Equatable {
         let sha: String
         let bytes: Int64?
