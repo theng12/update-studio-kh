@@ -74,4 +74,15 @@ func logRotationTests() {
     let defaultText = text(logFile(defaultDir, 0))
     expect(defaultText.contains("plain-usual") && !defaultText.contains("plain-detail"),
            "LR17 normal is the default")
+
+    // A long operator sentence reaches the log whole. The 2026-11-19 sighting of a `…` at about 104
+    // characters must never be the log's own doing: the file is where the instruction survives.
+    let longDir = tmpDir("log-rotation-long")
+    let sentence = "the saved address 100.82.91.102 is a bare IP, which macOS refuses for an unencrypted feed; use the publisher's host name instead"
+    let long = sentence + String(repeating: " x", count: 40)
+    AgentLog(name: "agent", in: longDir, environment: [:]).record(long, at: .quiet)
+    let longText = text(logFile(longDir, 0))
+    expect(long.count >= 200, "LR18 the fixture line is at least 200 characters (\(long.count))")
+    expect(longText.contains(long), "LR19 a \(long.count)-character line is recorded whole")
+    expect(!longText.contains("…"), "LR20 the log adds no ellipsis of its own")
 }
