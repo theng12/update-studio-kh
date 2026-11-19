@@ -285,9 +285,13 @@ func connectionFlowTests() {
         expectThrows("CF6 a path on the typed address is refused", contains: "without a path") {
             _ = try Connect.changeDestination(to: "100.64.0.7:8790/not-the-feed", file: file, http: client)
         }
-        expectThrows("CF6 an https address is refused rather than assumed", contains: "plain http") {
+        expectThrows("CF6 an https address without a feed path is refused rather than assumed",
+                     contains: "release.json") {
             _ = try Connect.changeDestination(to: "https://100.64.0.7:8790", file: file, http: client)
         }
+        expect((try? Connect.destination("https://theng12.github.io/kh-releases/release.json"))
+               == "https://theng12.github.io/kh-releases/release.json",
+               "CF6 a pasted public https feed link is taken as given")
         expectThrows("CF6 an unreachable address is one honest sentence", contains: "could not be reached") {
             _ = try Connect.changeDestination(to: "host.tail1234.ts.net:8790", file: file, http: OfflineHTTP())
         }
@@ -331,7 +335,11 @@ func connectionFlowTests() {
             _ = try Connect.destination("update-studio.example")
         }
         expectThrows("CF7 a zero port is refused", contains: "port") { _ = try Connect.destination("host.tail1234.ts.net:0") }
-        expectThrows("CF7 https is refused", contains: "plain http") { _ = try Connect.destination("https://host.tail1234.ts.net:8790") }
+        expectThrows("CF7 https without a feed path is refused", contains: "release.json") {
+            _ = try Connect.destination("https://host.tail1234.ts.net:8790")
+        }
+        expect((try? Connect.destination("https://example.test/release.json")) == "https://example.test/release.json",
+               "CF7 a public https feed link is accepted as typed")
     }
 
     // CF14. Editing the first-run route never replaces the kit's pinned key.

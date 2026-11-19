@@ -716,8 +716,11 @@ public enum Agent {
             health["feed-host"] = status
         }
 
-        let headers = ["Authorization": "Bearer \(config.token)"]
-        var publisherAvailable = true
+        // A public feed is read anonymously: only the publisher's own addresses ever receive this
+        // Mac's token. `authenticated` is false for a public address, and then nothing is reported.
+        let authenticated = FeedNetwork.authenticated(serverBase)
+        let headers = authenticated ? ["Authorization": "Bearer \(config.token)"] : [:]
+        var publisherAvailable = authenticated
         /// The status a result post answered with, or nil when it could not be made at all.
         func post(_ commandID: String, _ done: AgentMemory.Done) -> Int? {
             guard publisherAvailable else { return nil }
@@ -760,18 +763,25 @@ public enum Agent {
         let statusBody = try JSONSerialization.data(withJSONObject: report)
         let statusCode: Int?
         var statusReply: Data?
-        do {
-            (statusReply, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
-        }
-        catch {
-            // A refused address is a sentence for the person, never Foundation's own text: this one
-            // reaches the Launcher window unchanged, and "Code=-1022 … /status" told nobody anything.
-            if blockedByTransportSecurity(error) {
-                throw khuFail(plainUnreachable(serverBase.appendingPathComponent("status"), error: error))
+        if authenticated {
+            do {
+                (statusReply, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
             }
-            guard transportUnavailable(error) else { throw error }
-            statusCode = nil; publisherAvailable = false
-            result.notes.append("publisher unavailable; local requests may use a verified source, remote orders and Automatic wait")
+            catch {
+                // A refused address is a sentence for the person, never Foundation's own text: this one
+                // reaches the Launcher window unchanged, and "Code=-1022 … /status" told nobody anything.
+                if blockedByTransportSecurity(error) {
+                    throw khuFail(plainUnreachable(serverBase.appendingPathComponent("status"), error: error))
+                }
+                guard transportUnavailable(error) else { throw error }
+                statusCode = nil; publisherAvailable = false
+                result.notes.append("publisher unavailable; local requests may use a verified source, remote orders and Automatic wait")
+            }
+        } else {
+            // A public feed has no publisher to report to, and none is contacted: the run installs
+            // only what the signed feed offers, from the addresses that feed names.
+            statusCode = nil; statusReply = nil
+            result.notes.append("reading a public feed: nothing is reported to it; only this feed's own apps are offered")
         }
         if let statusCode {
             guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }

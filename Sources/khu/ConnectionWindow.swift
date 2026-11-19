@@ -78,7 +78,8 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             intro = Self.wrap("Choose the owned Mac running Update Studio KH. Studio Launcher sets up its helper from inside this app. "
                 + "Type that Mac’s address and the pairing code from Connect a Mac. The app’s pinned key still verifies the connection."
                 + (savedAddress.isEmpty
-                   ? "\n\nThis copy of Studio Launcher KH is not connected to an Update Studio yet: type the address of the Mac running it."
+                   ? "\n\nThis copy is not connected yet. Paste the feed link from the page you downloaded it from, "
+                     + "or type the address of the Mac running Update Studio KH."
                    : ""))
             // An edited address changes the route, never the kit's pinned publisher key. A copy
             // built for public download carries no address, so the field starts empty and sayable.
@@ -279,30 +280,35 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     @objc private func connectPressed() {
         if state == .done { finish(.connected); return }
         guard state != .working else { return }
+        let destination = destinationField.stringValue
+        var publicFeed = false
+        if case .firstRun = mode {
+            guard !destination.trimmingCharacters(in: .whitespaces).isEmpty else {
+                show("Paste the feed link from the download page, or type the address of the Mac running Update Studio KH.",
+                     color: .systemRed, spinning: false); return
+            }
+            do { publicFeed = try Connect.destination(destination).lowercased().hasPrefix("https://") }
+            catch { show("\(error)", color: .systemRed, spinning: false); return }
+        }
         let machine: String
         var code = ""
         switch mode {
         case .setupRepair(_, _, let plan, _):
             machine = plan.machine
         case .firstRun:
-            code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
-            guard !code.isEmpty else { show("Type the pairing code from Update Studio.", color: .systemRed, spinning: false); return }
             machine = nameField.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
             guard !machine.isEmpty else { show("Type the name for this Mac.", color: .systemRed, spinning: false); return }
+            // A public feed asks for no pairing code: there is no publisher to enrol with.
+            if !publicFeed {
+                code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
+                guard !code.isEmpty else { show("Type the pairing code from Update Studio.", color: .systemRed, spinning: false); return }
+            }
         case .repair(_, let plan):
             // Empty is allowed: it works only when the publisher no longer lists this Mac and its
             // allow-a-Mac window is open; an enrolled Mac is refused with the publisher's own
             // sentence, which names the pairing code.
             code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
             machine = plan.machine
-        }
-        let destination = destinationField.stringValue
-        if case .firstRun = mode {
-            guard !destination.trimmingCharacters(in: .whitespaces).isEmpty else {
-                show("Type the address of the Mac running Update Studio KH.", color: .systemRed, spinning: false); return
-            }
-            do { _ = try Connect.destination(destination) }
-            catch { show("\(error)", color: .systemRed, spinning: false); return }
         }
         state = .working
         stopping = false
@@ -315,13 +321,15 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         if case .setupRepair = mode {
             show("Repairing this Mac's saved setup…", color: nil, spinning: true)
         } else {
-            show("Connecting to Update Studio…", color: nil, spinning: true)
+            show(publicFeed ? "Reading the public feed…" : "Connecting to Update Studio…", color: nil, spinning: true)
         }
         let mode = self.mode
         DispatchQueue.global(qos: .userInitiated).async {
             var failure: String?
             do {
                 switch mode {
+                case .firstRun(let kit, let home) where publicFeed:
+                    _ = try Connect.usePublicFeed(kit: kit, home: home, machine: machine, address: destination)
                 case .firstRun(let kit, let home):
                     _ = try Connect.run(kit: kit, home: home, machine: machine, code: code, destination: destination)
                 case .repair(let file, _):

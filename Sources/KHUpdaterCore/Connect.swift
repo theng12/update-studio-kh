@@ -146,6 +146,61 @@ public enum Connect {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) + "\nSetup used \(source)."
     }
 
+    /// Set this Mac up from a public, signed feed: no publisher, no pairing code, no token. The link
+    /// is fetched and its signature verified against the key pinned in this build before a helper is
+    /// installed for it, and this Mac then reports nothing to anyone — it installs only what that
+    /// feed signs. A publisher's own address is refused here: that is the pairing flow.
+    public static func usePublicFeed(kit: URL, home: URL, machine: String, address typed: String,
+                                     http: HTTPClient = URLSessionHTTPClient(), shell: Shell = SystemShell()) throws -> String {
+        try FileLock.withExclusive(home.appendingPathComponent("Library/.khu-connect.lock")) {
+            guard !isSetUp(home: home) else { throw khuFail("Studio Launcher KH is already set up on this Mac") }
+            _ = try SafeName.component(machine, what: "name for this Mac")
+            let pub = try publisher(kit: kit)
+            try PinnedKey.requireKit(pub.publicKey)
+            let feedText = try destination(typed)
+            guard let feedURL = URL(string: feedText), feedURL.scheme?.lowercased() == "https",
+                  !FeedNetwork.authenticated(feedURL) else {
+                throw khuFail("That is a publisher's address. Choose Connect and type the pairing code from Update Studio instead.")
+            }
+            // The link must be this fleet's signed feed before any helper is installed for it.
+            let data: Data, status: Int
+            do { (data, status) = try http.get(feedURL, headers: [:]) }
+            catch { throw unreachable(feedURL, error: error) }
+            guard status == 200 else { throw khuFail("that feed link answered HTTP \(status); nothing was installed") }
+            let release = try JSON.decode(Release.self, from: data)
+            guard let body = release.feedData, let signature = release.signatureData,
+                  let key = try? Signing.loadPublicKey(base64: PinnedKey.trusted(pub.publicKey)),
+                  Signing.verify(body, signature: signature, publicKey: key) else {
+                throw khuFail("that link does not serve a feed signed by this fleet's key; nothing was installed")
+            }
+            let feed = try JSON.decode(Feed.self, from: body).validated()
+            guard feed.apps["updater"] != nil else { throw khuFail("that feed offers no helper for this Mac; nothing was installed") }
+            let library = home.appendingPathComponent("Library")
+            try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+            let config: [String: Any] = [
+                "feedURL": feedText, "publicKey": PinnedKey.trusted(pub.publicKey), "machine": machine, "token": "",
+                "stateDir": "set-by-installer", "intervalMinutes": 5, "once": false,
+                "apps": ["updater": ["bundlePath": "", "recipe": "updater", "automatic": true]],
+            ]
+            let temp = library.appendingPathComponent(".khu-connect-\(UUID().uuidString).json")
+            guard FileManager.default.createFile(atPath: temp.path, contents: try JSONSerialization.data(withJSONObject: config),
+                                                 attributes: [.posixPermissions: 0o600]) else {
+                throw khuFail("This Mac could not save its setup settings. Try again.")
+            }
+            defer { _ = try? Trash.move(temp, into: library.appendingPathComponent("_trash")) }
+            let result = try shell.run("/bin/bash", arguments: [kit.appendingPathComponent("install-agent.sh").path, temp.path, home.path],
+                                       timeout: 120)
+            guard result.exitCode == 0 else {
+                if isSetUp(home: home) {
+                    throw khuFail("Setup finished, but Studio Launcher could not start. Close this window and open Studio Launcher again.")
+                }
+                throw khuFail("Local setup could not be completed. Your saved data is kept. Try again.")
+            }
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                + "\nThis Mac updates from the public feed and reports nothing to anyone."
+        }
+    }
+
     /// Pairing still requires the controller. Only transport failure falls back to the verified
     /// local kit; a bad signature, refused request or mismatched download must stay an error.
     static func setupKit(_ kit: URL, publisher pub: Publisher, library: URL, http: HTTPClient) throws -> URL {
@@ -394,6 +449,9 @@ public enum Connect {
     public static func check(config: AgentConfig, http: HTTPClient = URLSessionHTTPClient(), now: Date = Date()) throws {
         try PinnedKey.require(config.publicKey)
         guard let feed = URL(string: config.feedURL) else { throw khuFail("this Mac's update address is not a URL") }
+        guard FeedNetwork.authenticated(feed) else {
+            throw khuFail("This Mac reads a public feed. There is no publisher to check in with: updates come from that signed feed, and nothing is reported to it.")
+        }
         let url = feed.deletingLastPathComponent().appendingPathComponent("commands")
             .appendingQuery("machine", config.machine)
         let data: Data, status: Int
@@ -437,7 +495,9 @@ public enum Connect {
         var text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = text.lowercased()
         if lower.hasPrefix("https://") {
-            throw khuFail("Update Studio is reached over plain http on the tailnet, not https; type host or host:port")
+            // A public feed's own link, pasted as it appears on the download page. Used exactly as
+            // given: `FeedNetwork.feedURL` is the one place that decides what a feed address is.
+            return (try FeedNetwork.feedURL(text)).absoluteString
         }
         if lower.hasPrefix("http://") { text = String(text.dropFirst(7)) }
         while text.hasSuffix("/") { text = String(text.dropLast()) }
