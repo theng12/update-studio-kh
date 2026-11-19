@@ -1442,7 +1442,10 @@ public final class FeedServer: @unchecked Sendable {
     /// — an exclusion with no line in the log is how a whole fleet sat idle and looked healthy.
     static func skipReason(_ ms: MachineState, app: String, feed: Feed?, now: Date) -> String? {
         guard ms.tokenHash != nil else { return "not enrolled here" }
-        guard app != "story", app != "hub" else { return "\(app) is never swept" }
+        // The feed's own answer, not two app ids: an app whose kind is `status` updates itself and
+        // is never swept; everything else (hub and story included) can be ordered like any app. The
+        // old hard-coded pair was the only thing blocking a fleet-wide Hub order (2026-11-20).
+        guard feed?.apps[app]?.kind != "status" else { return "\(app) updates itself, so it is not swept here" }
         guard isOnline(ms, now: now) else {
             let minutes = ms.lastSeen.flatMap(ISO.date).map { Int(now.timeIntervalSince($0) / 60) }
             return minutes.map { "not seen for \($0) min" } ?? "never seen"

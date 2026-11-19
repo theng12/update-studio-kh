@@ -14,6 +14,10 @@ public struct RecipeResult: Sendable, Equatable {
     /// True when the installed build predates its app's update hold: it has no hold route, or it
     /// answered 401/403/404 and the feed's `holdSince` is newer than what is installed.
     public var predatesHold = false
+    /// True when the app's update hold could not be taken: it refused, did not answer, or the feed
+    /// names no endpoint. Asking again seconds later cannot change that answer, so the attempt ends
+    /// and the artifact is remembered — never a retry loop on a production Mac (issue 20261120-151).
+    public var holdRefused = false
     /// The unattended quit's own log lines: what the idle check answered, whether the app exited and
     /// how long it took, whether its services started, and whether it came back. Kept as separate
     /// lines so a Mac that stalls or half-restarts says which of the four failed.

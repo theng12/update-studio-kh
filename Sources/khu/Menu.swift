@@ -148,17 +148,30 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
 
     // MARK: the menu
 
+    /// Which symbol the item shows, in one place so a test can prove each name resolves on this
+    /// macOS rather than only that some image was assigned.
+    static func iconSymbol(apps: [HelperApp], busy: Bool, error: String?) -> String {
+        apps.contains { $0.status == HelperApp.failed } || error != nil ? "exclamationmark.arrow.circlepath"
+            : busy ? "arrow.triangle.2.circlepath"
+            : apps.contains { $0.status == HelperApp.updateAvailable } ? "arrow.down.circle.fill" : "arrow.down.circle"
+    }
+
     private func refreshIcon() {
         lock.lock(); let list = apps, busy = installingApp != nil, error = lastError; lock.unlock()
-        let symbol = list.contains { $0.status == HelperApp.failed } || error != nil ? "exclamationmark.arrow.circlepath"
-            : busy ? "arrow.triangle.2.circlepath"
-            : list.contains { $0.status == HelperApp.updateAvailable } ? "arrow.down.circle.fill" : "arrow.down.circle"
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Studio Launcher KH")
+        let image = NSImage(systemSymbolName: Self.iconSymbol(apps: list, busy: busy, error: error),
+                            accessibilityDescription: "Studio Launcher KH")
         image?.isTemplate = true
         item.button?.image = image
     }
 
+    /// Catches a first paint that ran before the status item's button existed (a blank square on an
+    /// idle Mac, reported 2026-11-20): once the app has launched, paint again.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        refreshIcon()
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
+        refreshIcon()   // opening the menu also repairs an item that started blank
         lock.lock(); let list = apps, error = lastError, busy = installingApp, pending = active.union(requested); lock.unlock()
         let settings = HelperSettings.load(from: stateDir)
         menu.removeAllItems()

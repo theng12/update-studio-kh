@@ -238,4 +238,22 @@ func bulkUpdateTests() {
                    "BU7 \(label): page and log agree (available \(available), reason \(reason ?? "nil"))")
         }
     }
+
+    // BU8 — the sweep decides by the feed's own kind, not by two app ids. An installable app
+    // (`fake-for-tests`, which is what a DMG app carries) may be ordered — hub and story included,
+    // which is the fleet-wide Hub route that a hard-coded `app != "hub"` had removed since 37f61a2.
+    // An app whose kind is `status` updates itself and is still never swept.
+    do {
+        let rig = Rig("bulk-kind")
+        try! rig.publish("demo", "2.0.0", rig.artifact("demo.zip", "bytes"), kind: "fake-for-tests")
+        try! rig.publish("selfish", "2.0.0", rig.artifact("self.zip", "bytes"), kind: "status")
+        let feed = try! FeedPublisher.loadFeed(from: rig.feed)
+        let now = Date()
+        var mac = MachineState(machine: "m"); mac.tokenHash = "t"
+        mac.lastSeen = ISO.string(now); mac.installed = ["demo": "1.0", "selfish": "1.0"]
+        expect(FeedServer.skipReason(mac, app: "demo", feed: feed, now: now) == nil,
+               "BU8 an installable app may be ordered by the bulk sweep (reason \(FeedServer.skipReason(mac, app: "demo", feed: feed, now: now) ?? "nil"))")
+        expect(FeedServer.skipReason(mac, app: "selfish", feed: feed, now: now) != nil,
+               "BU8 an app that updates itself is still never swept")
+    }
 }
