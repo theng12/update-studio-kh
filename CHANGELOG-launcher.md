@@ -9,6 +9,8 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - A hand-installed copy of one of these apps is offered once, with its own location shown before anything changes. Managing it updates it where it is: nothing is moved, renamed or reinstalled over it, and no second copy is made. "Not now" is remembered.
 - The helper's own log keeps this run and the two before it in the app's data folder, and Settings shows where it is. Quiet, Normal or Verbose changes how much is recorded on the next start, with no rebuild.
 - `packaging/release-checksums.py` writes a `SHA256SUMS.txt` for a release page — sorted, the two-space form `shasum -c` reads, never listing itself — and checks each line against the signed feed, the page's own stored digest and a fresh download. The signed feed remains what this app trusts.
+- `khu mirror --current-only` writes the release page's signed feed with no previous entry at all, instead of demanding older installers be uploaded — the builds before a release are often the ones a safety fix retired. The default is unchanged, and each app whose previous was left out is printed.
+- An automatic update never waits for a person: an app whose installed build predates its update hold is asked to quit only when its own idle check says it has nothing running or queued. If it does not, the update says why and tries again on the next check, and the app keeps its work.
 - A grid view, remembered on this Mac and the default on a fresh install. A card carries the same facts and the same single action as a row, and the keyboard alone runs it: arrows move, Enter acts, Cmd+A picks every app with an action, Escape clears the pick.
 
 ## 0.1.67 — 2026-11-19

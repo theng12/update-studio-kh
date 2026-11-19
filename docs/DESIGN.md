@@ -52,13 +52,16 @@ that carried `Authorization`, and every vendor (`officialHosts`) request, still 
 The feed fetch itself carries the token, so it still refuses one. The icon sits beside the named
 artifact when `url` is present.
 
-`khu mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids>`
+`khu mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]`
 writes that mirror feed from the live one: each named file is looked up in the names table
 (`app id, tag, feed file, stored asset name, sha256` — the release page's own names, never guessed),
 the entry takes the stored name and a full address `--base/<tag>/<stored name>`, `sha256` and
 `bytes` are untouched, `network` and `delta` are left out, and the result is signed with the same
 key and read back before its addresses and sizes are printed. A names row whose checksum is not the
-signed artifact's refuses the whole file (0.1.65).
+signed artifact's refuses the whole file (0.1.65). The default still demands a row for every
+`previous` entry; `--current-only` (0.1.68) writes the same release with **no** previous entry at
+all — the right answer for a page anyone can download from, whose older builds are often the ones
+a safety fix retired — and prints one line for each app whose previous was left out.
 
 Two feeds naming the same artifacts at the same `published_at` are equivalent — a mirror copy
 differs in bytes (absolute URLs, no `network`), so the rollback guard compares a sorted identity of

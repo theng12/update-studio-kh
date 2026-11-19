@@ -570,7 +570,7 @@ public enum Recipe {
             // It was running at the boundary; if it exited on its own the hold is moot and there is
             // nothing to quit, so the swap simply goes ahead (the pause expires by itself).
             if wasRunning {
-                guard control.quit() else { try abandon(Recipe.didNotQuit + "; quit the app by hand, then choose Update") }
+                guard control.quit() else { try abandon(Recipe.didNotQuit + "; it is still running and keeps its work. The next check tries again") }
                 appQuit = true
             }
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }

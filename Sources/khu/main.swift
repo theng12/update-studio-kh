@@ -54,7 +54,7 @@ struct KHUMain {
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--new-app]
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
-              mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids>   (a signed feed naming a release page's own assets)
+              mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
               enrol --state <dir> --machine <id>
               enrol-window --state <dir> --minutes <n>   (0 closes; 1...240 opens)
               remove --state <dir> --machine <id>
@@ -238,9 +238,11 @@ struct KHUMain {
             } catch { fail("\(error)") }
         case "mirror":
             var feed: String?, key: String?, out: String?, base: String?, names: String?, apps: String?
+            var currentOnly = false
             var i = 1
             while i < args.count {
                 switch args[i] {
+                case "--current-only": currentOnly = true
                 case "--feed": feed = value("--feed", &i)
                 case "--key": key = value("--key", &i)
                 case "--out": out = value("--out", &i)
@@ -254,10 +256,15 @@ struct KHUMain {
             guard let feed, let key, let out, let base, let names, let apps else { usage() }
             let ids = apps.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             do {
+                var omitted: [String] = []
                 let written = try FeedMirror.export(feedDir: URL(fileURLWithPath: feed), keyFile: URL(fileURLWithPath: key),
                                                     out: URL(fileURLWithPath: out), base: base,
-                                                    names: URL(fileURLWithPath: names), apps: ids)
+                                                    names: URL(fileURLWithPath: names), apps: ids,
+                                                    currentOnly: currentOnly, previousOmitted: { omitted.append($0) })
                 for line in written { print("\(line.app) \(line.version): \(line.url) — \(line.bytes) bytes") }
+                for app in omitted.sorted() {
+                    print("previous omitted for \(app): --current-only writes no downgrade path (the page is public).")
+                }
                 print("signed mirror feed written to \(out) (\(written.count) installers)")
             } catch { fail("\(error)") }
         case "enrol":
