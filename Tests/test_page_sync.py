@@ -323,6 +323,8 @@ def case_digest_mismatch_retires_nothing():
               f"nothing may be retired when the digest does not match: {fx.publishes('DELETE')}")
         check(fx.publishes("PUT") == [],
               f"nothing may be committed when the digest does not match: {fx.publishes('PUT')}")
+        check("earlier action(s) stand and the mirror was not rebuilt" in r.stdout,
+              f"the refusal must say what already happened upstream\n{r.stdout}")
     finally:
         fx.close()
 

@@ -83,6 +83,10 @@ else
   printf '%s\t%s\n' "$APP" "$(printf %s "$ACCEPTED" | tr 'A-F' 'a-f')" > "$WORK/accepted.tsv"
 fi
 [ -s "$WORK/apps.txt" ] || { echo "page-sync: no app to sync" >&2; exit 2; }
+# A line that is not "app<TAB>sha256" is said out loud, never dropped in silence.
+if [ "$ALL" = 1 ]; then
+  awk -F'\t' 'NF<2 || $2 !~ /^[0-9a-fA-F]{64}$/ {print "page-sync: ignoring line " NR " of the acceptance file (it is not app<TAB>sha256): " $0}' "$ACCEPTED_FILE" >&2
+fi
 while IFS= read -r a; do
   case "$a" in ""|*[!a-z0-9-]*) echo "page-sync: not an app id: $a" >&2; exit 2 ;; esac
 done < "$WORK/apps.txt"
@@ -97,7 +101,8 @@ would() { printf '%-14s %d %-8s would %s\n' "$SUBJ" "$STEP" "$LABEL" "$*"; }
 did()   { CHANGED=$((CHANGED+1)); ok "$*"; }
 refuse() {
   printf '%-14s %d %-8s REFUSED: %s\n' "$SUBJ" "$STEP" "$LABEL" "$*"
-  printf 'page-sync: %s stopped at step %d — nothing after it was changed\n' "$SUBJ" "$STEP"
+  printf 'page-sync: %s stopped at step %d — nothing after it was changed%s\n' "$SUBJ" "$STEP" \
+    "$([ "$CHANGED" -gt 0 ] && echo "; $CHANGED earlier action(s) stand and the mirror was not rebuilt, so the feed is unchanged")"
   exit 5
 }
 not_served() {
