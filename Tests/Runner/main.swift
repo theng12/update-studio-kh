@@ -4207,6 +4207,8 @@ struct RunnerMain {
         controllerHandoffTests()
         feedMirrorTests()
         mirrorExportTests()
+        adoptionTests()
+        logRotationTests()
         neutralPublisherTests()
         pinnedKeyTests()
         publicFeedTests()

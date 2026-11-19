@@ -72,6 +72,17 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         DispatchQueue.main.async { [weak self] in self?.web.evaluateJavaScript("showWhatsNew()") }
     }
 
+    /// The apps this Mac manages here: the saved config plus the Launcher's own registrations, the
+    /// same merge the agent makes at its run (`Agent.mergeRegistrations`).
+    private func managedApps() -> [String: AppConfig] {
+        var managed = helper.config.apps
+        let file = helper.stateDir.appendingPathComponent("launcher-apps.json")
+        for (app, cfg) in (try? AtomicFile.readJSON([String: AppConfig].self, from: file)) ?? [:] where managed[app] == nil {
+            managed[app] = cfg
+        }
+        return managed
+    }
+
     /// Sends the page the current state. Cheap: the page redraws from it.
     func reload() {
         guard loaded else { return }
@@ -119,7 +130,25 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                          "notify": settings.notify ?? false, "appearance": settings.appearance ?? "system",
                          "menuBarWhenClosed": settings.menuBarWhenClosed ?? true,
                          "retireHelpers": cleanup?.enabled ?? false, "helperCleanupAvailable": cleanup != nil,
-                         "helperHealthySeconds": cleanup?.healthySeconds ?? 0],
+                         "helperHealthySeconds": cleanup?.healthySeconds ?? 0,
+                         "viewMode": settings.viewMode ?? "grid", "logVerbosity": settings.logVerbosity ?? "normal"],
+            // A run's log, where it really is, so the path is visible instead of a rumour.
+            "logPath": AgentLog.path(name: "agent", in: helper.stateDir),
+            // One quiet notice per new version, never repeated once dismissed (a dismissal is the
+            // same record the system notification uses).
+            "notices": apps.filter { app in
+                app.managed && !app.statusOnly && app.status == HelperApp.updateAvailable
+                    && app.available.map { settings.notified?[app.app] != $0 } == true
+            }.map { ["id": $0.app, "name": $0.name.isEmpty ? AppNames.display($0.app) : $0.name,
+                     "version": $0.available ?? ""] },
+            // Hand-installed copies of this fleet's apps, offered once each; a declined one stays
+            // declined on this Mac. `path` is the only thing adoption ever records.
+            "adoptions": Adoption.offers(known: Catalog.known(in: helper.stateDir, ssd: helper.ssdSources),
+                                         managed: managedApps(),
+                                         dismissed: Set(settings.adoptionDeclined ?? []),
+                                         folders: Catalog.applicationFolders)
+                .map { ["id": $0.appID, "bundleID": $0.bundleID, "version": $0.version,
+                        "name": AppNames.display($0.appID), "path": $0.existingPath] },
             "connection": ["destination": helper.config.feedURL, "machine": helper.config.machine,
                            "displayName": MacName.current(expectedMachine: helper.config.machine) as Any,
                            "checking": connectionBusy,
@@ -318,6 +347,47 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                     self.reload()
                 }
             }
+        case "dismissNotice":
+            // Dismissing the quiet notice records the version in the same map the system
+            // notification uses, so neither ever returns for this version on this Mac.
+            guard let version = body["version"] as? String else { break }
+            var s = HelperSettings.load(from: helper.stateDir)
+            var n = s.notified ?? [:]
+            n[id] = version
+            s.notified = n
+            helper.save(s)
+            reload()
+        case "adopt", "declineAdoption":
+            if action == "declineAdoption" {
+                var s = HelperSettings.load(from: helper.stateDir)
+                var d = Set(s.adoptionDeclined ?? []); d.insert(id); s.adoptionDeclined = d.sorted(); helper.save(s)
+                reload()
+                break
+            }
+            var config = helper.config
+            config.apps = managedApps()
+            let offer = Adoption.offers(known: Catalog.known(in: helper.stateDir, ssd: helper.ssdSources),
+                                        managed: config.apps,
+                                        folders: Catalog.applicationFolders).first { $0.appID == id }
+            guard let offer else { break }
+            // The same discovery the agent runs, so the recipe (an app that updates itself stays
+            // "status") and the recorded path match the copy the person approved.
+            let found = Catalog.discover(config: config,
+                                         known: Catalog.known(in: helper.stateDir, ssd: helper.ssdSources),
+                                         folders: Catalog.applicationFolders)
+            guard let registration = found[id] else { break }
+            // Record the copy where it already is. This is the whole of adoption: no move, no
+            // rename, no reinstall over it, and no second copy.
+            let file = helper.stateDir.appendingPathComponent("launcher-apps.json")
+            var registrations = (try? AtomicFile.readJSON([String: AppConfig].self, from: file)) ?? [:]
+            registrations[offer.appID] = registration
+            do { try AtomicFile.writeJSON(registrations, to: file) }
+            catch {
+                helper.alert("\(AppNames.display(offer.appID)) could not be managed", "\(error)")
+                break
+            }
+            helper.wake.signal()
+            reload()
         case "setting":
             if body["key"] as? String == "retireHelpers" {
                 do {
@@ -341,6 +411,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             case "notify": s.notify = v as? Bool
             case "menuBarWhenClosed": s.menuBarWhenClosed = v as? Bool
             case "appearance": s.appearance = v as? String
+            case "viewMode": s.viewMode = v as? String
+            case "logVerbosity": s.logVerbosity = v as? String
             default: break
             }
             if helper.save(s), body["key"] as? String == "appearance" { helper.applyAppearance(s.appearance) }

@@ -101,4 +101,32 @@ func mirrorExportTests() {
            && !fm.fileExists(atPath: root.appendingPathComponent("missing.json").path)
            && !fm.fileExists(atPath: root.appendingPathComponent("plain.json").path),
            "MX15 a refused mirror writes nothing")
+
+    // A public page needs no downgrade path, and the builds before a release are the ones a safety
+    // fix retired. `--current-only` writes the same release with no previous at all, and says which
+    // apps it left out, instead of demanding those older installers be uploaded.
+    let currentOut = root.appendingPathComponent("current-only.json")
+    var omitted: [String] = []
+    let currentOnly = try! FeedMirror.export(feedDir: feedDir, keyFile: keyFile, out: currentOut, base: base,
+                                             names: names, apps: ["launcher", "updater"], currentOnly: true,
+                                             previousOmitted: { omitted.append($0) })
+    expect(currentOnly.count == 2, "MX16 --current-only still names every chosen app's installer")
+    expect(omitted == ["launcher"], "MX17 --current-only reports the app whose previous was left out")
+    guard let currentRelease = try? AtomicFile.readJSON(Release.self, from: currentOut),
+          let currentBody = currentRelease.feedData else {
+        expect(false, "MX18 the current-only feed was written")
+        return
+    }
+    let current = try! JSON.decode(Feed.self, from: currentBody)
+    expect(current.previous == nil, "MX18 --current-only writes no previous entry at all")
+    expect(current.apps["launcher"]?.version == "0.1.65" && current.apps["launcher"]?.sha256 == launcherSHA,
+           "MX19 the current entry is unchanged")
+    expect(current.published_at == feed.published_at,
+           "MX20 it is the same release: same published_at, only the previous block differs")
+    // The strict default is untouched: without the flag the same call still restates `previous`.
+    var strictOmitted: [String] = []
+    _ = try! FeedMirror.export(feedDir: feedDir, keyFile: keyFile, out: root.appendingPathComponent("strict.json"),
+                               base: base, names: names, apps: ["launcher", "updater"],
+                               previousOmitted: { strictOmitted.append($0) })
+    expect(strictOmitted.isEmpty, "MX21 the default still carries every previous entry")
 }

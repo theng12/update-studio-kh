@@ -30,8 +30,16 @@ public struct HelperSettings: Codable, Sendable, Equatable {
     public var appearance: String?
     public var menuBarWhenClosed: Bool?
     public var hidden: [String]?
-    /// The version each app was last announced at, so one update is announced once.
+    /// Rotating-log verbosity on this Mac: quiet, normal (the default) or verbose. AgentLog reads
+    /// it from helper.json, so a change takes effect on the next start without a rebuild.
+    public var logVerbosity: String?
+    /// The version each app was last announced at, so one update is announced once — and a
+    /// dismissed notice never returns for that version.
     public var notified: [String: String]?
+    /// `grid` or `list`, this Mac's own choice; nil is grid, the fresh-install default.
+    public var viewMode: String?
+    /// App ids whose "manage it?" offer was declined, so it is not asked again on this Mac.
+    public var adoptionDeclined: [String]?
     /// Automatic installs happen unless the person chose "Manually" or switched them off.
     public var installsAutomatically: Bool { checkManually != true && autoInstall != false }
     public init(automatic: [String: Switch] = [:], pausedUntil: String? = nil) {

@@ -1444,7 +1444,7 @@ public enum Agent {
                 if let refusal = hold.refusal { return refusal }
                 endpoint = hold.endpoint
             } else if ctl.isRunning() != false, !exempt {
-                return RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. Update it by hand.")
+                return RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. It keeps working, and its release must serve an update hold before it can be rolled back while running.")
             }
             defer { if let endpoint, let http { UpdateHold.resume(endpoint, http: http) } }
             let beforeStop: (() throws -> Void)? = endpoint.flatMap { url in
@@ -1486,7 +1486,7 @@ public enum Agent {
                                 exempt: Bool, installed: String? = nil, holdSince: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
         guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }
         guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
-            return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. Update it by hand."))
+            return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. It cannot be updated while it runs until its release serves an update hold; the app itself still works."))
         }
         let window = Date().addingTimeInterval(UpdateHold.answerAllowance)
         do {
@@ -1701,34 +1701,28 @@ public enum Agent {
             let hold = beginUpdateHold(app: app, holdURL: feed.apps[app]?.holdURL, http: http,
                                        control: appControl, exempt: exempt, installed: installed,
                                        holdSince: feed.apps[app]?.holdSince)
-            // A build that predates its hold is updated the way it was before holds existed: asked to
-            // quit (bounded by the quit's own ceiling, never killed), swapped, relaunched hidden —
-            // but only when the app's own probe says it has nothing running or queued.
+            // A build that predates its hold has no hold route to ask, so it is quit only when its
+            // own probe says it has nothing running or queued. The 2026-11-16 temporary force path
+            // skipped that probe; on macmini-angkor (2026-11-19) that quit Story with nine jobs
+            // running, and its "quit anyway?" sheet left the update waiting for a person. An
+            // automatic update never asks a human: not idle is a wait that says why, retried by the
+            // next check, and the app keeps working until it really is idle.
             if quitOldBuild, let refusal = hold.refusal, refusal.status == waitingForClose {
                 let answer = idleRefusal(app: app, probe: idleProbe(app: app, cfg: cfg), shell: shell)
                 probeSaid = answer.said
-                // The owner, 2026-11-16: "can we use the old force update first to add this guard.
-                // then next release we remove? like the old updater used to work?" A build that
-                // predates its hold is quit the way updates worked before holds existed: the idle
-                // check is logged, not obeyed. Hub's owner established a quit loses no work —
-                // queued items are written through to its database and reloaded, a running item is
-                // requeued. TEMPORARY: remove this force path once the fleet is past the hold.
-                if refusal.predatesHold {
-                    legacyQuit = true
-                    let feedVersion = feed.apps[app]?.version ?? "the feed's version"
-                    holdNote = "\(app) \(installed ?? "") predates its update hold (\(feed.apps[app]?.holdSince ?? "first hold version unknown")); "
-                        + "asked to quit without waiting for an idle check, the way updates worked before holds existed, to install \(feedVersion) (temporary force path)."
-                    return nil
-                }
                 if let skipped = answer.skip {
                     holdEndpoint = hold.endpoint
                     var out = refusal
                     out.reason = (out.reason.map { $0 + " " } ?? "") + skipped
+                        + " The next check tries again when it is idle; nothing waits for a click."
                     out.quitTrace = ["\(app)'s \(answer.said)"]
                     return out
                 }
                 legacyQuit = true
-                holdNote = "\(app) \(installed ?? "") predates its update hold; its idle check passed, so it was asked to quit without one (quitOldBuilds is on)."
+                let why = refusal.predatesHold
+                    ? "predates its update hold (\(feed.apps[app]?.holdSince ?? "first hold version unknown"))"
+                    : "asked for a gap it could not take"
+                holdNote = "\(app) \(installed ?? "") \(why); its idle check passed, so it was asked to quit without a hold (quitOldBuilds is on)."
                 return nil
             }
             // Resume is attempted even when the POST itself failed: it may have paused before failing.

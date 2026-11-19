@@ -1275,8 +1275,8 @@ public final class FeedServer: @unchecked Sendable {
                     ms.tokenHash != nil && ms.installed[app].map { VersionCompare.isNewer(since, than: $0) } == true
                 }.count
                 belowHoldNote = belowHold > 0
-                    ? "<div class=sub>\(belowHold) Mac\(belowHold == 1 ? "" : "s") below hold (\(h(since)); temporary force path)</div>"
-                    : "<div class=sub>0 Macs below hold (\(h(since)); ready to retire force path)</div>"
+                    ? "<div class=sub>\(belowHold) Mac\(belowHold == 1 ? "" : "s") below hold (\(h(since)); each updates when it is idle)</div>"
+                    : "<div class=sub>0 Macs below hold (\(h(since)))</div>"
             } else {
                 belowHoldNote = ""
             }

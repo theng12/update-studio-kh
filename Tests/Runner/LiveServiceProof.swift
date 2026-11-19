@@ -34,9 +34,21 @@ func runLiveServiceProof() -> Never {
         return (false, false)
     }
     func waitListed(running: Bool, seconds: Double) -> Bool {
+        waitListed(label: label, running: running, seconds: seconds)
+    }
+    /// The same wait for any label this proof owns.
+    func waitListed(label: String, running: Bool, seconds: Double) -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
-            let now = listed()
+            var now = (loaded: false, running: false)
+            if let out = launchctl(["list"])?.stdout {
+                for line in out.split(separator: "\n") {
+                    let fields = line.split(whereSeparator: { $0.isWhitespace })
+                    if fields.count == 3, String(fields[2]) == label {
+                        now = (true, (pid_t(fields[0]) ?? 0) > 1)
+                    }
+                }
+            }
             if now.loaded && (now.running || !running) { return true }
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -75,6 +87,67 @@ func runLiveServiceProof() -> Never {
            "LP5 recovery puts an unloaded job back from the journal and clears it (\(note))")
 
     _ = launchctl(["bootout", "\(domain)/\(label)"])
+
+    // LP6 a swapped binary on a job that is NOT unconditional KeepAlive. The new build's CDHash
+    // differs, and launchd's cached code requirement then refuses the spawn however valid the file
+    // is ("needs LWCR update", OS_REASON_CODESIGNING; macmini-angkor, 2026-11-19). Only bootout then
+    // bootstrap from the plist clears it; kickstart -k re-spawns against the same stale requirement.
+    do {
+        let label2 = "com.khproof.reload.\(getpid())"
+        let program = root.appendingPathComponent("swapped-helper")
+        func sign(_ identifier: String) {
+            try? fm.removeItem(at: program)
+            try! fm.copyItem(atPath: "/bin/sleep", toPath: program.path)
+            _ = try? shell.run("/usr/bin/codesign", arguments: ["-f", "-s", "-", "--identifier", identifier, program.path], timeout: 10)
+        }
+        func cdhash() -> String {
+            // codesign prints its details on stderr, and the `-d` run exits non-zero.
+            guard let answer = try? shell.run("/usr/bin/codesign", arguments: ["-dvvv", program.path], timeout: 10) else { return "unknown" }
+            return (answer.stdout + "\n" + answer.stderr).split(separator: "\n")
+                .first { $0.hasPrefix("CDHash=") }.map { String($0.dropFirst(7)) } ?? "unknown"
+        }
+        sign("khproof.one")
+        let before = cdhash()
+        let plist2 = root.appendingPathComponent("\(label2).plist")
+        let job2: [String: Any] = ["Label": label2, "RunAtLoad": true,
+                                   "KeepAlive": ["SuccessfulExit": false],
+                                   "ProgramArguments": [program.path, "60"]]
+        try! PropertyListSerialization.data(fromPropertyList: job2, format: .xml, options: 0).write(to: plist2)
+        func listed2() -> (loaded: Bool, pid: pid_t) {
+            guard let out = launchctl(["list"])?.stdout else { return (false, 0) }
+            for line in out.split(separator: "\n") {
+                let fields = line.split(whereSeparator: { $0.isWhitespace })
+                if fields.count == 3, String(fields[2]) == label2 { return (true, pid_t(fields[0]) ?? 0) }
+            }
+            return (false, 0)
+        }
+        func printHasLwcr() -> Bool {
+            ((launchctl(["print", "\(domain)/\(label2)"])?.stdout ?? "") + (launchctl(["print", "\(domain)/\(label2)"])?.stderr ?? ""))
+                .lowercased().contains("needs lwcr update")
+        }
+        defer { _ = launchctl(["bootout", "\(domain)/\(label2)"]) }
+        _ = launchctl(["bootout", "\(domain)/\(label2)"])
+        expect(launchctl(["bootstrap", domain, plist2.path])?.exitCode == 0 && waitListed(label: label2, running: true, seconds: 15),
+               "LP6 a real restart-on-failure job is loaded and running")
+        // Swap the program under the loaded job: a different identifier gives a different CDHash.
+        sign("khproof.two")
+        let after = cdhash()
+        expect(before != "unknown" && after != "unknown" && before != after,
+               "LP6 the swapped binary really is a different build (\(before) → \(after))")
+        _ = launchctl(["kickstart", "-k", "\(domain)/\(label2)"])
+        Thread.sleep(forTimeInterval: 1.5)
+        let afterKickstart = listed2()
+        print("LP6 kickstart -k left pid \(afterKickstart.pid), needs LWCR update: \(printHasLwcr())")
+        // The reload the installer now performs: bootout, then bootstrap from the plist.
+        _ = launchctl(["bootout", "\(domain)/\(label2)"])
+        expect(launchctl(["bootstrap", domain, plist2.path])?.exitCode == 0,
+               "LP6 the job bootstraps again after the swap")
+        expect(waitListed(label: label2, running: true, seconds: 15),
+               "LP6 launchd starts the swapped binary and shows a pid, with nobody touching the machine")
+        expect(!printHasLwcr(),
+               "LP6 the reloaded job carries no 'needs LWCR update', so the next spawn is not refused")
+    }
+
     print("TESTS: \(passed) passed, \(failed) failed")
     exit(failed == 0 ? 0 : 1)
 }

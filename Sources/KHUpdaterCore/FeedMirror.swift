@@ -7,8 +7,12 @@ public enum FeedMirror {
     /// carries that file's full address under `base`. Size and checksum are not touched, so the
     /// release is the same one; `network` (the publisher's own hosts) and each patch (which the page
     /// does not hold) are left out. Signed with the publisher's key. Returns the addresses written.
+    /// `currentOnly` writes a feed with no `previous` at all: a page anyone can download from needs
+    /// no downgrade path, and the builds before a release are exactly the ones a safety fix retired.
+    /// `previousOmitted` is told each app whose previous entry was left out, so the caller can say so.
     public static func export(feedDir: URL, keyFile: URL, out: URL, base: String, names: URL,
-                              apps: [String]) throws -> [(app: String, version: String, url: String, bytes: Int64)] {
+                              apps: [String], currentOnly: Bool = false,
+                              previousOmitted: ((String) -> Void)? = nil) throws -> [(app: String, version: String, url: String, bytes: Int64)] {
         let key = try Signing.loadPrivateKey(from: keyFile)
         guard var feed = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey) else {
             throw khuFail("nothing is published in \(feedDir.path)")
@@ -79,6 +83,7 @@ public enum FeedMirror {
         var previous: [String: FeedApp] = [:]
         for app in apps {
             guard var entry = feed.previous?[app] else { continue }
+            if currentOnly { previousOmitted?(app); continue }
             _ = try mirrored(app, &entry)
             previous[app] = entry
         }

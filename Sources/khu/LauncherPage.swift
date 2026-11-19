@@ -29,6 +29,7 @@ input::placeholder{color:var(--sub)}input,textarea{cursor:text;-webkit-user-sele
 main{flex:1;padding:18px 22px 8px}
 h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-child{margin-top:4px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
+.card.selected{outline:2px solid var(--accent);outline-offset:2px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 16px 14px;display:flex;flex-direction:column;gap:10px;min-height:196px;transition:border-color .15s}
 .card:hover{border-color:var(--field)}.card.click{cursor:pointer}
 .head{display:flex;gap:12px;align-items:center}.head img,.ph{width:46px;height:46px;flex:none;border-radius:11px}.ph{background:var(--muted-bg);display:grid;place-items:center;color:var(--sub)}
@@ -83,6 +84,10 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 .note{font-size:12px;color:var(--sub);margin:2px 0 0 24px}.dis{opacity:.5}
 .bottom{display:flex;justify-content:flex-end;padding:14px 24px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel);z-index:1}
 .wn{width:min(460px,100%)}.wn .body{padding:16px 24px 4px}.wn .body .sub{margin:0}
+.notice{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 24px 0;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.adopt{margin:14px 24px 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.adopt .row{display:flex;gap:10px;align-items:center;padding:6px 0;flex-wrap:wrap}
+.adopt code{font-size:12px;color:var(--sub);word-break:break-all}
 @media (max-width:820px){input[type=search]{width:130px}.cols{grid-template-columns:1fr}.brand p{display:none}#hiddenNote{display:none}footer{flex-wrap:wrap;min-width:0}}
 </style></head><body>
 <header>
@@ -94,6 +99,8 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <div class=seg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
  <span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
 </header>
+<div id=notices hidden></div>
+<section id=adoptions hidden></section>
 <main id=main></main>
 <footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon" id=check title="Check for updates" aria-label="Check for updates"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="See the whole fleet on the publisher, and act on it">Fleet…</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
 <script>
@@ -101,7 +108,7 @@ const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.k
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null;
+let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null,selected=new Set();
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -217,16 +224,17 @@ function buttons(a,big){const out=[],m=mainAction(a);
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
 function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);
- const c=el('article',{class:'card click',style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget)openDetail(a.id)}},
+ const c=el('article',{class:'card click'+(selected.has(a.id)?' selected':''),'aria-selected':String(selected.has(a.id)),style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget){openDetail(a.id);return}const cards=[...document.querySelectorAll('.card')],i=cards.indexOf(e.currentTarget),d=e.key=='ArrowRight'||e.key=='ArrowDown'?1:e.key=='ArrowLeft'||e.key=='ArrowUp'?-1:0;if(d){e.preventDefault();cards[(i+d+cards.length)%cards.length]?.focus()}}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
   a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
-function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Status'),el('th',{},'Version'),el('th',{},'Updated'),el('th',{},''))),
+function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Installed'),el('th',{},'Latest'),el('th',{},'Released'),el('th',{},'State'),el('th',{},''))),
  el('tbody',{},list.map(a=>el('tr',{onclick:()=>openDetail(a.id),style:(a.accent?'--app:'+a.accent+';':'')+'cursor:pointer'},
   el('td',{},el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),a.tagline?el('div',{class:'tag'},a.tagline):null))),
-  el('td',{},chip(a)),el('td',{},versionLine(a)),el('td',{class:'when num'},day(installed(a)?a.installedAt:a.released)||'—'),
+  el('td',{class:'num'},a.installed||'Not installed'),el('td',{class:'num'},a.available||a.serverVersion||'—'),el('td',{class:'when num'},day(a.released)||'—'),
+  el('td',{},chip(a),a.reason?el('div',{class:'reason',style:'margin-top:4px'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null),
   el('td',{class:'act'},a.status=='Updating…'?el('div',{style:'min-width:240px'},progress(a)):buttons(a)))))))}
 function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filter(a=>showHidden||!a.hidden);
  if(q)list=list.filter(a=>(a.name+' '+(a.tagline||'')).toLowerCase().includes(q));
@@ -239,9 +247,10 @@ function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filte
 const tickOnly=(k,v)=>k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
 // What the page would look like if it were drawn from the state it holds right now — transfer
 // counters excepted, since those are written in rather than redrawn.
-const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,S],tickOnly);
+const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
 let sig='';
 function render(state){if(state)Object.assign(S,state);
+ if(!viewFromMac&&S.settings&&S.settings.viewMode){view=S.settings.viewMode;viewFromMac=true}
  if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
  const macLabel=S.connection?.displayName||S.connection?.machine;
  $('mac').textContent=macLabel?'Apps for '+macLabel:'Apps for this Mac';
@@ -264,12 +273,25 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  else if(!list.length)m.append(el('p',{class:'empty'},'No app matches “'+q+'”.'));
  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
   m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
+ drawNotices();drawAdoptions();
  $('hiddenNote').replaceChildren(hidden.length?el('button',{class:'link',onclick:()=>{showHidden=!showHidden;render()}},showHidden?'Hide hidden apps':hidden.length+' hidden · Show'):'');
  document.documentElement.style.colorScheme=S.settings.appearance=='dark'?'dark':S.settings.appearance=='light'?'light':'light dark';
  if(detail)drawDetail();if(settingsOpen)drawSettings();if(whatsNewOpen)drawWhatsNew();
  // shortcut: focus comes back only where the control has an id (search, sort, the address field);
  // cards carry none, so a redraw cannot hand focus back to the card the person was on.
  if(fk&&$(fk)){$(fk).focus();if(selection[0]!=null)$(fk).setSelectionRange?.(...selection)}}
+/// One quiet notice per new version: no badge, no count, and a dismissal is remembered by version.
+function drawNotices(){const n=S.notices||[],box=$('notices');box.hidden=!n.length;
+ box.replaceChildren(...n.map(x=>el('div',{class:'notice'},el('span',{},x.name+' '+x.version+' is ready.'),
+  el('button',{class:'btn',onclick:()=>ask('Update '+x.name+' '+x.version+'?','Update',ok=>{if(ok)post({action:'update',app:x.id})})},'Update'),
+  el('button',{class:'link',onclick:()=>post({action:'dismissNotice',app:x.id,version:x.version})},'Dismiss'))))}
+/// Copies of our apps already on this Mac: offered once, managed where they are, or left alone.
+function drawAdoptions(){const list=S.adoptions||[],box=$('adoptions');box.hidden=!list.length;if(!list.length){box.replaceChildren();return}
+ box.replaceChildren(el('div',{class:'adopt'},el('b',{},'Installed by hand'),
+  el('p',{class:'sub'},'These copies are already on this Mac. Managing one keeps it where it is and updates it in place — nothing is moved, renamed or reinstalled over it.'),
+  ...list.map(o=>el('div',{class:'row'},el('span',{},o.name+' '+o.version),el('code',{},o.path),
+   el('button',{class:'btn',onclick:()=>post({action:'adopt',app:o.id})},'Manage it'),
+   el('button',{class:'link',onclick:()=>post({action:'declineAdoption',app:o.id})},'Not now')))))}
 /// One compact status line: a failure replaces the freshness line rather than sitting beside it.
 function paintStatus(){const e=$('err'),c=$('checked'),err=S.error?'Last check failed: '+S.error+(S.lastAttempt?' · '+new Date(S.lastAttempt).toLocaleString():''):'';
  e.textContent=err;e.hidden=!err;
@@ -388,18 +410,26 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
     el('p',{class:'note',style:'margin-left:0'},'System matches this Mac. Light and Dark force that look.')),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
     check('login','Start at login',true,'Always on: the helper starts at login so this Mac keeps getting updates.',true)),
+   el('section',{},el('h4',{},'Log'),seg('logVerbosity',[['quiet','Quiet'],['normal','Normal'],['verbose','Verbose']],s.logVerbosity||'normal'),
+    el('p',{class:'note',style:'margin-left:0'},'What the helper did on this Mac, kept for this run and the two before it. A change applies on the helper’s next start; no rebuild.'),
+    el('p',{class:'note',style:'margin-left:0'},el('code',{style:'user-select:text;word-break:break-all'},S.logPath||'—'))),
    el('section',{},el('h4',{},'About'),el('p',{class:'ver'},'Studio Launcher KH v'+(S.version||'unknown')))),
   el('div',{class:'bottom'},el('button',{class:'btn primary',onclick:()=>{settingsOpen=false;closeLayers()}},'Done')));
  document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet));sig=signature()}
-$('vgrid').onclick=()=>{view='grid';store.set('view',view);render()};$('vlist').onclick=()=>{view='list';store.set('view',view);render()};
+$('vgrid').onclick=()=>{view='grid';store.set('view',view);post({action:'setting',key:'viewMode',value:'grid'});render()};$('vlist').onclick=()=>{view='list';store.set('view',view);post({action:'setting',key:'viewMode',value:'list'});render()};
 $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q').oninput=e=>{q=e.target.value.trim().toLowerCase();render()};
 $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};$('whatsNew').onclick=showWhatsNew;
 $('update').onclick=()=>post({action:'update',app:'updater'});$('support').onclick=()=>post({action:'support'});$('fleet').onclick=()=>post({action:'fleet'});
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove())});
-document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(whatsNewOpen){whatsNewOpen=false;closeLayers()}else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;closeLayers()}}
+document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(whatsNewOpen){whatsNewOpen=false;closeLayers()}else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;if(selected.size){selected.clear();render()};closeLayers()}}
  const editing=['INPUT','TEXTAREA','SELECT'].includes((e.target?.tagName||'').toUpperCase())||e.target?.isContentEditable;
  if(detail&&!settingsOpen&&!editing&&(e.key=='ArrowRight'||e.key=='ArrowLeft')){const l=visible()[0],i=l.findIndex(a=>a.id==detail.id),n=l[(i+(e.key=='ArrowRight'?1:-1)+l.length)%l.length];if(n){detail={id:n.id};drawDetail()}}
  if(e.metaKey&&e.key==','){e.preventDefault();settingsOpen=true;drawSettings()}
+ // Cmd+A picks every visible card that has a primary action, so the keyboard can do what Update all does.
+ if((e.metaKey||e.ctrlKey)&&e.key=='a'&&!settingsOpen&&!whatsNewOpen&&!detail&&!editing){e.preventDefault();
+  selected=new Set(visible()[0].filter(a=>{const m=mainAction(a);return m&&m[2]=='primary'}).map(a=>a.id));render();return}
+ if(e.key=='Enter'&&selected.size&&!settingsOpen&&!whatsNewOpen&&!detail&&!editing){e.preventDefault();
+  const n=selected.size;ask('Update '+n+' app'+(n==1?'':'s')+'?','Update',ok=>{if(ok)post({action:'updateAll'})});return}
  if(e.metaKey&&(e.key=='f'||e.key=='k')){e.preventDefault();$('q').focus()}});
 setInterval(()=>{if(S.lastRun)paintStatus()},30000);
 </script></body></html>

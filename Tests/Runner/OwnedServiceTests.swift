@@ -165,21 +165,50 @@ func ownedServiceTests() {
                "OS3 \(what) keeps counting as the app, so the install refuses instead of stopping it")
     }
 
-    // OS4: the existing restart-on-failure job is still signalled, then kickstarted back.
+    // OS4: a restart-on-failure job is reloaded like every other one — bootout, then bootstrap from
+    // its plist — never merely signalled. Signalling it leaves launchd's cached code requirement
+    // naming the old binary's CDHash, and the next spawn is killed as unsigned
+    // (OS_REASON_CODESIGNING, "needs LWCR update"; macmini-angkor, 2026-11-19). kickstart -k is not
+    // a fix: it re-spawns against the same stale requirement.
     do {
         let rig = ServiceRig(policy: ["KeepAlive": ["SuccessfulExit": false]])
         rig.startHelper()
         defer { rig.stopHelper() }
         let shell = LaunchdShell()
-        shell.list = { rig.list(unloaded: false) }
+        var unloaded = false
+        shell.list = { rig.list(unloaded: unloaded) }
+        shell.onBootout = { _ in unloaded = true; rig.stopHelper() }
+        shell.onBootstrap = { _ in unloaded = false; rig.startHelper() }
         shell.onKickstart = { _ in rig.startHelper() }
         let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 2)
         control.restoreServices([rig.label])
         expect(control.stopService(), "OS4 a restart-on-failure job is stopped")
-        expect(shell.count("bootout") == 0, "OS4 a restart-on-failure job is not unloaded")
+        expect(shell.count("bootout gui/") == 1 && rig.list(unloaded: true).isEmpty,
+               "OS4 a restart-on-failure job is unloaded, not merely signalled")
         let resumed = control.resumeServices()
-        expect(resumed.ok && shell.count("kickstart gui/") == 1 && !rig.list(unloaded: false).hasPrefix("- 0"),
-               "OS4 a loaded, stopped job is kickstarted back and really runs (\(resumed.reason ?? "ok"))")
+        expect(resumed.ok && shell.count("bootstrap gui/") == 1 && shell.count("kickstart") == 0,
+               "OS4 it is bootstrapped from its own plist, never kickstarted (\(resumed.reason ?? "ok"))")
+        expect(!rig.list(unloaded: false).hasPrefix("- 0"),
+               "OS4 the job comes back with a pid, which is the only success that counts")
+    }
+
+    // OS6: a bootstrap that leaves the job loaded with no pid is a failure, not a silent success:
+    // that is exactly what launchd does with a stale code requirement.
+    do {
+        let rig = ServiceRig(policy: ["KeepAlive": ["SuccessfulExit": false]])
+        rig.startHelper()
+        defer { rig.stopHelper() }
+        let shell = LaunchdShell()
+        var phase = 0   // 0 running · 1 unloaded by bootout · 2 bootstrapped but refused a pid
+        shell.list = { phase == 1 ? "" : phase == 2 ? "- 0 \(rig.label)" : rig.list(unloaded: false) }
+        shell.onBootout = { _ in phase = 1; rig.stopHelper() }
+        shell.onBootstrap = { _ in phase = 2 }
+        let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 2)
+        control.restoreServices([rig.label])
+        expect(control.stopService(), "OS6 the job is stopped")
+        let resumed = control.resumeServices()
+        expect(!resumed.ok && (resumed.reason ?? "").contains("did not bring the job back running"),
+               "OS6 loaded with no pid is reported as not running (\(resumed.reason ?? "nil"))")
     }
 
     // OS5: the whole swap through the recipe: the helper that used to block the install no longer
@@ -246,17 +275,20 @@ func ownedServiceTests() {
                "OS6 the service is really loaded and running again on the retry")
     }
 
-    // OS7: a refused kickstart is reported too.
+    // OS7: a refused unload during the reload is reported: the job's cached code requirement was
+    // not refreshed, so the install outcome must say the service did not come back cleanly.
     do {
         let rig = ServiceRig(policy: ["KeepAlive": ["SuccessfulExit": false]])
+        rig.startHelper()
+        defer { rig.stopHelper() }
         let shell = LaunchdShell()
-        shell.list = { "- 0 \(rig.label)" }
-        shell.kickstartExit = 5
+        shell.list = { "\(getpid()) 0 \(rig.label)" }
+        shell.bootoutFails = [rig.label]
         let control = LiveControl.appDmg(rig.app.path, shell: shell, agentsDirectory: rig.agents, quitWait: 1)
         control.restoreServices([rig.label])
         let resumed = control.resumeServices()
-        expect(!resumed.ok && (resumed.reason ?? "").contains("kickstart"),
-               "OS7 a refused kickstart is a reported failure (\(resumed.reason ?? "nil"))")
+        expect(!resumed.ok && (resumed.reason ?? "").contains("code requirement was not refreshed"),
+               "OS7 a refused unload is a reported failure (\(resumed.reason ?? "nil"))")
     }
 
     // OS8: a saved plist rewritten with a scheduled or unknown policy is never started back.

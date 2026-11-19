@@ -570,7 +570,7 @@ public enum Recipe {
             // It was running at the boundary; if it exited on its own the hold is moot and there is
             // nothing to quit, so the swap simply goes ahead (the pause expires by itself).
             if wasRunning {
-                guard control.quit() else { try abandon(Recipe.didNotQuit + "; quit the app by hand, then choose Update") }
+                guard control.quit() else { try abandon(Recipe.didNotQuit + "; it is still running and keeps its work. The next check tries again") }
                 appQuit = true
             }
             guard control.stopService() else { try abandon("the background service did not stop safely; the installed app was kept and restart was requested") }
@@ -1185,21 +1185,13 @@ public enum LiveControl {
         return gone()
     }
 
-    /// A launchd job the app owns, with the restart policy that decides how it is stopped and put
-    /// back. Ownership is proven from the plist and the live process, never from a name.
+    /// A launchd job the app owns. Ownership is proven from the plist and the live process, never
+    /// from a name. Its restart policy is checked when it is found: only `KeepAlive: true` and
+    /// `KeepAlive: {SuccessfulExit: false}` are jobs this updater can stop and put back.
     struct OwnedService {
-        enum Restart: Equatable {
-            /// `KeepAlive: {SuccessfulExit: false}`: a clean exit stays down, a signal restarts it.
-            /// SIGTERM stops it; `kickstart` puts it back.
-            case onFailure
-            /// `KeepAlive: true`: launchd restarts it after any exit, so a signal is not a stop.
-            /// `launchctl bootout` stops it; `launchctl bootstrap` puts it back.
-            case always
-        }
         let label: String
         let pid: pid_t
         let plist: URL
-        let restart: Restart
     }
 
     /// The app's own loaded jobs, by label: the label is a bundle ID, its program lives inside the
@@ -1228,22 +1220,19 @@ public enum LiveControl {
                   let pid = live[label] else { continue }
             // Scheduled/socket activation can restart a stopped job during a bundle exchange.
             guard ["StartInterval", "StartCalendarInterval", "WatchPaths", "QueueDirectories", "StartOnMount", "PathState", "EventMonitor", "Sockets", "MachServices"].allSatisfy({ job[$0] == nil }) else { continue }
-            let restart: OwnedService.Restart
-            if let always = job["KeepAlive"] as? Bool, always {
-                restart = .always
-            } else if let rules = job["KeepAlive"] as? [String: Any], rules.count == 1,
-                      rules["SuccessfulExit"] as? Bool == false {
-                restart = .onFailure
-            } else {
-                continue  // not a policy this updater can stop and put back on its own
-            }
+            let keepAlive = job["KeepAlive"]
+            let always = (keepAlive as? Bool) == true
+            let onFailure = (keepAlive as? [String: Any]).map {
+                $0.count == 1 && $0["SuccessfulExit"] as? Bool == false
+            } ?? false
+            guard always || onFailure else { continue }  // not a policy this updater can stop and put back on its own
             let program = (job["Program"] as? String) ?? (job["ProgramArguments"] as? [String])?.first
             guard let program, program.hasPrefix("/"),
                   realPath(program).hasPrefix(prefix), realPath(program) != desktop else { continue }
             if pid > 1 {
                 guard let actual = executablePath(pid), realPath(actual) == realPath(program) else { continue }
             }
-            owned[label] = OwnedService(label: label, pid: pid, plist: file, restart: restart)
+            owned[label] = OwnedService(label: label, pid: pid, plist: file)
         }
         return owned
     }
@@ -1369,31 +1358,39 @@ public enum LiveControl {
             }
             var failure: String?
             var loaded = start.loaded, running = start.running
-            for label in wanted.sorted() where !loaded.contains(label) {
+            // Every job the install touched is reloaded — bootout, then bootstrap from its plist —
+            // never kickstarted. A swap changes the binary's CDHash, and launchd caches the code
+            // requirement a loaded job was spawned with: kickstart -k re-spawns against that stale
+            // requirement and macOS kills it (OS_REASON_CODESIGNING, "needs LWCR update"), however
+            // healthy the app is on disk. Only a real unload clears it (macmini-angkor, 2026-11-19).
+            // A job that was running must come back with a pid; loaded-with-no-pid is not success.
+            for label in wanted.sorted() {
+                if loaded.contains(label) {
+                    let out = try? shell.run("/bin/launchctl", arguments: ["bootout", "gui/\(getuid())/\(label)"], timeout: 15)
+                    guard out?.exitCode == 0 else {
+                        failure = failure ?? "launchctl bootout \(label) failed, so its code requirement was not refreshed"
+                            + (out.map { " (exited \($0.exitCode))" } ?? " (failed)")
+                        continue
+                    }
+                    loaded.remove(label)
+                }
                 guard let plist = ownedPlist(label, installedPath: installedPath, agents: agents) else {
                     failure = failure ?? "no owned plist to restart \(label)"
                     continue
                 }
                 let answer = try? shell.run("/bin/launchctl", arguments: ["bootstrap", "gui/\(getuid())", plist.path], timeout: 30)
-                let state = waitLaunchd(wanted, shell: shell, seconds: 3) { loaded, _ in loaded.contains(label) }
-                guard let state, state.loaded.contains(label) else {
-                    failure = failure ?? "launchctl bootstrap \(label) did not load the job"
+                let mustRun = requiredServices.contains(label)
+                let state = waitLaunchd([label], shell: shell, seconds: mustRun ? 8 : 3) { loaded, running in
+                    loaded.contains(label) && (!mustRun || running.contains(label))
+                }
+                guard let state, state.loaded.contains(label), !mustRun || state.running.contains(label) else {
+                    failure = failure ?? "launchctl bootstrap \(label) did not bring the job back running"
                         + (answer.map { " (exited \($0.exitCode))" } ?? " (failed)")
                     continue
                 }
                 unloaded.remove(label)
                 loaded = state.loaded
                 running = state.running
-            }
-            for label in requiredServices.sorted() where loaded.contains(label) && !running.contains(label) {
-                let answer = try? shell.run("/bin/launchctl", arguments: ["kickstart", "gui/\(getuid())/\(label)"], timeout: 15)
-                let state = waitLaunchd([label], shell: shell, seconds: 3) { _, running in running.contains(label) }
-                if let state, state.running.contains(label) {
-                    running.formUnion(state.running)
-                    continue
-                }
-                failure = failure ?? "launchctl kickstart \(label) did not bring the job back"
-                    + (answer.map { " (exited \($0.exitCode))" } ?? " (failed)")
             }
             return ServiceResume(ok: failure == nil, reason: failure)
         }
@@ -1413,12 +1410,15 @@ public enum LiveControl {
                     .filter { requiredServices.contains($0.key) }
                 // Every process left in the bundle must be one of this app's own proven jobs.
                 guard Set(all).isSubset(of: Set(owned.values.map(\.pid).filter { $0 > 1 })) else { return false }
-                // An unconditional-KeepAlive job restarts after any signal, so only launchd's own unload
-                // stops it. Ownership is re-proven immediately before: a job that is no longer
-                // provably ours is never booted out.
-                for (label, job) in owned.sorted(by: { $0.key < $1.key }) where job.restart == .always {
+                // Every job this app owns is unloaded, not only unconditional-KeepAlive ones: the swap
+                // changes the binary's CDHash and a merely signalled job keeps launchd's old code
+                // requirement, which refuses the next spawn however valid the app on disk is
+                // (OS_REASON_CODESIGNING, "needs LWCR update"; macmini-angkor, 2026-11-19). Ownership
+                // is re-proven immediately before: a job that is no longer provably ours is never
+                // booted out.
+                for (label, job) in owned.sorted(by: { $0.key < $1.key }) {
                     let again = serviceJobs(installedPath, shell: shell, agents: agents)
-                    guard let current = again[label], current.restart == .always, current.plist == job.plist else { return false }
+                    guard let current = again[label], current.plist == job.plist else { return false }
                     let result = try? shell.run("/bin/launchctl", arguments: ["bootout", "gui/\(getuid())/\(label)"], timeout: 15)
                     guard result?.exitCode == 0 else { return false }
                     unloaded.insert(label)

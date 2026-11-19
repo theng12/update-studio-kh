@@ -719,10 +719,10 @@ func updateHoldTests() {
                "UH42 quitOldBuilds: false means no quit and the order keeps waiting (\(result?.status ?? "nil"))")
     }
 
-    // UH43 the check is logged, not obeyed: a pre-hold build whose check refuses (or never answers)
-    // is still quit and updated, and the log carries what the check said.
+    // UH43 the check is obeyed: a pre-hold build whose check refuses (or never answers) is not quit.
+    // The 2026-11-16 force path ignored it and quit Story with nine jobs running (2026-11-19).
     do {
-        let f = rig("legacy-force-busy-probe", hold: holdURL, recipe: "app-dmg", running: true)
+        let f = rig("legacy-busy-probe", hold: holdURL, recipe: "app-dmg", running: true)
         f.client.postError = URLError(.cannotConnectToHost)
         var busy = f.cfg
         busy.apps["demo"]?.idleProbe = "echo '2 jobs queued'; exit 3"
@@ -731,12 +731,13 @@ func updateHoldTests() {
                                         http: f.client, shell: RecordingShell(mount: f.mount),
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
         let silent = Agent.idleRefusal(app: "demo", probe: "sleep 5", shell: RecordingShell(mount: f.mount), timeout: 1).said
-        expect(result?.status == "updated" && result?.quitWithoutHold == true
-               && (result?.quitTrace ?? []).contains { $0.contains("exited 3 (2 jobs queued)") }
-               && (result?.reason ?? "").contains("temporary force path")
-               && f.app.events.contains("quit")
+        expect(result?.status == Agent.waitingForClose && result?.quitWithoutHold == false
+               && (result?.reason ?? "").contains("exited 3 (2 jobs queued)")
+               && (result?.reason ?? "").contains("tries again")
+               && !f.app.events.contains("quit")
+               && (try? BundleInfo.read(f.app.installed.path))?.version == "1.0.0"
                && silent.contains("did not answer within 1 s"),
-               "UH43 a refusing check is logged but does not stop a pre-hold build (\(result?.status ?? "nil"); \(silent))")
+               "UH43 a refusing check stops the quit and the wait says why (\(result?.status ?? "nil"); \(silent))")
     }
 
     // UH44 Hub's idle command is a shell string with quotes and `$HOME` in it: it must survive a
@@ -793,11 +794,15 @@ func updateHoldTests() {
                                                           probeOut: "7 items queued\n"),
                                         control: { _, _ in busy.app.control }, quitOldBuild: true)
         expect(done?.status == "updated" && done?.quitWithoutHold == true && idle.app.events.contains("quit")
-               && (try? BundleInfo.read(idle.app.installed.path))?.version == "2.0.0"
-               && waited?.status == "updated" && busy.app.events.contains("quit")
-               && (waited?.quitTrace ?? []).contains { $0.contains("idle check exited 3 (7 items queued)") }
-               && (try? BundleInfo.read(busy.app.installed.path))?.version == "2.0.0",
-               "UH46 Hub's built-in check runs with no Mac setting and is recorded, force path or not (\(done?.status ?? "nil") / \(waited?.status ?? "nil"); events \(busy.app.events))")
+               && (try? BundleInfo.read(idle.app.installed.path))?.version == "2.0.0",
+               "UH46 Hub's built-in check runs with no Mac setting, and an idle Hub is updated (\(done?.status ?? "nil"))")
+        // The check decides: a Hub with queued items keeps running and is never asked to quit. The
+        // force path that ignored this check quit Story with nine jobs running (2026-11-19).
+        expect(waited?.status == Agent.waitingForClose && !busy.app.events.contains("quit")
+               && (waited?.reason ?? "").contains("idle check exited 3 (7 items queued)")
+               && (waited?.reason ?? "").contains("tries again")
+               && (try? BundleInfo.read(busy.app.installed.path))?.version == "1.0.0",
+               "UH46 a Hub with queued items is not quit; the wait says why and is retried (\(waited?.status ?? "nil"), \(waited?.reason ?? "nil"))")
     }
 
     // UH47 a launch agent's environment is not an interactive shell's: the check is run with the
@@ -834,8 +839,8 @@ func updateHoldTests() {
                "UH48 a refusing Hub check says why (\(missing.said) | \(foreign.said))")
     }
 
-    // UH49 a pre-hold build with no idle check at all is still quit and updated — the force path is
-    // the owner's order — and the log says plainly that no check existed and the path bypassed it.
+    // UH49 a pre-hold build with no idle check at all is NOT quit: no check means no proof it is
+    // idle, so the order keeps waiting and says so. (The force path used to quit it.)
     do {
         let f = rig("force-no-probe", hold: holdURL, recipe: "app-dmg", running: true)
         f.client.postError = URLError(.cannotConnectToHost)
@@ -845,17 +850,17 @@ func updateHoldTests() {
                                         control: { _, _ in f.app.control }, quitOldBuild: true)
         // One expect per condition: the runner prints only the description of a red line, so an ANDed
         // assertion hides which part failed. Keep every condition, and let each name itself.
-        expect(result?.status == "updated", "UH49a a pre-hold build is updated (\(result?.status ?? "nil") \(result?.reason ?? "nil"))")
-        expect(result?.quitWithoutHold == true, "UH49b the result says the quit went without an update hold")
-        expect(f.app.events.contains("quit"), "UH49c the app was asked to quit (events \(f.app.events))")
-        expect(f.app.events.contains("launch"), "UH49d the app was put back running (events \(f.app.events))")
-        expect((result?.reason ?? "").contains("0.6.235") && (result?.reason ?? "").contains("2.0.0")
-               && (result?.reason ?? "").contains("temporary force path"),
-               "UH49e the reason names the installed version, the target and the force path (\(result?.reason ?? "nil"))")
+        expect(result?.status == Agent.waitingForClose, "UH49a a pre-hold build with no check waits (\(result?.status ?? "nil") \(result?.reason ?? "nil"))")
+        expect(result?.quitWithoutHold == false, "UH49b the result says nothing was quit")
+        expect(!f.app.events.contains("quit"), "UH49c the app was not asked to quit (events \(f.app.events))")
+        expect(!f.app.events.contains("launch") && (try? BundleInfo.read(f.app.installed.path))?.version == "1.0.0",
+               "UH49d the app keeps running as it was (events \(f.app.events))")
+        expect((result?.reason ?? "").contains("no idle check configured") && (result?.reason ?? "").contains("tries again"),
+               "UH49e the reason says no check exists and that it is retried (\(result?.reason ?? "nil"))")
         expect((result?.quitTrace ?? []).contains { $0.contains("idle check: none configured") },
                "UH49f with no check configured the trace says exactly that (trace \(result?.quitTrace ?? []))")
-        expect((try? BundleInfo.read(f.app.installed.path))?.version == "2.0.0",
-               "UH49g the installed bundle is the new version (\((try? BundleInfo.read(f.app.installed.path))?.version ?? "nil"))")
+        expect((try? BundleInfo.read(f.app.installed.path))?.version == "1.0.0",
+               "UH49g the installed bundle is untouched (\((try? BundleInfo.read(f.app.installed.path))?.version ?? "nil"))")
     }
 
     // UH21 a gated endpoint and a wrong address are named separately from an absent endpoint.
@@ -920,6 +925,40 @@ func updateHoldTests() {
                && reason.contains("did not answer its update hold within 35 s")
                && reason.contains("asked to settle for 20 s"),
                "UH20 a timeout names the update-hold timeout and both numbers, not an absent endpoint (\(reason))")
+    }
+
+    // UH30/UH31 a build that predates its hold is quit only when its own idle check passes. The
+    // 2026-11-16 force path skipped that check; on macmini-angkor a quit with nine jobs running
+    // left a "quit anyway?" sheet and an update waiting for a person.
+    do {
+        let f = rig("pre-hold-busy", hold: holdURL, recipe: "app-dmg", holdSince: "1.5.0")
+        f.client.replies = [(404, Data("no hold route".utf8))]
+        var cfg = f.cfg
+        cfg.apps["demo"]?.idleProbe = "probe-idle"
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: ProbeShell(inner: RecordingShell(mount: f.mount), probeExit: 1, probeOut: "9 jobs running\n"),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        let reason = result?.reason ?? ""
+        expect(!f.app.events.contains("quit"),
+               "UH30 an app with work running is never asked to quit, even without a hold endpoint (\(f.app.events))")
+        expect(result?.status == Agent.waitingForClose && reason.contains("9 jobs running")
+               && reason.contains("tries again"),
+               "UH30 the refusal is a wait that says why and is retried by the next check (\(result?.status ?? "nil"), \(reason))")
+    }
+    do {
+        let f = rig("pre-hold-idle", hold: holdURL, recipe: "app-dmg", holdSince: "1.5.0")
+        f.client.replies = [(404, Data("no hold route".utf8))]
+        var cfg = f.cfg
+        cfg.apps["demo"]?.idleProbe = "probe-idle"
+        let result = try? Agent.install(app: "demo", feed: f.feed, installed: "1.0.0", config: cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: f.state,
+                                        http: f.client, shell: ProbeShell(inner: RecordingShell(mount: f.mount), probeExit: 0, probeOut: "idle\n"),
+                                        control: { _, _ in f.app.control }, quitOldBuild: true)
+        expect(result?.status == "updated" && f.app.events.contains("quit"),
+               "UH31 an app whose own idle check passes is still updated without a hold (\(result?.status ?? "nil"), \(f.app.events))")
+        expect((result?.reason ?? "").contains("idle check passed"),
+               "UH31 the result says the idle check is what allowed the quit (\(result?.reason ?? "nil"))")
     }
 
     // UH11 the hold request is allowed the settle window plus its answer margin — never clamped
@@ -1110,7 +1149,7 @@ func updateHoldTests() {
         expect(validated?.apps["a"]?.holdURL == nil, "UH9 a remote hold endpoint is dropped from the signed feed")
     }
 
-    // UH50 the Fleet page counts how many enrolled Macs are still below holdSince on the force path.
+    // UH50 the Fleet page counts how many enrolled Macs are still below holdSince.
     do {
         let f = rig("fleet-hold-count", hold: holdURL, recipe: "app-dmg", running: false, holdSince: "0.6.240")
         _ = try! Enrolment.enrol(stateDir: f.rig.state, machine: "mac1")
@@ -1120,13 +1159,13 @@ func updateHoldTests() {
             st.machines["mac2"]?.installed["demo"] = "0.6.240"
         }
         let htmlBefore = f.rig.server.statusHTML()
-        expect(htmlBefore.contains("1 Mac below hold (0.6.240; temporary force path)"),
-               "UH50 Fleet counts Macs still below holdSince on the temporary force path")
+        expect(htmlBefore.contains("1 Mac below hold (0.6.240; each updates when it is idle)"),
+               "UH50 Fleet counts Macs still below holdSince, and says each updates when idle")
         try! StateStore.update(in: f.rig.state) { st in
             st.machines["mac1"]?.installed["demo"] = "0.6.240"
         }
         let htmlAfter = f.rig.server.statusHTML()
-        expect(htmlAfter.contains("0 Macs below hold (0.6.240; ready to retire force path)"),
+        expect(htmlAfter.contains("0 Macs below hold (0.6.240)"),
                "UH50 Fleet says when zero Macs remain below holdSince")
     }
 }

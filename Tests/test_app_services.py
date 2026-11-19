@@ -77,6 +77,7 @@ nonisolated(unsafe) var dropRowsAfter = -1
 nonisolated(unsafe) var listCalls = 0
 nonisolated(unsafe) var calls: [String] = []
 nonisolated(unsafe) var quitAsked = false
+nonisolated(unsafe) var bootedOut: Set<String> = []
 nonisolated(unsafe) var agentsURL = URL(fileURLWithPath: "/")
 
 func alive(_ pid: Int) -> Bool { pid > 1 && kill(pid_t(pid), 0) == 0 }
@@ -110,7 +111,7 @@ struct TestShell: Shell {
         if executable == "/bin/launchctl", arguments == ["list"] {
             listCalls += 1
             var out = "PID\tStatus\tLabel\n"
-            for row in rows {
+            for row in rows where !bootedOut.contains(row.label) {
                 if dropRowsAfter >= 0, listCalls > dropRowsAfter {
                     out += "-\t0\t" + row.label + "\n"
                 } else {
@@ -121,9 +122,29 @@ struct TestShell: Shell {
             }
             return ShellResult(exitCode: 0, stdout: out, stderr: "")
         }
+        // Since 0.1.68 every claimed job is reloaded: bootout stops it and drops it from launchd,
+        // bootstrap starts it again from its own plist. A kickstart is still answered because the
+        // recipe must never reach for one; reaching it fails the call-policy check below.
         if executable == "/bin/launchctl", arguments.count == 2, arguments[0] == "kickstart",
            arguments[1].hasPrefix("gui/\(getuid())/") {
             respawn(String(arguments[1].split(separator: "/").last ?? ""))
+            return ShellResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        if executable == "/bin/launchctl", arguments.count == 2, arguments[0] == "bootout",
+           arguments[1].hasPrefix("gui/\(getuid())/") {
+            let label = String(arguments[1].split(separator: "/").last ?? "")
+            if let row = rows.first(where: { $0.label == label }) {
+                let pid = running[label] ?? row.pid
+                if pid > 1 { kill(pid_t(pid), SIGTERM); _ = waitGone(pid, 5) }
+            }
+            bootedOut.insert(label)
+            return ShellResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        if executable == "/bin/launchctl", arguments.count == 3, arguments[0] == "bootstrap",
+           arguments[1] == "gui/\(getuid())" {
+            let label = (arguments[2] as NSString).lastPathComponent.replacingOccurrences(of: ".plist", with: "")
+            respawn(label)
+            bootedOut.remove(label)
             return ShellResult(exitCode: 0, stdout: "", stderr: "")
         }
         return ShellResult(exitCode: 127, stdout: "", stderr: "test shell refuses: " + command)
@@ -231,7 +252,7 @@ case "owned":
     verify(!control.healthy("1.0.0"), "a bundle missing its original services is not healthy, even while it runs")
     dropRowsAfter = -1
     verify(control.healthy("1.0.0"), "healthy must take the bundle again once its original services are live")
-    verify(control.stopService(), "stopService must SIGTERM each owned service and see each one stopped")
+    verify(control.stopService(), "stopService must unload each owned job and see each one stopped")
     verify(LiveControl.processes(inBundle: bundle)?.isEmpty == true, "no process of the bundle may be left")
 case "refuse":
     verify(!control.quit(), "processes the saved jobs do not claim mean the app never really quit")
@@ -256,15 +277,16 @@ case "stale":
     verify(control.isRunning() == true, "the bundle must still be up: nothing was replaced")
     for row in rows { verify(alive(row.pid), "an old job PID must never be signalled (\(row.label))") }
 case "signalexit":
-    // A stop only ever signals a label the recipe captured while quitting, so ask in recipe order.
+    // Since 0.1.68 the job is unloaded rather than signalled, so launchd's last exit status no longer
+    // decides anything: the job must leave the list and its host must really stop.
     verify(control.quit(), "the app counts as gone once only its claimed service host is left")
-    verify(!control.stopService(), "a service launchd reports as signal-killed is not a stopped service")
-    for row in rows { verify(waitGone(row.pid, 5), "\(row.label) must have been SIGTERMned, and only that") }
+    verify(control.stopService(), "an unloaded job is a stopped service whatever its last exit status")
+    for row in rows { verify(waitGone(row.pid, 5), "\(row.label)'s host must be gone, and only that") }
 case "recovered":
     verify(control.quit(), "the app must quit while its owned host is up")
     let saved = control.serviceLabels()
     verify(saved == rows.map { $0.label }, "the journal must carry the label of the service it stopped")
-    verify(control.stopService(), "the owned host must stop on SIGTERM")
+    verify(control.stopService(), "the owned host must stop when its job is unloaded")
     // The recipe rebuilds a control after a crash, so it captures nothing itself: the saved labels
     // are all that can bring the service back (`Recipe.recover` seeds exactly this call).
     let rebuilt = LiveControl.appDmg(bundle, shell: shell, agentsDirectory: agentsURL, quitWait: wait)
@@ -272,9 +294,10 @@ case "recovered":
     rebuilt.restoreServices(saved)
     rebuilt.launch()
     verify(!restored.isEmpty, "the saved job must be started again before the app is opened")
-    let kick = calls.firstIndex(where: { $0.hasPrefix("/bin/launchctl kickstart") }) ?? -1
+    let restart = calls.firstIndex(where: { $0.hasPrefix("/bin/launchctl bootstrap") }) ?? -1
     let opened = calls.firstIndex(where: { $0.hasPrefix("/usr/bin/open") }) ?? -1
-    verify(kick >= 0 && opened > kick, "the captured job is kickstarted first, then the app is opened")
+    verify(restart >= 0 && opened > restart,
+           "the captured job is bootstrapped again first, then the app is opened")
     verify(rebuilt.healthy("1.0.0"), "the rebuilt control must read healthy with its saved service running")
 case "caller-partial", "caller-refused", "caller-dead":
     // The recipe's own stop phase, with only the world around it faked.
@@ -324,11 +347,14 @@ default:
     verify(false, "unknown mode " + mode)
 }
 
-// Every outside call is a question, never a command: no `launchctl stop`/`kill`/`bootout`, no forced
-// or settings-changing `kickstart`, and `open` only where the recipe is entitled to relaunch.
+// Every outside call names a job this app owns or asks the app itself: list, the app's own quit,
+// bootout/bootstrap of an owned label from its own plist, and `open` only where the recipe is
+// entitled to relaunch. A kickstart is never correct here — it re-spawns against launchd's cached
+// code requirement — so reaching it fails the run.
 for call in calls {
     verify(call == "/bin/launchctl list" || call.hasPrefix("/usr/bin/osascript")
-           || call.hasPrefix("/bin/launchctl kickstart gui/\(getuid())/")
+           || call.hasPrefix("/bin/launchctl bootout gui/\(getuid())/")
+           || call.hasPrefix("/bin/launchctl bootstrap gui/\(getuid()) ")
            || call == "/usr/bin/open -g -j " + bundle, "the only outside calls are asking: saw " + call)
 }
 for row in rows where refused.contains(row.label) {
