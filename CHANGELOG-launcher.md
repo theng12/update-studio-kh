@@ -2,6 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.70 — 2026-11-20
+
+- Update N Macs now reaches a Mac it was silently skipping. A Mac that held an order nobody answered, or whose last try failed, was left out of every future sweep for ever: the only thing that could clear it was a new result, and a new result needs an order. Both now stop counting once they are 30 minutes old, so the next sweep tries the Mac again. A young order and a recent failure still hold the Mac back exactly as before.
+- A Mac that has waited out an old failure reads "Update available · last try failed <when>" instead of a bare "Failed", so the row and the Update button agree. The failure itself stays in the Mac's history, with its reason and a copy button.
+- Nothing is retried on a timer: Update N Macs still runs only when it is pressed, and a Mac whose copy of an app failed stops trying that exact build until a new one is published.
+- Not fixed by this version: a Mac whose helper cannot start because it was built for the wrong processor. Its log says `Exec format error`; the installer does not check for that yet, and it is tracked as its own defect.
+
 ## 0.1.69 — 2026-11-19
 
 - An address that can never work must never be written, installed or displayed as if it were fine. The kit builder now refuses to build a publisher address that is a numeric IP, and the installer refuses a kit carrying one — both fail loudly with the reason, instead of handing over a Mac that can never update.

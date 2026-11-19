@@ -1105,7 +1105,7 @@ public final class FeedServer: @unchecked Sendable {
                         || (o.action == ServerCommand.launch && !(ms.capabilities?.contains(AgentCapability.launch) ?? false))
                 } ?? false
                 let result = ms.lastResults?[app]
-                let failed = result.map { Self.failureStatuses.contains($0.status) } ?? false
+                let failed = Self.failureToLookAt(result, now: now)
                 let behind = installed.flatMap { i in feedApp.map { VersionCompare.isNewer($0.version, than: i) } } ?? false
                 let same = installed.flatMap { i in feedApp.map { VersionCompare.compare(i, $0.version) == 0 } } ?? false
                 let st: (String, String)
@@ -1120,10 +1120,15 @@ public final class FeedServer: @unchecked Sendable {
                     // A launch is not an update and must not show up in the update counts.
                     if order.action != ServerCommand.launch { anyUpdating = true }
                 } else if result?.status == "launched" { st = ("Running", "ok") }
+                // A recent failure is the owner's to read; an old one is history, and the Mac is
+                // offered again — the chip says which, so it never contradicts the button.
                 else if failed { st = ("Failed", "bad"); anyFailed = true }
                 else if !online { st = ("Not checked · no report for 10 min", "unknown") }
                 else if ownUpdater { st = ("Updates itself", "muted") }
                 else if feedApp == nil { st = ("Not checked · not in feed", "unknown") }
+                else if behind, let result, Self.failureStatuses.contains(result.status) {
+                    st = ("Update available · last try failed \(h(ago(result.at)))", "warn"); anyUpdate = true; updates += 1
+                }
                 else if installed == nil || behind { st = (installed == nil ? "Not installed" : "Update available", "warn"); anyUpdate = true; updates += 1 }
                 else if same { st = ("Up to date", "ok") }
                 else { st = ("Newer than feed", "muted") }
@@ -1403,14 +1408,41 @@ public final class FeedServer: @unchecked Sendable {
     static func isOnline(_ ms: MachineState, now: Date) -> Bool {
         ms.lastSeen.flatMap(ISO.date).map { now.timeIntervalSince($0) < offlineAfter } ?? false
     }
-    /// The page's "Update available": an online Mac with this app installed behind the feed, no order
-    /// already waiting and no failure to look at first. "Update N Macs" sends to exactly these.
+    /// The page's "Update available": an online Mac with this app installed behind the feed.
+    /// "Update N Macs" sends to exactly these — it is the fleet's only way to place an order, so
+    /// excluding a Mac here is the same as never trying it again.
+    ///
+    /// Two things hold a Mac back for a while, and neither may hold it back for ever. A fresh order
+    /// belongs to a Mac already working, and a fresh failure is one the owner should read before
+    /// the next sweep touches it. Past `orderRetryWindow` both stop counting: an order nobody
+    /// answered is dead (2026-11-16, 39 Macs held one), and a Mac whose last word on the app was a
+    /// failure can only ever report a new result by being given an order — the bulk action is
+    /// exactly the fresh attempt the failure was waiting for. Without that age, the failure hides
+    /// the Mac, the Mac gets no order, and no new result can clear it: a loop with no exit that ran
+    /// for months (2026-11-20).
     static func updateAvailable(_ ms: MachineState, app: String, feed: Feed?, now: Date) -> Bool {
         guard ms.tokenHash != nil, app != "story", app != "hub", isOnline(ms, now: now),
-              let installed = ms.installed[app], let offered = feed?.apps[app]?.version,
-              !ms.pending.contains(where: { $0.app == app }),
-              !(ms.lastResults?[app].map { failureStatuses.contains($0.status) } ?? false) else { return false }
+              let installed = ms.installed[app], let offered = feed?.apps[app]?.version else { return false }
+        let isYoung = { (orders: [ServerCommand]) in
+            orders.contains { order in
+                // A corrupt timestamp counts as stale, exactly as it does in `queueOrder`.
+                ISO.date(order.createdAt).map { now.timeIntervalSince($0) <= orderRetryWindow } ?? false
+            }
+        }
+        guard !isYoung(ms.pending.filter { $0.app == app }) else { return false }
+        if failureToLookAt(ms.lastResults?[app], now: now) { return false }
         return VersionCompare.isNewer(offered, than: installed)
+    }
+
+    /// A failure the owner has not had a chance to read yet: it holds the Mac back from a sweep
+    /// until it is `orderRetryWindow` old. Afterwards it is history — the page keeps showing what
+    /// happened, but it no longer decides whether the Mac may be tried again. Shared by the
+    /// predicate and the page so the chip and the button cannot disagree. An undated failure is
+    /// never "recent", the same reading `queueOrder` gives a corrupt timestamp.
+    static func failureToLookAt(_ result: CommandResult?, now: Date) -> Bool {
+        guard let result, failureStatuses.contains(result.status),
+              let at = ISO.date(result.at) else { return false }
+        return now.timeIntervalSince(at) <= orderRetryWindow
     }
     /// "M2 Pro · 16 GB · 512 GB" from a fleet name like terranash-1607-m2-pro-32-512-hub; nil otherwise.
     static func model(of machine: String) -> String? {
