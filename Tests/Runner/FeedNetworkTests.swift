@@ -166,6 +166,31 @@ func feedNetworkTests() {
                                              error: URLError(.appTransportSecurityRequiresSecureConnection))
         expect("\(checkError)".contains("bare IP") && !"\(checkError)".contains("Code="),
                "FN43 the connection check speaks the same sentence (\(checkError))")
+        // FN45–FN47 the literal-carrying fleet shape (2026-11-19): a config with a bare IP and no
+        // network block, against the remembered signed block a real Mac holds today. The live
+        // block names no address at all, so there is no name to migrate *to*; where one is
+        // remembered the name leads already; only a saved network block erases it.
+        let literal = "http://100.82.91.102:8790/release.json"
+        let literalBase = URL(string: "http://100.82.91.102:8790")!
+        let name = "http://publisher-m1-16-1000.tail4e72cf.ts.net:8790/release.json"
+        var literalConfig = AgentConfig(feedURL: literal, publicKey: config.publicKey,
+                                        stateDir: root.path, machine: "client", token: config.token, apps: [:])
+        literalConfig.network = nil
+        var liveMemory = AgentMemory()
+        liveMemory.feedNetwork = FeedNetwork(feedURLs: [], hosts: [:])
+        let fleetSources = try Agent.feedSources(config: literalConfig, memory: liveMemory, serverBase: literalBase)
+        expect(fleetSources == [URL(string: literal)!],
+               "FN45 a literal config against today's live block finds no name at all (\(fleetSources))")
+        var namedMemory = AgentMemory()
+        namedMemory.feedNetwork = FeedNetwork(feedURLs: [name])
+        let namedSources = try Agent.feedSources(config: literalConfig, memory: namedMemory, serverBase: literalBase)
+        expect(namedSources.first == URL(string: name)! && namedSources.count == 2,
+               "FN46 a remembered name already leads the unusable saved literal (\(namedSources))")
+        var blockConfig = literalConfig
+        blockConfig.network = FeedNetwork(feedURLs: [literal])
+        let blockSources = try Agent.feedSources(config: blockConfig, memory: namedMemory, serverBase: literalBase)
+        expect(blockSources == [URL(string: literal)!],
+               "FN47 a saved block of unusable addresses erases the usable remembered name (\(blockSources))")
     } catch { expect(false, "FN source verification: \(error)") }
     do {
         let http = NetworkClient(); http.statusOffline = true
