@@ -64,8 +64,11 @@ func indexUnderLoadTests() {
 
     // The index answers anyway. Before 0.1.73 both of these were 503 for ~18 s.
     let index = get("/release.json")
-    expect(index?.0 == 200 && index?.1.contains("kh.feed") == true,
+    expect(index?.0 == 200 && index?.1.contains("\"apps\"") == true,
            "IDX1 the feed index answers 200 while all \(fleet) transfer slots are held (\(index?.0 ?? -1))")
+    // The page has its own local-only policy (403 for anything but the tailnet); what this test is
+    // about is that it is answered at all, not refused as busy.
     let page = get("/")
-    expect(page?.0 == 200, "IDX1 the page answers 200 while all \(fleet) transfer slots are held (\(page?.0 ?? -1))")
+    expect(page != nil && page?.0 != 503,
+           "IDX1 the page is answered while all \(fleet) transfer slots are held, never 503 busy (\(page?.0 ?? -1))")
 }

@@ -136,7 +136,15 @@ func staggerTests() {
             expect(result?.commandsRun == 0 && result?.updates == 0
                    && result?.notes.contains { $0.contains("rollout window") } == true,
                    "SG6 the sweep holds a staggered pull and says why (commands \(result?.commandsRun ?? -1); notes \(result?.notes ?? []))")
-            let atSlot = go(started.addingTimeInterval(TimeInterval(a) + 1))
+            // Let the slot pass by backdating the anchor, never by moving the clock: a run whose
+            // `now` jumps past the order freshness window refuses this Mac's own orders as replays.
+            let memFile = URL(fileURLWithPath: cfg.stateDir).appendingPathComponent("agent-memory.json")
+            if var m = try? AtomicFile.readJSON(AgentMemory.self, from: memFile), var mark = m.stagger?["demo"] {
+                mark.since = ISO.string(Date().addingTimeInterval(-TimeInterval(a) - 60))
+                m.stagger?["demo"] = mark
+                try? AtomicFile.writeJSON(m, to: memFile)
+            }
+            let atSlot = go(Date())
             expect(atSlot?.commandsRun == 1, "SG6 at its slot the same sweep pulls it (\(atSlot?.commandsRun ?? -1))")
         }
     }
