@@ -2,6 +2,17 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.71 — 2026-11-20
+
+- An update that fails on this Mac no longer repeats itself every few seconds. A hold that cannot be taken, or a background service that will not stop, ends the attempt once and says why; the same version is not tried again by itself until a new version is published or Update is pressed on that Mac. This is the seven-second retry seen on a production Mac with storage-studio, and the library-studio loop on the publisher.
+- Turning Automatic off for an app in Update Studio now stops attempts that were already in train for it — an order placed before the switch, or a downloaded update waiting to install — with one line saying Automatic is off. An order placed after the switch still runs, and so does Update pressed on that Mac.
+- A slow download is no longer stopped for being slow. It now ends only when it has delivered nothing for five minutes, so a large app on a busy shared link can finish at its own speed instead of being cut off at a size-based guess. Hub's 1.48 GB download was being stopped at about 25 minutes while still moving, and each retry was given less time than the one before.
+- A download whose partial file was swept away between runs now starts again from zero instead of failing with "the file doesn't exist".
+- A download that is stopped now says how far it got — bytes received, seconds spent and the rate — so one log line explains it instead of needing a state file from each Mac.
+- The menu-bar icon repaints once the app has finished launching and again whenever the menu opens, so a Mac that started with a blank square no longer needs an install to correct it.
+- Update N Macs now says, in one log line each, every Mac it did not reach and why: not enrolled, not seen for N minutes, the app is not installed there, an order from N minutes ago is still unanswered, its last try N minutes ago failed, or it is already up to date. A sweep that reached fewer Macs than expected no longer looks the same as one that reached them all.
+- Which Macs are sent an order is unchanged: the page's count, the Update button and the log all read the same answer, so they cannot disagree. A Mac held back by an open order or an unread failure is still held back exactly as in 0.1.70, and still only for 30 minutes.
+
 ## 0.1.70 — 2026-11-20
 
 - Update N Macs now reaches a Mac it was silently skipping. A Mac that held an order nobody answered, or whose last try failed, was left out of every future sweep for ever: the only thing that could clear it was a new result, and a new result needs an order. Both now stop counting once they are 30 minutes old, so the next sweep tries the Mac again. A young order and a recent failure still hold the Mac back exactly as before.

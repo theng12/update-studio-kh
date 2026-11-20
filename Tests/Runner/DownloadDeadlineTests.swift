@@ -1,6 +1,10 @@
 import Foundation
 
 func downloadDeadlineTests() {
+    // A download is no longer stopped by `transferDeadline`: it is stopped by silence (DDL7). The
+    // size-derived function is kept as the backstop its numbers describe, and these tests keep it
+    // honest so nothing re-wires it over the progress rule by accident (issue 20261120-146).
+    //
     // DDL1: the old flat ceiling is now the floor. A 1.48 GB artifact at the fleet's ~1 MB/s gets
     // about 1,500 s — well past 600 s — so repeated partial pulls stop being cut off at ten minutes.
     let large = URLSessionHTTPClient.transferDeadline(bytes: 1_480_000_000, rate: 1_000_000)
@@ -43,4 +47,27 @@ func downloadDeadlineTests() {
     expect(shortened == 30, "DDL5b requestTimeout with a 30 s override returns 30 (got \(shortened))")
     let extended = URLSessionHTTPClient.requestTimeout(total: 600, override: 1200)
     expect(extended == 600, "DDL5c requestTimeout with a bigger override still caps at totalTimeout (got \(extended))")
+
+    // DDL7: what ends a download now is silence, not elapsed time. Hub's 1.48 GB pull on a shared
+    // relay (~0.08 MB/s, ~5 h) was killed at 1,483 s while it was still moving, and each resumed
+    // attempt was given less time than the one before (issue 20261120-146).
+    expect(!URLSessionHTTPClient.idleExpired(secondsWithoutProgress: 1, idle: URLSessionHTTPClient.idleTimeout),
+           "DDL7a a download that just delivered a byte is not expired")
+    expect(!URLSessionHTTPClient.idleExpired(secondsWithoutProgress: URLSessionHTTPClient.idleTimeout - 1,
+                                             idle: URLSessionHTTPClient.idleTimeout),
+           "DDL7b one second short of the allowance is still alive")
+    expect(URLSessionHTTPClient.idleExpired(secondsWithoutProgress: URLSessionHTTPClient.idleTimeout,
+                                            idle: URLSessionHTTPClient.idleTimeout),
+           "DDL7c silence for the whole allowance ends it")
+    expect(URLSessionHTTPClient.idleTimeout > 60,
+           "DDL7d the silence bound is longer than URLRequest's own 60 s inactivity timeout, so the two never race")
+
+    // DDL8: a stopped download names its own numbers — bytes, elapsed, rate — so the next person
+    // does not have to reconstruct them from four Macs' state files.
+    var stopped = TransferTimeout(path: "/tmp/Hub.dmg", seconds: 300, silence: true)
+    stopped.received = 120_000_000; stopped.elapsed = 1_500
+    expect(stopped.description.contains("received 120000000 bytes in 1500 s")
+           && stopped.description.contains("80 KB/s")
+           && stopped.description.contains("made no progress for 300 s"),
+           "DDL8 the stop names bytes, seconds and rate (\(stopped.description))")
 }

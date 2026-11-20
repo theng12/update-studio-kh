@@ -158,4 +158,102 @@ func bulkUpdateTests() {
         expect(counts == [1, 1, 1],
                "BU5 repeated presses hold one order at a time, never a growing queue (\(counts))")
     }
+
+    // BU6 — a Mac the sweep does not reach is named in one log line, with its reason. Before this,
+    // an excluded Mac and a Mac nobody considered looked identical in the log: the sweep reached
+    // fewer Macs than the owner expected and said nothing (backlog item 9).
+    do {
+        let rig = Rig("bulk-skip-lines")
+        try! rig.publish("demo", "2.0.0", rig.artifact("demo.zip", "bytes"))
+        for machine in ["mac-held", "mac-free"] {
+            let token = try! Enrolment.enrol(stateDir: rig.state, machine: machine)
+            _ = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/status",
+                headers: ["authorization": "Bearer \(token)"],
+                body: Data("{\"machine\":\"\(machine)\",\"installed\":{\"demo\":\"1.0\"}}".utf8)), remote: "100.64.0.9")
+        }
+        try! StateStore.update(in: rig.state) { ms in
+            ms.machines["mac-held"]?.pending.append(ServerCommand(
+                machine: "mac-held", app: "demo", createdAt: ISO.string(Date().addingTimeInterval(-60)),
+                action: ServerCommand.update))
+        }
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790", "content-type": "application/json"]
+        let pipe = Pipe(), savedError = dup(STDERR_FILENO)
+        precondition(savedError >= 0 && dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO) >= 0)
+        let r = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/update-all", headers: owner,
+                                                     body: Data("{\"app\":\"demo\"}".utf8)), remote: "127.0.0.1")
+        precondition(dup2(savedError, STDERR_FILENO) >= 0)
+        close(savedError)
+        try! pipe.fileHandleForWriting.close()
+        let lines = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .split(separator: "\n")
+        let skipped = lines.filter { $0.hasPrefix("sweep-skipped ") }.compactMap {
+            (try? JSONSerialization.jsonObject(with: Data($0.dropFirst("sweep-skipped ".count).utf8))) as? [String: Any]
+        }
+        let held = skipped.first { $0["machine"] as? String == "mac-held" }
+        expect(r.status == 200, "BU6 update-all answers 200")
+        expect(skipped.count == 1 && held != nil && (held?["why"] as? String ?? "").contains("order"),
+               "BU6 one line names the held Mac and its open order (\(skipped))")
+        expect(!skipped.contains { $0["machine"] as? String == "mac-free" },
+               "BU6 a Mac that was sent an order is not logged as skipped")
+        let free = try! StateStore.read(in: rig.state).machines["mac-free"]!
+        expect(free.pending.contains { $0.app == "demo" && $0.action == ServerCommand.update },
+               "BU6 the Mac with nothing holding it back still gets its order")
+    }
+
+    // BU7 — one answer behind both: `updateAvailable` is `skipReason == nil`, so the fleet page's
+    // count, the button and the log can never disagree about a Mac.
+    do {
+        let rig = Rig("bulk-skip-reasons")
+        try! rig.publish("demo", "2.0.0", rig.artifact("demo.zip", "bytes"))
+        let feed = try! FeedPublisher.loadFeed(from: rig.feed)
+        let now = Date()
+        func mac(_ machine: String, installed: String? = "1.0", seen: TimeInterval = 0,
+                 enrolled: Bool = true) -> MachineState {
+            var ms = MachineState(machine: machine)
+            if enrolled { ms.tokenHash = "t" }
+            ms.lastSeen = ISO.string(now.addingTimeInterval(-seen))
+            if let installed { ms.installed = ["demo": installed] }
+            return ms
+        }
+        var held = mac("held"); held.pending = [ServerCommand(machine: "held", app: "demo",
+                                                              createdAt: ISO.string(now.addingTimeInterval(-60)), action: ServerCommand.update)]
+        var failed = mac("failed"); failed.lastResults = ["demo": CommandResult(commandId: "o", status: "install_failed",
+                                                                               at: ISO.string(now.addingTimeInterval(-300)))]
+        var oldFailure = mac("old-failure"); oldFailure.lastResults = ["demo": CommandResult(
+            commandId: "o", status: "install_failed", at: ISO.string(now.addingTimeInterval(-3 * 3600)))]
+        let cases: [(String, MachineState, Bool)] = [
+            ("behind the feed", mac("behind"), true),
+            ("up to date", mac("current", installed: "2.0.0"), false),
+            ("offline", mac("offline", seen: FeedServer.offlineAfter + 60), false),
+            ("not enrolled", mac("unclaimed", enrolled: false), false),
+            ("app not installed", mac("bare", installed: nil), false),
+            ("open order", held, false),
+            ("fresh failure", failed, false),
+            ("failure past the window", oldFailure, true),
+        ]
+        for (label, state, eligible) in cases {
+            let reason = FeedServer.skipReason(state, app: "demo", feed: feed, now: now)
+            let available = FeedServer.updateAvailable(state, app: "demo", feed: feed, now: now)
+            expect(available == eligible && (reason == nil) == eligible,
+                   "BU7 \(label): page and log agree (available \(available), reason \(reason ?? "nil"))")
+        }
+    }
+
+    // BU8 — the sweep decides by the feed's own kind, not by two app ids. An installable app
+    // (`fake-for-tests`, which is what a DMG app carries) may be ordered — hub and story included,
+    // which is the fleet-wide Hub route that a hard-coded `app != "hub"` had removed since 37f61a2.
+    // An app whose kind is `status` updates itself and is still never swept.
+    do {
+        let rig = Rig("bulk-kind")
+        try! rig.publish("demo", "2.0.0", rig.artifact("demo.zip", "bytes"), kind: "fake-for-tests")
+        try! rig.publish("selfish", "2.0.0", rig.artifact("self.zip", "bytes"), kind: "status")
+        let feed = try! FeedPublisher.loadFeed(from: rig.feed)
+        let now = Date()
+        var mac = MachineState(machine: "m"); mac.tokenHash = "t"
+        mac.lastSeen = ISO.string(now); mac.installed = ["demo": "1.0", "selfish": "1.0"]
+        expect(FeedServer.skipReason(mac, app: "demo", feed: feed, now: now) == nil,
+               "BU8 an installable app may be ordered by the bulk sweep (reason \(FeedServer.skipReason(mac, app: "demo", feed: feed, now: now) ?? "nil"))")
+        expect(FeedServer.skipReason(mac, app: "selfish", feed: feed, now: now) != nil,
+               "BU8 an app that updates itself is still never swept")
+    }
 }

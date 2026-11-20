@@ -65,7 +65,19 @@ struct DeliveryMismatch: Error, CustomStringConvertible {
 public struct TransferTimeout: Error, CustomStringConvertible, Sendable {
     public let path: String
     public let seconds: Int
-    public var description: String { "\(path) did not finish within \(seconds) s; it was stopped" }
+    /// True when it was stopped for silence (no bytes for `seconds`), false for a request's own
+    /// total allowance. The sentence names which, so a log line is never ambiguous.
+    public var silence = false
+    /// The three numbers that end the investigation in one grep: bytes moved, time spent, and the
+    /// rate they imply. Tonight it took four people and a state-file read to work these out.
+    public var received: Int64 = 0
+    public var elapsed: TimeInterval = 0
+    public var description: String {
+        let rate = elapsed > 0 ? Double(received) / elapsed : 0
+        let moved = "received \(received) bytes in \(Int(elapsed)) s (\(String(format: "%.0f", rate / 1000)) KB/s)"
+        return "\(path) " + (silence ? "made no progress for \(seconds) s" : "did not finish within \(seconds) s")
+            + " — \(moved); it was stopped"
+    }
 }
 
 public struct URLSessionHTTPClient: HTTPClient {
@@ -89,6 +101,14 @@ public struct URLSessionHTTPClient: HTTPClient {
     /// Cap: four hours covers any artifact the signed feed will ever name (1.5 GB at 1 MB/s is
     /// 1,500 s), and nothing may outlast it however the numbers move.
     static let transferCap: TimeInterval = 14_400
+    /// What ends a download now: this long with no byte delivered, however long a slow-but-moving
+    /// relay takes. Nine Macs died at the old wall-clock deadline — Hub's 1.48 GB pull was given
+    /// 1,483 s at an assumed 1 MB/s, and a shared relay doing 0.08 MB/s needs ~5 h; resume then made
+    /// each attempt's allowance shorter, so the retries converged on the floor and never finished
+    /// (issue 20261120-146). A genuinely dead link is still ended: by URLRequest's 60 s silence
+    /// timeout, and by this bound. The floor/cap above remain the numbers a caller can apply as a
+    /// backstop; the transfer itself is bounded by progress.
+    public static let idleTimeout: TimeInterval = 300
     /// The time `bytes` are allowed at `rate`, floored at the old ceiling and capped. `rate` is a
     /// constant, so this can never be unbounded; a rate of zero or less answers the cap rather than
     /// dividing by it. A dead link is ended by the 60 s inactivity timeout, not by this number.
@@ -101,6 +121,11 @@ public struct URLSessionHTTPClient: HTTPClient {
     /// instead; keeping them apart means nobody can merge the two paths by accident.
     static func requestTimeout(total: TimeInterval, override: TimeInterval?) -> TimeInterval {
         min(total, override ?? total)
+    }
+    /// The one rule that ends a download: it has delivered nothing for its idle allowance. Pure, so
+    /// it can be proven without a network: silence expires, steady progress never does.
+    static func idleExpired(secondsWithoutProgress: TimeInterval, idle: TimeInterval) -> Bool {
+        secondsWithoutProgress >= idle
     }
     /// Vendor downloads and page lookups must stay on the catalog's official HTTPS hosts.
     public var officialHosts: [String]?
@@ -145,6 +170,14 @@ public struct URLSessionHTTPClient: HTTPClient {
 
     public func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64, phase: String) throws -> Int {
         let fm = FileManager.default
+        // The folder holding a `.part` can be swept between runs (finished downloads move to
+        // _trash), and the file itself can be gone. Either is a restart from zero, never a failed
+        // transfer: two Macs failed instantly on "The file …part doesn't exist" while the bytes
+        // were fine (issue 20261120-147).
+        let folder = file.deletingLastPathComponent()
+        if !fm.fileExists(atPath: folder.path) {
+            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
         if !fm.fileExists(atPath: file.path) {
             guard fm.createFile(atPath: file.path, contents: nil) else { throw khuFail("cannot write \(file.path)") }
         }
@@ -173,13 +206,12 @@ public struct URLSessionHTTPClient: HTTPClient {
         // Downloads get a deadline sized from the bytes still to move; everything else (hold POSTs,
         // feed/status GETs) keeps the old shorten-only behaviour. Keeping them apart means nobody
         // can merge the two paths by accident and silently cap a download at totalTimeout again.
-        let deadline: TimeInterval
-        if handle != nil {
-            let remaining = max(0, limit - resumeFrom)
-            deadline = Self.transferDeadline(bytes: remaining, rate: assumedBytesPerSecond)
-        } else {
-            deadline = Self.requestTimeout(total: totalTimeout, override: timeoutOverride)
-        }
+        // A download is bounded by silence, not by the wall clock: a transfer that keeps delivering
+        // bytes finishes, however slow the relay (issue 20261120-146). Small requests keep their own
+        // total allowance. Neither is the other's ceiling.
+        let deadline: TimeInterval? = handle != nil
+            ? nil
+            : Self.requestTimeout(total: totalTimeout, override: timeoutOverride)
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
                                  timeoutInterval: min(timeout, timeoutOverride ?? timeout))
         request.httpMethod = method
@@ -197,13 +229,19 @@ public struct URLSessionHTTPClient: HTTPClient {
         // The cancel state belongs to the operation, not to this transfer: it is reset once before
         // an install starts, so a Cancel is never erased by the next source a fallback tries.
         var finished = false, spent: TimeInterval = 0, suspended = false, cancelled = false
-        while spent < deadline {
+        var idle: TimeInterval = 0, lastBytes: Int64 = -1, silent = false
+        while deadline.map({ spent < $0 }) ?? true {
             if sink.done.wait(timeout: .now() + 0.5) == .success { finished = true; break }
             if handle != nil {
                 if DownloadControl.cancelled { cancelled = true; break }
                 // The sink holds the data while paused; here paused time just does not count.
                 suspended = DownloadControl.paused
                 if suspended { continue }
+                // Progress buys time; silence ends it. Bytes that arrived but were refused as
+                // larger than the signed size do not buy time, because `received` still moves —
+                // the sink cancels itself in that case, and it is not this bound's job.
+                if sink.received != lastBytes { lastBytes = sink.received; idle = 0 } else { idle += 0.5 }
+                if idle >= Self.idleTimeout { silent = true; break }
             }
             spent += 0.5
         }
@@ -219,7 +257,13 @@ public struct URLSessionHTTPClient: HTTPClient {
         }
         TransferMeter.record()
         if cancelled { throw khuFail("cancelled on this Mac; nothing was changed") }
-        guard finished else { throw TransferTimeout(path: url.path, seconds: Int(deadline)) }
+        guard finished else {
+            let seconds = silent ? Self.idleTimeout : (deadline ?? totalTimeout)
+            var timeout = TransferTimeout(path: url.path, seconds: Int(seconds), silence: silent)
+            timeout.received = max(0, sink.received - resumeFrom)
+            timeout.elapsed = spent
+            throw timeout
+        }
         if let error = sink.error { throw error }
         return sink
     }
@@ -1029,6 +1073,42 @@ public enum Agent {
         }
         try remember()
 
+        // 5b. The page's Automatic switch is a stop, not only a preference: an attempt it was set
+        // before — an order placed earlier, or a downloaded update waiting to install — ends here,
+        // once, with one line and a reported refusal. An order placed AFTER the switch is a fresh
+        // request and runs; a press on this Mac (menu "Update now") is the person's own and runs.
+        // Measured 2026-11-20: switching Automatic off did not stop a Mac retrying every 7 s
+        // (issue 20261120-151).
+        var endedBySwitch: [(app: String, id: String, reason: String)] = []
+        todo.removeAll { item in
+            // Updates only: a rollback or a launch is a correction the owner asked for, not a retry
+            // Automatic is pacing.
+            guard !item.manual, item.action == ServerCommand.update else { return false }
+            // Only a switch somebody actually set — the page's value, or this Mac's own entry in
+            // helper.json. A config default of `false` is not a switch: the owner's orders and the
+            // menu run under it, exactly as they always have (BU/OQ/SO tests hold this).
+            let pageOff = orders.automatic[item.app] == false
+            let macSwitch = helper.automatic[item.app]
+            let macOff = macSwitch.map { !$0.on } ?? false
+            guard pageOff || macOff else { return false }
+            let macOffAt = macSwitch.flatMap { $0.on ? nil : ISO.date($0.at) }
+            let pageOffAt = pageOff ? orders.automaticAt?[item.app].flatMap(ISO.date) : nil
+            let placed = orders.commands.first { $0.id == item.id }.flatMap { ISO.date($0.createdAt) }
+            if let placed, let offAt = [macOffAt, pageOffAt].compactMap({ $0 }).max(), placed > offAt { return false }
+            endedBySwitch.append((item.app, item.id,
+                "automatic updates are off for \(item.app) (\(macOff ? "set on this Mac" : "set in Update Studio")); this attempt ended without installing"))
+            return true
+        }
+        for item in endedBySwitch {
+            memory.waiting?[item.app] = nil
+            memory.done[item.id] = AgentMemory.Done(app: item.app, status: "refused", reason: item.reason,
+                                                    at: ISO.string(now), sent: false, version: feed.apps[item.app]?.version)
+            try remember()
+            if delivered(post(item.id, memory.done[item.id]!)) { memory.done[item.id]?.sent = true; try remember() }
+            result.commandsRun += 1
+            result.notes.append("\(item.app): \(item.reason)")
+        }
+
         // 6. One install at a time; a failure is reported and the next app still runs.
         // An app no longer asked for is no longer waiting.
         memory.waiting = memory.waiting?.filter { w in todo.contains { $0.app == w.key } }
@@ -1085,6 +1165,10 @@ public enum Agent {
                 default:
                     res = RecipeResult(status: "refused", reason: "this Mac does not know the order action \"\(item.action)\"; refused")
                 }
+            } catch let error as HoldUnavailable {
+                var refused = RecipeResult(status: "refused", reason: error.reason)
+                refused.holdRefused = true
+                res = refused
             } catch let error as ArtifactFailure {
                 res = RecipeResult(status: "failed", reason: "\(error)")
             } catch {
@@ -1141,9 +1225,15 @@ public enum Agent {
             // that artifact may be a newer release this Mac never tried, and suppressing it
             // silently breaks Automatic. Only rolled_back_by_owner marks the displaced version.
             if item.action == ServerCommand.update,
-               ["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status),
+               (["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status)
+                || res.holdRefused),
                let sha = feed.apps[item.app]?.sha256 {
+                // An attempt that failed on this Mac does not repeat itself every few seconds: the
+                // same bytes will fail the same way until the app, its service or its release
+                // changes. Remembered here, cleared by a new artifact or by an order/press on this
+                // Mac — which is the retry, once, instead of a loop (issues 20261120-151, 20261120-117).
                 memory.rejected[item.app] = sha
+                result.notes.append("\(item.app): this attempt failed (\(res.status)); it will not be tried again automatically until a new version is published or Update is pressed again")
             }
             let refusal = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory)
             if res.quitWithoutHold {
@@ -1493,7 +1583,7 @@ public enum Agent {
                                 exempt: Bool, installed: String? = nil, holdSince: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
         guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }
         guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
-            return (nil, nil, RecipeResult(status: "refused", reason: "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. It cannot be updated while it runs until its release serves an update hold; the app itself still works."))
+            return holdRefusal(app: app, endpoint: nil, "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. It cannot be updated while it runs until its release serves an update hold; the app itself still works.")
         }
         let window = Date().addingTimeInterval(UpdateHold.answerAllowance)
         do {
@@ -1534,7 +1624,7 @@ public enum Agent {
                 default:
                     reason = "\(app)'s update hold answered \(refused.status); nothing was changed."
                 }
-                return (endpoint, nil, RecipeResult(status: "refused", reason: reason))
+                return holdRefusal(app: app, endpoint: endpoint, reason)
             }
             if UpdateHold.endpointAbsent(error) {
                 var out = RecipeResult(status: waitingForClose,
@@ -1543,11 +1633,24 @@ public enum Agent {
                 return (endpoint, nil, out)
             }
             if UpdateHold.timedOut(error) {
-                return (endpoint, nil, RecipeResult(status: "refused",
-                    reason: "\(app) did not answer its update hold within \(Int(UpdateHold.answerAllowance)) s (it was asked to settle for \(Int(UpdateHold.settleWindow)) s); nothing was changed."))
+                return holdRefusal(app: app, endpoint: endpoint, "\(app) did not answer its update hold within \(Int(UpdateHold.answerAllowance)) s (it was asked to settle for \(Int(UpdateHold.settleWindow)) s); nothing was changed. It was reached but did not answer — that is the app's side, not this Mac's connection.")
             }
-            return (endpoint, nil, RecipeResult(status: "refused", reason: "\(error)"))
+            return holdRefusal(app: app, endpoint: endpoint, "\(error)")
         }
+    }
+
+    /// The hold was lost at the swap boundary (renew refused or unreachable). Typed, so the caller
+    /// records it as refused-once rather than a generic install failure that retries for ever.
+    struct HoldUnavailable: Error { let reason: String }
+
+    /// A hold that could not be taken, flagged so the caller records it as this artifact's failure
+    /// instead of asking again seconds later: the app's answer does not change until the app or its
+    /// release does (issue 20261120-151, the storage-studio retry every 7 s).
+    static func holdRefusal(app: String, endpoint: URL?, _ reason: String) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
+        var out = RecipeResult(status: "refused", reason: reason)
+        out.holdRefused = true
+        // The endpoint is kept even when refused: the caller resumes a hold it paused earlier.
+        return (endpoint, nil, out)
     }
 
     /// Idle checks that ship with the helper, so a Mac is armed without anyone editing its config.
@@ -1755,10 +1858,12 @@ public enum Agent {
                 guard holdEndpoint != nil else { return }   // the updater's own apps hold no queue
             }
             guard let endpoint = holdEndpoint else { return }
-            let renewed = try UpdateHold.begin(endpoint, http: http, timeoutS: 0)
+            let renewed: UpdateHold.Reply
+            do { renewed = try UpdateHold.begin(endpoint, http: http, timeoutS: 0) }
+            catch { throw HoldUnavailable(reason: "\(app)'s update hold could not be taken at the swap (\(error)); nothing was changed") }
             guard renewed.safe else {
                 let names = (renewed.unsettled ?? []).joined(separator: ", ")
-                throw khuFail("\(app)'s update hold is no longer safe (still in flight: \(names)); nothing was changed")
+                throw HoldUnavailable(reason: "\(app)'s update hold is no longer safe (still in flight: \(names)); nothing was changed")
             }
         }
         func withHoldNote(_ result: RecipeResult) -> RecipeResult {
