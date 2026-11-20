@@ -193,8 +193,14 @@ func retryStopTests() {
         var run9 = true
         let ctl9 = AppControl(isRunning: { run9 }, quit: { true }, launch: {}, healthy: { _ in true })
         func go9(at now: Date) -> AgentRunResult? {
-            try? Agent.runOnce(config: cfg9, http: InProcessClient(server: rig9.server),
-                               shell: RecordingShell(mount: rig9.root), control: { _, _ in ctl9 }, now: now, appFolders: [])
+            do {
+                return try Agent.runOnce(config: cfg9, http: InProcessClient(server: rig9.server),
+                                         shell: RecordingShell(mount: rig9.root), control: { _, _ in ctl9 },
+                                         now: now, appFolders: [])
+            } catch {
+                print("RS9 run at \(ISO.string(now)) threw: \(error)")
+                return nil
+            }
         }
         func mem9() -> AgentMemory { (try? AtomicFile.readJSON(AgentMemory.self, from: memFile9)) ?? AgentMemory() }
         let r1 = go9(at: t0)
