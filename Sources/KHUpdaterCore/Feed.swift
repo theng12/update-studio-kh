@@ -35,6 +35,9 @@ public struct FeedApp: Codable, Sendable, Equatable {
     /// The first version published with this `holdURL`. A build older than it predates the hold, so
     /// its 401/403/404 there means "no endpoint yet", not a refused credential. nil when unknown.
     public var holdSince: String?
+    /// A security update: it skips the rollout stagger. Waiting for a slot is a scheduling nicety;
+    /// closing a hole is not, and a Mac that has been offline is exactly the one that needs it now.
+    public var security: Bool?
     /// An absolute `https` address for this artifact, used instead of `<feed base>/artifacts/<file>`.
     /// A mirror feed names its own artifact addresses; the whole envelope is signed, so this is
     /// covered by the publisher's signature. nil keeps the old relative behaviour exactly.

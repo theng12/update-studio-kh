@@ -123,6 +123,7 @@ public enum FeedPublisher {
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
                                meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
+                               security: Bool = false,
                                keep: Int? = nil, now: Date = Date(),
                                retireArtifact: ((URL) throws -> Void)? = nil) throws {
         _ = try SafeName.component(app, what: "app id")
@@ -179,6 +180,9 @@ public enum FeedPublisher {
             entry.released = ISO.string(now)
             entry.mainMacOnly = mainMacOnly ?? old?.mainMacOnly
             entry.holdURL = holdURL ?? old?.holdURL
+            // A security update skips the Mac-side rollout stagger. Publishing without the flag
+            // keeps the previous value, so a routine re-publish never silently arms or disarms it.
+            entry.security = security || (old?.security ?? false) ? true : nil
             // Carried like holdURL; a new address starts at this version. An entry published before
             // holdSince existed stays unknown unless --hold-since names it.
             entry.holdSince = holdSince ?? (old?.holdURL == entry.holdURL ? old?.holdSince : version)

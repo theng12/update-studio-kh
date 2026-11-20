@@ -51,7 +51,7 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--new-app]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -136,7 +136,7 @@ struct KHUMain {
         case "publish":
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
             var keep: Int?
-            var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil
+            var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil, security = false
             var newApp = false
             var i = 1
             while i < args.count {
@@ -193,7 +193,7 @@ struct KHUMain {
                 try FeedPublisher.publish(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
-                                          holdURL: hold, holdSince: holdSince, keep: keep)
+                                          holdURL: hold, holdSince: holdSince, security: security, keep: keep)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "unpublish", "retire":

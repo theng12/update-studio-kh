@@ -255,6 +255,10 @@ public final class FeedServer: @unchecked Sendable {
     public let port: Int
     public let publisherBind: String?
     public let maxConnections: Int
+    /// What every Mac asks before it transfers anything: the page and the feed index. These are
+    /// served without taking a transfer slot, so a fleet checking during a rollout is never told
+    /// "busy" because the big artifacts are still moving (row 20261120-215).
+    static let indexPaths: Set<String> = ["/", "/index.html", "/release.json"]
     /// The key that signs every order reply. Without it the server has no way to answer a Mac with
     /// something the Mac can tell apart from a forgery, so it refuses to answer at all.
     public let commandKey: Curve25519.Signing.PrivateKey?
@@ -1684,17 +1688,25 @@ public final class FeedServer: @unchecked Sendable {
             var sendTimeout = timeval(tv_sec: 30, tv_usec: 0)
             setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, socklen_t(MemoryLayout<timeval>.size))
             let remote = String(cString: inet_ntoa(clientAddr.sin_addr))
-            guard slots.wait(timeout: .now()) == .success else {
-                HTTP.send(cfd, Self.text(503, "busy"))
-                close(cfd)
-                continue
-            }
             Thread.detachNewThread { [self] in
-                defer { close(cfd); slots.signal() }
+                defer { close(cfd) }
                 guard let data = HTTP.readRequest(from: cfd), let req = HTTP.parse(data) else {
                     HTTP.send(cfd, Self.text(400, "bad request"))
                     return
                 }
+                // The feed index is what every Mac asks first. Giving it one of the transfer slots
+                // meant 65 Macs checking during a rollout were answered "503 busy" while the big
+                // artifacts were still moving, so they retried together (row 20261120-215). The
+                // index is small and parsed from memory, so it is served outside the slot count.
+                guard !Self.indexPaths.contains(req.path) else {
+                    HTTP.send(cfd, handleRequest(req, remote: remote))
+                    return
+                }
+                guard slots.wait(timeout: .now()) == .success else {
+                    HTTP.send(cfd, Self.text(503, "busy"))
+                    return
+                }
+                defer { slots.signal() }
                 HTTP.send(cfd, handleRequest(req, remote: remote))
             }
         }

@@ -63,6 +63,11 @@ public struct AgentConfig: Codable, Sendable, Equatable {
     /// How long a remote launch waits for the app's process to appear; nil = 30 s. The wait is this
     /// one's own: a launch is not an install, and a slow start must not borrow an install's window.
     public var launchWaitSeconds: Int?
+    /// The rollout stagger: an automatic pull of a large artifact starts at this Mac's own minute
+    /// inside this many minutes, so 65 Macs never pull 1.48 GB at once. nil = 60; 0 turns it off.
+    public var staggerMinutes: Int?
+    /// The artifact size (megabytes) from which a pull is staggered. nil = 100; 0 staggers every pull.
+    public var staggerMB: Int?
     public init(feedURL: String, publicKey: String, stateDir: String, machine: String, token: String,
                 apps: [String: AppConfig] = [:], intervalMinutes: Int = 5, once: Bool = false) {
         self.feedURL = feedURL; self.publicKey = publicKey; self.stateDir = stateDir

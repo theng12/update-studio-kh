@@ -458,6 +458,18 @@ public struct AgentMemory: Codable, Sendable, Equatable {
         }
     }
     public var holdRefusals: [String: HoldRefusal]?
+    /// This Mac's own minute in the rollout stagger, per app: the slot it was given for a version,
+    /// and when it first saw that version. Kept so a restart does not move the Mac's slot, and so a
+    /// Mac that has been offline simply starts its wait when it sees the release.
+    public struct Stagger: Codable, Sendable, Equatable {
+        public var version: String
+        public var offsetSeconds: Int
+        public var since: String
+        public init(version: String, offsetSeconds: Int, since: String) {
+            self.version = version; self.offsetSeconds = offsetSeconds; self.since = since
+        }
+    }
+    public var stagger: [String: Stagger]?
     /// Displaced versions from local offline rollbacks, reconciled when a signed feed returns.
     public var offlineRollbacks: [String: String]?
     public struct Mismatch: Codable, Sendable, Equatable { public var sha256: String; public var count: Int }
@@ -1087,6 +1099,11 @@ public enum Agent {
             }
             let current = installed[app]
             if current == nil || VersionCompare.isNewer(entry.version, than: current!) {
+                if let waiting = Self.staggerWait(app: app, entry: entry, config: config,
+                                                  installed: current, memory: &memory, at: now) {
+                    result.notes.append(waiting)
+                    continue
+                }
                 todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false, false))
             }
         }
@@ -1688,6 +1705,39 @@ public enum Agent {
     static let holdNeedsPerson = 3
     /// How long an artifact rejection stands. A transient fault must never strand a Mac for ever.
     static let artifactRejectionWindow: TimeInterval = 7 * 86_400
+
+    /// The rollout stagger, decided on the Mac (owner 2026-11-20: "stagger the hub rollouts from now
+    /// on"). A large artifact is pulled at this Mac's own minute in the window: `hash(machine, app,
+    /// version) mod window`, anchored when this Mac first saw that version. Deliberately no server
+    /// state — it survives a Mac being offline for a day, and 65 Macs retrying after a busy answer
+    /// cannot re-form the stampede, which is the failure the stagger exists to stop. A security
+    /// update, and an app not installed yet, never wait.
+    /// Returns the line to show when the pull waits; nil means it may start now.
+    static func staggerWait(app: String, entry: FeedApp, config: AgentConfig, installed: String?,
+                            memory: inout AgentMemory, at now: Date) -> String? {
+        let window = max(0, config.staggerMinutes ?? 60) * 60
+        let floorMB = max(0, config.staggerMB ?? 100)
+        guard window > 0, floorMB == 0 || entry.bytes >= Int64(floorMB) * 1_000_000 else { return nil }
+        if entry.security == true || installed == nil {
+            memory.stagger?[app] = nil
+            return nil
+        }
+        let digest = Enrolment.sha256Hex("\(config.machine)|\(app)|\(entry.version)")
+        let offset = (Int(digest.prefix(8), radix: 16) ?? 0) % window
+        var mark = memory.stagger?[app]
+        if mark?.version != entry.version {
+            let fresh = AgentMemory.Stagger(version: entry.version, offsetSeconds: offset, since: ISO.string(now))
+            memory.stagger = (memory.stagger ?? [:]).merging([app: fresh]) { _, new in new }
+            mark = fresh
+        }
+        guard let mark, let since = ISO.date(mark.since) else { return nil }
+        let starts = since.addingTimeInterval(TimeInterval(mark.offsetSeconds))
+        guard now < starts else { return nil }
+        let minutes = max(1, Int((starts.timeIntervalSince(now) / 60).rounded(.up)))
+        return "\(app): its turn in the \(window / 60)-minute rollout window is in \(minutes) min "
+            + "(minute \(mark.offsetSeconds / 60) of the window, set by this Mac's name); "
+            + "nothing else waits for it"
+    }
 
     static func beginUpdateHold(app: String, holdURL: String?, http: HTTPClient, control: AppControl,
                                 exempt: Bool, installed: String? = nil, holdSince: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
