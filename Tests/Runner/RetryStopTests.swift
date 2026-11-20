@@ -102,8 +102,10 @@ func retryStopTests() {
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
-        // Running: a closed app is covered by RS8, and it installs without waiting by design.
-        let quiet = AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in true })
+        // RS4 needs the app running (the backoff only holds a running app); RS5–RS7 need it closed,
+        // so the retried artifact actually installs. A closed app with a refusal is RS8's case.
+        var appRunning = true
+        let quiet = AppControl(isRunning: { appRunning }, quit: { true }, launch: {}, healthy: { _ in true })
         func go() -> AgentRunResult? {
             try? Agent.runOnce(config: config, http: InProcessClient(server: rig.server),
                                shell: RecordingShell(mount: rig.root), control: { _, _ in quiet }, appFolders: [])
@@ -124,6 +126,7 @@ func retryStopTests() {
                "RS4 a run that does not attempt it does not refresh its clock")
 
         // RS5: past the backoff the same artifact is attempted again.
+        appRunning = false
         m.holdRefusals?["demo"]?.at = ISO.string(Date().addingTimeInterval(-(Agent.holdBackoff + 60)))
         try! AtomicFile.writeJSON(m, to: memoryFile)
         expect(go()?.updates ?? -1 == 1, "RS5 the same artifact is tried again after the backoff")
@@ -183,7 +186,9 @@ func retryStopTests() {
 
         // RS9: repeated identical hold refusals keep `at` unrefreshed while pacing the backoff.
         let (rig9, token9, app9) = fixture("retry-stop-repeat-clock")
-        let cfg9 = agentConfig(rig9, token: token9, apps: ["demo": AppConfig(bundlePath: app9.path, recipe: "app-dmg", automatic: true)])
+        // fake-for-tests, like RS4–RS7: app-dmg throws on a fixture zip instead of reporting the
+        // refusal, so the repeat the test is about never happens.
+        let cfg9 = agentConfig(rig9, token: token9, apps: ["demo": AppConfig(bundlePath: app9.path, recipe: "fake-for-tests", automatic: true)])
         let memFile9 = URL(fileURLWithPath: cfg9.stateDir).appendingPathComponent("agent-memory.json")
         var run9 = true
         let ctl9 = AppControl(isRunning: { run9 }, quit: { true }, launch: {}, healthy: { _ in true })
