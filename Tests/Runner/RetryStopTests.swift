@@ -102,7 +102,8 @@ func retryStopTests() {
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
-        let quiet = AppControl(isRunning: { false }, quit: { true }, launch: {}, healthy: { _ in true })
+        // Running: a closed app is covered by RS8, and it installs without waiting by design.
+        let quiet = AppControl(isRunning: { true }, quit: { true }, launch: {}, healthy: { _ in true })
         func go() -> AgentRunResult? {
             try? Agent.runOnce(config: config, http: InProcessClient(server: rig.server),
                                shell: RecordingShell(mount: rig.root), control: { _, _ in quiet }, appFolders: [])
@@ -199,15 +200,15 @@ func retryStopTests() {
         let r2 = go9(at: t1)
         expect(r2?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 2
                && mem9().holdRefusals?["demo"]?.at == firstAt,
-               "RS9 identical repeat increments attempts without refreshing the original timestamp")
+               "RS9 identical repeat increments attempts without refreshing the original timestamp (commands \(r2?.commandsRun ?? -1), attempts \(mem9().holdRefusals?["demo"]?.attempts ?? -1), at \(mem9().holdRefusals?["demo"]?.at ?? "none"), first \(firstAt ?? "none"), notes \(r2?.notes ?? []))")
         let r2Wait = go9(at: t1.addingTimeInterval(60))
         expect(r2Wait?.commandsRun == 0 && mem9().holdRefusals?["demo"]?.attempts == 2,
-               "RS9 backoff holds after the second attempt too")
+               "RS9 backoff holds after the second attempt too (commands \(r2Wait?.commandsRun ?? -1), attempts \(mem9().holdRefusals?["demo"]?.attempts ?? -1))")
         let t3 = t1.addingTimeInterval(Agent.holdBackoff + 60)
         let r3 = go9(at: t3)
         expect(r3?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 3
                && r3?.notes.contains { $0.contains("Quit or restart demo once") } == true,
-               "RS9 third attempt surfaces the actionable instruction (notes \(r3?.notes ?? []))")
+               "RS9 third attempt surfaces the actionable instruction (commands \(r3?.commandsRun ?? -1), attempts \(mem9().holdRefusals?["demo"]?.attempts ?? -1), notes \(r3?.notes ?? []))")
         _ = run9; run9 = true
     }
 }
