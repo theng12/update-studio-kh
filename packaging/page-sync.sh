@@ -173,7 +173,10 @@ sync_app() {
   WHEN=$(awk -F'\t' '$1=="published_at" {print $2}' "$WORK/feed-$APP.tsv")
   ROW=$(awk -F'\t' -v a="$APP" '$1==a' "$WORK/feed-$APP.tsv")
   [ -n "$ROW" ] || refuse "the feed has no $APP"
-  IFS=$'\t' read -r _ A_VER A_FILE A_SHA A_BYTES A_ICON A_ICONSHA A_PREV <<<"$ROW"
+  # Tab is IFS *whitespace*, so `read` collapses runs of it and empty fields vanish: a null-icon
+  # row parsed the previous version into A_ICON ("cannot download the icon 0.1.70", issue
+  # 20261120-192). Split on a non-whitespace unit separator instead, where empties survive.
+  IFS=$'\x1f' read -r _ A_VER A_FILE A_SHA A_BYTES A_ICON A_ICONSHA A_PREV <<<"${ROW//$'\t'/$'\x1f'}"
   A_SHA=$(printf %s "$A_SHA" | tr 'A-F' 'a-f'); A_ICONSHA=$(printf %s "$A_ICONSHA" | tr 'A-F' 'a-f')
   TAG="$APP-$A_VER"
   ok "$A_VER $A_FILE $A_BYTES bytes sha256 $A_SHA, published $WHEN"
@@ -235,7 +238,7 @@ PY
   case "$EXISTING" in
     same) ok "$TAG already carries the feed's bytes — nothing to upload" ;;
     differ*)
-      IFS=$'\t' read -r _ dname ddg <<<"$EXISTING"
+      IFS=$'\x1f' read -r _ dname ddg <<<"${EXISTING//$'\t'/$'\x1f'}"
       refuse "$TAG already holds $dname with digest $ddg, not $A_SHA; a published DMG is never overwritten" ;;
     *)
       if [ -f "$WORK/tag.json" ]; then
