@@ -1163,16 +1163,21 @@ public enum Agent {
             // Only a switch somebody actually set — the page's value, or this Mac's own entry in
             // helper.json. A config default of `false` is not a switch: the owner's orders and the
             // menu run under it, exactly as they always have (BU/OQ/SO tests hold this).
-            let pageOff = orders.automatic[item.app] == false
-            let macSwitch = helper.automatic[item.app]
-            let macOff = macSwitch.map { !$0.on } ?? false
-            guard pageOff || macOff else { return false }
-            let macOffAt = macSwitch.flatMap { $0.on ? nil : ISO.date($0.at) }
-            let pageOffAt = pageOff ? orders.automaticAt?[item.app].flatMap(ISO.date) : nil
+            // The precedence is the same one the automatic sweep uses (Helper.automaticDecision):
+            // a page value provably later than this Mac's switch wins. Reading this Mac's switch
+            // raw here ended an order that the page had already turned back on, and named the wrong
+            // switch when it did (row 20261120-217).
+            let decision = helper.automaticDecision(item.app, page: orders.automatic[item.app],
+                                                    pageAt: orders.automaticAt?[item.app],
+                                                    config: config.apps[item.app]?.automatic ?? false)
+            guard !decision.on, decision.origin != .config else { return false }
+            let offAt = decision.origin == .mac
+                ? helper.automatic[item.app].flatMap { ISO.date($0.at) }
+                : orders.automaticAt?[item.app].flatMap(ISO.date)
             let placed = orders.commands.first { $0.id == item.id }.flatMap { ISO.date($0.createdAt) }
-            if let placed, let offAt = [macOffAt, pageOffAt].compactMap({ $0 }).max(), placed > offAt { return false }
+            if let placed, let offAt, placed > offAt { return false }
             endedBySwitch.append((item.app, item.id,
-                "automatic updates are off for \(item.app) (\(macOff ? "set on this Mac" : "set in Update Studio")); this attempt ended without installing"))
+                "automatic updates are off for \(item.app) (\(decision.origin == .page ? "set in Update Studio" : "set on this Mac")); this attempt ended without installing"))
             return true
         }
         for item in endedBySwitch {

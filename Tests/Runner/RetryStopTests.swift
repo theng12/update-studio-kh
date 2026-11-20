@@ -229,4 +229,46 @@ func retryStopTests() {
                "RS9 third attempt surfaces the actionable instruction (commands \(r3?.commandsRun ?? -1), attempts \(mem9().holdRefusals?["demo"]?.attempts ?? -1), notes \(r3?.notes ?? []))")
         _ = run9; run9 = true
     }
+
+    // RS10 — the page is one source of truth with this Mac's switch, and the sentence names the
+    // switch that actually decided. Row 20261120-217: a Mac with no Hub had its page switch set on
+    // (200, state.json written) and its next pass still ended the order "set on this Mac", because
+    // section 5b read the Mac's switch raw instead of asking Helper.automaticDecision.
+    do {
+        let owner = ["host": "127.0.0.1:8790", "origin": "http://127.0.0.1:8790",
+                     "content-type": "application/x-www-form-urlencoded"]
+        func go(_ tag: String, macOffAt: TimeInterval, pageOn: Bool) -> (result: AgentRunResult?, memory: AgentMemory) {
+            let (rig, token, app) = fixture(tag)
+            let config = agentConfig(rig, token: token, apps: ["demo": AppConfig(bundlePath: app.path, recipe: "fake-for-tests")])
+            let stateDir = URL(fileURLWithPath: config.stateDir)
+            try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+            try! HelperSettings(automatic: ["demo": .init(on: false, at: ISO.string(Date().addingTimeInterval(macOffAt)))])
+                .save(to: stateDir)
+            try! StateStore.update(in: rig.state) { $0.machines["mac1"]?.pending.append(ServerCommand(
+                machine: "mac1", app: "demo", createdAt: ISO.string(Date().addingTimeInterval(-900)),
+                action: ServerCommand.update)) }
+            _ = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/api/automatic", headers: owner,
+                body: Data("machine=mac1&app=demo&on=\(pageOn)".utf8)), remote: "127.0.0.1")
+            let quiet = AppControl(isRunning: { false }, quit: { true }, launch: {}, healthy: { _ in true })
+            let result = try? Agent.runOnce(config: config, http: InProcessClient(server: rig.server),
+                                            shell: RecordingShell(mount: rig.root), control: { _, _ in quiet },
+                                            appFolders: [])
+            let memory = (try? AtomicFile.readJSON(AgentMemory.self, from: stateDir.appendingPathComponent("agent-memory.json"))) ?? AgentMemory()
+            return (result, memory)
+        }
+
+        // The switch set in the page three days after this Mac's own off-switch is the one that
+        // decides: the queued order runs. This fails before the fix.
+        // The order is older than this Mac's off-switch, so the "placed after the switch" exemption
+        // cannot rescue it: only the page's later value can. That is the live case on 1301.
+        let rescued = go("retry-stop-page-rescues", macOffAt: -600, pageOn: true).result
+        expect(rescued?.updates == 1 && rescued?.notes.contains { $0.contains("automatic updates are off") } == false,
+               "RS10 a page switch later than this Mac's off-switch lets the queued order run (updates \(rescued?.updates ?? -1); notes \(rescued?.notes ?? []))")
+
+        // The same page value, but earlier than this Mac's own switch: the Mac's switch still wins,
+        // and the sentence says so. Nothing about the 0.1.71 behaviour is loosened.
+        let macWins = go("retry-stop-mac-still-wins", macOffAt: 60, pageOn: true).result
+        expect(macWins?.updates == 0 && macWins?.notes.contains { $0.contains("automatic updates are off for demo") && $0.contains("set on this Mac") } == true,
+               "RS10 a Mac switch later than the page's still ends the order, naming this Mac (notes \(macWins?.notes ?? []))")
+    }
 }
