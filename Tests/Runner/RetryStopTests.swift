@@ -192,31 +192,38 @@ func retryStopTests() {
         let memFile9 = URL(fileURLWithPath: cfg9.stateDir).appendingPathComponent("agent-memory.json")
         var run9 = true
         let ctl9 = AppControl(isRunning: { run9 }, quit: { true }, launch: {}, healthy: { _ in true })
-        func go9(at now: Date) -> AgentRunResult? {
+        func go9() -> AgentRunResult? {
             do {
                 return try Agent.runOnce(config: cfg9, http: InProcessClient(server: rig9.server),
                                          shell: RecordingShell(mount: rig9.root), control: { _, _ in ctl9 },
-                                         now: now, appFolders: [])
+                                         appFolders: [])
             } catch {
-                print("RS9 run at \(ISO.string(now)) threw: \(error)")
+                print("RS9 run threw: \(error)")
                 return nil
             }
         }
         func mem9() -> AgentMemory { (try? AtomicFile.readJSON(AgentMemory.self, from: memFile9)) ?? AgentMemory() }
-        let r1 = go9(at: t0)
+        // Age the refusal, not the clock: moving the agent's clock forward makes the server's signed
+        // order genuinely stale, and the run is refused as a replay before any of this is reached.
+        func age(_ seconds: TimeInterval) {
+            var m = mem9()
+            m.holdRefusals?["demo"]?.lastAttemptAt = ISO.string(Date().addingTimeInterval(-seconds))
+            try! AtomicFile.writeJSON(m, to: memFile9)
+        }
+        let r1 = go9()
         let firstAt = mem9().holdRefusals?["demo"]?.at
         expect(r1?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 1 && mem9().rejected["demo"] == nil,
                "RS9 first hold refusal records attempt 1 without rejecting the artifact")
-        let t1 = t0.addingTimeInterval(Agent.holdBackoff + 60)
-        let r2 = go9(at: t1)
+        age(Agent.holdBackoff + 60)
+        let r2 = go9()
         expect(r2?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 2
                && mem9().holdRefusals?["demo"]?.at == firstAt,
                "RS9 identical repeat increments attempts without refreshing the original timestamp (commands \(r2?.commandsRun ?? -1), attempts \(mem9().holdRefusals?["demo"]?.attempts ?? -1), at \(mem9().holdRefusals?["demo"]?.at ?? "none"), first \(firstAt ?? "none"), notes \(r2?.notes ?? []))")
-        let r2Wait = go9(at: t1.addingTimeInterval(60))
+        let r2Wait = go9()
         expect(r2Wait?.commandsRun == 0 && mem9().holdRefusals?["demo"]?.attempts == 2,
                "RS9 backoff holds after the second attempt too (commands \(r2Wait?.commandsRun ?? -1), attempts \(mem9().holdRefusals?["demo"]?.attempts ?? -1))")
-        let t3 = t1.addingTimeInterval(Agent.holdBackoff + 60)
-        let r3 = go9(at: t3)
+        age(Agent.holdBackoff + 60)
+        let r3 = go9()
         expect(r3?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 3
                && r3?.notes.contains { $0.contains("Quit or restart demo once") } == true,
                "RS9 third attempt surfaces the actionable instruction (commands \(r3?.commandsRun ?? -1), attempts \(mem9().holdRefusals?["demo"]?.attempts ?? -1), notes \(r3?.notes ?? []))")
