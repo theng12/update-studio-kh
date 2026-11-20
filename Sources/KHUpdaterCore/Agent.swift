@@ -1286,7 +1286,11 @@ public enum Agent {
                 memory.rejectedAt?[item.app] = nil
                 result.notes.append("\(item.app): its update hold was refused at \(refusal.at) (attempt \(refusal.attempts); retried after \(Int(Self.holdBackoff / 60)) min)")
                 if refusal.attempts >= Self.holdNeedsPerson {
-                    result.notes.append("\(item.app): its update hold has failed \(refusal.attempts) times (\(reason)); this needs a person")
+                    // "Needs a person" is only useful if it names what the person can do. A hold that
+                    // never answers is usually the running process being stuck (storage 0.1.14: its
+                    // hold returns silently while paused), so the action is to get that process to
+                    // stop — the update is already downloaded and installs while the app is closed.
+                    result.notes.append("\(item.app): its update hold has failed \(refusal.attempts) times (\(reason)). Quit or restart \(item.app) once: its update is already downloaded and installs while it is closed, with no further step.")
                 }
             } else if item.action == ServerCommand.update,
                (["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status)),
