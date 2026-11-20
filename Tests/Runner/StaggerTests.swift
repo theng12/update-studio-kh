@@ -108,29 +108,36 @@ func staggerTests() {
     do {
         let rig = Rig("stagger-sweep")
         try! rig.publish("demo", "2.0.0", rig.artifact("demo.bin", String(repeating: "x", count: 4096)))
-        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "stagger-mac")
+        // agentConfig names this Mac "mac1", and the token must prove that same machine.
+        let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
         _ = rig.server.handleRequest(HTTPRequest(method: "POST", path: "/status",
             headers: ["authorization": "Bearer \(token)"],
-            body: Data(#"{"machine":"stagger-mac","installed":{"demo":"1.0.0"}}"#.utf8)), remote: "100.64.0.9")
+            body: Data(#"{"machine":"mac1","installed":{"demo":"1.0.0"}}"#.utf8)), remote: "100.64.0.9")
         let app = makeApp(rig.root.appendingPathComponent("Demo.app"), version: "1.0.0")
         var cfg = agentConfig(rig, token: token, apps: ["demo": AppConfig(bundlePath: app.path, recipe: "fake-for-tests", automatic: true)])
         cfg.staggerMB = 0
-        let a = offset("stagger-mac", "demo", "2.0.0", window: 60)
+        let a = offset("mac1", "demo", "2.0.0", window: 60)
         let quiet = AppControl(isRunning: { false }, quit: { true }, launch: {}, healthy: { _ in true })
         let started = Date()
-        let result = try! Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server),
-                                        shell: RecordingShell(mount: rig.root), control: { _, _ in quiet },
-                                        now: started, appFolders: [])
+        func go(_ at: Date) -> AgentRunResult? {
+            do {
+                return try Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server),
+                                         shell: RecordingShell(mount: rig.root), control: { _, _ in quiet },
+                                         now: at, appFolders: [])
+            } catch {
+                print("SG6 run threw: \(error)")
+                return nil
+            }
+        }
+        let result = go(started)
         if a == 0 {
-            expect(result.commandsRun == 1, "SG6 a Mac whose slot is now pulls at once")
+            expect(result?.commandsRun == 1, "SG6 a Mac whose slot is now pulls at once (\(result?.commandsRun ?? -1))")
         } else {
-            expect(result.commandsRun == 0 && result.updates == 0
-                   && result.notes.contains { $0.contains("rollout window") },
-                   "SG6 the sweep holds a staggered pull and says why (commands \(result.commandsRun); notes \(result.notes))")
-            let atSlot = try! Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server),
-                                            shell: RecordingShell(mount: rig.root), control: { _, _ in quiet },
-                                            now: started.addingTimeInterval(TimeInterval(a) + 1), appFolders: [])
-            expect(atSlot.commandsRun == 1, "SG6 at its slot the same sweep pulls it (\(atSlot.commandsRun))")
+            expect(result?.commandsRun == 0 && result?.updates == 0
+                   && result?.notes.contains { $0.contains("rollout window") } == true,
+                   "SG6 the sweep holds a staggered pull and says why (commands \(result?.commandsRun ?? -1); notes \(result?.notes ?? []))")
+            let atSlot = go(started.addingTimeInterval(TimeInterval(a) + 1))
+            expect(atSlot?.commandsRun == 1, "SG6 at its slot the same sweep pulls it (\(atSlot?.commandsRun ?? -1))")
         }
     }
 
