@@ -27,7 +27,7 @@ fail() { echo "$1" >&2; exit 1; }
 VERSION="$(cat "$KIT/VERSION")"
 [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || fail 'Invalid kit version.'
 /usr/bin/plutil -convert json -o /dev/null "$CONFIG" >/dev/null 2>&1 || fail 'Config is not valid JSON/plist.'
-for field in feedURL publicKey machine token; do
+for field in feedURL publicKey machine; do
     value="$(/usr/bin/plutil -extract "$field" raw -expect string -o - "$CONFIG" 2>/dev/null)" || fail "Config needs $field."
     [[ -n "$value" && "$value" != *'__'* ]] || fail "Fill in $field before installing."
 done
@@ -36,6 +36,15 @@ done
 # every app (App Transport Security), so a kit naming one installs a Mac that fails every check for
 # ever, silently. Fail here, loudly, at install (2026-11-19).
 FEED="$(/usr/bin/plutil -extract feedURL raw -expect string -o - "$CONFIG" 2>/dev/null)"
+# A public https feed carries no token on purpose — `Connect.usePublicFeed` writes "" because it
+# reports nothing to anyone. Requiring a token there refused every GitHub public-feed install
+# (2026-11-20). A publisher's feed still needs one; both must be a real string, never a placeholder.
+TOKEN="$(/usr/bin/plutil -extract token raw -expect string -o - "$CONFIG" 2>/dev/null)" || fail 'Config needs token.'
+[[ "$TOKEN" != *'__'* ]] || fail 'Fill in token before installing.'
+case "$(printf '%s' "$FEED" | /usr/bin/tr 'A-Z' 'a-z')" in
+    https://*) ;;
+    *) [[ -n "$TOKEN" ]] || fail 'Fill in token before installing. A publisher feed needs this Mac’s token.' ;;
+esac
 case "$FEED" in
     http://[0-9]*.[0-9]*.[0-9]*.[0-9]*/*)
         fail "This kit's feed address is a bare IP ($FEED). macOS refuses plain http to an IP address, so this Mac would never update. Rebuild the kit on the publisher so it carries the Tailscale name (ending in .ts.net), or use the HTTPS feed address." ;;

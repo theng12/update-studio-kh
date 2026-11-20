@@ -289,6 +289,35 @@ try:
           and (loaded_home / "Library/KHUpdater/base/config.json").is_file(),
           "an already-loaded job is left alone and the install still completes")
 
+    # A public https feed carries no token on purpose — Connect.usePublicFeed writes "" because it
+    # reports to nobody. Requiring one refused every GitHub public-feed install (2026-11-20). A
+    # publisher's feed still needs its token; both must be a real string, never a placeholder.
+    public_home = work / "public-home"
+    public_home.mkdir()
+    # Exactly the file Connect.usePublicFeed writes (Connect.swift), field for field.
+    public_cfg = {
+        "feedURL": "https://raw.githubusercontent.com/theng12/kh-releases/main/release.json",
+        "publicKey": cfg["publicKey"], "machine": "fixture-mac", "token": "",
+        "stateDir": "set-by-installer", "intervalMinutes": 5, "once": False,
+        "apps": {"updater": {"bundlePath": "", "recipe": "updater", "automatic": True}},
+    }
+    config.write_text(json.dumps(public_cfg))
+    result = run(installer, config, public_home)
+    public_config = public_home / "Library/KHUpdater/base/config.json"
+    check(result.returncode == 0 and public_config.is_file()
+          and json.loads(public_config.read_text())["token"] == "",
+          "a public https feed installs with the empty token Connect writes for it")
+
+
+    plain_home = work / "no-token-home"
+    plain_home.mkdir()
+    config.write_text(json.dumps(dict(cfg, feedURL="http://publisher.tailnet.ts.net:8790/release.json", token="")))
+    result = run(installer, config, plain_home)
+    check(result.returncode != 0 and "Fill in token" in result.stderr
+          and not (plain_home / "Library/KHUpdater").exists(),
+          "a publisher feed with no token is still refused before anything is installed")
+    config.write_text(json.dumps(cfg))
+
     # A refused start keeps the finished install, says why, and names the one command that retries it.
     fail_home = work / "fail-home"
     fail_home.mkdir()
