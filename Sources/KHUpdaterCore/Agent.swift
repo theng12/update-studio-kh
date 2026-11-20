@@ -1065,10 +1065,17 @@ public enum Agent {
                 result.notes.append("\(app): skipped — its update hold was refused at \(refusal.at) (\(refusal.reason)); trying again after \(Int(Self.holdBackoff / 60)) min")
                 continue
             }
+            // Once the attempts are spent the app is not asked again — while it RUNS. A hold is only
+            // needed for a running app, so a Mac where the person followed the instruction (quit or
+            // restart it) must install on the next cycle instead of staying skipped for ever.
             if let refusal = memory.holdRefusals?[app], refusal.sha256 == entry.sha256,
-               refusal.attempts >= Self.holdNeedsPerson {
-                result.notes.append("\(app): skipped — its update hold has failed \(refusal.attempts) times since \(refusal.at) (\(refusal.reason)); this needs a person")
+               refusal.attempts >= Self.holdNeedsPerson, control(app, cfg).isRunning() != false {
+                result.notes.append("\(app): skipped — its update hold has failed \(refusal.attempts) times since \(refusal.at) (\(refusal.reason)); this needs a person: quit or restart \(app) once")
                 continue
+            }
+            if let refusal = memory.holdRefusals?[app], refusal.sha256 == entry.sha256,
+               let cfg0 = config.apps[app], control(app, cfg0).isRunning() == false {
+                memory.holdRefusals?[app] = nil   // it is closed: no hold is needed, install it now
             }
             let current = installed[app]
             if current == nil || VersionCompare.isNewer(entry.version, than: current!) {
