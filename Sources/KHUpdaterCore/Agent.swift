@@ -437,6 +437,21 @@ public struct AgentMemory: Codable, Sendable, Equatable {
     /// app → sha256 of an artifact that failed or was rolled back here; Automatic skips it until
     /// the artifact changes or the owner asks for it explicitly.
     public var rejected: [String: String] = [:]
+    /// When an artifact was marked rejected. `rejected` alone has no clock, so a transient fault
+    /// stranded a Mac on an old version for ever (issue 20261120-209). Absent = written before this
+    /// existed; a rejection whose newest recorded result was a hold refusal is cleared on load.
+    public var rejectedAt: [String: String]?
+    /// A hold that could not be taken, with its reason and moment. Separate from `rejected`: the app
+    /// did not pause, which says nothing about the artifact. Retried after `Agent.holdBackoff`, and
+    /// surfaced as needing a person after `Agent.holdNeedsPerson` attempts.
+    public struct HoldRefusal: Codable, Sendable, Equatable {
+        public var version: String?
+        public var sha256: String?
+        public var reason: String
+        public var at: String
+        public var attempts: Int
+    }
+    public var holdRefusals: [String: HoldRefusal]?
     /// Displaced versions from local offline rollbacks, reconciled when a signed feed returns.
     public var offlineRollbacks: [String: String]?
     public struct Mismatch: Codable, Sendable, Equatable { public var sha256: String; public var count: Int }
@@ -675,6 +690,19 @@ public enum Agent {
         let serverBase = feedURL.deletingLastPathComponent()
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
         var memory = try AtomicFile.readJSON(AgentMemory.self, from: memoryFile) ?? AgentMemory()
+        var healed: [String] = []
+        // Heal the 0.1.71 defect on load: that build marked an artifact rejected when the app's HOLD
+        // was refused, so a Mac whose hold failed once would never try the version again (angkor,
+        // storage-studio 0.1.16, issue 20261120-209). A legacy rejection whose newest result for the
+        // app is a hold refusal was never about the bytes, so it is cleared once, with a note.
+        for (app, sha) in memory.rejected where memory.rejectedAt?[app] == nil {
+            let newest = memory.done.values.filter { $0.app == app }.max { $0.at < $1.at }
+            if memory.holdRefusals?[app] != nil || (newest?.reason.contains("update hold") ?? false) {
+                memory.rejected[app] = nil
+                healed.append("\(app): a failed update hold was recorded as a bad artifact by an earlier build; that memory is cleared and the version will be tried again")
+                _ = sha
+            }
+        }
         // Ids the publisher still lists as orders for this Mac, from the reply read below.
         var reportedIDs: Set<String>?
         func remember() throws {
@@ -682,7 +710,7 @@ public enum Agent {
             try AtomicFile.writeJSON(memory, to: memoryFile)
         }
         var result = AgentRunResult()
-        result.notes = startingNotes + registrationNotes
+        result.notes = startingNotes + registrationNotes + healed
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
@@ -1025,7 +1053,23 @@ public enum Agent {
             && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic) {
             guard !todo.contains(where: { $0.app == app }), let entry = feed.apps[app] else { continue }
             guard !updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app }) else { continue }
-            guard memory.rejected[app] != entry.sha256 else { continue }  // failed here before: wait for a new artifact
+            // A rejected artifact stops attempts only while its rejection is current; past the
+            // window it is history, so no transient fault can strand a Mac (issue 20261120-209).
+            if let sha = memory.rejected[app], sha == entry.sha256,
+               let at = memory.rejectedAt?[app].flatMap(ISO.date), now.timeIntervalSince(at) < Self.artifactRejectionWindow {
+                continue
+            }
+            // A refused hold is retried after its backoff, not remembered as a bad artifact.
+            if let refusal = memory.holdRefusals?[app], refusal.sha256 == entry.sha256,
+               let at = ISO.date(refusal.at), now.timeIntervalSince(at) < Self.holdBackoff {
+                result.notes.append("\(app): skipped — its update hold was refused at \(refusal.at) (\(refusal.reason)); trying again after \(Int(Self.holdBackoff / 60)) min")
+                continue
+            }
+            if let refusal = memory.holdRefusals?[app], refusal.sha256 == entry.sha256,
+               refusal.attempts >= Self.holdNeedsPerson {
+                result.notes.append("\(app): skipped — its update hold has failed \(refusal.attempts) times since \(refusal.at) (\(refusal.reason)); this needs a person")
+                continue
+            }
             let current = installed[app]
             if current == nil || VersionCompare.isNewer(entry.version, than: current!) {
                 todo.append((app, "auto-\(app)-\(UUID().uuidString)", ServerCommand.update, false, false))
@@ -1063,8 +1107,9 @@ public enum Agent {
                 result.notes.append("\(app): skipped — automatic updates are paused on this Mac")
             } else if !helper.installsAutomatically {
                 result.notes.append("\(app): skipped — automatic installs are set to manual on this Mac")
-            } else if let sha = memory.rejected[app], sha == entry.sha256 {
-                result.notes.append("\(app): skipped — this exact version failed here; a new artifact clears it")
+            } else if let sha = memory.rejected[app], sha == entry.sha256,
+                      memory.rejectedAt?[app].flatMap(ISO.date).map({ now.timeIntervalSince($0) < Self.artifactRejectionWindow }) ?? false {
+                result.notes.append("\(app): skipped — this exact version failed here; a new artifact clears it, and the rejection expires after \(Int(Self.artifactRejectionWindow / 86_400)) days")
             } else {
                 let decision = helper.automaticDecision(app, page: orders.automatic[app],
                                                         pageAt: orders.automaticAt?[app], config: cfg.automatic)
@@ -1117,7 +1162,8 @@ public enum Agent {
             // An order to update is the owner asking for that artifact again, so what failed here
             // before is cleared. A rollback is not: it puts the version he rejected back on purpose.
             if item.explicit && item.action == ServerCommand.update {
-                memory.rejected[item.app] = nil; memory.deliveryMismatches?[item.app] = nil
+                memory.rejected[item.app] = nil; memory.rejectedAt?[item.app] = nil
+                memory.deliveryMismatches?[item.app] = nil; memory.holdRefusals?[item.app] = nil
             }
             if config.apps[item.app]?.recipe == "updater", let entry = feed.apps[item.app] {
                 memory.updaterArtifacts = (memory.updaterArtifacts ?? [:]).merging([entry.version: entry.sha256]) { _, new in new }
@@ -1224,16 +1270,34 @@ public enum Agent {
             // A rollback order that fails must NOT mark the feed's current artifact rejected:
             // that artifact may be a newer release this Mac never tried, and suppressing it
             // silently breaks Automatic. Only rolled_back_by_owner marks the displaced version.
-            if item.action == ServerCommand.update,
-               (["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status)
-                || res.holdRefused),
+            if res.holdRefused {
+                // The app did not pause; the artifact is not the problem. Remembered with its reason
+                // and moment, retried after the backoff, and a person is named after N attempts.
+                var refusal = memory.holdRefusals?[item.app] ?? AgentMemory.HoldRefusal(
+                    version: nil, sha256: nil, reason: "", at: ISO.string(now), attempts: 0)
+                let reason = res.reason ?? "the update hold was refused"
+                if refusal.reason != reason { refusal.at = ISO.string(now) }   // an identical repeat keeps its clock
+                refusal.attempts += 1
+                refusal.version = feed.apps[item.app]?.version
+                refusal.sha256 = feed.apps[item.app]?.sha256
+                refusal.reason = reason
+                memory.holdRefusals = (memory.holdRefusals ?? [:]).merging([item.app: refusal]) { _, new in new }
+                memory.rejected[item.app] = nil       // a hold failure never condemns the bytes
+                memory.rejectedAt?[item.app] = nil
+                result.notes.append("\(item.app): its update hold was refused at \(refusal.at) (attempt \(refusal.attempts); retried after \(Int(Self.holdBackoff / 60)) min)")
+                if refusal.attempts >= Self.holdNeedsPerson {
+                    result.notes.append("\(item.app): its update hold has failed \(refusal.attempts) times (\(reason)); this needs a person")
+                }
+            } else if item.action == ServerCommand.update,
+               (["failed", "rolled_back", "rollback_failed", "rollback_unhealthy", "rollback_blocked"].contains(res.status)),
                let sha = feed.apps[item.app]?.sha256 {
                 // An attempt that failed on this Mac does not repeat itself every few seconds: the
                 // same bytes will fail the same way until the app, its service or its release
                 // changes. Remembered here, cleared by a new artifact or by an order/press on this
                 // Mac — which is the retry, once, instead of a loop (issues 20261120-151, 20261120-117).
                 memory.rejected[item.app] = sha
-                result.notes.append("\(item.app): this attempt failed (\(res.status)); it will not be tried again automatically until a new version is published or Update is pressed again")
+                memory.rejectedAt = (memory.rejectedAt ?? [:]).merging([item.app: ISO.string(now)]) { _, new in new }
+                result.notes.append("\(item.app): this attempt failed (\(res.status)); it will not be tried again automatically until a new version is published, Update is pressed, or the rejection expires")
             }
             let refusal = refusalNote(app: item.app, version: feed.apps[item.app]?.version, result: res, memory: &memory)
             if res.quitWithoutHold {
@@ -1579,6 +1643,14 @@ public enum Agent {
     /// Takes the app's update hold inside one settle window. Shared by the install and owner-rollback
     /// paths so both hold before a swap and both refuse an app that cannot offer a gap. Returns the
     /// endpoint even when the reply is unsafe, so the caller can resume it.
+    /// How long a refused hold waits before the same artifact is tried again. Longer than a normal
+    /// cycle so a failing hold is not hammered, short enough that a person fixing the app is enough.
+    static let holdBackoff: TimeInterval = 15 * 60
+    /// Attempts inside one backoff window after which the row says a person is needed.
+    static let holdNeedsPerson = 3
+    /// How long an artifact rejection stands. A transient fault must never strand a Mac for ever.
+    static let artifactRejectionWindow: TimeInterval = 7 * 86_400
+
     static func beginUpdateHold(app: String, holdURL: String?, http: HTTPClient, control: AppControl,
                                 exempt: Bool, installed: String? = nil, holdSince: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
         guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }

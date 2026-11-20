@@ -92,4 +92,57 @@ func retryStopTests() {
         let second = go()
         expect(second?.commandsRun ?? 1 == 0, "RS3 no second attempt (\(second?.commandsRun ?? -1) commands)")
     }
+
+    // RS4–RS7 — the selection rules around 0.1.71's defect: a hold refusal is NOT an artifact
+    // rejection (issue 20261120-209). It backs off and retries; a rejection expires; a legacy
+    // rejection caused by a hold failure is healed once on load.
+    do {
+        let (rig, token, app) = fixture("retry-stop-hold-state")
+        let config = agentConfig(rig, token: token, apps: ["demo": AppConfig(bundlePath: app.path, recipe: "fake-for-tests", automatic: true)])
+        let stateDir = URL(fileURLWithPath: config.stateDir)
+        try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
+        let quiet = AppControl(isRunning: { false }, quit: { true }, launch: {}, healthy: { _ in true })
+        func go() -> AgentRunResult? {
+            try? Agent.runOnce(config: config, http: InProcessClient(server: rig.server),
+                               shell: RecordingShell(mount: rig.root), control: { _, _ in quiet }, appFolders: [])
+        }
+        let sha = try! FeedPublisher.loadFeed(from: rig.feed).apps["demo"]!.sha256
+        func memory() -> AgentMemory { (try? AtomicFile.readJSON(AgentMemory.self, from: memoryFile)) ?? AgentMemory() }
+
+        // RS4: a fresh hold refusal backs off — no attempt, one line with its time, and the artifact
+        // is NOT remembered as rejected.
+        var m = AgentMemory()
+        m.holdRefusals = ["demo": .init(version: "2.0.0", sha256: sha, reason: "the app did not pause", at: ISO.string(Date()), attempts: 1)]
+        try! AtomicFile.writeJSON(m, to: memoryFile)
+        let held = go()
+        expect(held?.updates ?? -1 == 0 && memory().rejected["demo"] == nil
+               && held?.notes.contains { $0.contains("update hold was refused") && $0.contains("trying again after 15 min") } == true,
+               "RS4 a refused hold backs off with one line and is never an artifact rejection (notes \(held?.notes ?? []))")
+        expect(memory().holdRefusals?["demo"]?.at == m.holdRefusals?["demo"]?.at,
+               "RS4 a run that does not attempt it does not refresh its clock")
+
+        // RS5: past the backoff the same artifact is attempted again.
+        m.holdRefusals?["demo"]?.at = ISO.string(Date().addingTimeInterval(-(Agent.holdBackoff + 60)))
+        try! AtomicFile.writeJSON(m, to: memoryFile)
+        expect(go()?.updates ?? -1 == 1, "RS5 the same artifact is tried again after the backoff")
+
+        // RS6: an artifact rejection expires, so no transient fault strands a Mac for ever.
+        var expired = AgentMemory()
+        expired.rejected = ["demo": sha]
+        expired.rejectedAt = ["demo": ISO.string(Date().addingTimeInterval(-(Agent.artifactRejectionWindow + 60)))]
+        try! AtomicFile.writeJSON(expired, to: memoryFile)
+        expect(go()?.updates ?? -1 == 1, "RS6 a rejection older than the window is history, not a life sentence")
+
+        // RS7: the 0.1.71 defect heals on load — a rejection with no clock whose newest result was a
+        // hold refusal was never about the bytes.
+        var legacy = AgentMemory()
+        legacy.rejected = ["demo": sha]
+        legacy.done["auto-demo-old"] = .init(app: "demo", status: "install_failed",
+                                              reason: "demo's update hold is no longer safe", at: ISO.string(Date().addingTimeInterval(-3600)), sent: true)
+        try! AtomicFile.writeJSON(legacy, to: memoryFile)
+        let healed = go()
+        expect(healed?.updates ?? -1 == 1 && healed?.notes.contains { $0.contains("recorded as a bad artifact by an earlier build") } == true,
+               "RS7 a legacy hold-caused rejection is cleared once and the version is tried again (notes \(healed?.notes ?? []))")
+    }
 }
