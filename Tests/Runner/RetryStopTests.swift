@@ -145,4 +145,69 @@ func retryStopTests() {
         expect(healed?.updates ?? -1 == 1 && healed?.notes.contains { $0.contains("recorded as a bad artifact by an earlier build") } == true,
                "RS7 a legacy hold-caused rejection is cleared once and the version is tried again (notes \(healed?.notes ?? []))")
     }
+
+    // RS8–RS9 — spent hold refusals: actionable while running, cleared the moment the app closes,
+    // and identical repeated failures keep `at` fixed while pacing the next backoff.
+    do {
+        let (rig, token, app) = fixture("retry-stop-spent-and-repeat")
+        let config = agentConfig(rig, token: token, apps: ["demo": AppConfig(bundlePath: app.path, recipe: "fake-for-tests", automatic: true)])
+        let stateDir = URL(fileURLWithPath: config.stateDir)
+        try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
+        let sha = try! FeedPublisher.loadFeed(from: rig.feed).apps["demo"]!.sha256
+        func memory() -> AgentMemory { (try? AtomicFile.readJSON(AgentMemory.self, from: memoryFile)) ?? AgentMemory() }
+        var running = true
+        let ctl = AppControl(isRunning: { running }, quit: { true }, launch: {}, healthy: { _ in true })
+        func go(at now: Date) -> AgentRunResult? {
+            try? Agent.runOnce(config: config, http: InProcessClient(server: rig.server),
+                               shell: RecordingShell(mount: rig.root), control: { _, _ in ctl }, now: now, appFolders: [])
+        }
+
+        // RS8: spent hold refusal skips while running with the action, and installs immediately on close
+        // even inside the backoff window.
+        let t0 = Date()
+        var spent = AgentMemory()
+        spent.holdRefusals = ["demo": .init(version: "2.0.0", sha256: sha, reason: "the app did not pause",
+                                            at: ISO.string(t0.addingTimeInterval(-3600)), lastAttemptAt: ISO.string(t0),
+                                            attempts: Agent.holdNeedsPerson)]
+        try! AtomicFile.writeJSON(spent, to: memoryFile)
+        let skipped = go(at: t0.addingTimeInterval(60))
+        expect(skipped?.updates ?? -1 == 0 && skipped?.commandsRun ?? -1 == 0
+               && skipped?.notes.contains { $0.contains("quit or restart demo once") } == true,
+               "RS8 spent hold refusal skips while running and names the action (notes \(skipped?.notes ?? []))")
+        running = false
+        let closed = go(at: t0.addingTimeInterval(120))
+        expect(closed?.updates ?? -1 == 1 && memory().holdRefusals?["demo"] == nil,
+               "RS8 closing the app clears the spent refusal and installs on the next cycle without waiting")
+
+        // RS9: repeated identical hold refusals keep `at` unrefreshed while pacing the backoff.
+        let (rig9, token9, app9) = fixture("retry-stop-repeat-clock")
+        let cfg9 = agentConfig(rig9, token: token9, apps: ["demo": AppConfig(bundlePath: app9.path, recipe: "app-dmg", automatic: true)])
+        let memFile9 = URL(fileURLWithPath: cfg9.stateDir).appendingPathComponent("agent-memory.json")
+        var run9 = true
+        let ctl9 = AppControl(isRunning: { run9 }, quit: { true }, launch: {}, healthy: { _ in true })
+        func go9(at now: Date) -> AgentRunResult? {
+            try? Agent.runOnce(config: cfg9, http: InProcessClient(server: rig9.server),
+                               shell: RecordingShell(mount: rig9.root), control: { _, _ in ctl9 }, now: now, appFolders: [])
+        }
+        func mem9() -> AgentMemory { (try? AtomicFile.readJSON(AgentMemory.self, from: memFile9)) ?? AgentMemory() }
+        let r1 = go9(at: t0)
+        let firstAt = mem9().holdRefusals?["demo"]?.at
+        expect(r1?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 1 && mem9().rejected["demo"] == nil,
+               "RS9 first hold refusal records attempt 1 without rejecting the artifact")
+        let t1 = t0.addingTimeInterval(Agent.holdBackoff + 60)
+        let r2 = go9(at: t1)
+        expect(r2?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 2
+               && mem9().holdRefusals?["demo"]?.at == firstAt,
+               "RS9 identical repeat increments attempts without refreshing the original timestamp")
+        let r2Wait = go9(at: t1.addingTimeInterval(60))
+        expect(r2Wait?.commandsRun == 0 && mem9().holdRefusals?["demo"]?.attempts == 2,
+               "RS9 backoff holds after the second attempt too")
+        let t3 = t1.addingTimeInterval(Agent.holdBackoff + 60)
+        let r3 = go9(at: t3)
+        expect(r3?.commandsRun == 1 && mem9().holdRefusals?["demo"]?.attempts == 3
+               && r3?.notes.contains { $0.contains("Quit or restart demo once") } == true,
+               "RS9 third attempt surfaces the actionable instruction (notes \(r3?.notes ?? []))")
+        _ = run9; run9 = true
+    }
 }
