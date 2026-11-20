@@ -64,7 +64,8 @@ func indexUnderLoadTests() {
 
     // The index answers anyway. Before 0.1.73 both of these were 503 for ~18 s.
     let index = get("/release.json")
-    expect(index?.0 == 200 && index?.1.contains("\"apps\"") == true,
+    // The index is the signed envelope: the base64 feed plus its signature.
+    expect(index?.0 == 200 && index?.1.contains("\"signature\"") == true && (index?.1.count ?? 0) > 100,
            "IDX1 the feed index answers 200 while all \(fleet) transfer slots are held (\(index?.0 ?? -1))")
     // The page has its own local-only policy (403 for anything but the tailnet); what this test is
     // about is that it is answered at all, not refused as busy.
