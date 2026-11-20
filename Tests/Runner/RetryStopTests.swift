@@ -107,7 +107,7 @@ func retryStopTests() {
             try? Agent.runOnce(config: config, http: InProcessClient(server: rig.server),
                                shell: RecordingShell(mount: rig.root), control: { _, _ in quiet }, appFolders: [])
         }
-        let sha = try! FeedPublisher.loadFeed(from: rig.feed).apps["demo"]!.sha256
+        let sha = FeedPublisher.loadFeed(from: rig.feed)!.apps["demo"]!.sha256
         func memory() -> AgentMemory { (try? AtomicFile.readJSON(AgentMemory.self, from: memoryFile)) ?? AgentMemory() }
 
         // RS4: a fresh hold refusal backs off — no attempt, one line with its time, and the artifact
@@ -154,7 +154,7 @@ func retryStopTests() {
         let stateDir = URL(fileURLWithPath: config.stateDir)
         try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
-        let sha = try! FeedPublisher.loadFeed(from: rig.feed).apps["demo"]!.sha256
+        let sha = FeedPublisher.loadFeed(from: rig.feed)!.apps["demo"]!.sha256
         func memory() -> AgentMemory { (try? AtomicFile.readJSON(AgentMemory.self, from: memoryFile)) ?? AgentMemory() }
         var running = true
         let ctl = AppControl(isRunning: { running }, quit: { true }, launch: {}, healthy: { _ in true })
