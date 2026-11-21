@@ -273,7 +273,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             destinationField.isEditable = true
             destinationField.isBezeled = true
             destinationField.drawsBackground = true
-            sourceNote.stringValue = "An https feed link installs from that public feed and needs no pairing code. A publisher’s Tailscale name needs the code from its Update Studio window."
+            sourceNote.stringValue = "An https feed link installs from that public feed and needs no pairing code. A publisher’s Tailscale name needs the code from its Update Studio window. A numeric IP can never work: macOS refuses plain http to an IP address."
         case .kit:
             destinationField.stringValue = kitAddress
             destinationField.placeholderString = ""

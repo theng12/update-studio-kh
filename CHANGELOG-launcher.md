@@ -2,11 +2,13 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
-## 0.1.76 — 2026-11-21
+## 0.1.77 — 2026-11-21
 
 - Settings' "Where updates come from" now shows which route is chosen: the selected one is a pressed segment, not three identical buttons.
 - The footer's fleet button reads "Fleet" in full (it was cut to "Fleet…"); its tooltip keeps the full sentence.
 - In Settings, "Where updates come from" has its own spacing, "Check connection" sits under the address it checks, and the Join note is one line — so the route picker and the Join controls are visible without scrolling at the default window size.
+- Connecting from GitHub releases no longer fails on a Mac that has used Studio Launcher before: leftover updater state made the installer refuse a plain run ("KH Updater already exists"), and the app showed only "Local setup could not be completed". The app now asks for the installer's repair mode when anything is already there, and a real failure shows the installer's own last line.
+- The custom-address field says plainly that a numeric IP can never work: macOS refuses plain http to an IP address, so only the name ending in .ts.net (or an https feed link) can be used.
 
 ## 0.1.75 — 2026-11-21
 

@@ -142,7 +142,7 @@ public enum Connect {
             if isSetUp(home: home) {
                 throw khuFail("Setup finished, but Studio Launcher could not start. Close this window and open Studio Launcher again.")
             }
-            throw khuFail("Local setup could not be completed. Your saved data is kept. Try Connect again.")
+            throw khuFail("Local setup could not be completed: \(Self.installerReason(result)). Your saved data is kept; Try Connect again finishes the same install.")
         }
         _ = try? Trash.move(claimFile, into: library.appendingPathComponent("_trash"))
         let source = selectedKit == kit ? "the verified copy inside this Launcher" : "the publisher's verified download"
@@ -191,13 +191,21 @@ public enum Connect {
                 throw khuFail("This Mac could not save its setup settings. Try again.")
             }
             defer { _ = try? Trash.move(temp, into: library.appendingPathComponent("_trash")) }
-            let result = try shell.run("/bin/bash", arguments: [kit.appendingPathComponent("install-agent.sh").path, temp.path, home.path],
-                                       timeout: 120)
+            // A Mac that has run an older Launcher keeps Library/KHUpdater (or a LaunchAgent stub)
+            // behind; the installer then refuses a plain run — "KH Updater already exists" — and the
+            // person saw only a generic sentence. The publisher route already asked for --repair in
+            // this case (2026-11-21, owner hit this on GitHub with 0.1.75 leftovers); do the same here.
+            let remnants = ["Library/KHUpdater", "Library/LaunchAgents/com.khupdater.agent.plist"].contains {
+                (try? FileManager.default.attributesOfItem(atPath: home.appendingPathComponent($0).path)) != nil
+            }
+            var arguments = [kit.appendingPathComponent("install-agent.sh").path, temp.path, home.path]
+            if remnants { arguments.append("--repair") }
+            let result = try shell.run("/bin/bash", arguments: arguments, timeout: 120)
             guard result.exitCode == 0 else {
                 if isSetUp(home: home) {
                     throw khuFail("Setup finished, but Studio Launcher could not start. Close this window and open Studio Launcher again.")
                 }
-                throw khuFail("Local setup could not be completed. Your saved data is kept. Try again.")
+                throw khuFail("Local setup could not be completed: \(Self.installerReason(result)). Your saved data is kept; Try again finishes the same install.")
             }
             return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
                 + "\nThis Mac updates from the public feed and reports nothing to anyone."
@@ -568,6 +576,17 @@ public enum Connect {
         }
         _ = try JSON.decode(Feed.self, from: feedData).validated()
         return try saveDestination(feedURL, file: file, expected: raw)
+    }
+
+    /// The installer's own last meaningful line, for the sentence a person reads instead of
+    /// "could not be completed": honest states say why, and every other line is noise.
+    static func installerReason(_ result: ShellResult) -> String {
+        let lines = (result.stderr + "\n" + result.stdout)
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard let last = lines.last else { return "the installer gave no reason (exit \(result.exitCode))" }
+        return last.count > 300 ? String(last.prefix(300)) + "…" : last
     }
 
     /// Enrolled to a publisher: a saved publisher address and the token that signs this Mac in.

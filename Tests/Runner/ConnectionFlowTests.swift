@@ -483,6 +483,51 @@ func connectionFlowTests() {
                "CF20 a usable publisher address keeps today's repair window unchanged")
     }
 
+    // CF22. A GitHub connect on a Mac that still carries old KHUpdater state: the installer refuses
+    // a plain run ("KH Updater already exists"), which the owner met as a generic sentence. The app
+    // now asks for the installer's repair mode, and a real failure carries the installer's reason.
+    do {
+        let r = EnrolRig("cf22")
+        PinnedKey.test = r.rig.pair.publicKeyBase64
+        defer { PinnedKey.test = nil }
+        let k = kit(for: r)
+        func home(_ tag: String, leftover: Bool) -> URL {
+            let home = r.rig.root.appendingPathComponent("home-" + tag)
+            try! fm.createDirectory(at: home.appendingPathComponent("Library"), withIntermediateDirectories: true)
+            if leftover {
+                try! fm.createDirectory(at: home.appendingPathComponent("Library/KHUpdater/state"), withIntermediateDirectories: true)
+                try! #"{"phase":"promoted","staging":"/Applications/.Studio Launcher KH.app.khu-staging"}"#
+                    .write(to: home.appendingPathComponent("Library/KHUpdater/state/install-updater.json"),
+                           atomically: true, encoding: .utf8)
+            }
+            return home
+        }
+        struct FailingShell: Shell {
+            let stderr: String
+            func run(_ e: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+                ShellResult(exitCode: 1, stdout: "", stderr: stderr)
+            }
+        }
+        var feed = Feed(published_at: ISO.string(Date()))
+        feed.apps["updater"] = FeedApp(version: "0.1.76", file: "khu", sha256: Signing.sha256Hex(Data("u".utf8)),
+                                       bytes: 1, kind: "updater")
+        let body = try! JSON.encode(feed)
+        let release = try! JSON.encode(Release(feed: body, signature: try! Signing.sign(body, with: r.rig.pair.privateKey)))
+        let http = MirrorHTTP(feed: release)
+        for (tag, leftover) in [("clean", false), ("leftover", true)] {
+            let shell = CaptureShell()
+            _ = try? Connect.usePublicFeed(kit: k, home: home(tag, leftover: leftover), machine: "cf22-" + tag,
+                                           address: Connect.publicFeedURL, http: http, shell: shell)
+            expect((shell.calls.first?.last == "--repair") == leftover,
+                   "CF22 a \(tag) home runs the installer \(leftover ? "in its --repair mode" : "plain") (\(shell.calls.first ?? []))")
+        }
+        expectThrows("CF22 a failed setup carries the installer's own reason", contains: "KH Updater already exists") {
+            _ = try Connect.usePublicFeed(kit: k, home: home("reason", leftover: true), machine: "cf22-reason",
+                                          address: Connect.publicFeedURL, http: http,
+                                          shell: FailingShell(stderr: "KH Updater already exists; preserve it and use the upgrade/repair procedure.\n"))
+        }
+    }
+
     // CF21. A Mac whose only address is one macOS refuses never sits unable to update: it reads the
     // built-in mirror and says so. A Mac with a usable address never falls back to GitHub.
     do {
