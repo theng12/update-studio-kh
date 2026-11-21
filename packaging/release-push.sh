@@ -15,14 +15,19 @@ APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; KIND="${5:-}"
 # The publisher writes the feed's category label from this release id, never from UI inference.
 # An explicit label wins; the two Launcher components are labelled even by older wrappers that
 # do not set the variable. Every other app keeps its current unlabelled state.
-TYPE="${KHU_APP_TYPE:-}"
+# `KHU_APP_TYPE=` set but empty means "no label on this one": needed to publish the helper onto a
+# host whose own tool predates `--type`, and it can never label anything by accident.
+TYPE=""
+if [ -n "${KHU_APP_TYPE+set}" ]; then
+  TYPE="${KHU_APP_TYPE}"
+elif [ "$APP" = "launcher" ] || [ "$APP" = "updater" ]; then
+  TYPE="system"
+fi
 if [ -n "$TYPE" ]; then
   case "$TYPE" in
     business|entertainment|extension|media|plugin|system|utility) ;;
     *) echo "release-push: KHU_APP_TYPE must be business, entertainment, extension, media, plugin, system or utility, not $TYPE" >&2; exit 2 ;;
   esac
-elif [ "$APP" = "launcher" ] || [ "$APP" = "updater" ]; then
-  TYPE="system"
 fi
 [ -f "$DMG" ] || { echo "no such DMG: $DMG" >&2; exit 2; }
 [ -f "$LOG" ] || { echo "no such changelog: $LOG" >&2; exit 2; }
