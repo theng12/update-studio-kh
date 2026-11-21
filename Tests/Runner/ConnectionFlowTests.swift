@@ -47,6 +47,14 @@ private final class CountingHTTP: HTTPClient, @unchecked Sendable {
     }
 }
 
+/// Serves one signed feed to any address asked: the public mirror's own bytes, without a network.
+private struct MirrorHTTP: HTTPClient {
+    let feed: Data
+    func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { (feed, 200) }
+    func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) { (Data(), 404) }
+    func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int { 404 }
+}
+
 func connectionFlowTests() {
     /// A kit for this rig: publisher record and install script, pinned by MANIFEST.json. The
     /// script really writes the config into the temp home when a real shell runs it (the
@@ -340,6 +348,50 @@ func connectionFlowTests() {
         }
         expect((try? Connect.destination("https://example.test/release.json")) == "https://example.test/release.json",
                "CF7 a public https feed link is accepted as typed")
+    }
+
+    // CF15. The GitHub mirror is a destination for an already-paired Mac too: it is verified
+    // against this Mac's pin, only the address is saved, and the token stays for a switch back.
+    // The three refusals a person meets are distinguishable, each naming its own cause.
+    do {
+        let fleet = Signing.generateKeyPair()
+        PinnedKey.test = fleet.publicKeyBase64
+        defer { PinnedKey.test = nil }
+        var feed = Feed(published_at: ISO.string(Date()))
+        feed.apps["updater"] = FeedApp(version: "0.1.74", file: "khu",
+                                       sha256: Signing.sha256Hex(Data("u".utf8)), bytes: 1, kind: "updater")
+        let body = try! JSON.encode(feed)
+        let release = try! JSON.encode(Release(feed: body, signature: try! Signing.sign(body, with: fleet.privateKey)))
+        let file = tmpDir("cf15").appendingPathComponent("config.json")
+        let original: [String: Any] = [
+            "feedURL": "http://100.64.0.9:1/release.json", "publicKey": fleet.publicKeyBase64,
+            "stateDir": tmpDir("cf15-state").path, "machine": "cf-mac", "token": "tok-cf15-0123456789",
+            "apps": ["updater": ["bundlePath": "", "recipe": "updater", "automatic": true]],
+        ]
+        try! JSONSerialization.data(withJSONObject: original).write(to: file)
+        let mirror = "https://theng12.github.io/kh-releases/release.json"
+
+        let saved = try! Connect.changeDestination(to: mirror, file: file, http: MirrorHTTP(feed: release))
+        expect(saved == mirror, "CF15 the GitHub mirror is saved as this Mac's address")
+        let after = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]
+        expect(after?["feedURL"] as? String == mirror && after?["token"] as? String == "tok-cf15-0123456789"
+               && after?["publicKey"] as? String == fleet.publicKeyBase64,
+               "CF15 switching to the mirror keeps the token and the pin, so a switch back stays possible")
+
+        expectThrows("CF15 a numeric IP names the ATS rule and offers GitHub", contains: "GitHub releases") {
+            _ = try Connect.destination("100.64.0.7:8790")
+        }
+        expectThrows("CF15 https to a publisher names the scheme it really serves", contains: "serves plain http") {
+            _ = try Connect.destination("https://host.tail1234.ts.net:8790")
+        }
+        let dns = Agent.plainUnreachable(URL(string: "http://mac.tail1234.ts.net:8790/release.json")!,
+                                         error: URLError(.cannotFindHost))
+        expect(dns.contains("Tailscale") && dns.contains("GitHub releases"),
+               "CF15 a tailnet name that will not resolve says Tailscale's DNS is not answering and offers GitHub (\(dns))")
+        let offline = Agent.plainUnreachable(URL(string: "http://mac.tail1234.ts.net:8790/release.json")!,
+                                             error: URLError(.cannotConnectToHost))
+        expect(offline.contains("could not be reached"),
+               "CF15 a publisher that answers nothing stays one honest sentence (\(offline))")
     }
 
     // CF14. Editing the first-run route never replaces the kit's pinned key.

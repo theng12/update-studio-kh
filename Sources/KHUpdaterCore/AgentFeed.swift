@@ -31,10 +31,18 @@ extension Agent {
     /// an address macOS refuses is a setting to change, not a network failure to retry.
     public static func plainUnreachable(_ url: URL, error: Error) -> String {
         let host = url.host ?? url.absoluteString
-        guard blockedByTransportSecurity(error) else { return "Update Studio could not be reached at \(host)" }
-        return FeedNetwork.isAddressLiteral(host)
-            ? "the saved address \(host) is a bare IP, which macOS refuses for an unencrypted feed; use the publisher's host name instead"
-            : "macOS refused \(host) because it is not a secure address; use the publisher's host name instead"
+        if blockedByTransportSecurity(error) {
+            return FeedNetwork.isAddressLiteral(host)
+                ? "the saved address \(host) is a bare IP, which macOS refuses for an unencrypted feed; use the publisher's host name instead"
+                : "macOS refused \(host) because it is not a secure address; use the publisher's host name instead"
+        }
+        // A tailnet name that will not resolve is Tailscale's DNS, not a dead publisher; a person
+        // can fix that or take the public feed, and the sentence must say which.
+        if let urlError = error as? URLError, [.cannotFindHost, .dnsLookupFailed].contains(urlError.code),
+           host.lowercased().hasSuffix(".ts.net") {
+            return "\(host) cannot be found: Tailscale's DNS is not answering on this Mac. Bring Tailscale up, or use GitHub releases instead."
+        }
+        return "Update Studio could not be reached at \(host)"
     }
 
     /// An address macOS refuses on sight: plain HTTP to a bare IP (ATS). It is dropped from the

@@ -441,9 +441,7 @@ public enum Connect {
     /// setting it is; anything else says where it tried, in plain words — Foundation's own text
     /// ("Code=-1022 … requires a secure connection") tells a person nothing they can act on.
     static func unreachable(_ url: URL, error: Error) -> KHUError {
-        Agent.blockedByTransportSecurity(error)
-            ? khuFail(Agent.plainUnreachable(url, error: error))
-            : khuFail("Update Studio could not be reached at \(url.host ?? url.absoluteString)")
+        khuFail(Agent.plainUnreachable(url, error: error))
     }
 
     public static func check(config: AgentConfig, http: HTTPClient = URLSessionHTTPClient(), now: Date = Date()) throws {
@@ -457,11 +455,8 @@ public enum Connect {
         let data: Data, status: Int
         do { (data, status) = try http.get(url, headers: ["Authorization": "Bearer \(config.token)"]) }
         catch {
-            // A refused address is a setting to change, said in one sentence; Foundation's own text
-            // ("Code=-1022 … requires a secure connection") is not something a person can act on.
-            guard Agent.blockedByTransportSecurity(error) else {
-                throw khuFail("Update Studio could not be reached at \(feed.host ?? config.feedURL)")
-            }
+            // Foundation's own text ("Code=-1022 … requires a secure connection") is not something
+            // a person can act on; each cause gets the sentence that names it.
             throw khuFail(Agent.plainUnreachable(feed, error: error))
         }
         guard status == 200 else {
@@ -495,6 +490,12 @@ public enum Connect {
         var text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = text.lowercased()
         if lower.hasPrefix("https://") {
+            if let url = URL(string: text), let host = url.host, FeedNetwork.authenticated(url) {
+                // A publisher in this fleet serves plain http on its own port. https there is the
+                // wrong scheme, said plainly instead of surfacing as a TLS or ATS failure.
+                let port = url.port.map { ":\($0)" } ?? ":8790"
+                throw khuFail("Update Studio serves plain http on its own port, not https, so \(host) will not answer this way. Type http://\(host)\(port)/release.json — or use GitHub releases.")
+            }
             // A public feed's own link, pasted as it appears on the download page. Used exactly as
             // given: `FeedNetwork.feedURL` is the one place that decides what a feed address is.
             return (try FeedNetwork.feedURL(text)).absoluteString
@@ -524,7 +525,7 @@ public enum Connect {
             !octet.isEmpty && octet.allSatisfy { $0.isNumber }
         }
         if numeric {
-            throw khuFail("type the publisher's Tailscale name, not the numeric IP \(host): macOS blocks plain http to an IP address (App Transport Security). The name ends in .ts.net and is shown on the publisher's Update Studio window.")
+            throw khuFail("type the publisher's Tailscale name, not the numeric IP \(host): macOS blocks plain http to an IP address (App Transport Security). The name ends in .ts.net and is shown on the publisher's Update Studio window, or use GitHub releases instead.")
         }
         guard host.lowercased().hasSuffix(".ts.net") else {
             throw khuFail("type the publisher's Tailscale name ending in .ts.net: macOS only allows plain http to that name (App Transport Security), not to \(host).")

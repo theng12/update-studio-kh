@@ -149,7 +149,9 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                                          folders: Catalog.applicationFolders)
                 .map { ["id": $0.appID, "bundleID": $0.bundleID, "version": $0.version,
                         "name": AppNames.display($0.appID), "path": $0.existingPath] },
-            "connection": ["destination": helper.config.feedURL, "machine": helper.config.machine,
+            "connection": ["destination": helper.config.feedURL,
+                           // A Mac with no saved address shows and uses this default; a saved one wins.
+                           "defaultFeed": ConnectionWindow.publicFeedURL, "machine": helper.config.machine,
                            "displayName": MacName.current(expectedMachine: helper.config.machine) as Any,
                            "checking": connectionBusy,
                            "checkedAt": connectionUI.checkedAt as Any, "ok": connectionUI.ok as Any, "note": connectionUI.note as Any,
@@ -336,7 +338,10 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                         self.helper.config.feedURL = saved
                         self.helper.wake.signal()
                         self.connectionUI.serverOk = true
-                        self.connectionUI.serverNote = "Saved. The next update check uses this address."
+                        // A public feed changes what this Mac is: no publisher, no reports, no orders.
+                        self.connectionUI.serverNote = saved.lowercased().hasPrefix("https://")
+                            ? "Saved. This Mac now updates from that public feed: it installs only what that feed signs and no longer reports to or takes orders from Update Studio."
+                            : "Saved. The next update check uses this address."
                         self.connectionUI.checkedAt = nil
                         self.connectionUI.ok = nil
                         self.connectionUI.note = nil

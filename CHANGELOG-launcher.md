@@ -2,6 +2,16 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.74 — 2026-11-21
+
+- First run now asks where updates come from, as a drop-down: GitHub releases, a custom address, or — when this copy came from a publisher's kit — that Mac's own Update Studio. GitHub is the default on a copy downloaded for anyone, so setting up a Mac no longer starts at one particular publisher's address.
+- Choosing GitHub releases needs no pairing code and shows the public feed link, read-only, with one line saying this Mac installs only what that feed signs and reports nothing to anyone.
+- A custom address accepts an https feed link (no pairing code) or a publisher's Tailscale name ending in .ts.net (the code from its Update Studio window). A numeric IP is still refused — macOS blocks plain http to one — and the sentence says to use the name shown on the publisher's window.
+- A Mac set up from a publisher's kit opens on that Mac's own Update Studio, prefilled with its address and the pairing code, exactly as before. Pair again and Repair keep their saved connection and show no picker.
+- GitHub releases is now the built-in starting address when nothing is saved — it keeps working when Update Studio is off. A saved or typed address always wins over it, and Settings shows the address actually in use, marked as the default when it is that one.
+- An already-paired Mac can move to the public feed in one click: Settings has "Use GitHub releases instead". The mirror is checked against this Mac's own pinned key before it is saved; the saved sign-in is kept, so switching back is one address away. After the switch Settings says this Mac no longer reports to or takes orders from Update Studio.
+- The failure sentence names the real cause instead of a generic "could not be reached": a numeric IP says macOS blocks plain http to an IP; https typed for a publisher says it serves plain http on its own port; a tailnet name that does not resolve says Tailscale's DNS is not answering on this Mac. Each offers GitHub releases as the way out.
+
 ## 0.1.73 — 2026-11-20
 
 - The version check now answers while transfers are running. The feed index sat in the same fixed slot count as a 1.48 GB download, so 46–65 Macs checking during a rollout were told the publisher was busy for about 18 seconds and then retried together. The index and the page are now served outside the transfer slots; a transfer started while every slot is full is still refused as busy, exactly as before.

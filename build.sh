@@ -32,7 +32,9 @@ case "${1:-build}" in
   test)
     python3 -B -I Tests/test_startup_refusal.py --output "build/startup-refusal-$(uuidgen)"
     universal build/khu "${CORE[@]}" Sources/khu/*.swift
-    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-tests "${CORE[@]}" Tests/Runner/*.swift
+    # ConnectionWindow.swift is compiled with the tests so the first-run window's states are
+    # checked headlessly, without a desktop (its test-only surface is behind KHU_TESTS).
+    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-tests "${CORE[@]}" Sources/khu/ConnectionWindow.swift Tests/Runner/*.swift
     ./build/khu-tests
     ;;
   test-cli)

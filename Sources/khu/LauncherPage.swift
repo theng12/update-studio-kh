@@ -372,9 +372,12 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
   :el('p',{class:'note',style:'margin-left:0'},'Not checked yet.');
  // What the person typed but has not applied yet outlives a redraw; once the new address is saved,
  // the state carries it and the draft is dropped.
- const chInput=el('input',{id:'addr',type:'text',value:addrDraft===null?(c.destination||''):addrDraft,placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address',oninput:e=>{addrDraft=e.target.value}});
+ // The address in use, never a guess: a saved one, else the default a Mac with no saved address
+ // starts on. Both are shown here so nobody has to wonder which feed is live.
+ const shownAddress=c.destination||c.defaultFeed||'';
+ const chInput=el('input',{id:'addr',type:'text',value:addrDraft===null?shownAddress:addrDraft,placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address',oninput:e=>{addrDraft=e.target.value}});
  const connSection=el('section',{},el('h4',{},'Connection'),
-  el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},c.destination)),
+  el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},shownAddress+(c.destination?'':' (default)'))),
   el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.displayName&&c.machine&&c.displayName!==c.machine?c.displayName+' ('+c.machine+')':(c.displayName||c.machine||''))),
   connStatus(),
   el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection')),
@@ -382,7 +385,9 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
   // confirmation and the pairing code are collected by the native window that follows.
   c.pairAvailable?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'pairAgain'})},'Pair again now')):null,
   el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:chInput.value})},'Use this address')),
-  el('p',{class:'note',style:'margin-left:0'},'This Mac only accepts an address where Update Studio serves the updates its own key already signed. A different Update Studio needs its setup kit, not an address.'),
+  // One click back to the public mirror, offered only while a publisher's address is saved.
+  c.destination&&c.defaultFeed&&c.destination!==c.defaultFeed?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:c.defaultFeed})},'Use GitHub releases instead')):null,
+  el('p',{class:'note',style:'margin-left:0'},(c.destination?'':'GitHub releases is the default while no address is saved. ')+'This Mac only accepts an address where Update Studio serves the updates its own key already signed. A different Update Studio needs its setup kit, not an address.'),
   c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null);
  const updater=S.apps.find(a=>a.id=='updater');
  const sheet=el('div',{class:'sheet set',role:'dialog','aria-modal':true,'aria-label':'Settings',style:again?'animation:none':'',onclick:e=>e.stopPropagation()},

@@ -19,6 +19,13 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
 
     private enum State { case idle, working, refused, done }
 
+    /// Where a first run takes its updates from. Only `.firstRun` has a picker; the repair flows
+    /// keep the saved connection and never show it.
+    private enum Source: Int { case github, custom, kit }
+
+    /// The public mirror: signed by this fleet's pinned key, no publisher on the other end.
+    static let publicFeedURL = "https://theng12.github.io/kh-releases/release.json"
+
     private static let width: CGFloat = 500
     private static let inset: CGFloat = 24
     private static let inner: CGFloat = ConnectionWindow.width - 2 * ConnectionWindow.inset
@@ -29,6 +36,12 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     private let destinationField = NSTextField()
     private let nameField = NSTextField()
     private let codeField = NSTextField()
+    private let sourcePicker = NSPopUpButton()
+    private let sourceNote = NSTextField(labelWithString: "")
+    private var source: Source = .kit
+    private var codeRow: NSStackView?
+    /// The kit's own address, or "" for a copy built for public download.
+    private let kitAddress: String
     private let statusLabel = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
@@ -46,11 +59,16 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     /// Where typing starts: the code, or the only button a repair has.
     private var initialField: NSView {
         if case .setupRepair = mode { return connectButton }
+        if case .firstRun = mode, source == .github { return connectButton }
         return codeField
     }
 
     private init(mode: Mode) {
         self.mode = mode
+        kitAddress = {
+            guard case .firstRun(let kit, _) = mode, let pub = try? Connect.publisher(kit: kit) else { return "" }
+            return pub.feedURL ?? ""
+        }()
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 380),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         super.init()
@@ -73,18 +91,11 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         let intro: NSTextField
         let destination = destinationField
         switch mode {
-        case .firstRun(let kit, _):
-            let savedAddress = (try? Connect.publisher(kit: kit))?.feedURL ?? ""
-            intro = Self.wrap("Choose the owned Mac running Update Studio KH. Studio Launcher sets up its helper from inside this app. "
-                + "Type that Mac’s address and the pairing code from Connect a Mac. The app’s pinned key still verifies the connection."
-                + (savedAddress.isEmpty
-                   ? "\n\nThis copy is not connected yet. Paste the feed link from the page you downloaded it from, "
-                     + "or type the address of the Mac running Update Studio KH."
-                   : ""))
-            // An edited address changes the route, never the kit's pinned publisher key. A copy
-            // built for public download carries no address, so the field starts empty and sayable.
-            destination.stringValue = savedAddress
-            if savedAddress.isEmpty { destination.placeholderString = "Not connected yet — type the address" }
+        case .firstRun:
+            intro = Self.wrap("Choose where this Mac’s updates come from. From GitHub releases, Studio Launcher installs only "
+                + "what that feed signs and reports nothing to anyone. From a Mac running Update Studio KH, Studio Launcher "
+                + "sets up its helper from inside this app: type that Mac’s address and the pairing code from Connect a Mac. "
+                + "The app’s pinned key verifies the connection either way.")
             destination.setAccessibilityLabel("Update Studio address")
             nameField.stringValue = Connect.proposedName()
         case .repair(_, let plan):
@@ -113,6 +124,23 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         destination.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         destination.isSelectable = true
 
+        sourceNote.maximumNumberOfLines = 0
+        sourceNote.lineBreakMode = .byWordWrapping
+        sourceNote.textColor = .secondaryLabelColor
+        sourceNote.preferredMaxLayoutWidth = Self.inner
+        sourceNote.widthAnchor.constraint(equalToConstant: Self.inner).isActive = true
+        if case .firstRun = mode {
+            // GitHub releases is the primary choice; a kit that carries its publisher's address
+            // starts on that route so a Mac set up from a publisher kit is unchanged.
+            sourcePicker.addItems(withTitles: ["GitHub releases", "Custom address"]
+                + (kitAddress.isEmpty ? [] : ["This Mac's Update Studio"]))
+            sourcePicker.setAccessibilityLabel("Where updates come from")
+            sourcePicker.target = self
+            sourcePicker.action = #selector(sourceChanged)
+            source = kitAddress.isEmpty ? .github : .kit
+            sourcePicker.selectItem(at: source.rawValue)
+        }
+
         nameField.setAccessibilityLabel("Name for this Mac")
         codeField.placeholderString = "123-456"
         codeField.setAccessibilityLabel("Pairing code")
@@ -139,8 +167,12 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         cancelButton.action = #selector(cancelPressed)
         cancelButton.keyEquivalent = "\u{1b}"
 
-        var rowViews = [Self.row("Update Studio", destination), Self.row("Name for this Mac", nameField)]
-        if !setupRepair { rowViews.append(Self.row("Pairing code", codeField)) }
+        codeRow = setupRepair ? nil : Self.row("Pairing code", codeField)
+        var rowViews: [NSView] = []
+        if case .firstRun = mode { rowViews.append(Self.row("Where updates come from", sourcePicker)) }
+        rowViews.append(Self.row("Update Studio", destination))
+        rowViews.append(Self.row("Name for this Mac", nameField))
+        if let codeRow { rowViews.append(codeRow) }
         let rows = NSStackView(views: rowViews)
         rows.orientation = .vertical
         rows.alignment = .leading
@@ -159,7 +191,10 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         buttons.spacing = 10
         buttons.widthAnchor.constraint(equalToConstant: Self.inner).isActive = true
 
-        let stack = NSStackView(views: [title, intro, rows, nameHint, statusRow, buttons])
+        var stackViews: [NSView] = [title, intro, rows]
+        if case .firstRun = mode { stackViews.append(sourceNote) }
+        stackViews += [nameHint, statusRow, buttons]
+        let stack = NSStackView(views: stackViews)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 14
@@ -177,9 +212,60 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             content.widthAnchor.constraint(equalToConstant: Self.width),
         ])
+        if case .firstRun = mode { applySource() }
         content.layoutSubtreeIfNeeded()
         window.setContentSize(content.fittingSize)
         window.initialFirstResponder = initialField
+    }
+
+    // MARK: where updates come from
+
+    @objc private func sourceChanged() {
+        source = Source(rawValue: sourcePicker.indexOfSelectedItem) ?? .custom
+        applySource()
+        window.setContentSize(window.contentView?.fittingSize ?? window.contentView?.frame.size ?? .zero)
+        window.initialFirstResponder = initialField
+        window.makeFirstResponder(initialField)
+    }
+
+    /// The one place a first-run source decides the field, the code row and the sentence under it.
+    private func applySource() {
+        guard case .firstRun = mode else { return }
+        switch source {
+        case .github:
+            destinationField.stringValue = Self.publicFeedURL
+            destinationField.placeholderString = ""
+            destinationField.isEditable = false
+            destinationField.isBezeled = false
+            destinationField.drawsBackground = false
+            sourceNote.stringValue = "GitHub releases: this Mac installs only what that feed signs and reports nothing to anyone. No pairing code is needed."
+        case .custom:
+            destinationField.stringValue = ""
+            destinationField.placeholderString = "Paste an https feed link, or type a name ending in .ts.net"
+            destinationField.isEditable = true
+            destinationField.isBezeled = true
+            destinationField.drawsBackground = true
+            sourceNote.stringValue = "An https feed link installs from that public feed and needs no pairing code. A publisher’s Tailscale name needs the code from its Update Studio window."
+        case .kit:
+            destinationField.stringValue = kitAddress
+            destinationField.placeholderString = ""
+            destinationField.isEditable = true
+            destinationField.isBezeled = true
+            destinationField.drawsBackground = true
+            sourceNote.stringValue = "This Mac's Update Studio: use the address and pairing code shown in Update Studio KH on that Mac."
+        }
+        let code = source != .github
+        codeRow?.isHidden = !code
+        codeField.isHidden = !code
+        sourcePicker.isEnabled = state == .idle || state == .refused
+        window.initialFirstResponder = initialField
+    }
+
+    /// What a typed first-run address means: a public https feed, or a publisher that needs a code.
+    /// One rule for the window and its tests; `Connect.destination` still refuses an IP or a bare host.
+    static func route(_ address: String) throws -> (publicFeed: Bool, needsCode: Bool) {
+        let publicFeed = try Connect.destination(address).lowercased().hasPrefix("https://")
+        return (publicFeed, !publicFeed)
     }
 
     /// First run: the kit's window, to completion — connected (the setup finished) or cancelled
@@ -284,10 +370,10 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         var publicFeed = false
         if case .firstRun = mode {
             guard !destination.trimmingCharacters(in: .whitespaces).isEmpty else {
-                show("Paste the feed link from the download page, or type the address of the Mac running Update Studio KH.",
+                show("Choose GitHub releases or this Mac's Update Studio above, or type the address of the Mac running Update Studio KH.",
                      color: .systemRed, spinning: false); return
             }
-            do { publicFeed = try Connect.destination(destination).lowercased().hasPrefix("https://") }
+            do { publicFeed = try Self.route(destination).publicFeed }
             catch { show("\(error)", color: .systemRed, spinning: false); return }
         }
         let machine: String
@@ -315,6 +401,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         destinationField.isEnabled = false
         nameField.isEnabled = false
         codeField.isEnabled = false
+        sourcePicker.isEnabled = false
         connectButton.isEnabled = false
         cancelButton.isEnabled = true
         cancelButton.title = "Cancel"
@@ -354,7 +441,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         guard state == .working else { return }
         if stopping { finish(.cancelled); return }
         destinationField.isEnabled = true
-        if case .firstRun = mode { nameField.isEnabled = true }
+        if case .firstRun = mode { nameField.isEnabled = true; sourcePicker.isEnabled = true }
         codeField.isEnabled = true
         connectButton.isEnabled = true
         cancelButton.isEnabled = true
@@ -415,6 +502,21 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         }
         finish(state == .done ? .connected : .cancelled)
     }
+
+    #if KHU_TESTS
+    /// Test-only: build the first-run window without presenting it, so a headless test can read
+    /// the three states the picker builds. Nothing here is compiled into a shipped app.
+    static func testFirstRun(kit: URL, home: URL) -> ConnectionWindow {
+        ConnectionWindow(mode: .firstRun(kit: kit, home: home))
+    }
+    /// Test-only: choose a source exactly as the picker's action does.
+    func testSelect(_ item: Int) { sourcePicker.selectItem(at: item); sourceChanged() }
+    var testState: (sources: [String], selected: Int, address: String, editable: Bool,
+                    codeVisible: Bool, note: String) {
+        (sourcePicker.itemTitles, sourcePicker.indexOfSelectedItem, destinationField.stringValue,
+         destinationField.isEditable, !(codeRow?.isHidden ?? true), sourceNote.stringValue)
+    }
+    #endif
 
     // MARK: layout helpers
 

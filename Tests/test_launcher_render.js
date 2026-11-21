@@ -346,6 +346,35 @@ render(state([row()],{settingsNote:'Could not save that change. Your previous se
 assert.match(document.querySelector('.scrim.s .sheet').textContent,/Could not save that change/);
 assert.equal(document.getElementById('addr').value,'http://100.64.0.9:8790/release.json','failed address check retains the editable draft');
 
+// The address box always shows the feed in use: a saved address wins, and a Mac with none shows
+// the default it starts on, named as the default.
+const mirror='https://theng12.github.io/kh-releases/release.json';
+run('addrDraft=null;settingsOpen=false;closeLayers()');
+render(state([row()],{connection:Object.assign({},state([]).connection,{destination:'',defaultFeed:mirror})}));
+run('settingsOpen=true;drawSettings()');
+assert.equal(document.getElementById('addr').value,mirror,'with no saved address the box shows the default feed');
+assert.match(document.querySelector('.scrim.s .sheet').textContent,/GitHub releases is the default while no address is saved/);
+assert.match(document.querySelector('.scrim.s .sheet').textContent,/\(default\)/,'the shown address is marked as the default');
+run('addrDraft=null;settingsOpen=false;closeLayers()');
+render(state([row()],{connection:Object.assign({},state([]).connection,{defaultFeed:mirror})}));
+run('settingsOpen=true;drawSettings()');
+assert.equal(document.getElementById('addr').value,'http://100.64.0.7:8790/release.json','a saved address wins over the default');
+assert.doesNotMatch(document.querySelector('.scrim.s .sheet').textContent,/GitHub releases is the default/);
+
+// One click back to the public mirror while a publisher's address is saved — and none once the
+// mirror is already the address in use.
+posts.length=0;
+const ghSwitch=document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='Use GitHub releases instead');
+assert(ghSwitch,'the GitHub switch is offered while a publisher address is saved');
+ghSwitch.fire('click');
+assert.equal(posts[0].action,'changeServer');
+assert.equal(posts[0].value,mirror,'the switch posts the public mirror as the new address');
+run('settingsOpen=false;closeLayers()');
+render(state([row()],{connection:Object.assign({},state([]).connection,{destination:mirror,defaultFeed:mirror})}));
+run('settingsOpen=true;drawSettings()');
+assert(!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Use GitHub releases instead'),
+       'no GitHub switch once the mirror is already the address in use');
+
 // The Automatic switch names which setting it follows, in the agent's own words for its own decision.
 run('settingsOpen=false;detail=null;closeLayers()');
 for (const words of ['Set on this Mac','Set in Update Studio','This Mac’s default']) {
