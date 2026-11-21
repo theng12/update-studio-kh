@@ -406,11 +406,12 @@ if mine.get("previous"):
     print("the public copy carries a previous entry; it is built --current-only"); raise SystemExit(3)
 if mine.get("network"):
     print("the public copy carries a network block"); raise SystemExit(3)
-# A bundle id is an identifier inside every copy of the app, not an address: com.terranash.* is
-# legitimate. Every other field is scanned for a private host.
-scanned = {k: v for k, v in mine.items() if k != "apps"}
-scanned["apps"] = {a: {k: v for k, v in e.items() if k != "bundleID"} for a, e in mine["apps"].items()}
-text = json.dumps(scanned)
+# `com.terranash.<app>` is the reserved bundle-id domain: it sits in every copy's Info.plist and is
+# public wherever it appears, so it is allowed in every field — not only in `bundleID`, which made
+# the same string a leak in a changelog sentence and no leak in a plist. Everything else is still
+# scanned: a tailnet host, a ts.net URL, an address or the machine-name form `terranash-<host>`
+# does not match this prefix and still fails.
+text = re.sub(r"(?i)com\.terranash\.[a-z0-9._-]+", "", json.dumps(mine))
 for pattern in (r"[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net", r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b",
                 r"(?i)terranash", r"(?i)macmini"):
     if re.search(pattern, text):
