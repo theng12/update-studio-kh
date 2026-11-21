@@ -823,7 +823,7 @@ render(state(appRows,{extensions:{status:'loading'}}));
 assert.match(extBox.textContent,/Checking for published extensions/);
 assert.equal(extBox.querySelectorAll('button').length,0);
 render(state(appRows,{extensions:{status:'unpublished'}}));
-assert.match(extBox.textContent,/extensions are not published yet/);
+assert.match(extBox.textContent,/Extensions and plugins are not published yet; nothing to download/);
 assert(!extBox.querySelectorAll('button').some(b=>b.textContent==='Download'));
 render(state(appRows,{extensions:{status:'failed'}}));
 assert.match(extBox.textContent,/Could not check/);

@@ -303,7 +303,7 @@ function drawExtensions(){const state=S.extensions||{status:'idle'}, sig=JSON.st
  const box=$('extensionDownloads'),focus=box.contains(document.activeElement);
  const check=()=>post({action:'checkExtensions'});
  const message={idle:'Check for public Chrome extension downloads.',loading:'Checking for published extensions…',
-  unpublished:'The Chrome extensions are not published yet.',failed:'Could not check for published extensions. Try again.'}[state.status];
+  unpublished:'Extensions and plugins are not published yet; nothing to download.',failed:'Could not check for published extensions. Try again.'}[state.status];
  if(message){box.replaceChildren(el('p',{},message));if(state.status!=='loading')box.append(
   el('button',{class:'btn',onclick:check},state.status==='idle'?'Check downloads':'Check again'));}
  else{box.replaceChildren(el('p',{},'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'),
