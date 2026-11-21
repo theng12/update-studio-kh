@@ -28,6 +28,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     var settingsNote: String?
     var serverKnown = false
     var feedAppIDs: Set<String>?
+    var feedPublishedAt: String?
+    var checkedFeedSource: String?
     var lastDriveScan: Date?
     var window: LauncherWindow?
     var fleetWindow: FleetWindow?
@@ -111,6 +113,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         lastError = error ?? result?.feedError
         serverKnown = result != nil && result?.feedError == nil && error == nil
         feedAppIDs = serverKnown ? result?.feedAppIDs : nil
+        feedPublishedAt = serverKnown ? result?.feedPublishedAt : nil
+        checkedFeedSource = serverKnown ? result?.checkedFeedSource : nil
         lastAttempt = Date()
         if serverKnown { lastRun = lastAttempt }
         let ready = apps.filter { $0.managed && !$0.statusOnly && $0.status == HelperApp.updateAvailable }
@@ -119,6 +123,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         lock.unlock()
         Notifier.announce(ready, stateDir: stateDir)
         DispatchQueue.main.async {
+            if self.window != nil { self.reloadSavedConnection() }
             self.refreshIcon()
             self.window?.reload()
             // KHU_WINDOW_SHOW=light|dark opens the window after the first run, for screenshots; nobody sets it in real use.

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Packaging order and refusal checks with fake tools; no keys or installed apps."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,7 +20,7 @@ class SigningTests(unittest.TestCase):
         self.repo.mkdir()
         for name in ("build.sh", "CHANGELOG.md", "CHANGELOG-launcher.md",
                      "packaging/build-launcher.sh", "packaging/build-agent-kit.sh",
-                     "packaging/install-agent.sh", "packaging/rotate-build.py",
+                     "packaging/install-agent.sh", "packaging/rotate-build.py", "packaging/fleet-roster.json",
                      "packaging/generate-ui.py", "packaging/shared-ui/whats-new.py",
                      "packaging/shared-ui/design-tokens.json", "packaging/shared-ui/UI-CONVENTIONS.md",
                      "packaging/com.khupdater.agent.plist", "examples/agent-config.json"):
@@ -106,7 +107,11 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         self.assertEqual(calls[-1], "hdiutil")
         kit = self.repo / "build/Studio Launcher KH.app/Contents/Resources/khu-agent"
         self.assertEqual((kit / "bin/khu-stub").read_text(), "signed fixture stub")
-        self.assertIn("bin/khu", json.loads((kit / "MANIFEST.json").read_text())["files"])
+        pins = json.loads((kit / "MANIFEST.json").read_text())["files"]
+        self.assertIn("bin/khu", pins)
+        roster = (ROOT / "packaging/fleet-roster.json").read_bytes()
+        self.assertEqual((kit / "fleet-roster.json").read_bytes(), roster)
+        self.assertEqual(pins["fleet-roster.json"], {"bytes": len(roster), "sha256": hashlib.sha256(roster).hexdigest()})
 
     def test_shipped_kit_keeps_the_key_but_not_the_address(self):
         # A DMG anyone can download must not hand out the publisher's machine name.

@@ -15,6 +15,7 @@ body{margin:0;min-height:100vh;display:flex;flex-direction:column}::selection{ba
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 ::-webkit-scrollbar{width:11px;height:11px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:3px solid var(--bg)}::-webkit-scrollbar-track{background:transparent}
 header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;min-width:0}
+.viewTools{display:flex;gap:12px;align-items:center;margin-left:auto}
 .brand{display:flex;align-items:center;gap:10px;margin-right:auto;min-width:0;flex-wrap:wrap}.brand svg{width:30px;height:30px;flex:none}.brand h1{font-size:16px;margin:0;letter-spacing:-.015em}.brand p{margin:0;font-size:12px;color:var(--sub)}
 .btn{height:30px;padding:0 13px;border-radius:7px;border:1px solid var(--line);background:var(--panel);font-weight:550;white-space:nowrap}
 .btn:hover:not(:disabled){border-color:var(--field)}.btn:active:not(:disabled){transform:translateY(.5px)}.btn:disabled{opacity:.45}
@@ -27,6 +28,11 @@ select,input[type=search]{height:30px;border:1px solid var(--line);border-radius
 .set input[type=text]{flex:1;min-width:0;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 9px;font:12px/1.4 ui-monospace,Menlo,monospace}
 input::placeholder{color:var(--sub)}input,textarea{cursor:text;-webkit-user-select:text;caret-color:var(--accent)}
 main{flex:1;padding:18px 22px 8px}
+.extensions{margin:8px 22px 18px;border-top:1px solid var(--line);padding-top:12px}
+.extensions summary{width:fit-content;font-size:14px;font-weight:650;cursor:pointer}
+.extensions p{margin:8px 0;color:var(--sub);overflow-wrap:anywhere}
+.extRow{display:flex;justify-content:space-between;align-items:center;gap:8px 16px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
+.extRow p{margin:2px 0 0}.extRow strong{overflow-wrap:anywhere}.extRow .btn{flex:none}
 h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-child{margin-top:4px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px}
 .card.selected{outline:2px solid var(--accent);outline-offset:2px}
@@ -47,10 +53,10 @@ h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-c
 @media (prefers-reduced-motion:reduce){.bar.loose i{animation:none;width:100%;opacity:.5}}
 .tablewrap{overflow-x:auto;max-width:100%}table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 th{font-size:11.5px;font-weight:600;color:var(--sub);text-align:left;padding:9px 14px;border-bottom:1px solid var(--line)}
-td{padding:9px 14px;border-bottom:1px solid var(--line2);vertical-align:middle}tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--line2)}
+td{padding:9px 14px;border-bottom:1px solid var(--line2);vertical-align:middle}tr:last-child td{border-bottom:0}tbody tr:hover{background:var(--line2)}tbody tr[aria-selected=true]{background:var(--ok-bg)}
 td .head img,td .ph{width:32px;height:32px;border-radius:8px}td .name{font-size:13.5px}td.act{width:1%;white-space:nowrap;text-align:right}td.act .btn+.btn{margin-left:6px}
 footer{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:8px 18px;font-size:12px;color:var(--sub);background:var(--bg);border-top:1px solid var(--line)}
-footer .link{background:none;border:0;color:var(--accent);padding:0;cursor:pointer;white-space:nowrap}footer .stat{font-size:12px;color:var(--sub);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}footer .stat.err{color:var(--bad);font-weight:550}
+footer .link{background:none;border:0;color:var(--accent);padding:0;cursor:pointer;white-space:nowrap}footer .stat{font-size:12px;color:var(--sub);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}footer .stat.err{color:var(--bad);font-weight:550}#checked{white-space:normal;overflow-wrap:anywhere}
 footer .btn{height:26px;min-height:26px;padding:0 10px;font-size:12px}footer .btn.icon{width:26px;padding:0}footer .btn.icon.upd{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .pill{display:inline-flex;align-items:center;gap:5px;height:26px;min-height:26px;min-width:0;padding:0 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:11px;font-weight:550;cursor:pointer;white-space:nowrap;flex:none}
 .pill:hover{border-color:var(--field)}.pill .v{font:10px/1 ui-monospace,Menlo,monospace;color:var(--sub);font-variant-numeric:tabular-nums}
@@ -94,14 +100,16 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <div class=brand><svg viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill="var(--accent)"/><g fill="#fff"><rect x=8 y=8 width=7 height=7 rx=1.8 /><rect x=17 y=8 width=7 height=7 rx=1.8 /><rect x=8 y=17 width=7 height=7 rx=1.8 /><rect x=17 y=17 width=7 height=7 rx=1.8 /></g></svg>
  <div><h1>Studio Launcher KH</h1><p id=mac>Apps for this Mac</p></div></div>
  <button class="btn primary" id=all hidden></button>
- <label class=sr for=sort>Sort</label><select id=sort aria-label="Sort"><option value=name>Name</option><option value=recent>Recently updated</option></select>
+ <label class=sr for=sort>Sort</label><select id=sort aria-label="Sort"><option value=name>Name</option><option value=type>Type</option><option value=recent>Recently updated</option></select>
  <input type=search id=q placeholder="Search apps" aria-label="Search apps">
- <div class=seg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
- <button class="btn" id=check title="Scan mounted drives for installers and check the update feed" aria-label="Scan drives and check the update feed">Scan drives</button><span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
+ <div class=viewTools><div class=seg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
+ <button class="btn" id=check title="Check the saved feed and scan for installer drives" aria-label="Check the saved feed and scan for installer drives">Check sources</button><span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
+ </div>
 </header>
 <div id=notices hidden></div>
 <section id=adoptions hidden></section>
 <main id=main></main>
+<details class=extensions id=extensions><summary id=extensionsHeading>Extensions</summary><div id=extensionDownloads aria-live="polite"></div></details>
 <footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="Fleet: see the whole fleet on the publisher, and act on it" aria-label="Fleet: see the whole fleet on the publisher, and act on it">Fleet</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
@@ -116,7 +124,6 @@ function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k i
 const day=iso=>{if(!iso)return null;const d=new Date(iso);return isNaN(d)?null:d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})};
 const mb=b=>b==null?null:(b>=1e9?(b/1e9).toFixed(1)+' GB':b>=1e6?Math.round(b/1e6)+' MB':b>=1e3?Math.round(b/1e3)+' KB':b+' B');
 function ago(iso){const s=(Date.now()-new Date(iso))/1000;return s<60?'just now':s<3600?Math.round(s/60)+' min ago':Math.round(s/3600)+' h ago'}
-function scanned(iso){return iso?'Drives scanned '+ago(iso):'Drives not scanned yet'}
 // A failure in plain words; the Mac's own text stays in Copy error report.
 function plain(r){if(!r)return '';const t=r.toLowerCase();
  if(t.includes('hdiutil')||t.includes('image not recognized')||t.includes('no mountable'))return 'The installer file couldn’t be opened. It may be damaged; try Update again.';
@@ -223,29 +230,32 @@ function buttons(a,big){const out=[],m=mainAction(a);
   }
   post({action:m[1],app:a.id})}},m[0]));
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
+const typeName=a=>(S.appTypes||[]).includes(a.type)?a.type[0].toUpperCase()+a.type.slice(1):'Unlabelled';
+function byType(a,b){const x=typeName(a),y=typeName(b);return Number(x==='Unlabelled')-Number(y==='Unlabelled')||x.localeCompare(y)}
+const typeLine=a=>el('div',{class:'tag'},typeName(a)+(a.unrecognised?' · Unrecognised':''));
 function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);
  const c=el('article',{class:'card click'+(selected.has(a.id)?' selected':''),'aria-selected':String(selected.has(a.id)),style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget){openDetail(a.id);return}const cards=[...document.querySelectorAll('.card')],i=cards.indexOf(e.currentTarget),d=e.key=='ArrowRight'||e.key=='ArrowDown'?1:e.key=='ArrowLeft'||e.key=='ArrowUp'?-1:0;if(d){e.preventDefault();cards[(i+d+cards.length)%cards.length]?.focus()}}},
-  el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),tag?el('div',{class:'tag'},tag):null)),
+  el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),typeLine(a),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
   a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Installed'),el('th',{},'Latest'),el('th',{},'Released'),el('th',{},'State'),el('th',{},''))),
- el('tbody',{},list.map(a=>el('tr',{onclick:()=>openDetail(a.id),style:(a.accent?'--app:'+a.accent+';':'')+'cursor:pointer'},
-  el('td',{},el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),a.tagline?el('div',{class:'tag'},a.tagline):null))),
+ el('tbody',{},list.map(a=>el('tr',{'aria-selected':String(selected.has(a.id)),onclick:()=>openDetail(a.id),style:(a.accent?'--app:'+a.accent+';':'')+'cursor:pointer'},
+  el('td',{},el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),typeLine(a),a.tagline?el('div',{class:'tag'},a.tagline):null))),
   el('td',{class:'num'},a.installed||'Not installed'),el('td',{class:'num'},a.available||a.serverVersion||'—'),el('td',{class:'when num'},day(a.released)||'—'),
   el('td',{},chip(a),a.reason?el('div',{class:'reason',style:'margin-top:4px'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null),
   el('td',{class:'act'},a.status=='Updating…'?el('div',{style:'min-width:240px'},progress(a)):buttons(a)))))))}
 function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filter(a=>showHidden||!a.hidden);
  if(q)list=list.filter(a=>(a.name+' '+(a.tagline||'')).toLowerCase().includes(q));
  const key=a=>new Date(installed(a)?a.installedAt||0:a.released||0).getTime();
- list.sort(sort=='recent'?(x,y)=>key(y)-key(x):(x,y)=>x.name.localeCompare(y.name));return [list,hidden]}
+ list.sort((x,y)=>(sort=='recent'?key(y)-key(x):sort=='type'?byType(x,y):0)||x.name.localeCompare(y.name));return [list,hidden]}
 // A push from the helper is either news or a transfer tick. News redraws the page; a tick writes
 // its counters into the nodes already on screen. Redrawing for both was the flicker: every push
 // destroyed the whole grid and any open dialog and re-made it, which replayed the dialog's entry
 // animation twice a second, dropped keyboard focus and erased what had been typed in Settings.
-const tickOnly=(k,v)=>k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
+const tickOnly=(k,v)=>k==='extensions'?undefined:k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
 // What the page would look like if it were drawn from the state it holds right now — transfer
 // counters excepted, since those are written in rather than redrawn.
 const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
@@ -258,7 +268,7 @@ function render(state){if(state)Object.assign(S,state);
  $('wnver').textContent=S.version?'v'+S.version:'';
  const u=S.apps.find(a=>a.id=='updater'&&a.status=='Update available'&&a.available&&!a.statusOnly);
  $('update').hidden=!u;if(u){$('update').title='Studio Launcher KH Helper '+u.available;$('update').setAttribute('aria-label','Studio Launcher KH Helper to '+u.available)}
- paintStatus();
+ paintStatus();drawExtensions();
  const s=signature();
  if(s==sig){move();return}
  sig=s;draw()}
@@ -270,9 +280,14 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
  $('vgrid').setAttribute('aria-pressed',view=='grid');$('vlist').setAttribute('aria-pressed',view=='list');$('sort').value=sort;
  const m=$('main');m.replaceChildren();
+ if(Number.isInteger(S.feedCount)&&S.feedPublishedAt){
+  const stamp=new Date(S.feedPublishedAt).toLocaleString(undefined,{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'});
+  const missing=S.missingFromFeed||[];
+  const source=S.checkedFeedSource?.startsWith('GitHub (')?'This page':'This feed';
+  m.append(el('p',{class:'note',style:'margin:2px 0 8px'},source+' carries '+S.feedCount+' '+(S.feedCount===1?'app':'apps')+', last updated '+stamp+(missing.length?' · Not on it: '+missing.join(', '):'')));
+ }
  if(!S.apps.length)m.append(el('p',{class:'empty'},S.error?'The publisher at '+(S.connection.destination||'the saved address')+' could not be reached: '+S.error:'Checking…'));
  else if(!list.length)m.append(el('p',{class:'empty'},'No app matches “'+q+'”.'));
- if(S.missingFromFeed&&S.missingFromFeed.length)m.append(el('p',{class:'note',style:'margin-left:0;margin-bottom:8px'},'The last feed checked does not carry '+S.missingFromFeed.join(', ')+'.'));
  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
   m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
  drawNotices();drawAdoptions();
@@ -282,6 +297,21 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  // shortcut: focus comes back only where the control has an id (search, sort, the address field);
  // cards carry none, so a redraw cannot hand focus back to the card the person was on.
  if(fk&&$(fk)){$(fk).focus();if(selection[0]!=null)$(fk).setSelectionRange?.(...selection)}}
+let extensionSig='';
+function drawExtensions(){const state=S.extensions||{status:'idle'}, sig=JSON.stringify(state);
+ if(sig===extensionSig)return;extensionSig=sig;
+ const box=$('extensionDownloads'),focus=box.contains(document.activeElement);
+ const check=()=>post({action:'checkExtensions'});
+ const message={idle:'Check for public Chrome extension downloads.',loading:'Checking for published extensions…',
+  unpublished:'The Chrome extensions are not published yet.',failed:'Could not check for published extensions. Try again.'}[state.status];
+ if(message){box.replaceChildren(el('p',{},message));if(state.status!=='loading')box.append(
+  el('button',{class:'btn',onclick:check},state.status==='idle'?'Check downloads':'Check again'));}
+ else{box.replaceChildren(el('p',{},'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'),
+  ...(state.entries||[]).map(x=>el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,el('p',{},x.summary)),
+   el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download'))));
+  if(state.note)box.append(el('p',{role:'status'},state.note));}
+ if(focus)$('extensionsHeading').focus();}
+$('extensions').ontoggle=()=>{if($('extensions').open&&(!S.extensions||S.extensions.status==='idle'))post({action:'checkExtensions'})};
 /// One quiet notice per new version: no badge, no count, and a dismissal is remembered by version.
 function drawNotices(){const n=S.notices||[],box=$('notices');box.hidden=!n.length;
  box.replaceChildren(...n.map(x=>el('div',{class:'notice'},el('span',{},x.name+' '+x.version+' is ready.'),
@@ -296,8 +326,15 @@ function drawAdoptions(){const list=S.adoptions||[],box=$('adoptions');box.hidde
    el('button',{class:'link',onclick:()=>post({action:'declineAdoption',app:o.id})},'Not now')))))}
 /// One compact status line: a failure replaces the freshness line rather than sitting beside it.
 function paintStatus(){const e=$('err'),c=$('checked'),err=S.error?'Last check failed: '+S.error+(S.lastAttempt?' · '+new Date(S.lastAttempt).toLocaleString():''):'';
+ const source=S.configuredFeedSource||'the saved feed', n=S.sources.length;
+ const drives=n===1?'1 installer drive':n+' installer drives';
+ const title='Check '+source+(n?' and '+drives:', and scan for installer drives');
+ const refresh=$('check');if(refresh.getAttribute('title')!==title){refresh.setAttribute('title',title);refresh.setAttribute('aria-label',title)}
  e.textContent=err;e.hidden=!err;
- c.textContent=scanned(S.lastDriveScan)+' · '+(S.serverKnown&&S.lastRun?'Feed checked '+ago(S.lastRun):'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');c.hidden=!!err}
+ const checked=S.serverKnown&&S.lastRun&&S.checkedFeedSource;
+ c.textContent=(checked?'Checked '+S.checkedFeedSource+' '+ago(S.lastRun):'Not checked yet: '+source)
+  +(S.lastDriveScan?(n?' · Scanned '+drives:' · No installer drives found'):' · Drives not scanned yet')
+  +(S.paused?' · Automatic updates paused':'');c.hidden=!!err}
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));

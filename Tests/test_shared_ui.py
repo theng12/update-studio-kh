@@ -19,6 +19,7 @@ class SharedUITests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix='khu-shared-ui-'))
         shutil.copytree(ROOT / 'packaging/shared-ui', self.root / 'packaging/shared-ui')
+        (self.root / 'packaging/fleet-roster.json').write_text('{"test-app":"Test App"}')
         for name in ('CHANGELOG.md', 'CHANGELOG-launcher.md'):
             (self.root / name).write_text('## 1.2.3 — 2026-11-09\n- Says "Ready" in Khmer: រួចរាល់\n')
 
@@ -40,6 +41,8 @@ class SharedUITests(unittest.TestCase):
         self.assertIn('--kh-type-body:19px;', swift)
         self.assertIn('public static let textJSON', swift)
         self.assertIn('public static let launcherJSON', swift)
+        self.assertIn('public static let fleetRosterJSON', swift)
+        self.assertIn('"test-app": "Test App"', swift)
         self.assertIn('រួចរាល់', swift)
 
     def test_launcher_choices_save_and_storage_refusal_stays_usable(self):

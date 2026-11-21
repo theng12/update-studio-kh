@@ -51,7 +51,7 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
-              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
+              publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|media|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -134,7 +134,7 @@ struct KHUMain {
                 print(executable.path)
             } catch { fail("\(error)") }
         case "publish":
-            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
+            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, type: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
             var keep: Int?
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil, security = false
             var newApp = false
@@ -148,6 +148,7 @@ struct KHUMain {
                 case "--version": version = value("--version", &i)
                 case "--artifact": artifact = value("--artifact", &i)
                 case "--kind": kind = value("--kind", &i)
+                case "--type": type = value("--type", &i)
                 case "--changelog": changelog = value("--changelog", &i)
                 case "--note": extra = value("--note", &i)
                 case "--notes": fail("--notes is gone: the notes come from --changelog, plus one optional --note line")
@@ -174,6 +175,9 @@ struct KHUMain {
             }
             guard let f = feed, let k = key, let a = app, let v = version, let art = artifact else { usage() }
             guard let changelog else { fail("publish needs --changelog <repo or CHANGELOG.md>: the notes come from its top entry") }
+            if let type, !FeedPublisher.appTypes.contains(type) {
+                fail("--type must be business, entertainment, media, system or utility, not \(type)")
+            }
             if let holdSince, !VersionCompare.isValid(holdSince) { fail("--hold-since must be a dotted numeric version, not \(holdSince)") }
             if let hold, UpdateHold.trusted(hold) == nil {
                 fail("--hold-url must be this Mac's loopback hold endpoint (http://127.0.0.1:<port>/api/maintenance/hold or /drain), not \(hold)")
@@ -193,7 +197,7 @@ struct KHUMain {
                 try FeedPublisher.publish(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
-                                          holdURL: hold, holdSince: holdSince, security: security, keep: keep)
+                                          holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "unpublish", "retire":
