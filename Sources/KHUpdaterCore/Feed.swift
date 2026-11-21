@@ -6,6 +6,10 @@ public struct FeedApp: Codable, Sendable, Equatable {
     public var sha256: String
     public var bytes: Int64
     public var kind: String
+    /// The publisher's category label: `business`, `entertainment`, `media`, `system` or `utility`.
+    /// Optional: older feeds decode as before, and a label outside that set reads Unlabelled in
+    /// the consumer instead of breaking the whole feed.
+    public var type: String?
     public var notes: String?
     /// Read from the app's own bundle when it is published, so the Launcher can list a new app
     /// with no code change. All optional: a feed written before they existed decodes as it did.

@@ -42,6 +42,10 @@ func publicFeedSweepTests() {
                "SW1 a Mac on the public feed updates an installed app automatically (calls \(shell.calls.count))")
         expect(f.client.posts.isEmpty, "SW1 a public-feed run posts nothing anywhere (\(f.client.posts))")
         expect(run?.feedAppIDs == ["demo"], "SW1 the Launcher receives the verified feed’s app IDs")
+        expect(run?.feedPublishedAt.flatMap(ISO.date) != nil, "SW1 coverage has the signed published_at")
+        expect(run?.checkedFeedSource == "GitHub (theng12.github.io)", "SW1 coverage names the feed that answered")
+        expect(run?.apps.first { $0.app == "demo" }?.feedType == nil, "SW1 an older feed row is still present without a type")
+        expect(Connect.sourceName(URL(string: "http://studio.example.test:8790/release.json")) == "the studio server at studio.example.test:8790", "SW1 the configured studio label keeps the host and port")
     }
 
     // SW2. This Mac's own switch off: nothing is installed, and the note names that switch — never

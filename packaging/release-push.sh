@@ -12,6 +12,23 @@ KEY="${KHU_RELEASE_KEY:-$HOME/.ssh/id_ed25519_gateway1301}"
 STAGE="${KHU_RELEASE_STAGE:-Library/KHUpdater/feed-incoming-$(date +%Y%m%d)}"
 [ $# -eq 4 ] || [ $# -eq 5 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind]" >&2; exit 2; }
 APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; KIND="${5:-}"
+# The publisher writes the feed's category label from this release id, never from UI inference.
+# An explicit label wins; the two Launcher components are labelled even by older wrappers that
+# do not set the variable. Every other app keeps its current unlabelled state.
+# `KHU_APP_TYPE=` set but empty means "no label on this one": needed to publish the helper onto a
+# host whose own tool predates `--type`, and it can never label anything by accident.
+TYPE=""
+if [ -n "${KHU_APP_TYPE+set}" ]; then
+  TYPE="${KHU_APP_TYPE}"
+elif [ "$APP" = "launcher" ] || [ "$APP" = "updater" ]; then
+  TYPE="system"
+fi
+if [ -n "$TYPE" ]; then
+  case "$TYPE" in
+    business|entertainment|extension|media|plugin|system|utility) ;;
+    *) echo "release-push: KHU_APP_TYPE must be business, entertainment, extension, media, plugin, system or utility, not $TYPE" >&2; exit 2 ;;
+  esac
+fi
 [ -f "$DMG" ] || { echo "no such DMG: $DMG" >&2; exit 2; }
 [ -f "$LOG" ] || { echo "no such changelog: $LOG" >&2; exit 2; }
 # The `updater` entry is the raw helper, and a stale build/khu is not it: publish the bytes sealed
@@ -34,7 +51,7 @@ scp -i "$KEY" -o BatchMode=yes "$LOG" "$HOST:$STAGE/changelogs/$APP.md"
 # know, so a mistyped one cannot become a second app beside the real one.
 "${SSH[@]}" "K=\$HOME/Library/KHUpdater; H=\"\$K/base/current\"; [ -x \"\$H\" ] || H=\"\$K/bin/khu\"; \"\$H\" publish --feed \"\$K/feed\" --key \"\$K/keys/private.key\" \
   --app '$APP' --version '$VERSION' --artifact \"\$HOME/$STAGE/$BASE\" --changelog \"\$HOME/$STAGE/changelogs/$APP.md\" \
-  ${KIND:+--kind '$KIND'} ${KHU_NEW_APP:+--new-app}"
+  ${KIND:+--kind '$KIND'} ${TYPE:+--type '$TYPE'} ${KHU_NEW_APP:+--new-app}"
 
 /usr/bin/python3 -I - "$HOST" "$APP" "$VERSION" <<'PY'
 import base64, json, sys, urllib.request

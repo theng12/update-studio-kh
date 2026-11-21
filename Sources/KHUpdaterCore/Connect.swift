@@ -7,6 +7,16 @@ public enum Connect {
     /// The public mirror: the built-in starting destination, and where "Leave this fleet" goes.
     public static let publicFeedURL = "https://theng12.github.io/kh-releases/release.json"
 
+    /// Display only the host and port, never credentials, query strings, or a private feed path.
+    public static func sourceName(_ url: URL?) -> String {
+        guard let url, let host = url.host else { return "the saved feed" }
+        let address = host + (url.port.map { ":\($0)" } ?? "")
+        if url.scheme == "https", host == URL(string: publicFeedURL)?.host || host == "raw.githubusercontent.com" {
+            return "GitHub (\(address))"
+        }
+        return url.scheme == "http" ? "the studio server at \(address)" : "the feed at \(address)"
+    }
+
     /// A kit built for public download carries the pinned key and no address; an absent address
     /// means "not connected yet", never a broken kit.
     public struct Publisher: Codable, Sendable { public var feedURL: String?; public var enrolURL: String?; public var publicKey: String }

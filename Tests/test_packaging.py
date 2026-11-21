@@ -94,7 +94,7 @@ try:
     (fake_root / "examples").mkdir()
     (fake_root / "build").mkdir()
     for rel in ("packaging/build-agent-kit.sh", "packaging/install-agent.sh",
-                "packaging/com.khupdater.agent.plist", "examples/agent-config.json"):
+                "packaging/com.khupdater.agent.plist", "packaging/fleet-roster.json", "examples/agent-config.json"):
         shutil.copy(ROOT / rel, fake_root / rel)
     # Stand-in lipo first on this block's PATH only (like the launchctl fake): the fixtures are
     # text, so the real lipo would reject them; real Mach-O inputs are exercised by the kit run
@@ -136,6 +136,8 @@ try:
           and (out / "bin/khu").read_text() == universal_blob
           and (out / "bin/khu-stub").read_text() == universal_blob,
           "kit ships universal inputs unchanged")
+    check((out / "fleet-roster.json").read_bytes() == (ROOT / "packaging/fleet-roster.json").read_bytes(),
+          "the kit includes the release roster without changing its data")
     check(run(fake_builder, "1.0.0", out, env=univ_env).returncode != 0
           and (out / "bin/khu").read_text() == universal_blob,
           "overwrite refusal still follows the universal check")

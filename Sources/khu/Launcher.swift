@@ -22,8 +22,15 @@ extension HelperMenu {
         fleetWindow?.show()
     }
 
-    /// Volumes are read only when the window opens or a volume mounts or unmounts.
+    func reloadSavedConnection() {
+        if let saved = try? config.reloadingConnection(from: Connect.configFile(stateDir: stateDir)) {
+            config = saved
+        }
+    }
+
+    /// Rescans mounted installer drives and wakes the normal update check.
     func rescanSSDs() {
+        reloadSavedConnection()
         let found = SSDSource.scan()
         lock.lock(); ssd = found; lastDriveScan = Date(); lock.unlock()
         window?.reload()

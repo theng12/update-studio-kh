@@ -86,6 +86,23 @@ public enum FeedPublisher {
     /// entry; a genuinely new app is published once with `--new-app`.
     public static let fleetApps: Set<String> = Set(AppNames.names.keys).union(["launcher"])
 
+    /// The only labels a publisher may write: `business`, `entertainment`, `media`, `system` and
+    /// `utility`. A feed can still decode any raw label: an old or unknown one stays in the signed
+    /// bytes for the consumer to read Unlabelled, and is never carried forward as though this
+    /// publisher had chosen it.
+    public static let appTypes: Set<String> = ["business", "entertainment", "extension", "media", "plugin", "system", "utility"]
+
+    public static func validateAppType(_ raw: String) throws {
+        guard appTypes.contains(raw) else {
+            throw khuFail("--type must be business, entertainment, extension, media, plugin, system or utility, not \(raw)")
+        }
+    }
+
+    private static func knownAppType(_ raw: String?) -> String? {
+        guard let raw, appTypes.contains(raw) else { return nil }
+        return raw
+    }
+
     /// Whether a publish may name `app` in `feedDir`. `allowNew` is the CLI's explicit statement
     /// that this is a genuinely new app, not a mistyped one.
     public static func isKnownApp(_ app: String, in feedDir: URL, allowNew: Bool = false) -> Bool {
@@ -123,11 +140,12 @@ public enum FeedPublisher {
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
                                meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
-                               security: Bool = false,
+                               security: Bool = false, type: String? = nil,
                                keep: Int? = nil, now: Date = Date(),
                                retireArtifact: ((URL) throws -> Void)? = nil) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
+        if let type { try FeedPublisher.validateAppType(type) }
         let key = try Signing.loadPrivateKey(from: keyFile)
         try FileLock.withExclusive(feedDir.appendingPathComponent("publish.lock")) {
             let artifactsDir = feedDir.appendingPathComponent("artifacts", isDirectory: true)
@@ -178,6 +196,9 @@ public enum FeedPublisher {
             let w = words ?? AppWords(tagline: old?.tagline, description: old?.description, features: old?.features, accent: old?.accent)
             entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
             entry.released = ISO.string(now)
+            // Only a known prior label is carried: a version or metadata publish that omits --type
+            // keeps it, while an unrecognised raw label from an older feed is never re-written.
+            entry.type = Self.knownAppType(type) ?? Self.knownAppType(old?.type)
             entry.mainMacOnly = mainMacOnly ?? old?.mainMacOnly
             entry.holdURL = holdURL ?? old?.holdURL
             // A security update skips the Mac-side rollout stagger. Publishing without the flag

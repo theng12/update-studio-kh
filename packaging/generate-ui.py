@@ -28,7 +28,10 @@ def generate(root):
     tokens = json.loads((shared / 'design-tokens.json').read_text())
     out = root / 'build'
     out.mkdir(exist_ok=True)
-    values = {'buildDate': datetime.date.today().isoformat()}
+    roster = json.loads((root / 'packaging/fleet-roster.json').read_text())
+    if not isinstance(roster, dict) or not roster or not all(isinstance(name, str) and name.strip() for name in roster.values()):
+        raise ValueError('The fleet roster must map app IDs to nonempty display names')
+    values = {'buildDate': datetime.date.today().isoformat(), 'fleetRosterJSON': json.dumps(roster, ensure_ascii=False)}
     for field, filename, output in [('text', 'CHANGELOG.md', 'whats-new.json'),
                                      ('launcher', 'CHANGELOG-launcher.md', 'whats-new-launcher.json')]:
         values[field] = (root / filename).read_text()

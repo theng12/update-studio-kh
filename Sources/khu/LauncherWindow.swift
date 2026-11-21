@@ -31,6 +31,25 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         var pairAvailable = false
     }
     private var connectionUI = ConnectionUI()
+    private enum ExtensionDownloads {
+        case idle, loading, unpublished, failed
+        case available([ExtensionCatalog.Entry], note: String? = nil)
+
+        var page: [String: Any] {
+            switch self {
+            case .idle: return ["status": "idle"]
+            case .loading: return ["status": "loading"]
+            case .unpublished: return ["status": "unpublished"]
+            case .failed: return ["status": "failed"]
+            case let .available(entries, note):
+                return ["status": "available", "note": note as Any, "entries": entries.map {
+                    ["id": $0.id, "name": $0.name, "version": $0.version, "summary": $0.summary,
+                     "kind": $0.kind, "download": $0.downloadURL != nil]
+                }]
+            }
+        }
+    }
+    private var extensionDownloads = ExtensionDownloads.idle
 
     /// Enrolled to a publisher: a saved publisher address and the token that signs this Mac in.
     /// A GitHub-only Mac has neither, so "Leave this fleet" is absent rather than disabled.
@@ -45,6 +64,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         return !FeedNetwork.authenticated(url)
     }
     private var connectionBusy = false
+    private static let roster = (try? JSONDecoder().decode([String: String].self, from: Data(Changelog.fleetRosterJSON.utf8))) ?? [:]
 
     init(helper: HelperMenu) {
         self.helper = helper
@@ -102,6 +122,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         helper.lock.lock()
         let apps = helper.apps, busy = helper.installingApp, pending = helper.active.union(helper.requested), ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, attempt = helper.lastAttempt, serverKnown = helper.serverKnown
         let feedAppIDs = helper.feedAppIDs, lastDriveScan = helper.lastDriveScan
+        let feedPublishedAt = helper.feedPublishedAt, checkedFeedSource = helper.checkedFeedSource
         helper.lock.unlock()
         let settings = HelperSettings.load(from: helper.stateDir)
         let cleanup = try? HelperRetirementSettings.load(from: helper.stateDir)
@@ -116,6 +137,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                 "open": app.bundlePath != nil, "setup": app.setupFolder != nil, "canRollBack": app.canRollBack, "helper": app.app == "updater",
             ]
             row["installed"] = app.installed; row["available"] = app.available; row["reason"] = app.reason
+            row["type"] = serverKnown ? app.feedType : nil
+            row["unrecognised"] = !Self.roster.isEmpty && feedAppIDs?.contains(app.app) == true && Self.roster[app.app] == nil
             row["source"] = app.source; row["fromSSD"] = app.fromSSD; row["released"] = app.released; row["installedAt"] = app.installedAt
             row["ssdNote"] = app.ssdNote; row["automaticOrigin"] = app.automaticOrigin
             row["serverVersion"] = serverKnown ? app.serverVersion : nil; row["ssdVersion"] = app.ssdVersion; row["initialSSD"] = app.initialSSD
@@ -133,14 +156,15 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             rows.append(row)
         }
         let known = Catalog.known(in: helper.stateDir, ssd: ssd)
-        // An SSD or an installed copy can produce a row even when the feed omits the app.
-        let missingFromFeed = feedAppIDs.map { ids in
-            Set(known.values.map(\.id)).subtracting(ids).subtracting(["launcher", "updater"])
-                .sorted().filter { RetiredApps.note($0) == nil }.map { AppNames.display($0) }
-        } ?? []
+        // A drive or installed copy is not evidence about what the signed feed carries.
+        let missingFromFeed = Self.roster.filter { feedAppIDs?.contains($0.key) == false }.values.sorted()
         let state: [String: Any] = [
-            "apps": rows, "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any,
+            "apps": rows, "appTypes": FeedPublisher.appTypes.sorted(), "extensions": extensionDownloads.page,
+            "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any,
             "missingFromFeed": missingFromFeed, "lastDriveScan": lastDriveScan.map(ISO.string) as Any,
+            "feedCount": feedAppIDs?.count as Any, "feedPublishedAt": feedPublishedAt as Any,
+            "checkedFeedSource": checkedFeedSource as Any,
+            "configuredFeedSource": Connect.sourceName(URL(string: helper.config.feedURL)),
             "lastAttempt": attempt.map(ISO.string) as Any, "serverKnown": serverKnown, "settingsNote": helper.settingsNote as Any,
             "version": helper.version ?? "", "whatsNew": helper.version.map(WhatsNew.lines(for:)) ?? [],
             // Where this Mac's own files live and the cap one reply may carry: the page says both
@@ -271,6 +295,23 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         }
     }
 
+    private func checkExtensions() {
+        if case .loading = extensionDownloads { return }
+        extensionDownloads = .loading
+        reload()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result: ExtensionDownloads
+            do {
+                let entries = try ExtensionCatalog.load() ?? []
+                result = entries.isEmpty ? .unpublished : .available(entries)
+            } catch { result = .failed }
+            DispatchQueue.main.async { [weak self] in
+                self?.extensionDownloads = result
+                self?.reload()
+            }
+        }
+    }
+
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         let id = body["app"] as? String ?? ""
@@ -308,7 +349,32 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         case "automatic": helper.setAutomatic(id, body["on"] as? Bool ?? false)
         case "check": helper.rescanSSDs()
             case "fleet": helper.showFleet()
-        // The page's one outside link: a free, optional donation, opened in the browser.
+        case "checkExtensions": checkExtensions()
+        case "downloadExtension":
+            // Only a catalog entry and its published address are used; the page never supplies a
+            // target. The file is kept only after its bytes and checksum match the index.
+            guard case let .available(entries, _) = extensionDownloads,
+                  let entry = entries.first(where: { $0.id == id }) else { break }
+            let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+            let name = (try? SafeName.component("kh-\(entry.id)-\(entry.version).zip", what: "download name"))
+                ?? "kh-\(entry.id)-\(entry.version).zip"
+            let file = folder.appendingPathComponent(name)
+            extensionDownloads = .available(entries, note: "Downloading \(entry.name)…")
+            reload()
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result: String
+                do {
+                    try ExtensionCatalog.fetch(entry, to: file)
+                    result = "Saved \(name) in Downloads. Unzip it, then use Load unpacked in Chrome."
+                } catch {
+                    result = "\(entry.name) was not kept: \(error). Nothing changed."
+                }
+                DispatchQueue.main.async {
+                    self?.extensionDownloads = .available(entries, note: result)
+                    self?.reload()
+                }
+            }
         case "support": if let url = URL(string: "https://nowpayments.io/donation/studiokh") { NSWorkspace.shared.open(url) }
         case "copyReport":
             guard let app else { break }

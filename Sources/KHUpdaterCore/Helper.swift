@@ -133,6 +133,7 @@ public struct HelperApp: Sendable, Equatable {
     public var reason: String?
     /// What the Launcher window shows besides the menu's line.
     public var name = ""
+    public var feedType: String?
     public var source: String?
     public var notes: String?
     public var icon: String?

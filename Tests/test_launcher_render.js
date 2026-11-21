@@ -330,7 +330,7 @@ const checked='2026-11-11T00:00:00Z', attempted='2026-11-11T01:00:00Z';
 render(state([row({status:'Up to date'})],{lastRun:checked,lastAttempt:attempted,error:'Offline',serverKnown:false}));
 assert.equal(run('S.lastRun'),checked,'a failed check does not rewrite when the server last answered');
 assert.match(document.getElementById('err').textContent,/Offline · /);
-assert.match(document.getElementById('checked').textContent,/Server versions unknown/);
+assert(!/Checked /.test(document.getElementById('checked').textContent), 'a failed check does not claim verified source coverage');
 // Ordinary settings report their save; an address remains an explicit consequential action.
 run('detail=null;settingsOpen=true;closeLayers();drawSettings()');
 render(state([row()],{settingsNote:'Saved.'}));
@@ -759,25 +759,92 @@ confirmAction('Update');
 assert.equal(posts[0].action, 'updateAll', 'F6 Enter on the selection asks once, then updates all of it');
 key({ key: 'Escape' });
 assert.equal(run('selected.size'), 0, 'F6 Escape clears the selection');
-// R18 an app this Mac knows but the feed it reads does not carry is named; the gap is never silent.
-render(state([row({ status: 'Up to date' })], { missingFromFeed: ['Wire Studio KH', 'Media Studio KH'] }));
-assert.match(document.getElementById('main').textContent, /does not carry Wire Studio KH, Media Studio KH/,
-  'R18 the list names the apps the feed omits');
-render(state([row({ status: 'Up to date' })], { missingFromFeed: [] }));
-assert(!/does not carry/.test(document.getElementById('main').textContent),
-  'R18 no gap sentence when the feed carries everything');
-// R19 the refresh control sits in the header and names what it checks; the footer counter names its subject.
-render(state([row({ status: 'Up to date' })], { lastRun: new Date().toISOString(), lastDriveScan: null }));
-assert.match(markup, /<header[\s\S]*?id=vlist[\s\S]*?id=check title="Scan mounted drives for installers and check the update feed"[\s\S]*?<\/header>/,
-  'R19 Scan drives sits beside the view toggles and names both sources');
-assert(!markup.includes('id=check title="Check for updates"'), 'R19 the unlabelled footer check icon is gone');
-assert.match(document.getElementById('checked').textContent, /^Drives not scanned yet/,
-  'R19 the footer counter names its subject before a scan');
-render(state([row({ status: 'Up to date' })], { lastRun: null, lastDriveScan: new Date().toISOString() }));
-assert.match(document.getElementById('checked').textContent, /^Drives scanned just now/,
-  'R19 …and after one, even without a successful feed check');
-posts.length = 0;
-document.getElementById('check').fire('click');
-assert.deepEqual(posts.map(post => post.action), ['check'], 'R19 the moved button still starts a scan');
+// R18 coverage counts the verified feed, not the rows visible through a filter.
+const now = new Date().toISOString();
+const gitHubSource = 'GitHub (theng12.github.io)', studioSource = 'the studio server at studio.example.test:8790';
+const appRows = [
+  row({id:'hub', name:'A Hub', type:'media'}),
+  row({id:'new-app', name:'B New App', type:'future', unrecognised:true}),
+  row({id:'launcher', name:'C Launcher', type:'system'}),
+  row({id:'story', name:'D Story', type:'media'}),
+  row({id:'wire', name:'E Wire'}),
+  row({id:'printer', name:'F Printer', type:'utility'}),
+  row({id:'library', name:'G Library', type:'entertainment'}),
+  row({id:'business', name:'H Business', type:'business'}),
+];
+const appTypes=['business','entertainment','media','system','utility'];
+render(state(appRows, {appTypes,feedPublishedAt:'2026-11-21T14:21:00Z',feedCount:11,checkedFeedSource:gitHubSource,
+  missingFromFeed:['File Studio KH','Storage Studio KH']}));
+assert.match(document.getElementById('main').textContent, /This page carries 11 apps, last updated [^·]+ · Not on it: File Studio KH, Storage Studio KH/);
+render(state(appRows, {feedPublishedAt:null,feedCount:null,missingFromFeed:['File Studio KH']}));
+assert.doesNotMatch(document.getElementById('main').textContent,/Not on it:/,'no missing-app verdict without a verified feed');
+// R19 a configured source is the next check; the checked source can differ after a fallback.
+render(state(appRows,{lastRun:now,lastDriveScan:now,serverKnown:true,sources:['One','Two','Three'],
+  configuredFeedSource:studioSource,checkedFeedSource:gitHubSource}));
+const checkButton=document.getElementById('check');
+assert.match(markup, /<header[\s\S]*?id=vlist[\s\S]*?id=check[\s\S]*?<\/header>/);
+assert.equal(checkButton.getAttribute('title'),'Check '+studioSource+' and 3 installer drives');
+assert.equal(checkButton.getAttribute('aria-label'),checkButton.getAttribute('title'));
+assert.match(document.getElementById('checked').textContent,/^Checked GitHub \(theng12\.github\.io\) just now · Scanned 3 installer drives/);
+render(state(appRows,{lastRun:now,lastDriveScan:now,serverKnown:true,sources:['One'],
+  configuredFeedSource:gitHubSource,checkedFeedSource:studioSource}));
+assert.equal(checkButton.getAttribute('title'),'Check '+gitHubSource+' and 1 installer drive');
+assert.match(document.getElementById('checked').textContent,/^Checked the studio server at studio\.example\.test:8790 just now · Scanned 1 installer drive/);
+posts.length=0;
+checkButton.fire('click');
+assert.deepEqual(posts.map(post=>post.action),['check']);
+// R20 the native sort control reorders by type without inventing labels or losing selected IDs.
+run("view='grid';sort='name';selected=new Set(['story'])");
+render();
+assert.deepEqual(Array.from(run('visible()[0]').map(a=>a.id)),['hub','new-app','launcher','story','wire','printer','library','business']);
+const sortControl=document.getElementById('sort');
+sortControl.focus();
+sortControl.value='type';sortControl.onchange({target:sortControl});
+assert.deepEqual(Array.from(run('visible()[0]').map(a=>a.id)),['business','library','hub','story','launcher','printer','new-app','wire']);
+assert.equal(document.activeElement,sortControl);
+assert.match(document.querySelector('.card.selected').textContent,/D Story/);
+assert.match(document.getElementById('main').textContent,/B New AppUnlabelled · Unrecognised/);
+assert.match(document.getElementById('main').textContent,/E WireUnlabelled/, 'a familiar app ID does not imply a type');
+run("view='list';render()");
+assert.match(document.getElementById('main').textContent,/A HubMedia/);
+assert.match(document.querySelector('tr[aria-selected=true]').textContent,/D StoryMedia/);
+assert.match(document.getElementById('main').textContent,/C LauncherSystem/);
+const relabelled=appRows.map(a=>a.id==='story'?{...a,type:'entertainment'}:a);
+render(state(relabelled));
+assert.match(document.querySelector('tr[aria-selected=true]').textContent,/D StoryEntertainment/,'publisher can relabel without a new UI build');
+
+// R21 opening Extensions checks once on demand. Only verified published rows get download actions.
+const extDisclosure=document.getElementById('extensions');
+const extBox=document.getElementById('extensionDownloads');
+posts.length=0;
+extDisclosure.open=true;extDisclosure.ontoggle();
+assert.deepEqual(posts.map(post=>post.action),['checkExtensions']);
+render(state(appRows,{extensions:{status:'loading'}}));
+assert.match(extBox.textContent,/Checking for published extensions/);
+assert.equal(extBox.querySelectorAll('button').length,0);
+render(state(appRows,{extensions:{status:'unpublished'}}));
+assert.match(extBox.textContent,/Extensions and plugins are not published yet; nothing to download/);
+assert(!extBox.querySelectorAll('button').some(b=>b.textContent==='Download'));
+render(state(appRows,{extensions:{status:'failed'}}));
+assert.match(extBox.textContent,/Could not check/);
+const extRows=['Video generator','Image generator','Audio generator'].map((name,i)=>({
+  id:'test-extension-'+i,name,version:'10.20.'+i,summary:'Make '+name.split(' ')[0].toLowerCase()+' in Chrome.',
+  kind:'extension',download:true}));
+// A plugin is the other category, listed only until it has a published download.
+extRows.push({id:'efficient-orchestration',name:'Efficient Orchestration',version:'0.3.204',
+  summary:'Coordinates work across Studio apps.',kind:'plugin',download:false});
+render(state(appRows,{extensions:{status:'available',entries:extRows}}));
+assert.equal(extBox.querySelectorAll('.extRow').length,4);
+assert.match(extBox.textContent,/Video generator · 10\.20\.0 · ExtensionMake video in Chrome/);
+assert.match(extBox.textContent,/Efficient Orchestration · 0\.3\.204 · PluginCoordinates work across Studio apps\.No public download yet/);
+assert.equal(extBox.querySelectorAll('button').length,3,'a plugin without a download offers no dead button');
+assert.match(markup,/Extensions and plugins/);
+assert.doesNotMatch(document.getElementById('main').textContent,/generator|Efficient Orchestration/,'extensions and plugins never become app rows');
+posts.length=0;
+extBox.querySelectorAll('button')[1].fire('click');
+assert.equal(posts.length,1);
+assert.equal(posts[0].action,'downloadExtension');
+assert.equal(posts[0].app,'test-extension-1');
+assert.equal(posts[0].url,undefined,'browser opening uses only the verified native catalog');
 
 console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback, the empty list’s reason, the feed’s missing apps and the Scan drives control');

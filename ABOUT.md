@@ -25,8 +25,12 @@ never runs, routes or pauses production work.
   feed.
 - Shows this Mac's apps in the Launcher window and the publisher's page in a Fleet
   window; the headless tools keep working without a menu bar.
-- Names known apps absent from the last verified feed and shows drive scans separately
-  from feed checks. The Launcher can use either the public signed feed or a paired publisher.
+- Shows the last verified feed’s app count and publication time, names roster apps it does
+  not carry, and marks unfamiliar apps. The kit’s roster is updated at release.
+- Checks the source named in this Mac’s settings and scans installer drives. The footer
+  names the feed that answered. Apps can be sorted by the publisher’s type label.
+- Shows verified extension and plugin downloads in their own section when published: each row
+  names its category. Chrome downloads install by hand; a plugin without a download is listed only.
 
 ## How it is built
 
