@@ -2,6 +2,15 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.79 — 2026-11-22
+
+- The helper no longer restarts itself after a check that failed. A failed check leaves nothing to preserve, and on the Studio server every check was failing at its status report, so it restarted 1,605 times in a row — the app that kept appearing.
+- It cannot restart twice with no successful check in between: the second attempt is refused, with one line in the log saying so, instead of another restart.
+- The Dock icon added in 0.1.63 stays, and now appears at most once per genuine restart: the 1,605 appearances were one failing check restarting for ever, and that is what this release stops.
+- The agent log begins each process with its transfer count and whether the last restart had a successful check, so "did it reset?" is answered by a line instead of a guess.
+- The status report now has its own 15-second ceiling and a line naming the address and the reason when it fails, and the first check after a restart waits up to 30 seconds for the publisher's name before going ahead — a Mac that has just booted reaches its publisher instead of hanging on a name that is not answering yet.
+- The Download-previous-version control is scheduled for 0.1.80: this release is the restart fix alone, so a fault fix is not hidden behind a feature.
+
 ## 0.1.78 — 2026-11-21
 
 - **Check sources** names the Mac’s saved host and installer drives. The footer names the host that actually answered, even when the Launcher used a fallback.

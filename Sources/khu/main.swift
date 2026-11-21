@@ -477,15 +477,21 @@ struct KHUMain {
             }
             // This run plus the previous two, in the app's own data folder (Launcher shows the path).
             let agentLog = AgentLog(name: "agent", in: URL(fileURLWithPath: cfg.stateDir))
+            // Answers "did the transfer count reset across exec?" with a line rather than inference;
+            // on 1301 each of 1,605 restarts logged the same count and nothing said why.
+            agentLog.record("agent start: transfers=\(TransferMeter.completed) restarted-without-success=\(AgentRecycle.recycledSinceSuccess(stateDir: cfg.stateDir))")
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
             let initialRequests = installs
             let startedAt = Date()
             func loop() {
                 var requested = initialRequests
+                var refusedAgain = false
                 repeat {
+                    var ranOK = false
                     do {
                         let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))
                         let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
+                        ranOK = r.statusPosted
                         agentLog.record("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)", at: .quiet)
                         for note in r.notes { agentLog.record("note: \(note)") }
                         if agentLog.verbosity == .verbose {
@@ -506,19 +512,33 @@ struct KHUMain {
                         AgentReport.record(kind: Agent.blockedByTransportSecurity(error) ? "refused" : "error",
                                            reason: "\(error)", stateDir: URL(fileURLWithPath: cfg.stateDir), now: Date())
                     }
+                    // A run that reached the publisher is what makes the restart worth its cost, and
+                    // it is also what lifts the ban on a second restart (AgentRecycle.due).
+                    if ranOK { AgentRecycle.recordSuccess(stateDir: cfg.stateDir) }
                     if cfg.once { break }
                     // Between runs, never inside one: nothing is downloading, installing or holding.
                     // A requested install is one-shot setup, so those runs never recycle.
                     let cap = ProcessInfo.processInfo.environment["KHU_RECYCLE_TRANSFERS"].flatMap(Int.init)
                         ?? AgentRecycle.afterTransfers
-                    if initialRequests.isEmpty,
-                       let why = AgentRecycle.due(transfers: TransferMeter.completed,
-                                                  age: Date().timeIntervalSince(startedAt),
-                                                  afterTransfers: cap) {
-                        // Written straight to the pipe: a buffered `print` would be lost by the exec.
-                        FileHandle.standardError.write(
-                            Data("note: starting this helper again in place because \(why). Same process and job; no work was interrupted.\n".utf8))
-                        recycleInPlace()
+                    if initialRequests.isEmpty {
+                        let restartPending = AgentRecycle.recycledSinceSuccess(stateDir: cfg.stateDir)
+                        if let why = AgentRecycle.due(transfers: TransferMeter.completed,
+                                                      age: Date().timeIntervalSince(startedAt),
+                                                      successfulRun: ranOK,
+                                                      recycledSinceSuccess: restartPending,
+                                                      afterTransfers: cap) {
+                            // Written straight to the pipe: a buffered `print` would be lost by the exec.
+                            FileHandle.standardError.write(
+                                Data("note: starting this helper again in place because \(why). Same process and job; no work was interrupted.\n".utf8))
+                            AgentRecycle.recordRecycle(stateDir: cfg.stateDir, transfers: TransferMeter.completed)
+                            recycleInPlace()
+                        } else if !ranOK && restartPending && !refusedAgain {
+                            // One line per incarnation: the alternative is a wall of them, which is
+                            // what made 1,605 restarts look like progress.
+                            refusedAgain = true
+                            FileHandle.standardError.write(
+                                Data("note: not restarting this helper again: the last restart had no successful run before it. It keeps running and retrying.\n".utf8))
+                        }
                     }
                     rotateAgentLog()
                     let seconds = Double(max(1, cfg.intervalMinutes) * 60)

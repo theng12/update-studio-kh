@@ -280,13 +280,21 @@ public final class StubRunner: @unchecked Sendable {
 
     /// Wraps a version binary in its helper bundle so the process has a product name. Naming is a
     /// convenience: when it cannot be done, the version still runs from its plain path.
+    ///
+    /// The agent's own Dock icon, so its window is reachable after Close (0.1.63, commit 4444bf8 —
+    /// "the helper runs as a regular app … applicationShouldHandleReopen brings the window back").
+    /// 0.1.79 bounds the recycle loop that made it appear 1,605 times; the icon itself stays.
+    public static func agentHelperSpec(version: String?, icon: URL?) -> HelperBundle.Spec {
+        HelperBundle.Spec(name: "Studio Launcher KH Helper", bundleID: "com.khupdater.agent",
+                          executableName: HelperBundle.helperExecutable, version: version,
+                          icon: icon, dockIcon: true)
+    }
     private func namedBinary(_ binary: URL) -> URL {
         let version = StubLayout.version(of: binary)
         let icon = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/AppIcon.icns")
         do {
-            let spec = HelperBundle.Spec(name: "Studio Launcher KH Helper", bundleID: "com.khupdater.agent",
-                                         executableName: HelperBundle.helperExecutable, version: version,
-                                         icon: FileManager.default.fileExists(atPath: icon.path) ? icon : nil, dockIcon: true)
+            let spec = Self.agentHelperSpec(version: version,
+                                            icon: FileManager.default.fileExists(atPath: icon.path) ? icon : nil)
             return try HelperBundle.ensure(spec, source: binary, out: layout.helperBundle(for: version))
         } catch {
             log("could not name \(version) in a helper bundle: \(error); running it by path")

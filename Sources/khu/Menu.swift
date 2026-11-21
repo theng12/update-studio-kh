@@ -46,7 +46,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
 
     func start() {
         // A Dock icon, so the window is reachable after the red button: without it the only way
-        // back was the menu-bar icon, which is easy to miss (owner, 2026-11-18).
+        // back was the menu-bar icon, which is easy to miss (owner, 2026-11-18, 0.1.63). It stays:
+        // the 1,605 appearances on 1301 were one recycle loop, and 0.1.79 bounds that loop instead
+        // of taking the icon away — at most one appearance per genuine restart.
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.delegate = self
         LauncherMenus.install()

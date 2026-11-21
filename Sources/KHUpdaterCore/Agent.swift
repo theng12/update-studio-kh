@@ -291,9 +291,15 @@ public enum TransferMeter {
 public enum AgentRecycle {
     public static let afterTransfers = 500
     public static let afterSeconds: TimeInterval = 24 * 3600
+    /// A restart is only worth its own start-up when the run before it finished its job. On 1301 on
+    /// 2026-11-22 every run failed at its first status POST, the cap fired anyway, and the helper
+    /// restarted 1,605 times in a row — a failed run has nothing to preserve, so restarting it is
+    /// pure churn. Two restarts with no successful run between them is the same churn one step on.
     public static func due(transfers: Int, age: TimeInterval,
+                           successfulRun: Bool = true, recycledSinceSuccess: Bool = false,
                            afterTransfers: Int = afterTransfers,
                            afterSeconds: TimeInterval = afterSeconds) -> String? {
+        guard successfulRun, !recycledSinceSuccess else { return nil }
         if transfers >= afterTransfers {
             return "it has made \(transfers) transfers, and the system's HTTP stack keeps a port for each"
         }
@@ -302,6 +308,68 @@ public enum AgentRecycle {
         }
         return nil
     }
+
+    /// Set when this process restarts itself and removed by the first run that reaches the publisher,
+    /// so the fact survives the `exec` that swaps the process image — an in-memory flag would be
+    /// reset by the very restart it is meant to bound.
+    public static func markerURL(stateDir: String) -> URL {
+        URL(fileURLWithPath: stateDir).appendingPathComponent("agent-recycle.json")
+    }
+    public static func recycledSinceSuccess(stateDir: String) -> Bool {
+        FileManager.default.fileExists(atPath: markerURL(stateDir: stateDir).path)
+    }
+    public static func recordRecycle(stateDir: String, transfers: Int, at now: Date = Date()) {
+        let body = #"{"at":"\#(ISO.string(now))","transfers":\#(transfers)}"#
+        try? Data(body.utf8).write(to: markerURL(stateDir: stateDir), options: .atomic)
+    }
+    public static func recordSuccess(stateDir: String) {
+        try? FileManager.default.removeItem(at: markerURL(stateDir: stateDir))
+    }
+}
+
+/// Before the first status report, wait for the publisher's name to answer: a Mac that has just
+/// started runs this helper before Tailscale and mDNS are up, and a report to a name that does not
+/// resolve hangs instead of refusing (1301, 2026-11-22, minutes after a reboot). The wait is bounded
+/// for the same reason the report is — an unbounded wait is the same defect one step earlier.
+public enum StartupWait {
+    public static let pollSeconds: TimeInterval = 0.5
+    public static let maximumSeconds: TimeInterval = 30
+    nonisolated(unsafe) private static var waited = false
+    private static let lock = NSLock()
+
+    /// nil when the name answered, or when this process has already waited. The note when the bound
+    /// ran out: the run then posts anyway, with the report's own ceiling as the only bound left.
+    public static func waitOnce(for host: String, maximum: TimeInterval = maximumSeconds) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard !waited else { return nil }
+        waited = true
+        guard !host.isEmpty else { return nil }
+        let deadline = Date().addingTimeInterval(maximum)
+        while Date() < deadline {
+            if resolves(host, within: pollSeconds) { return nil }
+            Thread.sleep(forTimeInterval: pollSeconds)
+        }
+        return "network not up after \(Int(maximum)) s (\(host) did not resolve); posting anyway"
+    }
+
+    /// A resolver that hangs counts as "not up yet": the lookup runs on its own thread and this call
+    /// gives up after its own share of the wait, so no single lookup can outlast the bound.
+    static func resolves(_ host: String, within seconds: TimeInterval) -> Bool {
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var ok = false
+        Thread {
+            var hints = addrinfo()
+            hints.ai_socktype = SOCK_STREAM
+            var info: UnsafeMutablePointer<addrinfo>?
+            ok = getaddrinfo(host, nil, &hints, &info) == 0
+            if let info { freeaddrinfo(info) }
+            done.signal()
+        }.start()
+        return done.wait(timeout: .now() + seconds) == .success && ok
+    }
+
+    /// A long-running helper waits once per process; a test needs to see the wait again.
+    public static func resetForTests() { lock.lock(); waited = false; lock.unlock() }
 }
 
 /// The Launcher's Pause and Cancel for the download in progress. One download runs at a time.
@@ -512,6 +580,18 @@ public struct AgentMemory: Codable, Sendable, Equatable {
 }
 
 public enum Agent {
+    /// Every run makes this one request, so it carries its own ceiling: against a name that does not
+    /// resolve yet it hung with nothing in the log, which is what the recycle churn on 1301 looked
+    /// like from the outside (2026-11-22).
+    public static let statusPostSeconds: TimeInterval = 15
+    /// The sentence a failed status report writes: the target, and why.
+    static func statusFailure(_ url: URL, error: Error) -> String {
+        if let e = error as? URLError, e.code == .timedOut {
+            return "no answer within \(Int(statusPostSeconds)) s"
+        }
+        return plainUnreachable(url, error: error)
+    }
+
     /// The one recipe that never installs: an app observed on this Mac that keeps its own updater.
     /// It is only set by `Catalog.discover` for an app the live sources mark that way.
     static let statusOnly: Set<String> = ["status"]
@@ -609,7 +689,8 @@ public enum Agent {
                                executable: String? = Bundle.main.executablePath, now: Date = Date(),
                                requested: Set<String> = [], installing: ((String?) -> Void)? = nil,
                                ssd: [SSDSource] = [], appFolders: [URL] = Catalog.applicationFolders,
-                               connectionFile: URL? = nil, configFile: URL? = nil) throws -> AgentRunResult {
+                               connectionFile: URL? = nil, configFile: URL? = nil,
+                               startupWaitSeconds: TimeInterval = StartupWait.maximumSeconds) throws -> AgentRunResult {
         // A config that names only the helper is a Mac that was just enrolled: it seeds itself from
         // the signed feed and what is installed here (see `adoptInstalledApps`). Read before this
         // run's own discovery adds anything, so "just enrolled" stays a fact about the saved file.
@@ -646,7 +727,7 @@ public enum Agent {
                           control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
                           requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile,
                           appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: startingNotes + repairNotes,
-                          configFile: configFile, loadedPaths: loadedPaths)
+                          configFile: configFile, loadedPaths: loadedPaths, startupWaitSeconds: startupWaitSeconds)
         }
     }
 
@@ -691,7 +772,8 @@ public enum Agent {
                           requested asked: Set<String> = [], installing: (String?) -> Void = { _ in }, ssd: [SSDSource] = [],
                           connectionFile: URL? = nil, appFolders: [URL] = Catalog.applicationFolders,
                           sparseConfig: Bool = false, startingNotes: [String] = [],
-                          configFile: URL? = nil, loadedPaths: [String: String] = [:]) throws -> AgentRunResult {
+                          configFile: URL? = nil, loadedPaths: [String: String] = [:],
+                          startupWaitSeconds: TimeInterval = StartupWait.maximumSeconds) throws -> AgentRunResult {
         DownloadControl.reset()
         var config = config
         let mergedRegistrations = try mergeRegistrations(config: config, stateDir: stateDir)
@@ -710,6 +792,9 @@ public enum Agent {
         let requested = Set(asked.filter { !$0.contains(":") }).union(reinstall).union(initialSSD)
         guard let feedURL = URL(string: config.feedURL) else { throw khuFail("feedURL is not a URL") }
         let serverBase = feedURL.deletingLastPathComponent()
+        // A Mac that has just booted starts this helper before Tailscale answers; the first report of
+        // this process waits for the name, bounded, and says so when the bound runs out.
+        let startupNotes = StartupWait.waitOnce(for: serverBase.host ?? "", maximum: startupWaitSeconds).map { [$0] } ?? []
         let memoryFile = stateDir.appendingPathComponent("agent-memory.json")
         var memory = try AtomicFile.readJSON(AgentMemory.self, from: memoryFile) ?? AgentMemory()
         var healed: [String] = []
@@ -736,7 +821,7 @@ public enum Agent {
             try AtomicFile.writeJSON(memory, to: memoryFile)
         }
         var result = AgentRunResult()
-        result.notes = startingNotes + registrationNotes + healed
+        result.notes = startingNotes + registrationNotes + healed + startupNotes
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
@@ -861,19 +946,23 @@ public enum Agent {
         let statusBody = try JSONSerialization.data(withJSONObject: report)
         let statusCode: Int?
         var statusReply: Data?
+        let statusURL = serverBase.appendingPathComponent("status")
         if authenticated {
             do {
-                (statusReply, statusCode) = try http.post(serverBase.appendingPathComponent("status"), headers: headers, body: statusBody)
+                (statusReply, statusCode) = try http.post(statusURL, headers: headers, body: statusBody,
+                                                          timeout: statusPostSeconds)
             }
             catch {
                 // A refused address is a sentence for the person, never Foundation's own text: this one
                 // reaches the Launcher window unchanged, and "Code=-1022 … /status" told nobody anything.
                 if blockedByTransportSecurity(error) {
-                    throw khuFail(plainUnreachable(serverBase.appendingPathComponent("status"), error: error))
+                    throw khuFail(plainUnreachable(statusURL, error: error))
                 }
                 guard transportUnavailable(error) else { throw error }
                 statusCode = nil; publisherAvailable = false
-                result.notes.append("publisher unavailable; local requests may use a verified source, remote orders and Automatic wait")
+                // One line naming the target and the reason: a report that never arrives used to be
+                // visible only as restart churn, and the churn was the only thing anyone could see.
+                result.notes.append("status report to \(statusURL.absoluteString) failed: \(statusFailure(statusURL, error: error)); local requests may use a verified source, remote orders and Automatic wait")
             }
         } else {
             // A public feed has no publisher to report to, and none is contacted: the run installs
@@ -882,7 +971,7 @@ public enum Agent {
             result.notes.append("reading a public feed: nothing is reported to it; only this feed's own apps are offered")
         }
         if let statusCode {
-            guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode))") }
+            guard statusCode == 200 else { throw khuFail("status was refused (\(statusCode)) by \(statusURL.absoluteString)") }
             result.statusPosted = true
         }
         // Keep result delivery before feed processing, without retrying every result against an offline publisher.
