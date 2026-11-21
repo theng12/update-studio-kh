@@ -27,6 +27,19 @@ private final class CatalogHTTP: HTTPClient, @unchecked Sendable {
     }
 }
 
+
+/// Serves fixture bytes to the download step without a network.
+private final class DownloadHTTP: HTTPClient, @unchecked Sendable {
+    private let payload: Data
+    init(_ payload: Data) { self.payload = payload }
+    func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) { (Data(), 404) }
+    func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) { (Data(), 404) }
+    func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
+        guard payload.count <= limit else { throw khuFail("too large") }
+        try payload.write(to: file); return 200
+    }
+}
+
 func extensionCatalogTests() {
     let fleet = Signing.generateKeyPair()
     let stranger = Signing.generateKeyPair()
@@ -35,10 +48,10 @@ func extensionCatalogTests() {
         try! JSONSerialization.data(withJSONObject: ["extensions": entries])
     }
     func entry(id: String = "notes", name: String = "Notes", version: String = "1.2.3",
-               url: String = "https://cdn.example.com/extensions/notes.dmg",
-               sha: String = String(repeating: "a", count: 64)) -> [String: Any] {
+               url: String = "https://github.com/theng12/kh-extensions/releases/download/video-1.3.30/kh-video-1.3.30.zip",
+               sha: String = String(repeating: "a", count: 64), bytes: Int = 81252) -> [String: Any] {
         ["id": id, "name": name, "version": version, "summary": "A small notes extension.",
-         "downloadURL": url, "sha256": sha]
+         "download": url, "sha256": sha, "bytes": bytes]
     }
     func signed(_ body: Data, by signer: Curve25519.Signing.PrivateKey = fleet.privateKey) -> Data {
         let release = Release(feed: body, signature: try! Signing.sign(body, with: signer))
@@ -53,25 +66,25 @@ func extensionCatalogTests() {
 
     let one = entry()
     let two = entry(id: "calendar", name: "Calendar", version: "0.9",
-                    url: "https://cdn.example.com/extensions/calendar.dmg?source=catalog")
+                    url: "https://github.com/theng12/kh-extensions/releases/download/calendar-0.9/kh-calendar-0.9.zip")
     let http = CatalogHTTP(reply: (catalog([one, two]), 200))
     let list = try? ExtensionCatalog.load(http: http, key: fleet.publicKeyBase64)
     expect(list?.count == 2 && list?.first?.id == "notes" && list?.last?.id == "calendar"
            && list?.first?.name == "Notes" && list?.first?.version == "1.2.3"
            && list?.first?.summary == "A small notes extension."
            && list?.first?.kind == "extension"
-           && list?.first?.downloadURL?.absoluteString == "https://cdn.example.com/extensions/notes.dmg"
-           && list?.last?.downloadURL?.absoluteString == "https://cdn.example.com/extensions/calendar.dmg?source=catalog"
+           && list?.first?.bytes == 81252
+           && list?.first?.downloadURL?.absoluteString == "https://github.com/theng12/kh-extensions/releases/download/video-1.3.30/kh-video-1.3.30.zip"
+           && list?.last?.downloadURL?.absoluteString == "https://github.com/theng12/kh-extensions/releases/download/calendar-0.9/kh-calendar-0.9.zip"
            && list?.first?.sha256 == String(repeating: "a", count: 64),
            "EC1 a signed catalogue decodes every field into browser-only entries")
     expect(http.calls.count == 1 && http.calls.first?.url == ExtensionCatalog.endpoint
            && http.calls.first?.url.lastPathComponent == "extensions.json"
            && http.calls.first?.headers.isEmpty == true,
            "EC2 one anonymous GET to extensions.json beside the public feed")
-    expect(ExtensionCatalog.endpoint.absoluteString.hasPrefix("https://")
-           && ExtensionCatalog.endpoint.deletingLastPathComponent() ==
-              URL(string: Connect.publicFeedURL)!.deletingLastPathComponent(),
-           "EC3 the endpoint sits next to Connect.publicFeedURL")
+    expect(ExtensionCatalog.endpoint.absoluteString ==
+           "https://raw.githubusercontent.com/theng12/kh-extensions/main/extensions.json",
+           "EC3 the endpoint is the one published index")
     expect((try? load(catalog([])))?.isEmpty == true, "EC4 a signed empty catalogue is empty, not a failure")
 
     // Not published is a normal answer; a bad status, a network error and bad bytes are not.
@@ -128,9 +141,9 @@ func extensionCatalogTests() {
     let mixed = try? load(catalog([one, plugin]))
     expect(mixed?.count == 2 && mixed?.last?.kind == "plugin" && mixed?.last?.downloadURL == nil,
            "EC17 a plugin row lists without a download")
-    plugin["downloadURL"] = "https://cdn.example.com/plugins/eo.zip"; plugin["sha256"] = String(repeating: "b", count: 64)
+    plugin["download"] = "https://github.com/theng12/kh-extensions/releases/download/eo-0.3.204/eo.zip"; plugin["sha256"] = String(repeating: "b", count: 64)
     expect((try? load(catalog([plugin])))?.first?.downloadURL != nil, "EC18 a plugin may carry a public download")
-    var private_plugin = plugin; private_plugin["downloadURL"] = "https://mac.ts.net/eo.zip"
+    var private_plugin = plugin; private_plugin["download"] = "https://mac.ts.net/eo.zip"
     expectThrows("EC19 a plugin download is held to the same public address", contains: "public HTTPS URL") {
         _ = try load(catalog([private_plugin]))
     }
@@ -185,11 +198,38 @@ func extensionCatalogTests() {
         _ = try load(catalog([entry(sha: "xyz")]))
     }
     expectThrows("EC22 an overlong summary is refused", contains: "refused extension summary") {
-        _ = try load(catalog([entry(url: "https://cdn.example.com/a.dmg")].map {
+        _ = try load(catalog([entry(url: "https://github.com/theng12/kh-extensions/releases/download/a-1/a.zip")].map {
             var copy = $0; copy["summary"] = String(repeating: "x", count: 400); return copy
         }))
     }
     expectThrows("EC23 an overlong catalogue is refused", contains: "more than 64 entries") {
         _ = try load(catalog((0..<65).map { entry(id: "extension-\($0)") }))
+    }
+
+    // The file is kept only when it is exactly what the index published.
+    let payload = Data("extension zip bytes".utf8)
+    let hash = Signing.sha256Hex(payload)
+    let good = ExtensionCatalog.Entry(id: "video", name: "Video", version: "1.3.30", summary: "s",
+        downloadURL: URL(string: "https://github.com/theng12/kh-extensions/releases/download/video-1.3.30/kh-video-1.3.30.zip"),
+        sha256: hash, bytes: Int64(payload.count))
+    let badHash = ExtensionCatalog.Entry(id: "video", name: "Video", version: "1.3.30", summary: "s",
+        downloadURL: good.downloadURL, sha256: String(repeating: "0", count: 64), bytes: Int64(payload.count))
+    let badSize = ExtensionCatalog.Entry(id: "video", name: "Video", version: "1.3.30", summary: "s",
+        downloadURL: good.downloadURL, sha256: hash, bytes: Int64(payload.count + 1))
+    let pluginEntry = ExtensionCatalog.Entry(id: "eo", name: "Efficient Orchestration", version: "1.0", summary: "s", kind: "plugin")
+    let folder = tmpDir("extension-fetch"), target = folder.appendingPathComponent("kh-video.zip")
+    try? ExtensionCatalog.fetch(good, to: target, http: DownloadHTTP(payload))
+    expect((try? Data(contentsOf: target)) == payload, "EC24 a matching download is saved")
+    expectThrows("EC25 a wrong checksum keeps nothing", contains: "did not match the published checksum") {
+        try ExtensionCatalog.fetch(badHash, to: folder.appendingPathComponent("bad.zip"), http: DownloadHTTP(payload))
+    }
+    expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("bad.zip").path)
+           && !FileManager.default.fileExists(atPath: folder.appendingPathComponent("bad.zip.part").path),
+           "EC26 the refused file and its partial copy are gone")
+    expectThrows("EC27 a different size than published is refused", contains: "not the published") {
+        try ExtensionCatalog.fetch(badSize, to: folder.appendingPathComponent("size.zip"), http: DownloadHTTP(payload))
+    }
+    expectThrows("EC28 a plugin with no download cannot be fetched", contains: "no published download") {
+        try ExtensionCatalog.fetch(pluginEntry, to: folder.appendingPathComponent("eo.zip"), http: DownloadHTTP(payload))
     }
 }

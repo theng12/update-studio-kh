@@ -16,17 +16,21 @@ public enum ExtensionCatalog {
         /// Present only when a public download exists; a plugin may have none yet.
         public var downloadURL: URL?
         public var sha256: String?
+        /// The published size, used as the download ceiling before anything is kept.
+        public var bytes: Int64?
 
         public init(id: String, name: String, version: String, summary: String, kind: String = "extension",
-                    downloadURL: URL? = nil, sha256: String? = nil) {
+                    downloadURL: URL? = nil, sha256: String? = nil, bytes: Int64? = nil) {
             self.id = id; self.name = name; self.version = version; self.summary = summary
-            self.kind = kind; self.downloadURL = downloadURL; self.sha256 = sha256
+            self.kind = kind; self.downloadURL = downloadURL; self.sha256 = sha256; self.bytes = bytes
         }
     }
 
-    /// `extensions.json` beside the public `release.json`, read anonymously.
-    public static let endpoint: URL =
-        URL(string: Connect.publicFeedURL)!.deletingLastPathComponent().appendingPathComponent("extensions.json")
+    /// The one published index. It is served from a fixed HTTPS path on the project's own repo, so a
+    /// network attacker cannot redirect it; the per-file SHA-256 in that index is checked after the
+    /// download. If it is ever re-signed with the fleet key, that envelope is verified as well.
+    public static let endpoint = URL(string: "https://raw.githubusercontent.com/theng12/kh-extensions/main/extensions.json")!
+    static let downloadHost = "github.com", downloadPath = "/theng12/kh-extensions/"
 
     private static let maxResponseBytes = 256 << 10
     private static let maxEntries = 64
@@ -42,8 +46,9 @@ public enum ExtensionCatalog {
         var version: String
         var summary: String
         var kind: String?
-        var downloadURL: String?
+        var download: String?
         var sha256: String?
+        var bytes: Int64?
     }
 
     /// Nil means no catalogue is published (404/410); an empty array is a signed empty catalogue.
@@ -61,16 +66,17 @@ public enum ExtensionCatalog {
             throw khuFail("extension catalogue is empty or larger than \(maxResponseBytes) bytes")
         }
 
-        let release = try JSON.decode(Release.self, from: data)
-        guard let body = release.feedData, let signature = release.signatureData else {
-            throw khuFail("extension catalogue has no signed bytes or signature")
-        }
-        guard let publishedKey = key ?? PinnedKey.base64 else {
-            throw khuFail("no pinned publisher key: extension catalogue was not verified")
-        }
-        let publicKey = try Signing.loadPublicKey(base64: publishedKey)
-        guard Signing.verify(body, signature: signature, publicKey: publicKey) else {
-            throw khuFail("extension catalogue signature is invalid")
+        var body = data
+        if let release = try? JSON.decode(Release.self, from: data),
+           let signed = release.feedData, let signature = release.signatureData {
+            guard let publishedKey = key ?? PinnedKey.base64 else {
+                throw khuFail("no pinned publisher key: extension catalogue was not verified")
+            }
+            let publicKey = try Signing.loadPublicKey(base64: publishedKey)
+            guard Signing.verify(signed, signature: signature, publicKey: publicKey) else {
+                throw khuFail("extension catalogue signature is invalid")
+            }
+            body = signed
         }
 
         let wire = try JSON.decode(Wire.self, from: body)
@@ -85,6 +91,33 @@ public enum ExtensionCatalog {
             entries.append(entry)
         }
         return entries
+    }
+
+    /// Download one published file. Nothing is kept unless its bytes and SHA-256 match the index
+    /// entry, so a truncated file or a swapped asset is refused in plain words rather than handed on.
+    public static func fetch(_ entry: Entry, to file: URL, http: HTTPClient = URLSessionHTTPClient()) throws {
+        guard let url = entry.downloadURL, let expected = entry.sha256 else {
+            throw khuFail("\(entry.name) has no published download")
+        }
+        let fm = FileManager.default
+        let holding = file.appendingPathExtension("part")
+        try? fm.removeItem(at: holding)
+        do {
+            let code = try http.download(url, headers: [:], to: holding, limit: entry.bytes ?? (64 << 20))
+            guard (200..<300).contains(code) else { throw khuFail("the download answered \(code)") }
+            let size = ((try? fm.attributesOfItem(atPath: holding.path))?[.size] as? NSNumber)?.int64Value
+            if let published = entry.bytes, size != published {
+                throw khuFail("the download was \(size ?? 0) bytes, not the published \(published)")
+            }
+            guard let actual = try? Signing.sha256Hex(fileAt: holding).hex, actual == expected else {
+                throw khuFail("the download did not match the published checksum")
+            }
+            try? fm.removeItem(at: file)
+            try fm.moveItem(at: holding, to: file)
+        } catch {
+            try? fm.removeItem(at: holding)
+            throw error
+        }
     }
 
     private static func validate(_ raw: WireEntry) throws -> Entry {
@@ -103,7 +136,7 @@ public enum ExtensionCatalog {
             throw khuFail("refused category \(kind) for \(id): only extension or plugin")
         }
         var url: URL?
-        if let address = raw.downloadURL {
+        if let address = raw.download {
             guard let parsed = publicDownloadURL(address) else {
                 throw khuFail("\(kind) \(id) download address is not a public HTTPS URL: \(address)")
             }
@@ -122,7 +155,11 @@ public enum ExtensionCatalog {
         if kind == "extension", url == nil || hash == nil {
             throw khuFail("extension \(id) needs a public download address and sha256")
         }
-        return Entry(id: id, name: name, version: raw.version, summary: summary, kind: kind, downloadURL: url, sha256: hash)
+        if kind == "extension", let size = raw.bytes, size <= 0 {
+            throw khuFail("extension \(id) declares an impossible size")
+        }
+        return Entry(id: id, name: name, version: raw.version, summary: summary, kind: kind,
+                     downloadURL: url, sha256: hash, bytes: raw.bytes)
     }
 
     private static func text(_ raw: String, limit: Int, what: String) throws -> String {
@@ -134,13 +171,14 @@ public enum ExtensionCatalog {
         return trimmed
     }
 
-    /// No credentials, no private names or address literals, no odd port: this is an address a
-    /// person may open in their browser, not a shortcut to a service on the sender's network.
+    /// Downloads must come from the project's own release path, so the index cannot point the app at
+    /// any other host, and the address still passes every public-URL rule below.
     private static func publicDownloadURL(_ raw: String) -> URL? {
         guard raw.utf8.count <= maxURLBytes, let url = URL(string: raw),
               url.scheme?.lowercased() == "https", url.user == nil, url.password == nil,
               url.port.map({ $0 == 443 }) ?? true,
-              let host = url.host, FeedNetwork.isPublicHostName(host) else { return nil }
+              let host = url.host, host == downloadHost, url.path.hasPrefix(downloadPath),
+              FeedNetwork.isPublicHostName(host) else { return nil }
         let lower = host.lowercased()
         let labels = lower.split(separator: ".")
         guard !labels.allSatisfy({ $0.allSatisfy(\.isNumber) }) else { return nil }

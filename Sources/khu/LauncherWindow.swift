@@ -351,12 +351,30 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             case "fleet": helper.showFleet()
         case "checkExtensions": checkExtensions()
         case "downloadExtension":
-            // Only use a URL from the verified catalog. The page cannot supply an arbitrary target.
+            // Only a catalog entry and its published address are used; the page never supplies a
+            // target. The file is kept only after its bytes and checksum match the index.
             guard case let .available(entries, _) = extensionDownloads,
-                  let entry = entries.first(where: { $0.id == id }), let url = entry.downloadURL else { break }
-            let opened = NSWorkspace.shared.open(url)
-            extensionDownloads = .available(entries, note: opened ? nil : "The browser could not open this download. Try again.")
+                  let entry = entries.first(where: { $0.id == id }) else { break }
+            let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+            let name = (try? SafeName.component("kh-\(entry.id)-\(entry.version).zip", what: "download name"))
+                ?? "kh-\(entry.id)-\(entry.version).zip"
+            let file = folder.appendingPathComponent(name)
+            extensionDownloads = .available(entries, note: "Downloading \(entry.name)…")
             reload()
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result: String
+                do {
+                    try ExtensionCatalog.fetch(entry, to: file)
+                    result = "Saved \(name) in Downloads. Unzip it, then use Load unpacked in Chrome."
+                } catch {
+                    result = "\(entry.name) was not kept: \(error). Nothing changed."
+                }
+                DispatchQueue.main.async {
+                    self?.extensionDownloads = .available(entries, note: result)
+                    self?.reload()
+                }
+            }
         case "support": if let url = URL(string: "https://nowpayments.io/donation/studiokh") { NSWorkspace.shared.open(url) }
         case "copyReport":
             guard let app else { break }

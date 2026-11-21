@@ -7,7 +7,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - **Check sources** names the Mac’s saved host and installer drives. The footer names the host that actually answered, even when the Launcher used a fallback.
 - The app list shows the verified feed’s app count and publish time, names fleet apps that the feed does not carry, and marks new feed apps it does not recognise yet.
 - Sort by **Type** in grid or list view. Publishers label apps Business, Entertainment, Media, System or Utility; older or unknown labels read **Unlabelled**.
-- **Extensions and plugins** is separate from apps. Open it to check for published downloads. Verified Chrome extensions show Download, which downloads the file for Chrome's Load unpacked; a plugin with no download says so instead of a dead button.
+- **Extensions and plugins** is separate from apps. Open it to check for published downloads. Verified Chrome extensions show Download, which saves the file to Downloads, then checks its published size and checksum before keeping it and refuses a mismatch; a plugin with no download says so instead of a dead button.
 
 ## 0.1.77 — 2026-11-21
 
