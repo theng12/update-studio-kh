@@ -307,7 +307,7 @@ function drawExtensions(){const state=S.extensions||{status:'idle'}, sig=JSON.st
  if(message){box.replaceChildren(el('p',{},message));if(state.status!=='loading')box.append(
   el('button',{class:'btn',onclick:check},state.status==='idle'?'Check downloads':'Check again'));}
  else{box.replaceChildren(el('p',{},'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'),
-  ...(state.entries||[]).map(x=>el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,' · ',x.kind[0].toUpperCase()+x.kind.slice(1),el('p',{},x.summary)),
+  ...(state.entries||[]).map(x=>el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,' · ',(x.kind==='plugin'?'Plugin':'Extension'),el('p',{},x.summary)),
    x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
              :el('span',{class:'tag'},'No public download yet'))));
   if(state.note)box.append(el('p',{role:'status'},state.note));}
