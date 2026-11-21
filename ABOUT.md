@@ -36,8 +36,9 @@ never runs, routes or pauses production work.
 
 Swift 6.4 SwiftPM code (`Sources/KHUpdaterCore/`, `Sources/khu/`,
 `Sources/KHUStub/`, `Sources/khu-stub/`), a test runner (`Tests/Runner/`), and
-shell/Python packaging (`packaging/`, `build.sh`). There is no remote for this
-repository.
+shell/Python packaging (`packaging/`, `build.sh`). The repository's remote is
+`https://github.com/theng12/update-studio-kh.git`; releases are built in a worktree
+off `main` and merged back.
 
 Build the tools with:
 
@@ -55,6 +56,8 @@ updated needs its own updater for the feed path.
 
 ## Current version
 
-1.0.42, from the newest `CHANGELOG.md` entry (2026-11-16). No manifest in this
-repository holds a version: the number is passed to `packaging/build-launcher.sh`
-when the Launcher DMG is built, so the manifest location is not established.
+0.1.78, from the top entry of `CHANGELOG-launcher.md`, served by the signed feed on
+1301 and mirrored to GitHub Pages since 2026-11-21T19:03:05Z (launcher DMG sha256
+`2f08f87e…`, helper `d6654d25…`). No manifest in this repository holds a version:
+the number is passed to `packaging/build-launcher.sh` when the Launcher DMG is
+built.
