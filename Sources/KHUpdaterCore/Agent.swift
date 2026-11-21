@@ -10,6 +10,8 @@ public struct AgentRunResult: Sendable, Equatable {
     public var notes: [String] = []
     /// No fresh verified server feed was available; SSD offers do not claim server currency.
     public var feedError: String?
+    /// nil means no signed feed was checked; an empty set means it carried no apps.
+    public var feedAppIDs: Set<String>?
     /// Each app as the menu-bar icon shows it, from what is on disk after the run.
     public var apps: [HelperApp] = []
     public init(statusPosted: Bool = false, commandsRun: Int = 0, updates: Int = 0) {
@@ -904,6 +906,7 @@ public enum Agent {
                                   executable: executable, serverBase: serverBase, now: now, installing: installing, appFolders: appFolders, reinstall: reinstall, rollbacks: rollbacks, initialSSD: initialSSD, previousResult: result)
         }
         let feed = selected.feed
+        result.feedAppIDs = Set(feed.apps.keys)
         if let note = selected.note { result.notes.append(note) }
         for (app, version) in memory.offlineRollbacks ?? [:] {
             if let entry = feed.apps[app], entry.version == version {

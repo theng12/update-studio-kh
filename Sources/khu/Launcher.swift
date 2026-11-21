@@ -25,7 +25,7 @@ extension HelperMenu {
     /// Volumes are read only when the window opens or a volume mounts or unmounts.
     func rescanSSDs() {
         let found = SSDSource.scan()
-        lock.lock(); ssd = found; lock.unlock()
+        lock.lock(); ssd = found; lastDriveScan = Date(); lock.unlock()
         window?.reload()
         wake.signal()
     }

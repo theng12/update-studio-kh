@@ -759,5 +759,25 @@ confirmAction('Update');
 assert.equal(posts[0].action, 'updateAll', 'F6 Enter on the selection asks once, then updates all of it');
 key({ key: 'Escape' });
 assert.equal(run('selected.size'), 0, 'F6 Escape clears the selection');
+// R18 an app this Mac knows but the feed it reads does not carry is named; the gap is never silent.
+render(state([row({ status: 'Up to date' })], { missingFromFeed: ['Wire Studio KH', 'Media Studio KH'] }));
+assert.match(document.getElementById('main').textContent, /does not carry Wire Studio KH, Media Studio KH/,
+  'R18 the list names the apps the feed omits');
+render(state([row({ status: 'Up to date' })], { missingFromFeed: [] }));
+assert(!/does not carry/.test(document.getElementById('main').textContent),
+  'R18 no gap sentence when the feed carries everything');
+// R19 the refresh control sits in the header and names what it checks; the footer counter names its subject.
+render(state([row({ status: 'Up to date' })], { lastRun: new Date().toISOString(), lastDriveScan: null }));
+assert.match(markup, /<header[\s\S]*?id=vlist[\s\S]*?id=check title="Scan mounted drives for installers and check the update feed"[\s\S]*?<\/header>/,
+  'R19 Scan drives sits beside the view toggles and names both sources');
+assert(!markup.includes('id=check title="Check for updates"'), 'R19 the unlabelled footer check icon is gone');
+assert.match(document.getElementById('checked').textContent, /^Drives not scanned yet/,
+  'R19 the footer counter names its subject before a scan');
+render(state([row({ status: 'Up to date' })], { lastRun: null, lastDriveScan: new Date().toISOString() }));
+assert.match(document.getElementById('checked').textContent, /^Drives scanned just now/,
+  'R19 …and after one, even without a successful feed check');
+posts.length = 0;
+document.getElementById('check').fire('click');
+assert.deepEqual(posts.map(post => post.action), ['check'], 'R19 the moved button still starts a scan');
 
-console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback and the empty list’s reason');
+console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback, the empty list’s reason, the feed’s missing apps and the Scan drives control');
