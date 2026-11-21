@@ -25,6 +25,8 @@ never runs, routes or pauses production work.
   feed.
 - Shows this Mac's apps in the Launcher window and the publisher's page in a Fleet
   window; the headless tools keep working without a menu bar.
+- Names known apps absent from the last verified feed and shows drive scans separately
+  from feed checks. The Launcher can use either the public signed feed or a paired publisher.
 
 ## How it is built
 

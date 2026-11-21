@@ -101,6 +101,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         guard loaded else { return }
         helper.lock.lock()
         let apps = helper.apps, busy = helper.installingApp, pending = helper.active.union(helper.requested), ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, attempt = helper.lastAttempt, serverKnown = helper.serverKnown
+        let feedAppIDs = helper.feedAppIDs, lastDriveScan = helper.lastDriveScan
         helper.lock.unlock()
         let settings = HelperSettings.load(from: helper.stateDir)
         let cleanup = try? HelperRetirementSettings.load(from: helper.stateDir)
@@ -131,8 +132,15 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             }
             rows.append(row)
         }
+        let known = Catalog.known(in: helper.stateDir, ssd: ssd)
+        // An SSD or an installed copy can produce a row even when the feed omits the app.
+        let missingFromFeed = feedAppIDs.map { ids in
+            Set(known.values.map(\.id)).subtracting(ids).subtracting(["launcher", "updater"])
+                .sorted().filter { RetiredApps.note($0) == nil }.map { AppNames.display($0) }
+        } ?? []
         let state: [String: Any] = [
             "apps": rows, "sources": ssd.map(\.volume), "error": error as Any, "lastRun": last.map(ISO.string) as Any,
+            "missingFromFeed": missingFromFeed, "lastDriveScan": lastDriveScan.map(ISO.string) as Any,
             "lastAttempt": attempt.map(ISO.string) as Any, "serverKnown": serverKnown, "settingsNote": helper.settingsNote as Any,
             "version": helper.version ?? "", "whatsNew": helper.version.map(WhatsNew.lines(for:)) ?? [],
             // Where this Mac's own files live and the cap one reply may carry: the page says both
@@ -156,7 +164,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                      "version": $0.available ?? ""] },
             // Hand-installed copies of this fleet's apps, offered once each; a declined one stays
             // declined on this Mac. `path` is the only thing adoption ever records.
-            "adoptions": Adoption.offers(known: Catalog.known(in: helper.stateDir, ssd: helper.ssdSources),
+            "adoptions": Adoption.offers(known: known,
                                          managed: managedApps(),
                                          dismissed: Set(settings.adoptionDeclined ?? []),
                                          folders: Catalog.applicationFolders)

@@ -9,6 +9,8 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - In Settings, "Where updates come from" has its own spacing, "Check connection" sits under the address it checks, and the Join note is one line — so the route picker and the Join controls are visible without scrolling at the default window size.
 - Connecting from GitHub releases no longer fails on a Mac that has used Studio Launcher before: leftover updater state made the installer refuse a plain run ("KH Updater already exists"), and the app showed only "Local setup could not be completed". The app now asks for the installer's repair mode when anything is already there, and a real failure shows the installer's own last line.
 - The custom-address field says plainly that a numeric IP can never work: macOS refuses plain http to an IP address, so only the name ending in .ts.net (or an https feed link) can be used.
+- An app Studio Launcher knows but the feed it reads does not carry is now named in the list ("This feed does not carry …"), never a silent gap.
+- The refresh control moved to the top right beside the view toggles and reads "Scan drives", so what it checks is on the button; the footer keeps "Drives scanned … · Server …" and says "Drives not scanned yet" before the first scan.
 
 ## 0.1.75 — 2026-11-21
 

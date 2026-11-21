@@ -97,12 +97,12 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <label class=sr for=sort>Sort</label><select id=sort aria-label="Sort"><option value=name>Name</option><option value=recent>Recently updated</option></select>
  <input type=search id=q placeholder="Search apps" aria-label="Search apps">
  <div class=seg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
- <span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
+ <button class="btn" id=check title="Scan mounted drives for installers and check the update feed" aria-label="Scan drives and check the update feed">Scan drives</button><span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
 </header>
 <div id=notices hidden></div>
 <section id=adoptions hidden></section>
 <main id=main></main>
-<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon" id=check title="Check for updates" aria-label="Check for updates"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="Fleet: see the whole fleet on the publisher, and act on it" aria-label="Fleet: see the whole fleet on the publisher, and act on it">Fleet</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
+<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="Fleet: see the whole fleet on the publisher, and act on it" aria-label="Fleet: see the whole fleet on the publisher, and act on it">Fleet</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
@@ -115,7 +115,8 @@ function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k i
  for(const c of kids.flat()){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)))}return e}
 const day=iso=>{if(!iso)return null;const d=new Date(iso);return isNaN(d)?null:d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})};
 const mb=b=>b==null?null:(b>=1e9?(b/1e9).toFixed(1)+' GB':b>=1e6?Math.round(b/1e6)+' MB':b>=1e3?Math.round(b/1e3)+' KB':b+' B');
-function ago(iso){if(!iso)return 'Not checked yet';const s=(Date.now()-new Date(iso))/1000;if(s<60)return 'Checked just now';if(s<3600)return 'Checked '+Math.round(s/60)+' min ago';return 'Checked '+Math.round(s/3600)+' h ago'}
+function ago(iso){const s=(Date.now()-new Date(iso))/1000;return s<60?'just now':s<3600?Math.round(s/60)+' min ago':Math.round(s/3600)+' h ago'}
+function scanned(iso){return iso?'Drives scanned '+ago(iso):'Drives not scanned yet'}
 // A failure in plain words; the Mac's own text stays in Copy error report.
 function plain(r){if(!r)return '';const t=r.toLowerCase();
  if(t.includes('hdiutil')||t.includes('image not recognized')||t.includes('no mountable'))return 'The installer file couldn’t be opened. It may be damaged; try Update again.';
@@ -271,6 +272,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  const m=$('main');m.replaceChildren();
  if(!S.apps.length)m.append(el('p',{class:'empty'},S.error?'The publisher at '+(S.connection.destination||'the saved address')+' could not be reached: '+S.error:'Checking…'));
  else if(!list.length)m.append(el('p',{class:'empty'},'No app matches “'+q+'”.'));
+ if(S.missingFromFeed&&S.missingFromFeed.length)m.append(el('p',{class:'note',style:'margin-left:0;margin-bottom:8px'},'The last feed checked does not carry '+S.missingFromFeed.join(', ')+'.'));
  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
   m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
  drawNotices();drawAdoptions();
@@ -295,7 +297,7 @@ function drawAdoptions(){const list=S.adoptions||[],box=$('adoptions');box.hidde
 /// One compact status line: a failure replaces the freshness line rather than sitting beside it.
 function paintStatus(){const e=$('err'),c=$('checked'),err=S.error?'Last check failed: '+S.error+(S.lastAttempt?' · '+new Date(S.lastAttempt).toLocaleString():''):'';
  e.textContent=err;e.hidden=!err;
- c.textContent=ago(S.lastRun)+' · '+(S.serverKnown?'Server':'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');c.hidden=!!err}
+ c.textContent=scanned(S.lastDriveScan)+' · '+(S.serverKnown&&S.lastRun?'Feed checked '+ago(S.lastRun):'Server versions unknown')+(S.sources.length?' + '+S.sources.join(', '):'')+(S.paused?' · Automatic updates paused':'');c.hidden=!!err}
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
@@ -368,8 +370,8 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  const seg=(key,opts,cur)=>el('div',{class:'seg',role:'group'},opts.map(([v,l])=>el('button',{'aria-pressed':String(cur==v),onclick:()=>set(key,v)},l)));
  const connStatus=()=>c.checking?el('p',{class:'note',style:'margin-left:0'},'Checking the connection…')
   :c.note?el('p',{style:'color:var(--bad);font-size:12px;margin:6px 0 0'},c.note)
-  :(c.ok&&c.checkedAt)?el('div',{class:'meta',style:'margin-top:6px'},el('span',{class:'chip ok'},'Connected'),el('span',{class:'when num'},ago(c.checkedAt)))
-  :el('p',{class:'note',style:'margin-left:0'},'Not checked yet.');
+  :(c.ok&&c.checkedAt)?el('div',{class:'meta',style:'margin-top:6px'},el('span',{class:'chip ok'},'Connected'),el('span',{class:'when num'},'checked '+ago(c.checkedAt)))
+  :el('p',{class:'note',style:'margin-left:0'},'The address has not been checked yet.');
  // What the person typed but has not applied yet outlives a redraw; once the new address is saved,
  // the state carries it and the draft is dropped.
  // The address in use, never a guess: a saved one, else the default a Mac with no saved address
@@ -457,7 +459,7 @@ document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySel
  if(e.key=='Enter'&&selected.size&&!settingsOpen&&!whatsNewOpen&&!detail&&!editing){e.preventDefault();
   const n=selected.size;ask('Update '+n+' app'+(n==1?'':'s')+'?','Update',ok=>{if(ok)post({action:'updateAll'})});return}
  if(e.metaKey&&(e.key=='f'||e.key=='k')){e.preventDefault();$('q').focus()}});
-setInterval(()=>{if(S.lastRun)paintStatus()},30000);
+setInterval(()=>{if(S.lastRun||S.lastDriveScan)paintStatus()},30000);
 </script></body></html>
 """#.replacingOccurrences(of: "</style>", with: Changelog.layoutCSS + "</style>")
 }

@@ -41,6 +41,7 @@ func publicFeedSweepTests() {
         expect(run != nil && !shell.calls.isEmpty,
                "SW1 a Mac on the public feed updates an installed app automatically (calls \(shell.calls.count))")
         expect(f.client.posts.isEmpty, "SW1 a public-feed run posts nothing anywhere (\(f.client.posts))")
+        expect(run?.feedAppIDs == ["demo"], "SW1 the Launcher receives the verified feed’s app IDs")
     }
 
     // SW2. This Mac's own switch off: nothing is installed, and the note names that switch — never

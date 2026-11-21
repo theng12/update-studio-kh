@@ -27,6 +27,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     var lastAttempt: Date?
     var settingsNote: String?
     var serverKnown = false
+    var feedAppIDs: Set<String>?
+    var lastDriveScan: Date?
     var window: LauncherWindow?
     var fleetWindow: FleetWindow?
     var ssdSources: [SSDSource] { lock.lock(); defer { lock.unlock() }; return ssd }
@@ -108,6 +110,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         if let result { apps = result.apps }
         lastError = error ?? result?.feedError
         serverKnown = result != nil && result?.feedError == nil && error == nil
+        feedAppIDs = serverKnown ? result?.feedAppIDs : nil
         lastAttempt = Date()
         if serverKnown { lastRun = lastAttempt }
         let ready = apps.filter { $0.managed && !$0.statusOnly && $0.status == HelperApp.updateAvailable }
