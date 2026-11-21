@@ -645,14 +645,14 @@ run('settingsOpen=true;drawSettings()');
 assert.match(document.querySelector('.scrim.s .sheet').textContent, /Edit Suite 1103 \(mac-id-1\)/, 'Settings This Mac shows displayName alongside machine id');
 run('settingsOpen=false;closeLayers()');
 
-// The publisher's fleet view lives in this app now: the footer offers Fleet… as a proper button,
+// The publisher's fleet view lives in this app now: the footer offers Fleet as a proper button,
 // and one click asks the helper to open it — the page itself reaches no network.
 run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
 render(state([row({ status: 'Up to date', installed: '0.1.53', available: '0.1.53' })], { version: '0.1.53' }));
 posts.length = 0;
 const fleetButton = document.getElementById('fleet');
 assert(fleetButton, 'the footer offers the fleet');
-assert(markup.includes('<button class=btn id=fleet'), 'Fleet… is a proper .btn button in the markup');
+assert(markup.includes('<button class=btn id=fleet'), 'Fleet is a proper .btn button in the markup');
 fleetButton.fire('click');
 assert.equal(posts.length, 1, 'one click sends exactly one message');
 assert.equal(posts[0].action, 'fleet', 'Fleet asks the helper to open the publisher page');

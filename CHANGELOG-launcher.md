@@ -2,6 +2,12 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.76 — 2026-11-21
+
+- Settings' "Where updates come from" now shows which route is chosen: the selected one is a pressed segment, not three identical buttons.
+- The footer's fleet button reads "Fleet" in full (it was cut to "Fleet…"); its tooltip keeps the full sentence.
+- In Settings, "Where updates come from" has its own spacing, "Check connection" sits under the address it checks, and the Join note is one line — so the route picker and the Join controls are visible without scrolling at the default window size.
+
 ## 0.1.75 — 2026-11-21
 
 - A Mac can now leave a fleet from Studio Launcher itself. Settings shows "Leave this fleet" only while this Mac is enrolled to a publisher — a saved Update Studio address and its sign-in. A GitHub-only Mac never sees it.

@@ -102,7 +102,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 <div id=notices hidden></div>
 <section id=adoptions hidden></section>
 <main id=main></main>
-<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon" id=check title="Check for updates" aria-label="Check for updates"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="See the whole fleet on the publisher, and act on it">Fleet…</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
+<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon" id=check title="Check for updates" aria-label="Check for updates"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/><path d="M12.5 1.8v2.7H9.8"/></svg></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="Fleet: see the whole fleet on the publisher, and act on it" aria-label="Fleet: see the whole fleet on the publisher, and act on it">Fleet</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
@@ -381,24 +381,27 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  const pubAddr=el('input',{id:'pubaddr',type:'text',value:(c.destination&&!c.publicFeed)?c.destination:'',placeholder:'http://name.tail1234.ts.net:8790/release.json','aria-label':'Update Studio address for joining'});
  const pubCode=el('input',{id:'pubcode',type:'text',placeholder:'123-456','aria-label':'Pairing code'});
  if(connSourceSel===null)connSourceSel=c.publicFeed?'github':(c.canLeave?'publisher':'custom');
- const pick=(v,l)=>el('button',{class:'btn'+(connSourceSel===v?' main':''),'aria-pressed':String(connSourceSel===v),onclick:()=>{connSourceSel=v;drawSettings()}},l);
+ // The house segment styling: the chosen route is visibly pressed, not three identical buttons.
+ const pick=(v,l)=>el('button',{'aria-pressed':String(connSourceSel===v),onclick:()=>{connSourceSel=v;drawSettings()}},l);
  const connSection=el('section',{},el('h4',{},'Connection'),
   el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},shownAddress+(c.destination?'':' (default)'))),
   el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.displayName&&c.machine&&c.displayName!==c.machine?c.displayName+' ('+c.machine+')':(c.displayName||c.machine||''))),
   connStatus(),
   // What this Mac is, in one line, for the person wondering whether to link it back.
   c.publicFeed?el('p',{class:'note',style:'margin-left:0'},'This Mac updates from the signed feed and reports to nobody. Joining Update Studio again needs a pairing code — choose This Mac’s Update Studio below.'):null,
-  el('h4',{},'Where updates come from'),
-  el('div',{class:'row'},pick('github','GitHub releases'),pick('publisher','This Mac’s Update Studio'),pick('custom','Custom address')),
+  el('h4',{style:'margin-top:12px'},'Where updates come from'),
+  el('div',{class:'row'},el('div',{class:'seg',role:'group','aria-label':'Where updates come from'},
+    pick('github','GitHub releases'),pick('publisher','This Mac’s Update Studio'),pick('custom','Custom address'))),
   connSourceSel==='publisher'?el('div',{},
    el('div',{class:'row'},pubAddr),
    el('div',{class:'row'},pubCode,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'joinFleet',value:pubAddr.value,code:pubCode.value})},'Join Update Studio')),
-   el('p',{class:'note',style:'margin-left:0'},'Type that Mac’s address and the pairing code it shows. Nothing is sent until Join Update Studio, and changing nothing leaves this Mac exactly as it is.')):null,
-  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection')),
+   el('p',{class:'note',style:'margin-left:0'},'Type that Mac’s address and the pairing code it shows; nothing is sent until you press Join.')):null,
   // Offered only after a check the publisher refused with 401/403 (pairAvailable); the
   // confirmation and the pairing code are collected by the native window that follows.
   c.pairAvailable?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'pairAgain'})},'Pair again now')):null,
   el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:chInput.value})},'Use this address')),
+  // The check sits after the address it checks, so the route picker itself is what a person sees first.
+  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection')),
   // One click back to the public mirror, offered only while a publisher's address is saved.
   c.destination&&c.defaultFeed&&c.destination!==c.defaultFeed?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:c.defaultFeed})},'Use GitHub releases instead')):null,
   // Only a Mac enrolled to a publisher can leave one; a GitHub-only Mac has no such button.
