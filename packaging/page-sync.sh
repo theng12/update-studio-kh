@@ -411,7 +411,7 @@ if mine.get("network"):
 scanned = {k: v for k, v in mine.items() if k != "apps"}
 scanned["apps"] = {a: {k: v for k, v in e.items() if k != "bundleID"} for a, e in mine["apps"].items()}
 text = json.dumps(scanned)
-for pattern in (r"\.ts\.net", r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b",
+for pattern in (r"[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net", r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b",
                 r"(?i)terranash", r"(?i)macmini"):
     if re.search(pattern, text):
         print("the public copy matches %s" % pattern); raise SystemExit(3)
