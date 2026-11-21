@@ -11,8 +11,8 @@ func feedAppTypeTests() {
     let key = Curve25519.Signing.PrivateKey()
     let keyFile = root.appendingPathComponent("fixture.key")
     try! Signing.savePrivateKey(key, to: keyFile)
-    let allowed = ["business", "entertainment", "media", "system", "utility"]
-    let refusedMessage = "--type must be business, entertainment, media, system or utility"
+    let allowed = ["business", "entertainment", "extension", "media", "plugin", "system", "utility"]
+    let refusedMessage = "--type must be business, entertainment, extension, media, plugin, system or utility"
 
     func dir(_ tag: String) -> URL {
         let url = root.appendingPathComponent(tag)
@@ -76,6 +76,6 @@ func feedAppTypeTests() {
     try! publish(raw, "1.0.1", "next")
     expect(loaded(raw)?.apps["media"]?.type == nil, "FT6 an old raw tag is not carried forward as known")
 
-    expect(FeedPublisher.appTypes == ["business", "entertainment", "media", "system", "utility"],
+    expect(FeedPublisher.appTypes == ["business", "entertainment", "extension", "media", "plugin", "system", "utility"],
            "FT7 only the five agreed lowercase labels are publisher labels")
 }

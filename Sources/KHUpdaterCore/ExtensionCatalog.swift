@@ -11,12 +11,16 @@ public enum ExtensionCatalog {
         public var version: String
         public var summary: String
         /// A public HTTPS address for the browser, never for `HTTPClient.download`.
-        public var downloadURL: URL
-        public var sha256: String
+        /// The house category this row belongs to: `extension` or `plugin`. Never an app.
+        public var kind: String
+        /// Present only when a public download exists; a plugin may have none yet.
+        public var downloadURL: URL?
+        public var sha256: String?
 
-        public init(id: String, name: String, version: String, summary: String, downloadURL: URL, sha256: String) {
+        public init(id: String, name: String, version: String, summary: String, kind: String = "extension",
+                    downloadURL: URL? = nil, sha256: String? = nil) {
             self.id = id; self.name = name; self.version = version; self.summary = summary
-            self.downloadURL = downloadURL; self.sha256 = sha256
+            self.kind = kind; self.downloadURL = downloadURL; self.sha256 = sha256
         }
     }
 
@@ -37,8 +41,9 @@ public enum ExtensionCatalog {
         var name: String
         var version: String
         var summary: String
-        var downloadURL: String
-        var sha256: String
+        var kind: String?
+        var downloadURL: String?
+        var sha256: String?
     }
 
     /// Nil means no catalogue is published (404/410); an empty array is a signed empty catalogue.
@@ -93,14 +98,31 @@ public enum ExtensionCatalog {
         let name = try text(raw.name, limit: maxNameBytes, what: "extension name")
         let summary = try text(raw.summary, limit: maxSummaryBytes, what: "extension summary")
         guard VersionCompare.isValid(raw.version) else { throw khuFail("invalid extension version \(raw.version)") }
-        let hash = raw.sha256.lowercased()
-        guard hash.utf8.count == 64, hash.utf8.allSatisfy({
-            (48...57).contains($0) || (97...102).contains($0)
-        }) else { throw khuFail("extension \(id) has no usable sha256") }
-        guard let url = publicDownloadURL(raw.downloadURL) else {
-            throw khuFail("extension \(id) download address is not a public HTTPS URL: \(raw.downloadURL)")
+        let kind = raw.kind ?? "extension"
+        guard kind == "extension" || kind == "plugin" else {
+            throw khuFail("refused category \(kind) for \(id): only extension or plugin")
         }
-        return Entry(id: id, name: name, version: raw.version, summary: summary, downloadURL: url, sha256: hash)
+        var url: URL?
+        if let address = raw.downloadURL {
+            guard let parsed = publicDownloadURL(address) else {
+                throw khuFail("\(kind) \(id) download address is not a public HTTPS URL: \(address)")
+            }
+            url = parsed
+        }
+        var hash: String?
+        if let rawHash = raw.sha256 {
+            let lower = rawHash.lowercased()
+            guard lower.utf8.count == 64, lower.utf8.allSatisfy({
+                (48...57).contains($0) || (97...102).contains($0)
+            }) else { throw khuFail("\(kind) \(id) has no usable sha256") }
+            hash = lower
+        }
+        // A Chrome extension is installable only from a published file; a plugin may simply be
+        // listed until its distribution exists, so only an extension demands both.
+        if kind == "extension", url == nil || hash == nil {
+            throw khuFail("extension \(id) needs a public download address and sha256")
+        }
+        return Entry(id: id, name: name, version: raw.version, summary: summary, kind: kind, downloadURL: url, sha256: hash)
     }
 
     private static func text(_ raw: String, limit: Int, what: String) throws -> String {

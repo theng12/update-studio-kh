@@ -90,11 +90,11 @@ public enum FeedPublisher {
     /// `utility`. A feed can still decode any raw label: an old or unknown one stays in the signed
     /// bytes for the consumer to read Unlabelled, and is never carried forward as though this
     /// publisher had chosen it.
-    public static let appTypes: Set<String> = ["business", "entertainment", "media", "system", "utility"]
+    public static let appTypes: Set<String> = ["business", "entertainment", "extension", "media", "plugin", "system", "utility"]
 
     public static func validateAppType(_ raw: String) throws {
         guard appTypes.contains(raw) else {
-            throw khuFail("--type must be business, entertainment, media, system or utility, not \(raw)")
+            throw khuFail("--type must be business, entertainment, extension, media, plugin, system or utility, not \(raw)")
         }
     }
 

@@ -18,8 +18,8 @@ APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; KIND="${5:-}"
 TYPE="${KHU_APP_TYPE:-}"
 if [ -n "$TYPE" ]; then
   case "$TYPE" in
-    business|entertainment|media|system|utility) ;;
-    *) echo "release-push: KHU_APP_TYPE must be business, entertainment, media, system or utility, not $TYPE" >&2; exit 2 ;;
+    business|entertainment|extension|media|plugin|system|utility) ;;
+    *) echo "release-push: KHU_APP_TYPE must be business, entertainment, extension, media, plugin, system or utility, not $TYPE" >&2; exit 2 ;;
   esac
 elif [ "$APP" = "launcher" ] || [ "$APP" = "updater" ]; then
   TYPE="system"

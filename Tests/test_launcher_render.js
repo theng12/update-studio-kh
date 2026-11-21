@@ -828,11 +828,18 @@ assert(!extBox.querySelectorAll('button').some(b=>b.textContent==='Download'));
 render(state(appRows,{extensions:{status:'failed'}}));
 assert.match(extBox.textContent,/Could not check/);
 const extRows=['Video generator','Image generator','Audio generator'].map((name,i)=>({
-  id:'test-extension-'+i,name,version:'10.20.'+i,summary:'Make '+name.split(' ')[0].toLowerCase()+' in Chrome.'}));
+  id:'test-extension-'+i,name,version:'10.20.'+i,summary:'Make '+name.split(' ')[0].toLowerCase()+' in Chrome.',
+  kind:'extension',download:true}));
+// A plugin is the other category, listed only until it has a published download.
+extRows.push({id:'efficient-orchestration',name:'Efficient Orchestration',version:'0.3.204',
+  summary:'Coordinates work across Studio apps.',kind:'plugin',download:false});
 render(state(appRows,{extensions:{status:'available',entries:extRows}}));
-assert.equal(extBox.querySelectorAll('.extRow').length,3);
-assert.match(extBox.textContent,/Video generator · 10\.20\.0Make video in Chrome/);
-assert.doesNotMatch(document.getElementById('main').textContent,/generator/,'extensions never become app rows');
+assert.equal(extBox.querySelectorAll('.extRow').length,4);
+assert.match(extBox.textContent,/Video generator · 10\.20\.0 · ExtensionMake video in Chrome/);
+assert.match(extBox.textContent,/Efficient Orchestration · 0\.3\.204 · PluginCoordinates work across Studio apps\.No public download yet/);
+assert.equal(extBox.querySelectorAll('button').length,3,'a plugin without a download offers no dead button');
+assert.match(markup,/Extensions and plugins/);
+assert.doesNotMatch(document.getElementById('main').textContent,/generator|Efficient Orchestration/,'extensions and plugins never become app rows');
 posts.length=0;
 extBox.querySelectorAll('button')[1].fire('click');
 assert.equal(posts.length,1);

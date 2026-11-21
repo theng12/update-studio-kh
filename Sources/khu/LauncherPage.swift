@@ -109,7 +109,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 <div id=notices hidden></div>
 <section id=adoptions hidden></section>
 <main id=main></main>
-<details class=extensions id=extensions><summary id=extensionsHeading>Extensions</summary><div id=extensionDownloads aria-live="polite"></div></details>
+<details class=extensions id=extensions><summary id=extensionsHeading>Extensions and plugins</summary><div id=extensionDownloads aria-live="polite"></div></details>
 <footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="Fleet: see the whole fleet on the publisher, and act on it" aria-label="Fleet: see the whole fleet on the publisher, and act on it">Fleet</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
@@ -307,8 +307,9 @@ function drawExtensions(){const state=S.extensions||{status:'idle'}, sig=JSON.st
  if(message){box.replaceChildren(el('p',{},message));if(state.status!=='loading')box.append(
   el('button',{class:'btn',onclick:check},state.status==='idle'?'Check downloads':'Check again'));}
  else{box.replaceChildren(el('p',{},'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'),
-  ...(state.entries||[]).map(x=>el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,el('p',{},x.summary)),
-   el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download'))));
+  ...(state.entries||[]).map(x=>el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,' · ',x.kind[0].toUpperCase()+x.kind.slice(1),el('p',{},x.summary)),
+   x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
+             :el('span',{class:'tag'},'No public download yet'))));
   if(state.note)box.append(el('p',{role:'status'},state.note));}
  if(focus)$('extensionsHeading').focus();}
 $('extensions').ontoggle=()=>{if($('extensions').open&&(!S.extensions||S.extensions.status==='idle'))post({action:'checkExtensions'})};

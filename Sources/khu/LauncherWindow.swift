@@ -43,7 +43,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             case .failed: return ["status": "failed"]
             case let .available(entries, note):
                 return ["status": "available", "note": note as Any, "entries": entries.map {
-                    ["id": $0.id, "name": $0.name, "version": $0.version, "summary": $0.summary]
+                    ["id": $0.id, "name": $0.name, "version": $0.version, "summary": $0.summary,
+                     "kind": $0.kind, "download": $0.downloadURL != nil]
                 }]
             }
         }
@@ -352,8 +353,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         case "downloadExtension":
             // Only use a URL from the verified catalog. The page cannot supply an arbitrary target.
             guard case let .available(entries, _) = extensionDownloads,
-                  let entry = entries.first(where: { $0.id == id }) else { break }
-            let opened = NSWorkspace.shared.open(entry.downloadURL)
+                  let entry = entries.first(where: { $0.id == id }), let url = entry.downloadURL else { break }
+            let opened = NSWorkspace.shared.open(url)
             extensionDownloads = .available(entries, note: opened ? nil : "The browser could not open this download. Try again.")
             reload()
         case "support": if let url = URL(string: "https://nowpayments.io/donation/studiokh") { NSWorkspace.shared.open(url) }

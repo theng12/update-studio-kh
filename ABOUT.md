@@ -29,8 +29,8 @@ never runs, routes or pauses production work.
   not carry, and marks unfamiliar apps. The kit’s roster is updated at release.
 - Checks the source named in this Mac’s settings and scans installer drives. The footer
   names the feed that answered. Apps can be sorted by the publisher’s type label.
-- Shows verified Chrome extension downloads in a separate section when published. It opens
-  downloads in the browser; the Launcher does not install extensions.
+- Shows verified extension and plugin downloads in their own section when published: each row
+  names its category. Chrome downloads install by hand; a plugin without a download is listed only.
 
 ## How it is built
 

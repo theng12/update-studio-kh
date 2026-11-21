@@ -44,7 +44,7 @@ The feed (schema 1):
 Versions are dotted numbers only (`1.4.355`); anything else is refused, never compared as zero.
 
 `type` is optional signed display metadata, independent of the install recipe (`kind`). On an app’s
-next normal publish, pass `khu publish --type business|entertainment|media|system|utility` or set
+next normal publish, pass `khu publish --type business|entertainment|extension|media|plugin|system|utility` or set
 `KHU_APP_TYPE` for `packaging/release-push.sh`. Launcher and its helper default to `system` in
 that wrapper. Moving another app to a different bucket is publisher metadata, not a hard-coded UI map. Omitted
 and unrecognised labels read **Unlabelled** and do not hide entries. Update `packaging/fleet-roster.json`
@@ -54,7 +54,10 @@ the verified feed’s `apps` and `published_at`, not a disk scan or a view filte
 
 `extensions.json` is an optional, separate public download catalog beside the public `release.json`.
 Use the same signed `{ "feed", "signature" }` envelope as the feed, with a signed JSON body
-`{ "extensions": [{ "id", "name", "version", "summary", "downloadURL", "sha256" }] }`.
+`{ "extensions": [{ "id", "name", "version", "summary", "kind", "downloadURL?", "sha256?" }] }`,
+where `kind` is `extension` (a public download and sha256 required) or `plugin` (both optional,
+listed without a download until one exists). The section is the Extension and Plugin categories;
+those rows never enter the app update list.
 The Launcher checks it anonymously on demand and never alters the app feed. No published catalog
 or an empty catalog yields no download buttons. An invalid or unreachable catalog yields a retry.
 A selected entry opens its verified HTTPS address in the browser; the Launcher does not download,

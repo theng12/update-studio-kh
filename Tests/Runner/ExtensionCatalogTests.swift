@@ -59,8 +59,9 @@ func extensionCatalogTests() {
     expect(list?.count == 2 && list?.first?.id == "notes" && list?.last?.id == "calendar"
            && list?.first?.name == "Notes" && list?.first?.version == "1.2.3"
            && list?.first?.summary == "A small notes extension."
-           && list?.first?.downloadURL.absoluteString == "https://cdn.example.com/extensions/notes.dmg"
-           && list?.last?.downloadURL.absoluteString == "https://cdn.example.com/extensions/calendar.dmg?source=catalog"
+           && list?.first?.kind == "extension"
+           && list?.first?.downloadURL?.absoluteString == "https://cdn.example.com/extensions/notes.dmg"
+           && list?.last?.downloadURL?.absoluteString == "https://cdn.example.com/extensions/calendar.dmg?source=catalog"
            && list?.first?.sha256 == String(repeating: "a", count: 64),
            "EC1 a signed catalogue decodes every field into browser-only entries")
     expect(http.calls.count == 1 && http.calls.first?.url == ExtensionCatalog.endpoint
@@ -118,8 +119,28 @@ func extensionCatalogTests() {
         _ = try load(signed(try! JSONSerialization.data(withJSONObject: ["items": []])))
     }
     var missing = one; missing.removeValue(forKey: "sha256")
-    expectThrows("EC15 a missing field is refused", contains: "malformed JSON") {
+    expectThrows("EC15 an extension without a download or hash is refused", contains: "needs a public download address and sha256") {
         _ = try load(catalog([missing]))
+    }
+    // An extension and a plugin are different categories; a plugin may be listed before it ships.
+    var plugin: [String: Any] = ["id": "efficient-orchestration", "name": "Efficient Orchestration",
+                                 "version": "0.3.204", "summary": "Coordinates work across Studio apps.", "kind": "plugin"]
+    let mixed = try? load(catalog([one, plugin]))
+    expect(mixed?.count == 2 && mixed?.last?.kind == "plugin" && mixed?.last?.downloadURL == nil,
+           "EC17 a plugin row lists without a download")
+    plugin["downloadURL"] = "https://cdn.example.com/plugins/eo.zip"; plugin["sha256"] = String(repeating: "b", count: 64)
+    expect((try? load(catalog([plugin])))?.first?.downloadURL != nil, "EC18 a plugin may carry a public download")
+    var private_plugin = plugin; private_plugin["downloadURL"] = "https://mac.ts.net/eo.zip"
+    expectThrows("EC19 a plugin download is held to the same public address", contains: "public HTTPS URL") {
+        _ = try load(catalog([private_plugin]))
+    }
+    var odd: [String: Any] = plugin; odd["kind"] = "app"
+    expectThrows("EC20 only extension and plugin categories are accepted", contains: "only extension or plugin") {
+        _ = try load(catalog([odd]))
+    }
+    var unhashed = one; unhashed.removeValue(forKey: "sha256")
+    expectThrows("EC21 an extension without its hash is refused", contains: "needs a public download address and sha256") {
+        _ = try load(catalog([unhashed]))
     }
     expectThrows("EC16 an oversized response is refused before decoding", contains: "larger than") {
         _ = try load(Data(repeating: 0x61, count: 300_000))
