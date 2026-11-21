@@ -108,7 +108,7 @@ const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.k
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null,selected=new Set();
+let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null,connSourceSel=null,selected=new Set();
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -376,10 +376,24 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  // starts on. Both are shown here so nobody has to wonder which feed is live.
  const shownAddress=c.destination||c.defaultFeed||'';
  const chInput=el('input',{id:'addr',type:'text',value:addrDraft===null?shownAddress:addrDraft,placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address',oninput:e=>{addrDraft=e.target.value}});
+ // The same three-way choice first run offers, here too: a GitHub Mac must have a way back to a
+ // publisher that needs no reinstall, and a publisher Mac keeps its route unchanged.
+ const pubAddr=el('input',{id:'pubaddr',type:'text',value:(c.destination&&!c.publicFeed)?c.destination:'',placeholder:'http://name.tail1234.ts.net:8790/release.json','aria-label':'Update Studio address for joining'});
+ const pubCode=el('input',{id:'pubcode',type:'text',placeholder:'123-456','aria-label':'Pairing code'});
+ if(connSourceSel===null)connSourceSel=c.publicFeed?'github':(c.canLeave?'publisher':'custom');
+ const pick=(v,l)=>el('button',{class:'btn'+(connSourceSel===v?' main':''),'aria-pressed':String(connSourceSel===v),onclick:()=>{connSourceSel=v;drawSettings()}},l);
  const connSection=el('section',{},el('h4',{},'Connection'),
   el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},shownAddress+(c.destination?'':' (default)'))),
   el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.displayName&&c.machine&&c.displayName!==c.machine?c.displayName+' ('+c.machine+')':(c.displayName||c.machine||''))),
   connStatus(),
+  // What this Mac is, in one line, for the person wondering whether to link it back.
+  c.publicFeed?el('p',{class:'note',style:'margin-left:0'},'This Mac updates from the signed feed and reports to nobody. Joining Update Studio again needs a pairing code — choose This Mac’s Update Studio below.'):null,
+  el('h4',{},'Where updates come from'),
+  el('div',{class:'row'},pick('github','GitHub releases'),pick('publisher','This Mac’s Update Studio'),pick('custom','Custom address')),
+  connSourceSel==='publisher'?el('div',{},
+   el('div',{class:'row'},pubAddr),
+   el('div',{class:'row'},pubCode,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'joinFleet',value:pubAddr.value,code:pubCode.value})},'Join Update Studio')),
+   el('p',{class:'note',style:'margin-left:0'},'Type that Mac’s address and the pairing code it shows. Nothing is sent until Join Update Studio, and changing nothing leaves this Mac exactly as it is.')):null,
   el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection')),
   // Offered only after a check the publisher refused with 401/403 (pairAvailable); the
   // confirmation and the pairing code are collected by the native window that follows.
@@ -387,6 +401,8 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
   el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:chInput.value})},'Use this address')),
   // One click back to the public mirror, offered only while a publisher's address is saved.
   c.destination&&c.defaultFeed&&c.destination!==c.defaultFeed?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:c.defaultFeed})},'Use GitHub releases instead')):null,
+  // Only a Mac enrolled to a publisher can leave one; a GitHub-only Mac has no such button.
+  c.canLeave?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>ask('Leave this fleet? This Mac keeps every app and every model. It stops taking orders from Update Studio and updates from the GitHub feed instead.','Leave this fleet',yes=>{if(yes)post({action:'leaveFleet'})})},'Leave this fleet')):null,
   el('p',{class:'note',style:'margin-left:0'},(c.destination?'':'GitHub releases is the default while no address is saved. ')+'This Mac only accepts an address where Update Studio serves the updates its own key already signed. A different Update Studio needs its setup kit, not an address.'),
   c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null);
  const updater=S.apps.find(a=>a.id=='updater');
@@ -403,7 +419,9 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
     el('p',{class:'note'},'A switch set on this Mac rules while it is the later change; otherwise Update Studio’s value does, and where neither has one this Mac’s default does. Each app’s menu names which of the three is in force.'),
     check('retireHelpers','Keep the current and previous helper versions',s.retireHelpers,s.helperCleanupAvailable?'Older versions move to restorable _trash after '+(s.helperHealthySeconds/60).toLocaleString()+' minutes of repeated healthy reports.':'Cleanup settings could not be read. Older versions are kept.',!s.helperCleanupAvailable),
     // The updater's own switch is live data, and its automatic-on-connect default is stated, not implied.
-    updater?check('updaterAutomatic','Update Studio KH updates itself automatically',!!updater.automatic,'Automatic is on when a Mac connects; change it in Update Studio KH’s … menu.',true):null),
+    updater?check('updaterAutomatic','Update Studio KH updates itself automatically',!!updater.automatic,
+      c.publicFeed?'From the signed feed: this Mac installs each new version that feed serves.':'Automatic is on when a Mac connects; change it in Update Studio KH’s … menu.',
+      !c.publicFeed):null),
    connSection,
    el('section',{},el('h4',{},'This Mac and Update Studio'),
     // Said from what the agent’s own report and recipes actually do; no budget is claimed here that

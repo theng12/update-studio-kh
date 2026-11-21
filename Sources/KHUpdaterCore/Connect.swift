@@ -4,6 +4,9 @@ import Foundation
 /// reply comes before installation; incomplete local files select the installer's repair mode,
 /// and the same claim survives a failed install so another attempt can finish it.
 public enum Connect {
+    /// The public mirror: the built-in starting destination, and where "Leave this fleet" goes.
+    public static let publicFeedURL = "https://theng12.github.io/kh-releases/release.json"
+
     /// A kit built for public download carries the pinned key and no address; an absent address
     /// means "not connected yet", never a broken kit.
     public struct Publisher: Codable, Sendable { public var feedURL: String?; public var enrolURL: String?; public var publicKey: String }
@@ -567,12 +570,85 @@ public enum Connect {
         return try saveDestination(feedURL, file: file, expected: raw)
     }
 
+    /// Enrolled to a publisher: a saved publisher address and the token that signs this Mac in.
+    /// A GitHub-only Mac has neither, so "Leave this fleet" is absent rather than disabled.
+    public static func enrolled(feedURL: String, token: String) -> Bool {
+        guard !token.isEmpty, let url = URL(string: feedURL) else { return false }
+        return FeedNetwork.authenticated(url)
+    }
+
+    /// Leaving the publisher from this Mac itself. The feed becomes the built-in public mirror,
+    /// the enrolment credential is cleared and this Mac gets a fresh local id, so the old
+    /// controller's record can never match it again. It touches the network with nothing at all —
+    /// no check, no enrolment, no report, no order — so it works with Update Studio off and this
+    /// Mac offline: the mirror is this build's own constant, and the pinned key, which stays,
+    /// verifies every update read from it. The previous settings are kept in
+    /// `~/Library/KHUpdater/_trash/` and the page says where.
+    public static func leaveFleet(file: URL, now: Date = Date()) throws -> (address: String, backup: URL) {
+        guard let raw = try? Data(contentsOf: file) else {
+            throw khuFail("this Mac's updater settings could not be read (\(file.path))")
+        }
+        guard let settings = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else {
+            throw khuFail("this Mac's updater settings are not readable JSON")
+        }
+        guard let pinned = settings["publicKey"] as? String, !pinned.isEmpty else {
+            throw khuFail("this Mac's updater settings hold no pinned key, so no feed can be trusted from here")
+        }
+        try PinnedKey.require(pinned)
+        _ = try FeedNetwork.feedURL(publicFeedURL)
+        let previous = (settings["machine"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "mac"
+        let fresh = previous + "-" + (0..<4).map { _ in String(format: "%x", Int.random(in: 0...15)) }.joined()
+        let library = file.deletingLastPathComponent().deletingLastPathComponent()   // …/Library/KHUpdater
+        let backup = Trash.root(in: library)
+            .appendingPathComponent(ISO.string(now).replacingOccurrences(of: ":", with: "-"), isDirectory: true)
+            .appendingPathComponent("config.json")
+        try FileManager.default.createDirectory(at: backup.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try raw.write(to: backup)
+        let saved = try saveDestination(publicFeedURL, file: file, expected: raw,
+                                        changes: ["token": "", "machine": fresh])
+        return (saved, backup)
+    }
+
+    /// Moves this Mac to the public mirror in one press: the mirror's signed feed is verified
+    /// against this Mac's pinned key first, then only the address is saved and the token cleared —
+    /// machine, apps and settings stay. Used by the repair window when the saved address is one
+    /// macOS refuses, so a dead end becomes a repaired Mac.
+    public static func switchToPublicFeed(file: URL, http: HTTPClient = URLSessionHTTPClient()) throws -> String {
+        guard let raw = try? Data(contentsOf: file) else {
+            throw khuFail("this Mac's updater settings could not be read (\(file.path))")
+        }
+        guard let settings = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else {
+            throw khuFail("this Mac's updater settings are not readable JSON")
+        }
+        guard let pinned = settings["publicKey"] as? String, !pinned.isEmpty else {
+            throw khuFail("this Mac's updater settings hold no pinned key, so no feed can be trusted from here")
+        }
+        try PinnedKey.require(pinned)
+        let mirror = try FeedNetwork.feedURL(publicFeedURL)
+        let data: Data, status: Int
+        do { (data, status) = try http.get(mirror, headers: [:]) }
+        catch { throw unreachable(mirror, error: error) }
+        guard status == 200 else { throw khuFail("the public feed answered HTTP \(status); this Mac was not changed") }
+        let release: Release
+        do { release = try JSON.decode(Release.self, from: data) }
+        catch { throw khuFail("that address did not serve an update feed this tool understands") }
+        guard let body = release.feedData, let signature = release.signatureData,
+              let key = try? Signing.loadPublicKey(base64: PinnedKey.trusted(pinned)),
+              Signing.verify(body, signature: signature, publicKey: key) else {
+            throw khuFail("the public feed is not signed by this Mac's key; this Mac was not changed")
+        }
+        _ = try JSON.decode(Feed.self, from: body).validated()
+        return try saveDestination(publicFeedURL, file: file, expected: raw, changes: ["token": ""])
+    }
+
     /// Shared compare-before-replace save; preserves unknown settings and refuses a concurrent edit.
-    static func saveDestination(_ feedURL: String, file: URL, expected raw: Data) throws -> String {
+    static func saveDestination(_ feedURL: String, file: URL, expected raw: Data,
+                                changes: [String: Any] = [:]) throws -> String {
         guard var settings = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
             throw khuFail("this Mac's updater settings are not readable JSON")
         }
         settings["feedURL"] = feedURL
+        for (key, value) in changes { settings[key] = value }
         let body = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys])
         let temp = file.deletingLastPathComponent().appendingPathComponent(".\(file.lastPathComponent).\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: temp.path, contents: body, attributes: [.posixPermissions: 0o600]) else {

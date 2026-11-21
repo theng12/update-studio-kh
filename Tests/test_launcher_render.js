@@ -375,6 +375,61 @@ run('settingsOpen=true;drawSettings()');
 assert(!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Use GitHub releases instead'),
        'no GitHub switch once the mirror is already the address in use');
 
+// Leaving the fleet: offered only to an enrolled Mac, confirmed in the page, and gone afterwards.
+run('settingsOpen=false;closeLayers()');
+render(state([row()],{connection:Object.assign({},state([]).connection,{canLeave:false})}));
+run('settingsOpen=true;drawSettings()');
+assert(!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Leave this fleet'),
+       'a GitHub-only Mac is never offered Leave this fleet');
+run('settingsOpen=false;closeLayers()');
+render(state([row()],{connection:Object.assign({},state([]).connection,{canLeave:true})}));
+run('settingsOpen=true;drawSettings()');
+posts.length=0;
+document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='Leave this fleet').fire('click');
+assert.equal(posts.length,0,'the button asks first, in the page, before anything is sent');
+const leaveDialog=[...document.querySelectorAll('[role=dialog]')].find(d=>/Leave this fleet\?/.test(d.textContent));
+assert(leaveDialog&&/keeps every app and every model/.test(leaveDialog.textContent)&&/GitHub feed instead/.test(leaveDialog.textContent),
+       'the confirmation names what this Mac keeps and where it goes next');
+confirmAction('Leave this fleet');
+assert.equal(posts[0].action,'leaveFleet','confirming posts the one leave action');
+run('settingsOpen=false;closeLayers()');
+render(state([row()],{connection:Object.assign({},state([]).connection,{destination:mirror,defaultFeed:mirror,canLeave:false})}));
+run('settingsOpen=true;drawSettings()');
+assert(!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Leave this fleet')
+       &&!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Use GitHub releases instead'),
+       'after leaving, both fleet buttons are gone — the mirror is simply the address in use');
+
+// A public-feed Mac says what it is, updates itself (the switch is on and usable), and offers the
+// way back to a publisher as the same three-way choice first run has.
+const upd=()=>row({id:'updater',name:'Update Studio KH',status:'Up to date',automatic:true,installed:'0.1.76',available:null,managed:true,helper:true});
+const sheetText=()=>document.querySelector('.scrim.s .sheet').textContent;
+run('settingsOpen=false;closeLayers();connSourceSel=null');
+render(state([upd()],{connection:Object.assign({},state([]).connection,{destination:mirror,defaultFeed:mirror,publicFeed:true,canLeave:false})}));
+run('settingsOpen=true;drawSettings()');
+assert.match(sheetText(),/updates from the signed feed and reports to nobody/,'a public-feed Mac says what it is');
+assert.match(sheetText(),/pairing code/,'and says joining Update Studio needs a pairing code');
+assert(document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='This Mac’s Update Studio'),
+       'the way back to a publisher is a visible choice, not a hidden field');
+const selfBox=document.querySelectorAll('.scrim.s input[type=checkbox]').find(i=>i.parentNode&&/updates itself automatically/.test(i.parentNode.textContent));
+assert(selfBox&&!selfBox.disabled,'on a public feed the self-update switch is on and usable');
+posts.length=0;selfBox.fire('change');
+assert.equal(posts[0].key,'updaterAutomatic','changing it is this Mac’s own setting');
+posts.length=0;
+document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='This Mac’s Update Studio').fire('click');
+assert(document.getElementById('pubaddr')&&document.getElementById('pubcode'),'choosing a publisher asks for its address and code');
+document.getElementById('pubaddr').value='http://studio.tail1234.ts.net:8790/release.json';
+document.getElementById('pubcode').value='123-456';
+document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='Join Update Studio').fire('click');
+assert.equal(posts[0].action,'joinFleet');
+assert.match(posts[0].value,/studio\.tail1234\.ts\.net/);
+assert.equal(posts[0].code,'123-456');
+// A publisher-fed Mac keeps today's row exactly: the self-update switch is the publisher's.
+run('settingsOpen=false;closeLayers();connSourceSel=null');
+render(state([upd()],{connection:Object.assign({},state([]).connection,{canLeave:true})}));
+run('settingsOpen=true;drawSettings()');
+const pubBox=document.querySelectorAll('.scrim.s input[type=checkbox]').find(i=>i.parentNode&&/updates itself automatically/.test(i.parentNode.textContent));
+assert(pubBox&&pubBox.disabled,'on a publisher feed the self-update row is unchanged (disabled)');
+
 // The Automatic switch names which setting it follows, in the agent's own words for its own decision.
 run('settingsOpen=false;detail=null;closeLayers()');
 for (const words of ['Set on this Mac','Set in Update Studio','This Mac’s default']) {

@@ -47,6 +47,24 @@ private final class CountingHTTP: HTTPClient, @unchecked Sendable {
     }
 }
 
+/// macOS's own refusal, without a network: plain http to a bare IP never answers, and everything
+/// else is the given feed. Proves the agent's fallback is driven by the refusal, not by syntax.
+private struct ATSRefusingHTTP: HTTPClient {
+    let feed: Data
+    func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
+        if let host = url.host, FeedNetwork.isAddressLiteral(host) {
+            throw URLError(.appTransportSecurityRequiresSecureConnection)
+        }
+        return (feed, 200)
+    }
+    func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) {
+        throw URLError(.cannotConnectToHost)
+    }
+    func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int {
+        throw URLError(.cannotConnectToHost)
+    }
+}
+
 /// Serves one signed feed to any address asked: the public mirror's own bytes, without a network.
 private struct MirrorHTTP: HTTPClient {
     let feed: Data
@@ -350,6 +368,147 @@ func connectionFlowTests() {
                "CF7 a public https feed link is accepted as typed")
     }
 
+    // CF16. Leaving the fleet from this Mac: the button exists only while enrolled; the switch is
+    // local (it works with the publisher unreachable), the mirror is saved, the credential is
+    // cleared with a fresh id, the pin and apps stay, the old settings are kept, and a pairing
+    // code from a controller still brings this Mac back.
+    do {
+        let r = EnrolRig("cf16")
+        let code = pairingCode(r)
+        let k = kit(for: r)
+        let home = r.rig.root.appendingPathComponent("home")
+        _ = try? Connect.run(kit: k, home: home, machine: "leave-mac", code: code,
+                             http: InProcessClient(server: r.server), shell: SystemShell())
+        let file = home.appendingPathComponent("Library/KHUpdater/base/config.json")
+        let before = try! JSON.decode(AgentConfig.self, from: Data(contentsOf: file))
+        let beforeBytes = try! Data(contentsOf: file)
+        expect(Connect.enrolled(feedURL: before.feedURL, token: before.token),
+               "CF16 an enrolled Mac reports that it can leave the fleet")
+        expect(!Connect.enrolled(feedURL: "https://theng12.github.io/kh-releases/release.json", token: ""),
+               "CF16 a GitHub-only Mac is never offered the leave button")
+
+        // The publisher is unreachable in this rig: leaving neither needs it nor touches it.
+        guard let left = try? Connect.leaveFleet(file: file) else {
+            expect(false, "CF16 leaving the fleet was refused where it must succeed")
+            return
+        }
+        expect(left.address == "https://theng12.github.io/kh-releases/release.json",
+               "CF16 leaving moves this Mac to the GitHub mirror with no network call")
+        let after = try! JSON.decode(AgentConfig.self, from: Data(contentsOf: file))
+        expect(after.token.isEmpty && !after.machine.isEmpty && after.machine != before.machine,
+               "CF16 the credential is cleared and this Mac gets a fresh id (\(after.machine))")
+        expect(after.publicKey == before.publicKey && Set(after.apps.keys) == Set(before.apps.keys),
+               "CF16 the pinned key and every app stay exactly as they were")
+        expect(after.feedURL == left.address && !Connect.enrolled(feedURL: after.feedURL, token: after.token),
+               "CF16 after leaving, this Mac is no longer enrolled")
+        expect(FileManager.default.fileExists(atPath: left.backup.path)
+               && (try? Data(contentsOf: left.backup)) == beforeBytes,
+               "CF16 the previous settings are kept byte for byte in _trash (\(left.backup.lastPathComponent))")
+
+        // Re-joining: point the Mac back at the publisher, then a pairing code from the controller.
+        try! r.rig.publish("demo", "1.0.0", r.rig.artifact("demo.zip", "demo-bytes"))
+        let client = InProcessClient(server: r.server)
+        let pointed = try? Connect.changeDestination(to: "host.tail1234.ts.net:8790", file: file, http: client)
+        expect(pointed != nil, "CF16 the saved publisher address can be pointed back (\(pointed ?? "refused"))")
+        let renewed = try? Connect.repair(configFile: file, code: pairingCode(r), confirmed: true, http: client)
+        let rejoined = (try? JSON.decode(AgentConfig.self, from: Data(contentsOf: file)))
+        expect(renewed != nil && rejoined?.token.isEmpty == false,
+               "CF16 a pairing code from the controller still brings this Mac back after leaving")
+    }
+
+    // CF20. The dead end the owner photographed: the saved address is one macOS refuses, the address
+    // row cannot change, and Repair can never succeed. It now ends in a repaired Mac in one press.
+    do {
+        let r = EnrolRig("cf20")
+        PinnedKey.test = r.rig.pair.publicKeyBase64
+        defer { PinnedKey.test = nil }
+        let k = kit(for: r)
+        func homeFor(_ tag: String, address: String) -> (URL, URL) {
+            let home = r.rig.root.appendingPathComponent("home-" + tag)
+            let file = home.appendingPathComponent("Library/KHUpdater/base/config.json")
+            let config: [String: Any] = [
+                "feedURL": address, "publicKey": r.rig.pair.publicKeyBase64,
+                "stateDir": home.appendingPathComponent("Library/KHUpdater/state").path,
+                "stubBase": home.appendingPathComponent("Library/KHUpdater/base").path,
+                "machine": "dead-mac", "token": "dead-token", "intervalMinutes": 60, "once": false,
+                "apps": ["updater": ["bundlePath": "", "recipe": "updater", "automatic": true]],
+            ]
+            try! fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try! JSONSerialization.data(withJSONObject: config, options: [.sortedKeys]).write(to: file)
+            return (home, file)
+        }
+        struct RepairStub: Shell {
+            func run(_ executable: String, arguments: [String], timeout: TimeInterval) throws -> ShellResult {
+                ShellResult(exitCode: 0, stdout: executable == "/bin/launchctl" ? "disabled services = {\n}\n" : "", stderr: "")
+            }
+        }
+        let (home, file) = homeFor("dead", address: "http://\(r.bind):\(r.port)/release.json")   // a bare IP
+        guard let dead = try? ConnectionWindow.testSetupRepair(kit: k, home: home, reason: "the helper's files are missing") else {
+            expect(false, "CF20 the repair window could not be built over the photographed state")
+            return
+        }
+        expect(dead.testPrimaryTitle == "Use GitHub releases instead",
+               "CF20 the photographed dead end now offers the one action that can end (\(dead.testPrimaryTitle))")
+        expect(dead.testIntro.contains("bare IP") && dead.testIntro.contains("GitHub releases"),
+               "CF20 the window names the cause and the fix, not only a refusal")
+
+        // The action, in the two steps it performs: verify the mirror against the pin, save it with
+        // the token cleared, then repair from this app's own kit.
+        var feed = Feed(published_at: ISO.string(Date()))
+        feed.apps["updater"] = FeedApp(version: "0.1.75", file: "khu", sha256: Signing.sha256Hex(Data("u".utf8)),
+                                       bytes: 1, kind: "updater")
+        let body = try! JSON.encode(feed)
+        let release = try! JSON.encode(Release(feed: body, signature: try! Signing.sign(body, with: r.rig.pair.privateKey)))
+        let switched = try? Connect.switchToPublicFeed(file: file, http: MirrorHTTP(feed: release))
+        expect(switched == Connect.publicFeedURL,
+               "CF20 the one press saves the mirror as the address (\(switched ?? "refused"))")
+        let afterSwitch = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]
+        expect(switched == Connect.publicFeedURL && afterSwitch?["token"] as? String == ""
+               && afterSwitch?["machine"] as? String == "dead-mac"
+               && afterSwitch?["publicKey"] as? String == r.rig.pair.publicKeyBase64
+               && afterSwitch?["apps"] != nil,
+               "CF20 the switch verifies the mirror, clears the token and keeps the name, pin and apps")
+        let repaired = try? Connect.repairSetup(kit: k, home: home, shell: RepairStub())
+        let final = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]
+        expect(repaired?.status == "repaired" && final?["feedURL"] as? String == switched,
+               "CF20 the same press ends in a repaired Mac on the GitHub feed (\(repaired.map { $0.status } ?? "threw"))")
+
+        // A usable publisher address keeps today's window, and nothing mentions GitHub there.
+        let (okHome, _) = homeFor("ok", address: "http://host.tail1234.ts.net:8790/release.json")
+        guard let ok = try? ConnectionWindow.testSetupRepair(kit: k, home: okHome, reason: "missing") else {
+            expect(false, "CF20 the repair window could not be built over a usable address")
+            return
+        }
+        expect(ok.testPrimaryTitle == "Repair" && !ok.testIntro.contains("GitHub releases"),
+               "CF20 a usable publisher address keeps today's repair window unchanged")
+    }
+
+    // CF21. A Mac whose only address is one macOS refuses never sits unable to update: it reads the
+    // built-in mirror and says so. A Mac with a usable address never falls back to GitHub.
+    do {
+        let fleet = Signing.generateKeyPair()
+        PinnedKey.test = fleet.publicKeyBase64
+        defer { PinnedKey.test = nil }
+        var feed = Feed(published_at: ISO.string(Date()))
+        feed.apps["updater"] = FeedApp(version: "0.1.75", file: "khu", sha256: Signing.sha256Hex(Data("u".utf8)),
+                                       bytes: 1, kind: "updater")
+        let body = try! JSON.encode(feed)
+        let release = try! JSON.encode(Release(feed: body, signature: try! Signing.sign(body, with: fleet.privateKey)))
+        let http = ATSRefusingHTTP(feed: release)
+        func config(_ address: String, _ tag: String) -> AgentConfig {
+            AgentConfig(feedURL: address, publicKey: fleet.publicKeyBase64,
+                        stateDir: tmpDir(tag).path, machine: "agent-mac", token: "tok")
+        }
+        let dead = try? Agent.runOnce(config: config("http://100.64.0.9:8790/release.json", "cf21-dead"),
+                                      http: http, shell: CaptureShell(), executable: nil, appFolders: [])
+        expect(dead?.notes.contains { $0.contains("updating from GitHub releases instead") } == true,
+               "CF21 an address macOS refuses falls back to the mirror and the run says so (\(dead?.notes ?? []))")
+        let good = try? Agent.runOnce(config: config("http://host.tail1234.ts.net:8790/release.json", "cf21-good"),
+                                      http: http, shell: CaptureShell(), executable: nil, appFolders: [])
+        expect(good != nil && !(good?.notes.contains { $0.contains("GitHub releases instead") } ?? true),
+               "CF21 a usable publisher address never falls back to GitHub")
+    }
+
     // CF15. The GitHub mirror is a destination for an already-paired Mac too: it is verified
     // against this Mac's pin, only the address is saved, and the token stays for a switch back.
     // The three refusals a person meets are distinguishable, each naming its own cause.
@@ -371,8 +530,8 @@ func connectionFlowTests() {
         try! JSONSerialization.data(withJSONObject: original).write(to: file)
         let mirror = "https://theng12.github.io/kh-releases/release.json"
 
-        let saved = try! Connect.changeDestination(to: mirror, file: file, http: MirrorHTTP(feed: release))
-        expect(saved == mirror, "CF15 the GitHub mirror is saved as this Mac's address")
+        let saved = try? Connect.changeDestination(to: mirror, file: file, http: MirrorHTTP(feed: release))
+        expect(saved == mirror, "CF15 the GitHub mirror is saved as this Mac's address (\(saved ?? "refused"))")
         let after = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]
         expect(after?["feedURL"] as? String == mirror && after?["token"] as? String == "tok-cf15-0123456789"
                && after?["publicKey"] as? String == fleet.publicKeyBase64,

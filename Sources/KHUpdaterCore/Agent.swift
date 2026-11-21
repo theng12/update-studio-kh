@@ -1072,8 +1072,11 @@ public enum Agent {
             todo.append((app, "auto-\(app)-menu-\(UUID().uuidString)", ServerCommand.rollback, true, true))
         }
         // A pause from the menu holds Automatic only; the owner's orders and "Update now" still run.
+        // Automatic updates depend on the feed, not on a publisher: a Mac on the public mirror has no
+        // publisher to report to and must still update itself. Everything publisher-only — orders,
+        // result posts, inventory, the status post — stays gated on `publisherAvailable`.
         for (app, cfg) in config.apps.sorted(by: { $0.key < $1.key })
-        where publisherAvailable && !helper.paused(at: now) && helper.installsAutomatically
+        where !helper.paused(at: now) && helper.installsAutomatically
             && helper.automatic(app, page: orders.automatic[app], pageAt: orders.automaticAt?[app], config: cfg.automatic) {
             guard !todo.contains(where: { $0.app == app }), let entry = feed.apps[app] else { continue }
             guard !updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app }) else { continue }
@@ -1133,8 +1136,6 @@ public enum Agent {
             guard current == nil || VersionCompare.isNewer(entry.version, than: current!) else { continue }
             if updatesItself(app: app, recipe: cfg.recipe, entry: catalog.first { $0.id == app }) {
                 result.notes.append("\(app): skipped — the live sources mark it as updating itself")
-            } else if !publisherAvailable {
-                result.notes.append("\(app): skipped — the publisher is unavailable, so remote switches are unknown")
             } else if helper.paused(at: now) {
                 result.notes.append("\(app): skipped — automatic updates are paused on this Mac")
             } else if !helper.installsAutomatically {

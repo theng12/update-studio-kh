@@ -2,6 +2,18 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.75 — 2026-11-21
+
+- A Mac can now leave a fleet from Studio Launcher itself. Settings shows "Leave this fleet" only while this Mac is enrolled to a publisher — a saved Update Studio address and its sign-in. A GitHub-only Mac never sees it.
+- One in-page confirmation: this Mac keeps every app, every model and every setting. It stops taking orders from Update Studio and updates from the GitHub feed instead.
+- Leaving needs no network at all, so it works with Update Studio off or this Mac offline. The pinned key stays and still verifies every update. The saved sign-in is cleared and this Mac gets a fresh local id, so the old controller's record can never be used against it. The previous settings are kept in ~/Library/KHUpdater/_trash, and the page says where.
+- Afterwards Settings shows the GitHub address as the one in use, says this Mac no longer reports to or takes orders from a Studio, and the GitHub switch button disappears — one action, not two. Re-joining with a pairing code from a controller works exactly as before, and removing a Mac from Update Studio is still done there.
+- "Repair this Mac's setup" can no longer be a dead end. When the saved address is one macOS refuses — a bare IP over plain http — the window says why and offers one press, "Use GitHub releases instead": the public feed is verified against this Mac's own pinned key, the address is saved, the old sign-in is cleared, and the helper is then repaired from this app's own kit. Apps, settings and the pinned key stay.
+- The updater never sits unable to update. When every saved address is one macOS refuses, it reads the built-in GitHub feed and says so in one line ("the saved address is a bare IP, so this Mac is updating from GitHub releases instead") instead of retrying an address macOS can never allow. A Mac with a working publisher address is untouched.
+- Automatic updates now depend on the feed, not on a publisher. A Mac on the GitHub feed updates its apps and itself automatically, exactly like a Mac on a publisher's feed, and still reports to nobody and takes no orders. Its per-app Automatic switches, pause and backoff work as before.
+- Settings offers the same three-way "Where updates come from" as first run: GitHub releases, This Mac's Update Studio, or a custom address. A Mac on the GitHub feed can join Update Studio again by typing that Mac's address and a pairing code — no reinstall — and a wrong code changes nothing.
+- On a GitHub-fed Mac the self-update switch is on and usable, driven by the feed instead of a publisher, and one line says this Mac updates from the signed feed, reports to nobody, and needs a pairing code to join Update Studio again.
+
 ## 0.1.74 — 2026-11-21
 
 - First run now asks where updates come from, as a drop-down: GitHub releases, a custom address, or — when this copy came from a publisher's kit — that Mac's own Update Studio. GitHub is the default on a copy downloaded for anyone, so setting up a Mac no longer starts at one particular publisher's address.

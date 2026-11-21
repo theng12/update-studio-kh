@@ -235,8 +235,13 @@ func feedNetworkTests() {
         let result = try Agent.runOnce(config: local, http: http, shell: NetworkShell(), now: now, requested: ["fixture"], appFolders: [])
         expect(!result.statusPosted && result.updates == 1, "FN explicit local install works from mirror while publisher is offline")
         expect(!http.gets.contains(where: { $0.path == "/commands" }), "FN offline client does not invent a signed remote order")
-        let automatic = try Agent.runOnce(config: local, http: http, shell: NetworkShell(), now: now, appFolders: [])
-        expect(automatic.updates == 0, "FN Automatic waits for the publisher rather than guessing remote switches")
+        // Automatic depends on the feed, not the publisher (owner, 2026-11-21): with the publisher
+        // offline, this Mac's own switch still updates it from the mirror — and reports nothing.
+        var autoOnly = local
+        autoOnly.stateDir = tmpDir("offline-auto").path
+        let automatic = try Agent.runOnce(config: autoOnly, http: http, shell: NetworkShell(), now: now, appFolders: [])
+        expect(automatic.updates == 1 && !automatic.statusPosted,
+               "FN Automatic updates from the mirror while the publisher is offline, and posts nothing")
         http.statusOffline = false; http.statusCode = 401
         expectThrows("FN authentication refusal is never treated as publisher downtime", contains: "status was refused") {
             _ = try Agent.runOnce(config: local, http: http, shell: NetworkShell(), now: now, requested: ["fixture"], appFolders: [])

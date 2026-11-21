@@ -31,6 +31,19 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         var pairAvailable = false
     }
     private var connectionUI = ConnectionUI()
+
+    /// Enrolled to a publisher: a saved publisher address and the token that signs this Mac in.
+    /// A GitHub-only Mac has neither, so "Leave this fleet" is absent rather than disabled.
+    private var canLeaveFleet: Bool {
+        Connect.enrolled(feedURL: helper.config.feedURL, token: helper.config.token)
+    }
+
+    /// This Mac reads a public feed: no publisher, so no reports, no orders — and the page says what
+    /// that means and keeps the route back to Update Studio visible.
+    private var publicFeed: Bool {
+        guard !helper.config.feedURL.isEmpty, let url = URL(string: helper.config.feedURL) else { return false }
+        return !FeedNetwork.authenticated(url)
+    }
     private var connectionBusy = false
 
     init(helper: HelperMenu) {
@@ -156,7 +169,11 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                            "checking": connectionBusy,
                            "checkedAt": connectionUI.checkedAt as Any, "ok": connectionUI.ok as Any, "note": connectionUI.note as Any,
                            "serverNote": connectionUI.serverNote as Any, "serverOk": connectionUI.serverOk as Any,
-                           "pairAvailable": connectionUI.pairAvailable],
+                           "pairAvailable": connectionUI.pairAvailable,
+                           // Offered only to a Mac enrolled to a publisher; absent on a GitHub Mac.
+                           "canLeave": canLeaveFleet,
+                           // On a public feed there is no publisher: the page says so and offers the way back.
+                           "publicFeed": publicFeed],
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]), let json = String(data: data, encoding: .utf8) else { return }
         publish(json, busy: busy)
@@ -352,6 +369,74 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                     self.reload()
                 }
             }
+        case "joinFleet":
+            // The way back from the public feed: point at a publisher, then pair with its code —
+            // the same two steps a first run takes, with this Mac's apps, models and settings kept.
+            guard !connectionBusy, let typed = body["value"] as? String, let code = body["code"] as? String,
+                  !typed.trimmingCharacters(in: .whitespaces).isEmpty,
+                  !code.trimmingCharacters(in: .whitespaces).isEmpty else { break }
+            connectionBusy = true
+            connectionUI.serverOk = nil
+            connectionUI.serverNote = "Joining Update Studio…"
+            reload()
+            let joinFile = Connect.configFile(stateDir: helper.stateDir)
+            DispatchQueue.global(qos: .userInitiated).async {
+                var note: String?, joined = false
+                do {
+                    _ = try Connect.changeDestination(to: typed, file: joinFile)
+                    _ = try Connect.repair(configFile: joinFile, code: code, confirmed: true)
+                    note = "Joined Update Studio. This Mac reports to it again and follows its Automatic switches."
+                    joined = true
+                } catch { note = "Not joined: \(error)" }
+                DispatchQueue.main.async {
+                    self.connectionBusy = false
+                    self.connectionUI.serverOk = joined
+                    self.connectionUI.serverNote = note
+                    self.connectionUI.checkedAt = nil
+                    self.connectionUI.ok = nil
+                    self.connectionUI.note = nil
+                    if let data = try? Data(contentsOf: joinFile),
+                       let fresh = try? JSONDecoder().decode(AgentConfig.self, from: data) {
+                        self.helper.config = fresh
+                        self.helper.wake.signal()
+                    }
+                    self.reload()
+                }
+            }
+        case "leaveFleet":
+            // Off the controller's books from this Mac itself: nothing is written to the network,
+            // so it works with Update Studio off or this Mac offline. Apps, models, settings and the
+            // pinned key stay; the old settings are kept in _trash and the page says where.
+            guard !connectionBusy, canLeaveFleet else { break }
+            connectionBusy = true
+            connectionUI.serverOk = nil
+            connectionUI.serverNote = "Leaving this fleet…"
+            reload()
+            let file = Connect.configFile(stateDir: helper.stateDir)
+            DispatchQueue.global(qos: .userInitiated).async {
+                var note: String?, left = false
+                do {
+                    let result = try Connect.leaveFleet(file: file)
+                    note = "Left this fleet. This Mac now updates from the GitHub feed, reports to no Studio and "
+                        + "takes no orders from one; your pinned key still verifies every update it reads. "
+                        + "Your previous settings are kept in \(result.backup.path)."
+                    left = true
+                } catch { note = "\(error)" }
+                DispatchQueue.main.async {
+                    self.connectionBusy = false
+                    self.connectionUI.serverOk = left
+                    self.connectionUI.serverNote = note
+                    self.connectionUI.checkedAt = nil
+                    self.connectionUI.ok = nil
+                    self.connectionUI.note = nil
+                    if left, let data = try? Data(contentsOf: file),
+                       let fresh = try? JSONDecoder().decode(AgentConfig.self, from: data) {
+                        self.helper.config = fresh
+                        self.helper.wake.signal()
+                    }
+                    self.reload()
+                }
+            }
         case "dismissNotice":
             // Dismissing the quiet notice records the version in the same map the system
             // notification uses, so neither ever returns for this version on this Mac.
@@ -394,6 +479,13 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             helper.wake.signal()
             reload()
         case "setting":
+            // The updater's own switch is this Mac's, on any feed: on a public feed there is no
+            // publisher to set it, so a GitHub Mac can turn its self-update on here.
+            if body["key"] as? String == "updaterAutomatic" {
+                helper.setAutomatic("updater", body["value"] as? Bool ?? false)
+                reload()
+                return
+            }
             if body["key"] as? String == "retireHelpers" {
                 do {
                     var cleanup = try HelperRetirementSettings.load(from: helper.stateDir)

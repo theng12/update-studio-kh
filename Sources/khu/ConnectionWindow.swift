@@ -24,7 +24,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     private enum Source: Int { case github, custom, kit }
 
     /// The public mirror: signed by this fleet's pinned key, no publisher on the other end.
-    static let publicFeedURL = "https://theng12.github.io/kh-releases/release.json"
+    static let publicFeedURL = Connect.publicFeedURL
 
     private static let width: CGFloat = 500
     private static let inset: CGFloat = 24
@@ -42,6 +42,17 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     private var codeRow: NSStackView?
     /// The kit's own address, or "" for a copy built for public download.
     private let kitAddress: String
+    /// The saved address is one macOS refuses (a bare IP over plain http): repair alone can never work.
+    private let savedAddressRefused: Bool
+    private var savedAddress: String {
+        switch mode {
+        case .repair(_, let plan): return plan.feedURL
+        case .setupRepair(_, _, let plan, _): return plan.feedURL
+        case .firstRun: return ""
+        }
+    }
+    /// What the window says, kept so a headless test can read it.
+    private var introText = ""
     private let statusLabel = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
     private let connectButton = NSButton(title: "Connect", target: nil, action: nil)
@@ -69,6 +80,13 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             guard case .firstRun(let kit, _) = mode, let pub = try? Connect.publisher(kit: kit) else { return "" }
             return pub.feedURL ?? ""
         }()
+        // A saved address macOS refuses on sight is why "Repair" could never succeed: the window
+        // offers the one action that can end, instead of a dead button.
+        switch mode {
+        case .firstRun: savedAddressRefused = false
+        case .repair(_, let plan): savedAddressRefused = FeedNetwork.isUnusable(plan.feedURL)
+        case .setupRepair(_, _, let plan, _): savedAddressRefused = FeedNetwork.isUnusable(plan.feedURL)
+        }
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Self.width, height: 380),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         super.init()
@@ -81,7 +99,8 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         case .setupRepair: repair = false; setupRepair = true
         }
         window.title = setupRepair ? "Repair this Mac's setup" : repair ? "Pair again with Update Studio" : "Connect to Update Studio"
-        connectButton.title = setupRepair ? "Repair" : repair ? "Pair again" : "Connect"
+        connectButton.title = savedAddressRefused ? "Use GitHub releases instead"
+            : setupRepair ? "Repair" : repair ? "Pair again" : "Connect"
         window.isReleasedWhenClosed = false
         window.delegate = self
 
@@ -121,6 +140,15 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             nameField.stringValue = plan.machine
             nameField.isEnabled = false
         }
+        if savedAddressRefused {
+            // The exact state the owner photographed: address locked, Repair alone can never work.
+            // Name the cause, then give the one press that ends it.
+            intro.stringValue += "\n\nThe saved address \(savedAddress) is a bare IP, which macOS refuses for an "
+                + "unencrypted feed, so Repair cannot succeed. Use GitHub releases instead moves this Mac to the "
+                + "public feed and then repairs it from this app's own setup kit. Your apps, settings and pinned "
+                + "key are kept; nothing is reported to Update Studio."
+        }
+        introText = intro.stringValue
         destination.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         destination.isSelectable = true
 
@@ -420,10 +448,22 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
                 case .firstRun(let kit, let home):
                     _ = try Connect.run(kit: kit, home: home, machine: machine, code: code, destination: destination)
                 case .repair(let file, _):
+                    // A saved address macOS refuses can never pair: the one press that ends it moves
+                    // this Mac to the public feed, and nothing is sent to any publisher.
+                    if self.savedAddressRefused {
+                        _ = try Connect.switchToPublicFeed(file: file)
+                        break
+                    }
                     // Confirmed only here because Pair again's confirmation was already accepted
                     // before this window could open (runRepair); Cancel sends nothing at all.
                     _ = try Connect.repair(configFile: file, code: code, confirmed: true)
                 case .setupRepair(let kit, let home, _, _):
+                    // The saved address is unusable, so the repair starts by moving to the public
+                    // feed; the kit then rebuilds the helper files against it.
+                    if self.savedAddressRefused {
+                        let file = Connect.configFile(stateDir: home.appendingPathComponent("Library/KHUpdater/state"))
+                        _ = try Connect.switchToPublicFeed(file: file)
+                    }
                     // Paused, already newer or any other status is not a repair; its own reason is
                     // shown honestly rather than as a green success.
                     let repaired = try Connect.repairSetup(kit: kit, home: home)
@@ -448,7 +488,11 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         if success {
             state = .done
             connectButton.title = "Continue"
-            if case .repair = mode {
+            if savedAddressRefused {
+                // The dead end the owner photographed now ends here, in one press.
+                show("Repaired. This Mac now updates from GitHub releases and reports to nobody; its apps, "
+                    + "settings and pinned key were kept.", color: .systemGreen, spinning: false)
+            } else if case .repair = mode {
                 show("Paired. This Mac's sign-in is renewed — the next update check uses it.",
                      color: .systemGreen, spinning: false)
             } else if case .setupRepair = mode {
@@ -459,7 +503,10 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         } else {
             state = .refused
             codeField.stringValue = ""
-            if case .repair = mode {
+            if savedAddressRefused {
+                connectButton.title = "Use GitHub releases instead"
+                show("Not repaired: \(failure ?? "the public feed could not be read")", color: .systemRed, spinning: false)
+            } else if case .repair = mode {
                 connectButton.title = "Pair again"
                 show("Not paired: \(failure ?? "the pairing was refused")", color: .systemRed, spinning: false)
             } else if case .setupRepair = mode {
@@ -509,6 +556,14 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     static func testFirstRun(kit: URL, home: URL) -> ConnectionWindow {
         ConnectionWindow(mode: .firstRun(kit: kit, home: home))
     }
+    /// Test-only: build the setup-repair window without presenting it, so a headless test can read
+    /// the photographed dead end and the action that now ends it.
+    static func testSetupRepair(kit: URL, home: URL, reason: String) throws -> ConnectionWindow {
+        let plan = try Connect.repairPlan(configFile: Connect.configFile(stateDir: home.appendingPathComponent("Library/KHUpdater/state")))
+        return ConnectionWindow(mode: .setupRepair(kit: kit, home: home, plan: plan, reason: reason))
+    }
+    var testPrimaryTitle: String { connectButton.title }
+    var testIntro: String { introText }
     /// Test-only: choose a source exactly as the picker's action does.
     func testSelect(_ item: Int) { sourcePicker.selectItem(at: item); sourceChanged() }
     var testState: (sources: [String], selected: Int, address: String, editable: Bool,

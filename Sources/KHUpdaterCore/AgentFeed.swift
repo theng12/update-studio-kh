@@ -85,7 +85,9 @@ extension Agent {
         sources.removeAll { $0 == original }
         // The address the person saved is what the very next check uses, without a restart. Mirrors
         // lead only when this Mac already reached the publisher at that same saved address; a newly
-        // saved one has not been reached yet, so it goes first until it answers once.
+        // saved one has not been reached yet, so it goes first until it answers once. An address
+        // macOS refuses on sight is not dropped on its syntax alone — the run that hits the refusal
+        // is what proves it, and that run then falls back to the public mirror (selectFeed).
         let mirrorsLead = !isHost && (memory.lastGoodFeedURL == nil || memory.lastGoodFeedURL == config.feedURL)
         if !mirrorsLead { sources.insert(original, at: 0) } else { sources.append(original) }
         return sources
@@ -96,7 +98,12 @@ extension Agent {
         var lastError: Error = FeedUnavailable()
         var refusal: Error?
         var unusable: [String] = []
-        for source in try feedSources(config: config, memory: memory, serverBase: serverBase) {
+        var sources = try feedSources(config: config, memory: memory, serverBase: serverBase)
+        var fellBack = false
+        var index = 0
+        while index < sources.count {
+            let source = sources[index]
+            index += 1
             let release: Data
             do { release = try get(http, source) }
             catch {
@@ -104,6 +111,14 @@ extension Agent {
                     // Proved unusable by this check: remembered only so a successful run can forget it.
                     if isUnusable(source) { unusable.append(source.absoluteString) }
                     refusal = khuFail(plainUnreachable(source, error: error))
+                    // A Mac whose only address macOS refuses still updates: the built-in mirror is
+                    // tried next, and the run says why. No retry loop against an address ATS can
+                    // never allow.
+                    if isUnusable(source), let mirror = try? FeedNetwork.feedURL(Connect.publicFeedURL),
+                       !sources.contains(mirror) {
+                        sources.append(mirror)
+                        fellBack = true
+                    }
                 } else if transportUnavailable(error) { lastError = FeedUnavailable() }
                 else { refusal = error }
                 continue
@@ -119,7 +134,9 @@ extension Agent {
                 let checked = try checkFeed(release, config: config, memory: &candidate, now: now)
                 memory = candidate
                 return SelectedFeed(feed: checked.feed, release: release, base: source.deletingLastPathComponent(),
-                                    note: checked.note)
+                                    note: fellBack
+                                        ? "the saved address is a bare IP, so this Mac is updating from GitHub releases instead"
+                                        : checked.note)
             } catch { refusal = error }
         }
         throw refusal ?? lastError
