@@ -412,8 +412,13 @@ if mine.get("network"):
 # scanned: a tailnet host, a ts.net URL, an address or the machine-name form `terranash-<host>`
 # does not match this prefix and still fails.
 text = re.sub(r"(?i)com\.terranash\.[a-z0-9._-]+", "", json.dumps(mine))
+# What is caught is a real identifier, never a name the owner chose to ship: an absolute home path, a
+# private key, an email address, a tailnet host or address, or the machine-name form (owner, 2026-11-21:
+# exempt `com.terranash.` and "keep catching /Users paths, tailnet hosts, emails and keys").
 for pattern in (r"[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net", r"\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b",
-                r"(?i)terranash", r"(?i)macmini"):
+                r"(?i)terranash", r"(?i)macmini",
+                r"/Users/[A-Za-z0-9._-]+", r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}",
+                r"BEGIN [A-Z ]*PRIVATE KEY"):
     if re.search(pattern, text):
         print("the public copy matches %s" % pattern); raise SystemExit(3)
 print(mine["published_at"])
