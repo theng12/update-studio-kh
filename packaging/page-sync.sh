@@ -397,7 +397,10 @@ if mine["published_at"] != before["published_at"]:
     print("the mirror is dated %s and the feed %s, so the mirror was not built from this feed"
           % (mine["published_at"], before["published_at"])); raise SystemExit(3)
 def identity(entries):
-    return sorted("%s|%s|%s|%s" % (k, v["version"], v["sha256"], v["bytes"]) for k, v in entries.items())
+    # tagline is in the comparison on purpose: the page card reads it, a dropped one is invisible
+    # (the card keeps old words), and version/sha/bytes cannot see it. Default keeps tagless apps valid.
+    return sorted("%s|%s|%s|%s|%s" % (k, v["version"], v["sha256"], v["bytes"], v.get("tagline", ""))
+                  for k, v in entries.items())
 # The feed carries apps the page has no row for (Hub, the updater helper); the mirror cannot name
 # them, so only the apps it carries are compared.
 if identity(mine["apps"]) != identity({a: after["apps"][a] for a in mine["apps"] if a in after["apps"]}):
