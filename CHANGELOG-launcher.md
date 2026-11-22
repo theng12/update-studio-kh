@@ -2,6 +2,10 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.80 — 2026-11-22
+
+- Publisher diagnostics report free and total disk space, the exact served feed fingerprint and timestamp, and the two installed updater fingerprints. Unavailable values are reported as unknown without interrupting feed service.
+
 ## 0.1.79 — 2026-11-22
 
 - The helper no longer restarts itself after a check that failed. A failed check leaves nothing to preserve, and on the Studio server every check was failing at its status report, so it restarted 1,605 times in a row — the app that kept appearing.

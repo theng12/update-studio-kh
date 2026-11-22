@@ -45,6 +45,7 @@ private struct FeedHostFixture {
 }
 
 func feedHostRuntimeTests() {
+    publisherStatusTests()
     let role = FeedHostRole(enabled: true, bind: "127.0.0.1", port: 8791)
     let executable = "/Users/tester/Library/KHUpdater/base/current"
     let domain = "gui/\(getuid())"

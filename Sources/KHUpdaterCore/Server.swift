@@ -623,13 +623,49 @@ public final class FeedServer: @unchecked Sendable {
         }
     }
 
+    private func publisherStatus() -> HTTPResponse {
+        let root = feedDir.deletingLastPathComponent().resolvingSymlinksInPath()
+        let null = NSNull()
+        var status: [String: Any] = ["disk": null, "feed": null, "bin_khu": null, "base_current": null]
+        if let volume = try? root.resourceValues(forKeys: [.isDirectoryKey, .volumeAvailableCapacityKey, .volumeTotalCapacityKey]),
+           volume.isDirectory == true, let free = volume.volumeAvailableCapacity, let total = volume.volumeTotalCapacity,
+           free >= 0, total > 0 {
+            status["disk"] = ["free_gb": Double(free) / 1e9, "total_gb": Double(total) / 1e9]
+        }
+        let release = FeedPublisher.releaseFile(in: root.appendingPathComponent(feedDir.lastPathComponent))
+        if release.resolvingSymlinksInPath().path == release.path,
+           let bytes = try? Data(contentsOf: release) {
+            // Hash the served envelope, not its decoded payload. Both fields describe one read.
+            let envelope = try? JSON.decode(Release.self, from: bytes)
+            let stamp = envelope?.feedData.flatMap { (try? JSON.decode(Feed.self, from: $0))?.published_at }
+            status["feed"] = ["sha256": Signing.sha256Hex(bytes), "published_at": stamp as Any? ?? null] as [String: Any]
+        }
+        for (field, path) in [("bin_khu", "bin/khu"), ("base_current", "base/current")] {
+            let file = root.appendingPathComponent(path).resolvingSymlinksInPath()
+            // Only the updater binary locations are eligible, even if a local link points elsewhere.
+            let folder = root.appendingPathComponent(path).deletingLastPathComponent()
+            guard file.path.hasPrefix(folder.path + "/"),
+                  (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+                  let digest = try? Signing.sha256Hex(fileAt: file) else { continue }
+            status[field] = digest.hex
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: status)) ?? Data("{\"disk\":null,\"feed\":null,\"bin_khu\":null,\"base_current\":null}".utf8)
+        var response = HTTPResponse(200, "application/json", data: data)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    }
+
     /// `now` exists so a test can drive the enrolment window's end time and the rate limit without
     /// waiting; every real caller leaves it alone.
     public func handleRequest(_ req: HTTPRequest, remote: String, now: Date = Date()) -> HTTPResponse {
         if req.method == "GET" {
-            // A read-only liveness probe. The agent treats a dead host as "feed host is off" and
-            // refuses local installs, so this must answer without a token or a body.
-            if req.path == "/status" { return HTTPResponse(200, "application/json", data: Data("{\"ok\":true}".utf8)) }
+            if req.path == "/status" {
+                // Keep the old liveness reply on mirrors and outside the publisher's private peers.
+                if !feedOnly && (OwnerAccess.isLoopback(remote) || Self.isTailnet(remote)) {
+                    return publisherStatus()
+                }
+                return HTTPResponse(200, "application/json", "{\"ok\":true}")
+            }
             if req.path == "/release.json" {
                 let url = FeedPublisher.releaseFile(in: feedDir)
                 guard let data = try? Data(contentsOf: url) else { return Self.text(404, "nothing published yet") }
