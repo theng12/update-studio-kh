@@ -65,7 +65,9 @@ PUBLIC_CANONICAL=${KHU_PAGES_URL:-https://$OWNER.github.io/$REPONAME/release.jso
 PUBLIC_RAW=${KHU_RAW_URL:-https://raw.githubusercontent.com/$REPO/main/release.json}
 WAIT=${KHU_PUBLIC_WAIT:-180}
 EVIDENCE_EMAIL="112568204+theng12@users.noreply.github.com"
-MIRROR_BASE="https://github.com/$REPO/releases/download"
+# The base every page download hangs off. Overridable so the fixtures can serve it from their own
+# origin and prove the post-run sweep for real, rather than reaching GitHub.
+MIRROR_BASE="${KHU_MIRROR_BASE:-https://github.com/$REPO/releases/download}"
 
 # ---------- the task list: which apps, each with the sha256 its checker passed ----------
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/khu-page-sync.XXXXXX")
@@ -355,7 +357,7 @@ for rel in rels:
         if tag.startswith(app + "-") and version.match(tag[len(app) + 1:]):
             if best is None or len(app) > len(best): best = app
     if best: owner.setdefault(best, []).append(rel)
-out, carrying, gaps = [], [], []
+out, carrying, gaps, no_previous = [], [], [], []
 for app in sorted(owner):
     r = apps[app]
     ver, file, sha, icon, iconsha = r[1], r[2], r[3], r[5], r[6]
@@ -399,25 +401,35 @@ for app in sorted(owner):
             raise SystemExit(3)
         out.append("\t".join([app, tag, icon, stored(rel, iconsha), iconsha]))
     # The previous release rides in the mirror too, so a public Mac keeps current + previous.
+    # The page's previous release is a nicety, not a precondition. Retention keeps current + previous
+    # in dist/ and the feed's artifacts/; the page worked for months carrying current only. Requiring
+    # a previous row for every app made one line's missing history freeze the whole page (2026-11-22:
+    # 11 of 14 apps), which is the same all-or-nothing shape as row 326. So carry it where the page
+    # has it and name it where it does not — never refuse the build for it.
     if prev_ver and prev_file:
         prev_rel = release_for(prev_ver)
         if prev_rel is None or not stored(prev_rel, prev_sha):
-            print("the page has no %s row for the feed's previous version; run page-sync for %s first" % (app + "-" + prev_ver, app))
-            raise SystemExit(3)
-        out.append("\t".join([app, app + "-" + prev_ver, prev_file, stored(prev_rel, prev_sha), prev_sha]))
-        if prev_icon and prev_iconsha:
-            prev_icon_name = stored(prev_rel, prev_iconsha)
-            if prev_icon_name:
-                out.append("\t".join([app, app + "-" + prev_ver, prev_icon, prev_icon_name, prev_iconsha]))
+            no_previous.append(app)
+        else:
+            out.append("\t".join([app, app + "-" + prev_ver, prev_file, stored(prev_rel, prev_sha), prev_sha]))
+            if prev_icon and prev_iconsha:
+                prev_icon_name = stored(prev_rel, prev_iconsha)
+                if prev_icon_name:
+                    out.append("\t".join([app, app + "-" + prev_ver, prev_icon, prev_icon_name, prev_iconsha]))
     carrying.append(app)
 if not carrying:
     print("no app on the page is in the feed, so there is nothing to mirror"); raise SystemExit(3)
 open(names_out, "w").write("\n".join(out) + "\n")
 open(names_out + ".behind", "w").write(",".join(gaps))
+open(names_out + ".noprev", "w").write(",".join(no_previous))
 print(",".join(carrying))
 PY
 ) || refuse "$MIRROR_APPS"
 BEHIND=$(cat "$WORK/names.tsv.behind" 2>/dev/null || true)
+# A page with no previous release for an app is named once, not treated as a failure: the page
+# carries current for it and fills in its history as each line mirrors its own.
+NOPREV=$(cat "$WORK/names.tsv.noprev" 2>/dev/null || true)
+[ -z "$NOPREV" ] || ok "previous not on the page, carried as current only: ${NOPREV//,/ }"
 
 # The names table carries the name GitHub actually stored, so it is written from the readback above.
 pub 'K="$HOME/Library/KHUpdater"; mkdir -p "$K/page-sync" && cat > "$K/page-sync/names.tsv"' < "$WORK/names.tsv" \
@@ -445,7 +457,7 @@ feed_read "$WORK/feed-after.json" || refuse "cannot re-read the feed after the m
 feed_tsv "$WORK/feed-after.json" > "$WORK/feed-after.tsv"
 WHEN_AFTER=$(awk -F'\t' '$1=="published_at" {print $2}' "$WORK/feed-after.tsv")
 
-MIRROR_WHEN=$(python3 -I - "$WORK/release.json" "$WORK/feed-before.json" "$WORK/feed-after.json" 2>&1 <<'PY'
+MIRROR_WHEN=$(python3 -I - "$WORK/release.json" "$WORK/feed-before.json" "$WORK/feed-after.json" "$WORK/names.tsv.noprev" 2>&1 <<'PY'
 import base64, json, re, sys
 mirror_file, before_file, after_file = sys.argv[1:4]
 def feed_of(path): return json.loads(base64.b64decode(json.load(open(path))["feed"]))
@@ -476,9 +488,15 @@ for app, entry in mine["apps"].items():
 # network block keeps its public addresses. A dropped key is invisible in version/sha/bytes — the
 # same reason `tagline` is in the identity comparison — so each is checked by name.
 fed_prev, mine_prev = after.get("previous") or {}, mine.get("previous") or {}
+# Apps whose previous release the page does not carry are named by the build and carried current
+# only; that is a documented omission, not a dropped key.
+try:
+    noprev = set(filter(None, open(sys.argv[4]).read().split(",")))
+except (OSError, IndexError):
+    noprev = set()
 for app, entry in mine["apps"].items():
     p = fed_prev.get(app)
-    if not p or app in mine_prev:
+    if not p or app in mine_prev or app in noprev:
         continue
     if entry.get("version") != p.get("version"):   # a behind app keeps its newest page row instead
         print("the mirror dropped the feed's previous entry for %s" % app); raise SystemExit(3)
@@ -571,6 +589,37 @@ served "$PUBLIC_RAW" "$WORK/raw.json" || {
   SIDE="the raw address served $([ -f "$WORK/raw.json" ] && sha_of "$WORK/raw.json" || echo nothing)"
   not_served "$SIDE within ${WAIT}s; the commit holds sha256 $REL_SHA — re-run when the cache has turned over" ; }
 ok "both public addresses serve sha256 $REL_SHA"
+
+# Prove the page before calling the run done: every download the served page names must answer. The
+# 0.1.78 outage was a page pointing at files an earlier step had removed — the feed verified, both
+# addresses served the new file, and two links were 404. A run that cannot prove every address
+# refuses instead of reporting success. This is what makes a retire safe: nothing may leave the page
+# unless everything that remains still answers.
+URLS=$(python3 -I - "$WORK/canonical.json" <<'PY'
+import base64, json, sys
+outer = json.load(open(sys.argv[1]))
+feed = json.loads(base64.b64decode(outer["feed"]))
+def urls(e):
+    for key in ("url", "iconURL", "deltaURL"):
+        if isinstance(e.get(key), str): print(e[key])
+    assets = e.get("assets")
+    for a in (assets if isinstance(assets, list) else []):
+        if isinstance(a, dict) and isinstance(a.get("url"), str): print(a["url"])
+for app in sorted(feed.get("apps") or {}): urls(feed["apps"][app])
+for app in sorted(feed.get("previous") or {}): urls(feed["previous"][app])
+PY
+)
+BAD=0; CHECKED=0
+while IFS= read -r u; do
+  [ -n "$u" ] || continue
+  CHECKED=$((CHECKED+1))
+  # A byte range keeps this cheap: the answer is the point, not the bytes.
+  code=$(curl -sL -r 0-0 -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 "$u" 2>/dev/null || echo 000)
+  case "$code" in 200|206) ;; *) BAD=$((BAD+1)); printf '  missing: %s answered %s\n' "$u" "$code" ;; esac
+done <<< "$URLS"
+[ "$CHECKED" -gt 0 ] || refuse "the served page names no downloads at all"
+[ "$BAD" = 0 ] || refuse "$BAD of $CHECKED downloads on the served page do not answer; the page points at files that are gone"
+ok "all $CHECKED downloads on the served page answer"
 
 printf 'page-sync: %s — %d steps, %d changed, %d skipped, 0 refused\n' \
   "$(tr '\n' ' ' < "$WORK/apps.txt" | sed 's/ $//')" "$DONE" "$CHANGED" "$SKIPPED"

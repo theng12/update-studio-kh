@@ -72,6 +72,13 @@ def asset_of(path):
                 "digest": "sha256:" + hashlib.sha256(b"corrupt").hexdigest()}
     return {"name": os.path.basename(path).replace(" ", "."), "size": len(data),
             "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
+def serve_asset(tag, path):
+    # GitHub would serve the uploaded file at <tag>/<asset name>; the fixture serves the same shape
+    # from its own origin so page-sync's post-run sweep checks real answers, not GitHub's.
+    root = os.environ.get("FAKE_PUB_HOME")
+    if not root: return
+    d = os.path.join(root, tag); os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, os.path.basename(path).replace(" ", ".")), "wb").write(open(path, "rb").read())
 def publish():
     src = os.path.join(STATE, "release.json")
     if not os.path.exists(src): return
@@ -112,13 +119,13 @@ elif args[0] == "release" and args[1] == "create":
     tag, path = args[2], args[3]
     if any(r["tag_name"] == tag for r in rels()): fail("release already exists")
     rel = {"id": len(rels()) + 1, "tag_name": tag, "assets": [asset_of(path)]}
-    save(rels() + [rel]); print("https://example.invalid/" + tag)
+    save(rels() + [rel]); serve_asset(tag, path); print("https://example.invalid/" + tag)
 elif args[0] == "release" and args[1] == "upload":
     tag, path = args[2], args[3]
     all_rels = rels()
     found = [r for r in all_rels if r["tag_name"] == tag]
     if not found: fail("Not Found (HTTP 404)")
-    found[0]["assets"].append(asset_of(path)); save(all_rels); print("uploaded")
+    found[0]["assets"].append(asset_of(path)); save(all_rels); serve_asset(tag, path); print("uploaded")
 else:
     fail("unsupported: " + " ".join(args))
 '''
@@ -206,6 +213,12 @@ class Fixture:
         for name, data in (artifacts or {}).items():
             (self.kh / "feed" / "artifacts" / name).write_bytes(data)
         json.dump(page_releases or [], open(self.state / "releases.json", "w"))
+        # A page row that exists has a file behind it; serve each one, so the post-run sweep is
+        # checking real answers for the rows this fixture says are already on the page.
+        for rel in page_releases or []:
+            d = self.pub / rel["tag_name"]; d.mkdir(parents=True, exist_ok=True)
+            for a in rel.get("assets", []):
+                (d / a["name"]).write_bytes(b"page-asset")
         self.httpd, self.port = self.serve()
 
     def write_exec(self, path, text):
@@ -235,6 +248,9 @@ class Fixture:
                "KHU_PAGES_URL": self.url("page/canonical/release.json"),
                "KHU_RAW_URL": self.url("page/raw/release.json"),
                "KHU_PUBLIC_WAIT": "5", "KHU_RELEASE_HOST": "fake-1301",
+               # The page's downloads hang off its own origin, which the fixture serves, so the
+               # post-run sweep answers for real and never reaches GitHub.
+               "KHU_MIRROR_BASE": self.url("").rstrip("/"),
                "KHU_RELEASE_KEY": str(self.dir / "key"), "KHU_PUBLIC_REPO": "theng12/kh-releases"}
         env.update(extra_env or {})
         result = subprocess.run([str(SCRIPT), *args], capture_output=True, text=True, env=env)
@@ -313,8 +329,7 @@ def case_happy_path_and_stored_name():
         doc = fx.committed()
         check(doc["apps"]["alpha"]["file"] == "aaa-Alpha.Studio.KH-1.0.1.dmg",
               "the mirror must carry the name GitHub stored")
-        check(doc["apps"]["alpha"]["url"] ==
-              "https://github.com/theng12/kh-releases/releases/download/alpha-1.0.1/aaa-Alpha.Studio.KH-1.0.1.dmg",
+        check(doc["apps"]["alpha"]["url"] == fx.url("alpha-1.0.1/aaa-Alpha.Studio.KH-1.0.1.dmg"),
               "the mirror must name the page's own address")
         check(doc["apps"]["alpha"]["sha256"] == sha(ALPHA_DMG), "the mirror keeps the feed's digest")
         check(set(doc) == {"schema", "published_at", "apps"}, f"no network block, no previous: {sorted(doc)}")
@@ -396,6 +411,26 @@ def case_mirror_keeps_public_network_and_refuses_a_drop():
         r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)], extra_env={"FAKE_KHU_DROP": "network"})
         check(r.returncode == 5, f"a mirror that drops network must refuse (got {r.returncode})\n{r.stdout}")
         check("dropped the feed's network addresses" in r.stdout, f"it must name the key\n{r.stdout}")
+    finally:
+        fx.close()
+
+
+def case_previous_missing_on_the_page_does_not_freeze_the_run():
+    # Beta's feed has a previous release the page has never carried. Syncing alpha must build and
+    # say so once; requiring a previous row for every app froze the whole page on 2026-11-22.
+    doc = with_previous()
+    doc["previous"]["beta"] = {"version": "1.9.0", "file": "bbb-Beta Studio KH-1.9.0.dmg",
+                               "sha256": "1" * 64, "bytes": 11}
+    fx = Fixture(doc, beta_on_page(alpha_previous=True), artifacts())
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)])
+        check(r.returncode == 0, f"a missing previous row must not fail the run\n{r.stdout}\n{r.stderr}")
+        check("previous not on the page" in r.stdout and "beta" in r.stdout,
+              f"the gap must be named once\n{r.stdout}")
+        committed = fx.committed()
+        check("beta" not in (committed.get("previous") or {}),
+              f"beta is carried current only: {(committed.get('previous') or {}).keys()}")
+        check("alpha" in (committed.get("previous") or {}), "alpha's previous row is carried")
     finally:
         fx.close()
 
@@ -595,6 +630,7 @@ def case_bundle_id_naming_the_owner_is_not_a_leak():
 CASES = [case_happy_path_and_stored_name, case_digest_mismatch_retires_nothing,
          case_keeps_previous_and_mirrors_it, case_mirror_that_drops_previous_refuses,
          case_mirror_keeps_public_network_and_refuses_a_drop,
+         case_previous_missing_on_the_page_does_not_freeze_the_run,
          case_behind_app_on_another_row_does_not_fail_the_run, case_all_mode_refuses_an_app_it_cannot_carry,
          case_artifact_hash_mismatch_refuses_before_upload,
          case_unaccepted_sha_touches_nothing, case_mirror_staleness_refuses,

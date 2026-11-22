@@ -197,7 +197,8 @@ struct KHUMain {
                 try FeedPublisher.publish(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
-                                          holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep)
+                                          holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep,
+                                          requireComplete: true)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "unpublish", "retire":

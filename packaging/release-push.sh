@@ -40,18 +40,40 @@ if [ "$KIND" = "updater" ]; then
     DMG="$SEALED"
   fi
 fi
+# An app that serves an update hold must publish its address: `khu publish` now refuses a
+# hold-serving app without one, and this wrapper is the only route a release takes. The address is
+# live state the app answers on, so it is named here (KHU_HOLD_URL / KHU_HOLD_SINCE) rather than
+# copied into the repo; --hold-since is optional because publish derives it from the version.
+HOLD_FLAGS=""
+[ -n "${KHU_HOLD_URL:-}" ] && HOLD_FLAGS="$HOLD_FLAGS --hold-url '$KHU_HOLD_URL'"
+[ -n "${KHU_HOLD_SINCE:-}" ] && HOLD_FLAGS="$HOLD_FLAGS --hold-since '$KHU_HOLD_SINCE'"
+if [ -f packaging/hold-apps.json ] && /usr/bin/python3 -I - packaging/hold-apps.json "$APP" <<'PY'
+import json, sys
+raise SystemExit(0 if sys.argv[2] in json.load(open(sys.argv[1])) else 1)
+PY
+then
+  [ -n "${KHU_HOLD_URL:-}" ] || echo "release-push: $APP serves an update hold; set KHU_HOLD_URL (and KHU_HOLD_SINCE if the first hold version is not this one)" >&2
+fi
+
 BASE=$(basename "$DMG")
 SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "$HOST")
 
 "${SSH[@]}" "mkdir -p ~/$STAGE/changelogs"
 scp -i "$KEY" -o BatchMode=yes "$DMG" "$HOST:$STAGE/$BASE"
 scp -i "$KEY" -o BatchMode=yes "$LOG" "$HOST:$STAGE/changelogs/$APP.md"
+# The hold-serving list travels with the feed it guards, so `publish` judges the registry instead of
+# only a row it could inherit from. Regenerate it from the handoff registry when an app starts or
+# stops serving a hold.
+if [ -f packaging/hold-apps.json ]; then
+  scp -i "$KEY" -o BatchMode=yes packaging/hold-apps.json "$HOST:Library/KHUpdater/feed/hold-apps.json" \
+    || echo "release-push: could not place hold-apps.json on $HOST; publish falls back to the row's own hold" >&2
+fi
 # base/current moves with the agent's own updates; bin/khu is a copy that can fall behind.
 # A genuinely new app says so once (`KHU_NEW_APP=1`); otherwise the host refuses an id it does not
 # know, so a mistyped one cannot become a second app beside the real one.
 "${SSH[@]}" "K=\$HOME/Library/KHUpdater; H=\"\$K/base/current\"; [ -x \"\$H\" ] || H=\"\$K/bin/khu\"; \"\$H\" publish --feed \"\$K/feed\" --key \"\$K/keys/private.key\" \
   --app '$APP' --version '$VERSION' --artifact \"\$HOME/$STAGE/$BASE\" --changelog \"\$HOME/$STAGE/changelogs/$APP.md\" \
-  ${KIND:+--kind '$KIND'} ${TYPE:+--type '$TYPE'} ${KHU_NEW_APP:+--new-app}"
+  ${KIND:+--kind '$KIND'} ${TYPE:+--type '$TYPE'} ${KHU_NEW_APP:+--new-app}$HOLD_FLAGS"
 
 /usr/bin/python3 -I - "$HOST" "$APP" "$VERSION" <<'PY'
 import base64, json, sys, urllib.request

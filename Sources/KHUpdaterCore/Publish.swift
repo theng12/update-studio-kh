@@ -137,11 +137,47 @@ public enum FeedPublisher {
     /// feed still names are never replaced. After the signed release commits, installers and
     /// icons no pin names any more retire to `retireArtifact` — the native macOS Trash when
     /// nothing is injected (`## Feed`), never the operator's Trash from a fixture feed in `Tests`.
+    /// What an app row must carry before it reaches the fleet, as one list: a later widening or
+    /// narrowing is one line here, never a second copy of the rule at the call site. `type` groups
+    /// the app; the two words are what its card renders. The hold pair is conditional — only a row
+    /// that already served a hold must keep one, so a client-only app is never made to grow a hold
+    /// endpoint in order to publish. Version, sha256 and bytes come from the sealed artifact, never
+    /// from a flag, so they are not in this list.
+    static func missingAppFields(_ entry: FeedApp, holdServing: Bool, holdSinceKnown: Bool) -> [String] {
+        var missing: [String] = []
+        if entry.type == nil {
+            missing.append("type — pass --type business|entertainment|media|plugin|system|utility")
+        }
+        if (entry.tagline ?? "").isEmpty { missing.append(#"tagline — pass --tagline "…""#) }
+        if (entry.description ?? "").isEmpty { missing.append(#"description — pass --description "…""#) }
+        // Both halves of a hold are required of a row that serves one. `holdSince` is derived below
+        // from the version when it is not named, so judging the row as written is what keeps the
+        // three registry apps with a null `holdSince` publishable; an explicit empty value is refused.
+        if holdServing && (entry.holdURL ?? "").isEmpty {
+            missing.append("hold — this app serves an update hold; pass --hold-url …")
+        }
+        if holdServing && !holdSinceKnown {
+            missing.append("hold since — this app serves an update hold; pass --hold-since <version>")
+        }
+        return missing
+    }
+
+    /// The apps that serve an update hold, from `hold-apps.json` beside the feed, generated from
+    /// `_orchestra/developer-handoff/registry/apps.json`. A missing or unreadable file is not a
+    /// reason to skip the rule for a row that already served a hold: the caller passes that in.
+    public static func holdApps(in feedDir: URL) -> Set<String> {
+        let file = feedDir.appendingPathComponent("hold-apps.json")
+        guard let data = try? Data(contentsOf: file),
+              let ids = try? JSON.decode([String].self, from: data) else { return [] }
+        return Set(ids)
+    }
+
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
                                meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
                                security: Bool = false, type: String? = nil,
                                keep: Int? = nil, now: Date = Date(),
+                               requireComplete: Bool = false,
                                retireArtifact: ((URL) throws -> Void)? = nil) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
@@ -164,7 +200,11 @@ public enum FeedPublisher {
             let (sha, bytes) = try Signing.sha256Hex(fileAt: artifact)
             guard bytes > 0 else { throw khuFail("\(artifact.path) is empty") }
             let base = String(try SafeName.component(artifact.lastPathComponent, what: "artifact").prefix(100))
-            let name = try SafeName.component("\(sha.prefix(12))-\(base)", what: "artifact")
+            // A file already named for its own bytes — the artifact as it sits in artifacts/ — keeps
+            // its name. Prefixing it again produced f4f8af7b9770-f4f8af7b9770-… and retired the
+            // correctly named file as replaced (row 20261122-336).
+            let name = base.hasPrefix("\(sha.prefix(12))-") ? base
+                : try SafeName.component("\(sha.prefix(12))-\(base)", what: "artifact")
             let dest = artifactsDir.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: dest.path) {
                 guard try Signing.sha256Hex(fileAt: dest).hex == sha else {
@@ -193,8 +233,12 @@ public enum FeedPublisher {
                 entry.bundleID = nil; entry.bundleName = nil; entry.icon = nil; entry.iconSha256 = nil
             }
             // The card's words are carried over unless this publish names new ones.
-            let w = words ?? AppWords(tagline: old?.tagline, description: old?.description, features: old?.features, accent: old?.accent)
-            entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
+            // A named word replaces only that field: `--tagline X` used to clear description,
+            // features and accent wholesale, which is how rows lost their words silently.
+            entry.tagline = words?.tagline ?? old?.tagline
+            entry.description = words?.description ?? old?.description
+            entry.features = words?.features ?? old?.features
+            entry.accent = words?.accent ?? old?.accent
             entry.released = ISO.string(now)
             // Only a known prior label is carried: a version or metadata publish that omits --type
             // keeps it, while an unrecognised raw label from an older feed is never re-written.
@@ -206,7 +250,12 @@ public enum FeedPublisher {
             entry.security = security || (old?.security ?? false) ? true : nil
             // Carried like holdURL; a new address starts at this version. An entry published before
             // holdSince existed stays unknown unless --hold-since names it.
-            entry.holdSince = holdSince ?? (old?.holdURL == entry.holdURL ? old?.holdSince : version)
+            // Named, or carried from the same hold address. `written` below is what the row will
+            // say; `known` is whether anyone actually stated since when — the pair rule judges
+            // `known`, so a row backfilled only by this line's version is still refused.
+            let writtenSince = holdSince ?? (old?.holdURL == entry.holdURL ? old?.holdSince : version)
+            let knownSince = holdSince ?? (old?.holdURL == entry.holdURL ? old?.holdSince : nil)
+            entry.holdSince = writtenSince
             // A DMG that installs an app carries that app's own name and identity whatever kind of
             // app it is — `status` included: the hand route still offers it, so it needs an identity.
             if ["app-dmg", "gateway", "status"].contains(kindNow), let read = meta {
@@ -236,6 +285,29 @@ public enum FeedPublisher {
                 // The patch from the displaced version's exact bytes to this one, when it saves
                 // bytes: a Mac that already has the older artifact then fetches the patch alone.
                 entry.delta = try delta(from: displaced, to: dest, artifactsDir: artifactsDir, feedDir: feedDir)
+            }
+            // A row that reaches the fleet must be complete: a row with no label is invisible to the
+            // grouping a page or the Launcher draws, and a row with no words renders as a blank card.
+            // This judges the row being written, after carry-forward, so a routine republish of a
+            // complete row that names no flags still passes. The sentence names the field and the
+            // flag that fills it; "incomplete row" would send someone to read source. The CLI asks
+            // for this; fixtures that publish directly are not fleet publishes and are not gated.
+            // The catalogue rows are the discriminator's own shape, not incomplete apps: an extension
+            // carries no type and no tagline by design (`kind` is the discriminator, `summary` is its
+            // description), and a plugin row has no download to describe. Gating them would refuse
+            // the catalogue for being what it is meant to be (X001, 2026-11-22).
+            let catalogue = ["extension", "plugin"].contains(kindNow)
+            if requireComplete && !catalogue {
+                // Registry first, so a first publish of a hold-serving app is refused for the
+                // missing field instead of passing because there was nothing to inherit. The
+                // Launcher and its helper are exempt by name, as they are in the agent's own hold
+                // path (Agent.swift:1743): neither serves a hold.
+                let holdExempt = ["updater", "launcher"].contains(app)
+                let holdServing = !holdExempt && (Self.holdApps(in: feedDir).contains(app) || old?.holdURL != nil)
+                let missing = Self.missingAppFields(entry, holdServing: holdServing, holdSinceKnown: (knownSince ?? "").isEmpty == false)
+                guard missing.isEmpty else {
+                    throw khuFail("refused: \(app) would be published incomplete — \(missing.joined(separator: "; ")). Nothing was published.")
+                }
             }
             feed.apps[app] = entry
             // Strictly later than the last release, so an agent's high-water mark always moves forward.

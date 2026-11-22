@@ -4189,6 +4189,11 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["PC_ONLY"] == "1" {
+            publisherCompletenessTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["E_ONLY"] == "1" {
             enrolWindowTests()
             pairingTests()
@@ -4318,6 +4323,7 @@ r41HealthMustHold()
         artifactDeltaTests()
         installedIdentityTests()
         publisherRetentionTests()
+        publisherCompletenessTests()
         connectionReloadTests()
         connectionWindowTests()
         publicFeedSweepTests()
