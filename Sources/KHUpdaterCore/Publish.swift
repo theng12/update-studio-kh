@@ -183,6 +183,7 @@ public enum FeedPublisher {
             var entry = FeedApp(version: version, file: name, sha256: sha, bytes: bytes, kind: kindNow, notes: notes)
             // The app's own name, identity and icon, so the Launcher lists it with no code change.
             let old = feed.apps[app]
+            entry.extras = old?.extras ?? [:]
             entry.name = displayName ?? old?.name; entry.bundleID = old?.bundleID; entry.bundleName = old?.bundleName
             entry.icon = old?.icon; entry.iconSha256 = old?.iconSha256
             if kindNow == "updater" {

@@ -18,7 +18,11 @@ private struct LegacyFeed: Codable {
 func feedLosslessTests() {
     let sha = String(repeating: "a", count: 64)
     let json = """
-    {"schema":1,"published_at":"2026-11-22T10:00:00Z","revision_note":"kept at the top",
+    {"schema":1,"published_at":"2026-11-22T10:00:00Z",
+     "revision_note":{"values":[null,true,9007199254740993,18446744073709551615,0.123456789012345678901]},
+     "network":{"feedURLs":["https://example.invalid/release.json"],"hosts":{}},
+     "previous":{"media-studio":{"version":"0.1.121","file":"prior.dmg","sha256":"\(sha)","bytes":123,
+       "kind":"app","previousOnly":true}},
      "apps":{"media-studio":{"version":"0.1.122","file":"a.dmg","sha256":"\(sha)","bytes":123,
        "kind":"app","type":"media","extensions":["x"],"previousExtensions":["y"]}}}
     """
@@ -45,27 +49,41 @@ func feedLosslessTests() {
                && again.apps["media-studio"]?.type == "media"
                && again.published_at == "2026-11-22T10:00:00Z",
                "FL2 known fields are unchanged")
-        expect(JSON.encode(feed).range(of: Data("\"bytes\" : 123".utf8)) != nil,
-               "FL3 a whole number is written back as an integer, not 123.0")
+        expect(["9007199254740993", "18446744073709551615", "0.123456789012345678901"].allSatisfy { text.contains($0) },
+               "FL3 large integers and decimal values retain their precision")
+        expect(again.schema == 1 && again.network?.feedURLs == ["https://example.invalid/release.json"]
+               && again.previous?["media-studio"]?.extras["previousOnly"] == .bool(true),
+               "FL3 schema, network and previous rows survive the round trip")
     } catch { expect(false, "FL fixture: \(error)") }
 
     // FL4: a real publish over a feed carrying another build's row keeps that row's unknown fields.
     do {
         let root = tmpDir("feed-lossless")
         let keyFile = root.appendingPathComponent("fixture.key")
-        try Signing.savePrivateKey(Curve25519.Signing.PrivateKey(), to: keyFile)
+        let key = Curve25519.Signing.PrivateKey()
+        try Signing.savePrivateKey(key, to: keyFile)
         let feedDir = root.appendingPathComponent("feed")
         try fm.createDirectory(at: feedDir, withIntermediateDirectories: true)
+        let release = Release(feed: data, signature: try Signing.sign(data, with: key))
+        try AtomicFile.writeJSON(release, to: FeedPublisher.releaseFile(in: feedDir))
         let seed = try JSON.decode(Feed.self, from: data)
-        try FeedPublisher.saveFeed(seed, to: feedDir, key: try Signing.loadPrivateKey(from: keyFile))
         let artifact = root.appendingPathComponent("story.bin")
         try Data("story bytes".utf8).write(to: artifact)
         try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "story", version: "1.4.418",
                                   artifact: artifact, kind: "fake-for-tests", allowSame: false)
-        let after = FeedPublisher.loadFeed(from: feedDir)
-        expect(after?.extras["revision_note"] != nil, "FL4 a publish keeps the feed's unknown top-level field")
-        expect(after?.apps["media-studio"]?.extras["extensions"] != nil,
-               "FL4 a publish keeps another app's unknown fields")
+        let after = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey)
+        expect(after?.extras == seed.extras && after?.schema == seed.schema && after?.network == seed.network,
+               "FL4 a signed publish keeps top-level metadata")
+        expect(after?.apps["media-studio"] == seed.apps["media-studio"] && after?.previous == seed.previous,
+               "FL4 a signed publish keeps another app's current and previous rows")
         expect(after?.apps["story"]?.version == "1.4.418", "FL4 the published row is written as usual")
+
+        try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "media-studio", version: "0.1.123",
+                                  artifact: artifact, kind: "fake-for-tests", allowSame: false)
+        let updated = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey)
+        expect(updated?.apps["media-studio"]?.version == "0.1.123"
+               && updated?.apps["media-studio"]?.extras == seed.apps["media-studio"]?.extras
+               && updated?.previous?["media-studio"]?.extras == seed.apps["media-studio"]?.extras,
+               "FL5 a signed publish keeps unknown fields on the updated and displaced rows")
     } catch { expect(false, "FL4 publish fixture: \(error)") }
 }

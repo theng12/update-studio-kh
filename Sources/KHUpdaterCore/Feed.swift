@@ -48,7 +48,7 @@ public struct FeedApp: Codable, Sendable, Equatable {
     public var url: String?
     /// Fields this build does not model, kept exactly as read. A publisher rewrites the whole feed,
     /// so without this an older build silently strips fields a newer one wrote.
-    public var extras: [String: JSONValue] = [:]
+    var extras: [String: JSONValue] = [:]
 
     /// Where this artifact is fetched from: its own signed address when it names one, else beside
     /// the feed it came from.
@@ -68,70 +68,73 @@ public struct FeedApp: Codable, Sendable, Equatable {
     ]
 
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: FeedKey.self)
-        version = try c.decode(String.self, forKey: FeedKey("version"))
-        file = try c.decode(String.self, forKey: FeedKey("file"))
-        sha256 = try c.decode(String.self, forKey: FeedKey("sha256"))
-        bytes = try c.decode(Int64.self, forKey: FeedKey("bytes"))
-        kind = try c.decode(String.self, forKey: FeedKey("kind"))
-        type = try c.decodeIfPresent(String.self, forKey: FeedKey("type"))
-        notes = try c.decodeIfPresent(String.self, forKey: FeedKey("notes"))
-        name = try c.decodeIfPresent(String.self, forKey: FeedKey("name"))
-        bundleID = try c.decodeIfPresent(String.self, forKey: FeedKey("bundleID"))
-        bundleName = try c.decodeIfPresent(String.self, forKey: FeedKey("bundleName"))
-        icon = try c.decodeIfPresent(String.self, forKey: FeedKey("icon"))
-        iconSha256 = try c.decodeIfPresent(String.self, forKey: FeedKey("iconSha256"))
-        tagline = try c.decodeIfPresent(String.self, forKey: FeedKey("tagline"))
-        description = try c.decodeIfPresent(String.self, forKey: FeedKey("description"))
-        features = try c.decodeIfPresent([AppFeature].self, forKey: FeedKey("features"))
-        accent = try c.decodeIfPresent(String.self, forKey: FeedKey("accent"))
-        released = try c.decodeIfPresent(String.self, forKey: FeedKey("released"))
-        mainMacOnly = try c.decodeIfPresent(Bool.self, forKey: FeedKey("mainMacOnly"))
-        delta = try c.decodeIfPresent(ArtifactDelta.self, forKey: FeedKey("delta"))
-        holdURL = try c.decodeIfPresent(String.self, forKey: FeedKey("holdURL"))
-        holdSince = try c.decodeIfPresent(String.self, forKey: FeedKey("holdSince"))
-        security = try c.decodeIfPresent(Bool.self, forKey: FeedKey("security"))
-        url = try c.decodeIfPresent(String.self, forKey: FeedKey("url"))
+        let c = try decoder.container(keyedBy: AnyCodingKey.self)
+        version = try c.decode(String.self, forKey: AnyCodingKey("version"))
+        file = try c.decode(String.self, forKey: AnyCodingKey("file"))
+        sha256 = try c.decode(String.self, forKey: AnyCodingKey("sha256"))
+        bytes = try c.decode(Int64.self, forKey: AnyCodingKey("bytes"))
+        kind = try c.decode(String.self, forKey: AnyCodingKey("kind"))
+        type = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("type"))
+        notes = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("notes"))
+        name = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("name"))
+        bundleID = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("bundleID"))
+        bundleName = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("bundleName"))
+        icon = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("icon"))
+        iconSha256 = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("iconSha256"))
+        tagline = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("tagline"))
+        description = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("description"))
+        features = try c.decodeIfPresent([AppFeature].self, forKey: AnyCodingKey("features"))
+        accent = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("accent"))
+        released = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("released"))
+        mainMacOnly = try c.decodeIfPresent(Bool.self, forKey: AnyCodingKey("mainMacOnly"))
+        delta = try c.decodeIfPresent(ArtifactDelta.self, forKey: AnyCodingKey("delta"))
+        holdURL = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("holdURL"))
+        holdSince = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("holdSince"))
+        security = try c.decodeIfPresent(Bool.self, forKey: AnyCodingKey("security"))
+        url = try c.decodeIfPresent(String.self, forKey: AnyCodingKey("url"))
         extras = [:]
         for key in c.allKeys where !FeedApp.knownKeys.contains(key.stringValue) {
-            if let value = try? c.decode(JSONValue.self, forKey: key) { extras[key.stringValue] = value }
+            extras[key.stringValue] = try c.decode(JSONValue.self, forKey: key)
         }
     }
 
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: FeedKey.self)
-        try c.encode(version, forKey: FeedKey("version"))
-        try c.encode(file, forKey: FeedKey("file"))
-        try c.encode(sha256, forKey: FeedKey("sha256"))
-        try c.encode(bytes, forKey: FeedKey("bytes"))
-        try c.encode(kind, forKey: FeedKey("kind"))
-        try c.encodeIfPresent(type, forKey: FeedKey("type"))
-        try c.encodeIfPresent(notes, forKey: FeedKey("notes"))
-        try c.encodeIfPresent(name, forKey: FeedKey("name"))
-        try c.encodeIfPresent(bundleID, forKey: FeedKey("bundleID"))
-        try c.encodeIfPresent(bundleName, forKey: FeedKey("bundleName"))
-        try c.encodeIfPresent(icon, forKey: FeedKey("icon"))
-        try c.encodeIfPresent(iconSha256, forKey: FeedKey("iconSha256"))
-        try c.encodeIfPresent(tagline, forKey: FeedKey("tagline"))
-        try c.encodeIfPresent(description, forKey: FeedKey("description"))
-        try c.encodeIfPresent(features, forKey: FeedKey("features"))
-        try c.encodeIfPresent(accent, forKey: FeedKey("accent"))
-        try c.encodeIfPresent(released, forKey: FeedKey("released"))
-        try c.encodeIfPresent(mainMacOnly, forKey: FeedKey("mainMacOnly"))
-        try c.encodeIfPresent(delta, forKey: FeedKey("delta"))
-        try c.encodeIfPresent(holdURL, forKey: FeedKey("holdURL"))
-        try c.encodeIfPresent(holdSince, forKey: FeedKey("holdSince"))
-        try c.encodeIfPresent(security, forKey: FeedKey("security"))
-        try c.encodeIfPresent(url, forKey: FeedKey("url"))
-        for (key, value) in extras { try c.encode(value, forKey: FeedKey(key)) }
+        var c = encoder.container(keyedBy: AnyCodingKey.self)
+        try c.encode(version, forKey: AnyCodingKey("version"))
+        try c.encode(file, forKey: AnyCodingKey("file"))
+        try c.encode(sha256, forKey: AnyCodingKey("sha256"))
+        try c.encode(bytes, forKey: AnyCodingKey("bytes"))
+        try c.encode(kind, forKey: AnyCodingKey("kind"))
+        try c.encodeIfPresent(type, forKey: AnyCodingKey("type"))
+        try c.encodeIfPresent(notes, forKey: AnyCodingKey("notes"))
+        try c.encodeIfPresent(name, forKey: AnyCodingKey("name"))
+        try c.encodeIfPresent(bundleID, forKey: AnyCodingKey("bundleID"))
+        try c.encodeIfPresent(bundleName, forKey: AnyCodingKey("bundleName"))
+        try c.encodeIfPresent(icon, forKey: AnyCodingKey("icon"))
+        try c.encodeIfPresent(iconSha256, forKey: AnyCodingKey("iconSha256"))
+        try c.encodeIfPresent(tagline, forKey: AnyCodingKey("tagline"))
+        try c.encodeIfPresent(description, forKey: AnyCodingKey("description"))
+        try c.encodeIfPresent(features, forKey: AnyCodingKey("features"))
+        try c.encodeIfPresent(accent, forKey: AnyCodingKey("accent"))
+        try c.encodeIfPresent(released, forKey: AnyCodingKey("released"))
+        try c.encodeIfPresent(mainMacOnly, forKey: AnyCodingKey("mainMacOnly"))
+        try c.encodeIfPresent(delta, forKey: AnyCodingKey("delta"))
+        try c.encodeIfPresent(holdURL, forKey: AnyCodingKey("holdURL"))
+        try c.encodeIfPresent(holdSince, forKey: AnyCodingKey("holdSince"))
+        try c.encodeIfPresent(security, forKey: AnyCodingKey("security"))
+        try c.encodeIfPresent(url, forKey: AnyCodingKey("url"))
+        for (key, value) in extras where !Self.knownKeys.contains(key) {
+            try c.encode(value, forKey: AnyCodingKey(key))
+        }
     }
 }
 
-/// One JSON value kept as read, so a field this build does not model survives its rewrite of the
-/// feed. Whole numbers are written back as integers, so `1` never becomes `1.0`.
-public enum JSONValue: Codable, Sendable, Equatable {
+/// A JSON value from a feed field this build does not model.
+enum JSONValue: Codable, Sendable, Equatable {
     case string(String)
-    case number(Double)
+    case integer(Int64)
+    case unsignedInteger(UInt64)
+    case decimal(Decimal)
     case bool(Bool)
     case null
     case array([JSONValue])
@@ -141,7 +144,9 @@ public enum JSONValue: Codable, Sendable, Equatable {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { self = .null }
         else if let v = try? c.decode(Bool.self) { self = .bool(v) }
-        else if let v = try? c.decode(Double.self) { self = .number(v) }
+        else if let v = try? c.decode(Int64.self) { self = .integer(v) }
+        else if let v = try? c.decode(UInt64.self) { self = .unsignedInteger(v) }
+        else if let v = try? c.decode(Decimal.self), !v.isNaN { self = .decimal(v) }
         else if let v = try? c.decode(String.self) { self = .string(v) }
         else if let v = try? c.decode([JSONValue].self) { self = .array(v) }
         else { self = .object(try c.decode([String: JSONValue].self)) }
@@ -151,8 +156,9 @@ public enum JSONValue: Codable, Sendable, Equatable {
         var c = encoder.singleValueContainer()
         switch self {
         case .string(let v): try c.encode(v)
-        case .number(let v):
-            if let i = Int64(exactly: v) { try c.encode(i) } else { try c.encode(v) }
+        case .integer(let v): try c.encode(v)
+        case .unsignedInteger(let v): try c.encode(v)
+        case .decimal(let v): try c.encode(v)
         case .bool(let v): try c.encode(v)
         case .null: try c.encodeNil()
         case .array(let v): try c.encode(v)
@@ -162,12 +168,12 @@ public enum JSONValue: Codable, Sendable, Equatable {
 }
 
 /// A key no one declared: how unknown fields are read out and written back unchanged.
-public struct FeedKey: CodingKey, Hashable {
-    public var stringValue: String
-    public var intValue: Int? { nil }
-    public init(_ string: String) { stringValue = string }
-    public init?(stringValue: String) { self.stringValue = stringValue }
-    public init?(intValue: Int) { nil }
+private struct AnyCodingKey: CodingKey {
+    let stringValue: String
+    var intValue: Int? { nil }
+    init(_ string: String) { stringValue = string }
+    init?(stringValue: String) { self.init(stringValue) }
+    init?(intValue: Int) { nil }
 }
 
 /// One numbered feature in the Launcher's details panel.
@@ -199,7 +205,7 @@ public struct Feed: Codable, Sendable, Equatable {
     public var previous: [String: FeedApp]?
     public var network: FeedNetwork?
     /// Top-level fields this build does not model, kept exactly as read.
-    public var extras: [String: JSONValue] = [:]
+    var extras: [String: JSONValue] = [:]
 
     public init(schema: Int = Feed.supportedSchema, published_at: String, apps: [String: FeedApp] = [:]) {
         self.schema = schema; self.published_at = published_at; self.apps = apps
@@ -208,26 +214,28 @@ public struct Feed: Codable, Sendable, Equatable {
     private static let knownKeys: Set<String> = ["schema", "published_at", "apps", "previous", "network"]
 
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: FeedKey.self)
-        schema = try c.decode(Int.self, forKey: FeedKey("schema"))
-        published_at = try c.decode(String.self, forKey: FeedKey("published_at"))
-        apps = try c.decode([String: FeedApp].self, forKey: FeedKey("apps"))
-        previous = try c.decodeIfPresent([String: FeedApp].self, forKey: FeedKey("previous"))
-        network = try c.decodeIfPresent(FeedNetwork.self, forKey: FeedKey("network"))
+        let c = try decoder.container(keyedBy: AnyCodingKey.self)
+        schema = try c.decode(Int.self, forKey: AnyCodingKey("schema"))
+        published_at = try c.decode(String.self, forKey: AnyCodingKey("published_at"))
+        apps = try c.decode([String: FeedApp].self, forKey: AnyCodingKey("apps"))
+        previous = try c.decodeIfPresent([String: FeedApp].self, forKey: AnyCodingKey("previous"))
+        network = try c.decodeIfPresent(FeedNetwork.self, forKey: AnyCodingKey("network"))
         extras = [:]
         for key in c.allKeys where !Feed.knownKeys.contains(key.stringValue) {
-            if let value = try? c.decode(JSONValue.self, forKey: key) { extras[key.stringValue] = value }
+            extras[key.stringValue] = try c.decode(JSONValue.self, forKey: key)
         }
     }
 
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: FeedKey.self)
-        try c.encode(schema, forKey: FeedKey("schema"))
-        try c.encode(published_at, forKey: FeedKey("published_at"))
-        try c.encode(apps, forKey: FeedKey("apps"))
-        try c.encodeIfPresent(previous, forKey: FeedKey("previous"))
-        try c.encodeIfPresent(network, forKey: FeedKey("network"))
-        for (key, value) in extras { try c.encode(value, forKey: FeedKey(key)) }
+        var c = encoder.container(keyedBy: AnyCodingKey.self)
+        try c.encode(schema, forKey: AnyCodingKey("schema"))
+        try c.encode(published_at, forKey: AnyCodingKey("published_at"))
+        try c.encode(apps, forKey: AnyCodingKey("apps"))
+        try c.encodeIfPresent(previous, forKey: AnyCodingKey("previous"))
+        try c.encodeIfPresent(network, forKey: AnyCodingKey("network"))
+        for (key, value) in extras where !Self.knownKeys.contains(key) {
+            try c.encode(value, forKey: AnyCodingKey(key))
+        }
     }
 
     public var publishedAt: Date? { ISO.date(published_at) }

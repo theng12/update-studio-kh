@@ -592,7 +592,24 @@ def case_bundle_id_naming_the_owner_is_not_a_leak():
         fx.close()
 
 
+def case_missing_current_refuses_stale_copy():
+    fx = Fixture(with_previous(), beta_on_page(alpha_previous=True), artifacts())
+    try:
+        stale = fx.kh / "bin" / "khu"
+        stale.parent.mkdir()
+        (fx.kh / "base" / "current").rename(stale)
+        result = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)],
+                        extra_env={"KHU_RELEASE_HOST": "localhost"})
+        check(result.returncode == 5, f"a missing current helper must refuse\n{result.stdout}")
+        check("base/current" in result.stdout and "bin/khu" in result.stdout,
+              f"the refusal names both helper paths\n{result.stdout}")
+        check(not (fx.kh / "page-sync" / "release.json").exists(), "the stale copy never builds the mirror")
+    finally:
+        fx.close()
+
+
 CASES = [case_happy_path_and_stored_name, case_digest_mismatch_retires_nothing,
+         case_missing_current_refuses_stale_copy,
          case_keeps_previous_and_mirrors_it, case_mirror_that_drops_previous_refuses,
          case_mirror_keeps_public_network_and_refuses_a_drop,
          case_behind_app_on_another_row_does_not_fail_the_run, case_all_mode_refuses_an_app_it_cannot_carry,
