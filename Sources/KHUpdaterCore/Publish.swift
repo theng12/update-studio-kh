@@ -194,8 +194,12 @@ public enum FeedPublisher {
                 entry.bundleID = nil; entry.bundleName = nil; entry.icon = nil; entry.iconSha256 = nil
             }
             // The card's words are carried over unless this publish names new ones.
-            let w = words ?? AppWords(tagline: old?.tagline, description: old?.description, features: old?.features, accent: old?.accent)
-            entry.tagline = w.tagline; entry.description = w.description; entry.features = w.features; entry.accent = w.accent
+            // A named word replaces only that field: `--tagline X` used to clear description,
+            // features and accent wholesale, which is how rows lost their words silently.
+            entry.tagline = words?.tagline ?? old?.tagline
+            entry.description = words?.description ?? old?.description
+            entry.features = words?.features ?? old?.features
+            entry.accent = words?.accent ?? old?.accent
             entry.released = ISO.string(now)
             // Only a known prior label is carried: a version or metadata publish that omits --type
             // keeps it, while an unrecognised raw label from an older feed is never re-written.
