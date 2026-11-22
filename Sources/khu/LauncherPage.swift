@@ -28,9 +28,15 @@ select,input[type=search]{height:30px;border:1px solid var(--line);border-radius
 .set input[type=text]{flex:1;min-width:0;height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 9px;font:12px/1.4 ui-monospace,Menlo,monospace}
 input::placeholder{color:var(--sub)}input,textarea{cursor:text;-webkit-user-select:text;caret-color:var(--accent)}
 main{flex:1;padding:18px 22px 8px}
-.extensions{margin:8px 22px 18px;border-top:1px solid var(--line);padding-top:12px}
-.extensions summary{width:fit-content;font-size:14px;font-weight:650;cursor:pointer}
-.extensions p{margin:8px 0;color:var(--sub);overflow-wrap:anywhere}
+/* One row of sections across the top at any width where all eight fit; below that it wraps rather
+   than scrolls, so no section is ever hidden behind a sideways swipe. */
+.tabs{display:flex;flex-wrap:wrap;gap:2px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.tabs [role=tab]{height:40px;padding:0 12px;border:0;border-bottom:2px solid transparent;background:none;color:var(--sub);font-weight:600;white-space:nowrap;flex:none}
+.tabs [role=tab]:hover{color:var(--text)}
+.tabs [role=tab][aria-selected=true]{color:var(--text);border-bottom-color:var(--accent)}
+@media (max-width:520px){.tabs [role=tab]{height:38px;padding:0 10px}}
+.tabnote{margin:0;padding:8px 22px;color:var(--sub);font-size:12.5px;background:var(--panel);border-bottom:1px solid var(--line2)}
+#extPanel p{margin:8px 0;color:var(--sub);overflow-wrap:anywhere}
 .extRow{display:flex;justify-content:space-between;align-items:center;gap:8px 16px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
 .extRow p{margin:2px 0 0}.extRow strong{overflow-wrap:anywhere}.extRow .btn{flex:none}
 h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-child{margin-top:4px}
@@ -102,21 +108,22 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <button class="btn primary" id=all hidden></button>
  <label class=sr for=sort>Sort</label><select id=sort aria-label="Sort"><option value=name>Name</option><option value=type>Type</option><option value=recent>Recently updated</option></select>
  <input type=search id=q placeholder="Search apps" aria-label="Search apps">
- <div class=viewTools><div class=seg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
+ <div class=viewTools><div class=seg id=viewseg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
  <button class="btn" id=check title="Check the saved feed and scan for installer drives" aria-label="Check the saved feed and scan for installer drives">Check sources</button><span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
  </div>
 </header>
+<nav class=tabs id=tabs role=tablist aria-label="Sections"></nav>
+<p class=tabnote id=tabNote hidden role=status></p>
 <div id=notices hidden></div>
 <section id=adoptions hidden></section>
-<main id=main></main>
-<details class=extensions id=extensions><summary id=extensionsHeading>Extensions and plugins</summary><div id=extensionDownloads aria-live="polite"></div></details>
+<main id=main role=tabpanel></main>
 <footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="Fleet: see the whole fleet on the publisher, and act on it" aria-label="Fleet: see the whole fleet on the publisher, and act on it">Fleet</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null,connSourceSel=null,selected=new Set();
+let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',tab=store.get('tab')||'all',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null,connSourceSel=null,selected=new Set();
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -233,6 +240,12 @@ function buttons(a,big){const out=[],m=mainAction(a);
 const typeName=a=>(S.appTypes||[]).includes(a.type)?a.type[0].toUpperCase()+a.type.slice(1):'Unlabelled';
 function byType(a,b){const x=typeName(a),y=typeName(b);return Number(x==='Unlabelled')-Number(y==='Unlabelled')||x.localeCompare(y)}
 const typeLine=a=>el('div',{class:'tag'},typeName(a)+(a.unrecognised?' · Unrecognised':''));
+// The eight sections the owner asked for, in his order: five of the feed's labels, then the two
+// things that are not apps at all. Plugin and Extension read the same published list, split by kind.
+const TABS=[['all','All'],['business','Business'],['media','Media'],['utility','Utilities'],['entertainment','Entertainment'],['system','System'],['plugin','Plugin'],['extension','Extension']];
+const CATEGORIES=new Set(['business','media','utility','entertainment','system']);
+const appsTab=()=>tab==='all'||CATEGORIES.has(tab);
+const unlabelled=a=>!(S.appTypes||[]).includes(a.type);
 function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);
  const c=el('article',{class:'card click'+(selected.has(a.id)?' selected':''),'aria-selected':String(selected.has(a.id)),style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget){openDetail(a.id);return}const cards=[...document.querySelectorAll('.card')],i=cards.indexOf(e.currentTarget),d=e.key=='ArrowRight'||e.key=='ArrowDown'?1:e.key=='ArrowLeft'||e.key=='ArrowUp'?-1:0;if(d){e.preventDefault();cards[(i+d+cards.length)%cards.length]?.focus()}}},
@@ -248,6 +261,8 @@ function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('the
   el('td',{},chip(a),a.reason?el('div',{class:'reason',style:'margin-top:4px'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null),
   el('td',{class:'act'},a.status=='Updating…'?el('div',{style:'min-width:240px'},progress(a)):buttons(a)))))))}
 function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filter(a=>showHidden||!a.hidden);
+ // A category tab is the app list narrowed to that label; All is everything, unlabelled rows included.
+ if(CATEGORIES.has(tab))list=list.filter(a=>a.type===tab);
  if(q)list=list.filter(a=>(a.name+' '+(a.tagline||'')).toLowerCase().includes(q));
  const key=a=>new Date(installed(a)?a.installedAt||0:a.released||0).getTime();
  list.sort((x,y)=>(sort=='recent'?key(y)-key(x):sort=='type'?byType(x,y):0)||x.name.localeCompare(y.name));return [list,hidden]}
@@ -258,7 +273,7 @@ function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filte
 const tickOnly=(k,v)=>k==='extensions'?undefined:k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
 // What the page would look like if it were drawn from the state it holds right now — transfer
 // counters excepted, since those are written in rather than redrawn.
-const signature=()=>JSON.stringify([view,sort,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
+const signature=()=>JSON.stringify([view,sort,tab,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  if(!viewFromMac&&S.settings&&S.settings.viewMode){view=S.settings.viewMode;viewFromMac=true}
@@ -268,28 +283,71 @@ function render(state){if(state)Object.assign(S,state);
  $('wnver').textContent=S.version?'v'+S.version:'';
  const u=S.apps.find(a=>a.id=='updater'&&a.status=='Update available'&&a.available&&!a.statusOnly);
  $('update').hidden=!u;if(u){$('update').title='Studio Launcher KH Helper '+u.available;$('update').setAttribute('aria-label','Studio Launcher KH Helper to '+u.available)}
- paintStatus();drawExtensions();
+ paintStatus();
+ // The published list is polled by nothing: a new answer writes into the open panel's own node,
+ // exactly as a transfer tick does, because `extensions` is excluded from the redraw signature.
+ if(!appsTab()&&$('extPanel'))drawExtensions(tab);
  const s=signature();
  if(s==sig){move();return}
  sig=s;draw()}
 /// The counters moved and nothing else did: write them in, touch no other node.
 function move(){document.querySelectorAll('[data-prog]').forEach(n=>{const a=S.apps.find(x=>x.id==n.getAttribute('data-prog'));paint(n,(a&&a.progress)||{})})}
+function drawTabs(){const appTab=appsTab();
+ $('main').setAttribute('aria-labelledby','tab-'+tab);
+ $('tabs').replaceChildren(...TABS.map(([id,label])=>{const on=tab==id;
+  return el('button',{role:'tab',id:'tab-'+id,'aria-selected':String(on),'aria-controls':'main',tabindex:on?'0':'-1',
+   onclick:()=>selectTab(id),
+   onkeydown:e=>{const i=TABS.findIndex(t=>t[0]==id),d=e.key=='ArrowRight'?1:e.key=='ArrowLeft'?-1:0;
+    if(d){e.preventDefault();const n=TABS[(i+d+TABS.length)%TABS.length][0];selectTab(n);$('tab-'+n)?.focus()}
+    else if(e.key=='Home'||e.key=='End'){e.preventDefault();const n=(e.key=='Home'?TABS[0]:TABS[TABS.length-1])[0];selectTab(n);$('tab-'+n)?.focus()}}},label)}));
+ // Extensions and plugins are not apps: the controls that only shape an app list would do nothing
+ // on those tabs, so they are not offered there rather than offered and inert.
+ $('sort').hidden=!appTab;$('q').hidden=!appTab;$('viewseg').hidden=!appTab}
+function selectTab(id){if(tab===id)return;tab=id;store.set('tab',tab);detail=null;closeLayers();
+ // Nothing polls: the published list is asked for when someone first opens a tab that holds it.
+ if(!appsTab()&&(!S.extensions||S.extensions.status==='idle'))post({action:'checkExtensions'});
+ render()}
 function draw(){const active=document.activeElement||{},fk=active.id,selection=[active.selectionStart,active.selectionEnd];
- const [list,hidden]=visible(),mine=list.filter(installed),others=list.filter(a=>!installed(a));
+ drawTabs();
+ const appTab=appsTab();
+ const [list,hidden]=visible();
+ // Under All the unlabelled rows get their own named group, so they are not counted twice here.
+ const labelled=tab=='all'?list.filter(a=>!unlabelled(a)):list;
+ const mine=labelled.filter(installed),others=labelled.filter(a=>!installed(a));
+ const unlabelledRows=tab=='all'?list.filter(unlabelled):[];
  const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.available&&(a.status=='Update available'||a.status=='Failed'||a.status=='Downloaded')).length;
- $('all').hidden=n==0;$('all').textContent='Update all ('+n+')';
+ $('all').hidden=n==0||!appTab;$('all').textContent='Update all ('+n+')';
  $('vgrid').setAttribute('aria-pressed',view=='grid');$('vlist').setAttribute('aria-pressed',view=='list');$('sort').value=sort;
  const m=$('main');m.replaceChildren();
- if(Number.isInteger(S.feedCount)&&S.feedPublishedAt){
-  const stamp=new Date(S.feedPublishedAt).toLocaleString(undefined,{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'});
-  const missing=S.missingFromFeed||[];
-  const source=S.checkedFeedSource?.startsWith('GitHub (')?'This page':'This feed';
-  m.append(el('p',{class:'note',style:'margin:2px 0 8px'},source+' carries '+S.feedCount+' '+(S.feedCount===1?'app':'apps')+', last updated '+stamp+(missing.length?' · Not on it: '+missing.join(', '):'')));
+ if(appTab){
+  if(Number.isInteger(S.feedCount)&&S.feedPublishedAt){
+   const stamp=new Date(S.feedPublishedAt).toLocaleString(undefined,{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'});
+   const missing=S.missingFromFeed||[];
+   const source=S.checkedFeedSource?.startsWith('GitHub (')?'This page':'This feed';
+   m.append(el('p',{class:'note',style:'margin:2px 0 8px'},source+' carries '+S.feedCount+' '+(S.feedCount===1?'app':'apps')+', last updated '+stamp+(missing.length?' · Not on it: '+missing.join(', '):'')));
+  }
+  if(!S.apps.length)m.append(el('p',{class:'empty'},S.error?'The publisher at '+(S.connection.destination||'the saved address')+' could not be reached: '+S.error:'Checking…'));
+  else if(!list.length){
+   // An empty category is a fact about the feed's labels, and the sentence says so instead of
+   // leaving a blank panel that reads as a broken screen.
+   const none=S.apps.filter(a=>!a.hidden&&unlabelled(a)).length;
+   m.append(el('p',{class:'empty'},q?'No app matches “'+q+'”.':CATEGORIES.has(tab)?'No '+TABS.find(t=>t[0]==tab)[1]+' apps on this feed yet.'+(none?' '+none+' '+(none===1?'app has':'apps have')+' no category yet; they are under All.':''):'No app matches “'+q+'”.'));
+  }
+  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
+   m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
+  if(unlabelledRows.length)m.append(el('h2',{},'No category yet · '+unlabelledRows.length),view=='grid'?el('div',{class:'grid'},unlabelledRows.map(card)):tableOf(unlabelledRows));
+ }else{
+  const box=el('div',{id:'extPanel','aria-live':'polite'});m.append(box);drawExtensions(tab);
  }
- if(!S.apps.length)m.append(el('p',{class:'empty'},S.error?'The publisher at '+(S.connection.destination||'the saved address')+' could not be reached: '+S.error:'Checking…'));
- else if(!list.length)m.append(el('p',{class:'empty'},'No app matches “'+q+'”.'));
- for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
-  m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
+ // The note belongs to the category tabs: under All the group heading already says it, and on the
+ // two non-app tabs it would describe a list that is not on screen.
+ const none=appTab&&tab!='all'?S.apps.filter(a=>!a.hidden&&unlabelled(a)).length:0;
+ // A whole app labelled plugin or extension is still an app; it is named here rather than drawn as
+ // an index row, so neither tab hides it.
+ const asApps=!appTab?S.apps.filter(a=>!a.hidden&&a.type===tab).length:0;
+ const note=asApps?asApps+(asApps===1?' app is':' apps are')+' labelled '+TABS.find(t=>t[0]==tab)[1]+'; they are apps, under All.'
+  :none?none+(none===1?' app has':' apps have')+' no category on the feed yet; they are under All.':'';
+ $('tabNote').hidden=!note;$('tabNote').textContent=note;
  drawNotices();drawAdoptions();
  $('hiddenNote').replaceChildren(hidden.length?el('button',{class:'link',onclick:()=>{showHidden=!showHidden;render()}},showHidden?'Hide hidden apps':hidden.length+' hidden · Show'):'');
  document.documentElement.style.colorScheme=S.settings.appearance=='dark'?'dark':S.settings.appearance=='light'?'light':'light dark';
@@ -297,22 +355,24 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  // shortcut: focus comes back only where the control has an id (search, sort, the address field);
  // cards carry none, so a redraw cannot hand focus back to the card the person was on.
  if(fk&&$(fk)){$(fk).focus();if(selection[0]!=null)$(fk).setSelectionRange?.(...selection)}}
-let extensionSig='';
-function drawExtensions(){const state=S.extensions||{status:'idle'}, sig=JSON.stringify(state);
- if(sig===extensionSig)return;extensionSig=sig;
- const box=$('extensionDownloads'),focus=box.contains(document.activeElement);
+// Plugin and Extension are rows, not app cards: neither has an installer of its own, so neither
+// gets an Install button, a version chip of an installed build, or a place in the app list.
+function drawExtensions(kind){const state=S.extensions||{status:'idle'};
+ const box=$('extPanel');if(!box)return;
  const check=()=>post({action:'checkExtensions'});
  const message={idle:'Check for public Chrome extension downloads.',loading:'Checking for published extensions…',
   unpublished:'Extensions and plugins are not published yet; nothing to download.',failed:'Could not check for published extensions. Try again.'}[state.status];
  if(message){box.replaceChildren(el('p',{},message));if(state.status!=='loading')box.append(
-  el('button',{class:'btn',onclick:check},state.status==='idle'?'Check downloads':'Check again'));}
- else{box.replaceChildren(el('p',{},'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'),
-  ...(state.entries||[]).map(x=>el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,' · ',(x.kind==='plugin'?'Plugin':'Extension'),el('p',{},x.summary)),
-   x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
-             :el('span',{class:'tag'},'No public download yet'))));
-  if(state.note)box.append(el('p',{role:'status'},state.note));}
- if(focus)$('extensionsHeading').focus();}
-$('extensions').ontoggle=()=>{if($('extensions').open&&(!S.extensions||S.extensions.status==='idle'))post({action:'checkExtensions'})};
+  el('button',{class:'btn',onclick:check},state.status==='idle'?'Check downloads':'Check again'));return}
+ const rows=(state.entries||[]).filter(x=>(x.kind==='plugin')===(kind==='plugin'));
+ box.replaceChildren(el('p',{class:'sub'},kind==='plugin'
+  ?'Published plugins. A plugin has no installer of its own; it arrives with the app that carries it.'
+  :'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'));
+ if(!rows.length)box.append(el('p',{},kind==='plugin'?'No published plugin yet.':'No published extension yet.'));
+ for(const x of rows)box.append(el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,el('p',{},x.summary)),
+  x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
+            :el('span',{class:'tag'},'No public download yet')));
+ if(state.note)box.append(el('p',{role:'status'},state.note));}
 /// One quiet notice per new version: no badge, no count, and a dismissal is remembered by version.
 function drawNotices(){const n=S.notices||[],box=$('notices');box.hidden=!n.length;
  box.replaceChildren(...n.map(x=>el('div',{class:'notice'},el('span',{},x.name+' '+x.version+' is ready.'),
