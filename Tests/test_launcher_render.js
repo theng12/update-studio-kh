@@ -118,7 +118,7 @@ class El {
   get isConnected() { let n = this; while (n) { if (n === document.documentElement || n === document.body) return true; n = n.parentNode; } return false; }
   addEventListener(type, fn) { (this.handlers[type] = this.handlers[type] || []).push(fn); }
   fire(type, event) {
-    const e = Object.assign({ target: this, currentTarget: this, stopPropagation() {} }, event);
+    const e = Object.assign({ target: this, currentTarget: this, stopPropagation() {}, preventDefault() {} }, event);
     (this.handlers[type] || []).forEach(fn => fn(e));
     // A browser runs an element's `onclick` property on click too, not only addEventListener.
     if (type == 'click' && typeof this.onclick == 'function') this.onclick(e);
@@ -813,38 +813,86 @@ const relabelled=appRows.map(a=>a.id==='story'?{...a,type:'entertainment'}:a);
 render(state(relabelled));
 assert.match(document.querySelector('tr[aria-selected=true]').textContent,/D StoryEntertainment/,'publisher can relabel without a new UI build');
 
-// R21 opening Extensions checks once on demand. Only verified published rows get download actions.
-const extDisclosure=document.getElementById('extensions');
-const extBox=document.getElementById('extensionDownloads');
+// R21 the eight sections across the top: All, the five app labels, then Plugin and Extension,
+// which are not apps. The owner asked for this row in place of the old bottom disclosure.
+const tabButtons = () => document.querySelectorAll('#tabs [role=tab]');
+run("tab='all';render()");
+assert.deepEqual(tabButtons().map(t=>t.textContent),['All','Business','Media','Utilities','Entertainment','System','Plugin','Extension']);
+assert.equal(tabButtons().find(t=>t.getAttribute('aria-selected')==='true').textContent,'All');
+assert.doesNotMatch(markup,/Extensions and plugins<\/summary>/,'the bottom disclosure is gone');
+// A row with no label is neither lost nor guessed into a category: it keeps its own named group.
+assert.match(document.getElementById('main').textContent,/No category yet · 2/);
+run("tab='media';render()");
+assert.match(document.getElementById('main').textContent,/A Hub/);
+assert.doesNotMatch(document.getElementById('main').textContent,/C Launcher/,'a category tab shows that label only');
+assert.doesNotMatch(document.getElementById('main').textContent,/D Story/,'Story was relabelled entertainment above');
+run("tab='entertainment';render()");
+assert.match(document.getElementById('main').textContent,/D Story/);
+assert.equal(document.getElementById('tabNote').hidden,false);
+assert.match(document.getElementById('tabNote').textContent,/2 apps have no category on the feed yet; they are under All\./);
+run("tab='utility';render()");
+assert.match(document.getElementById('main').textContent,/F Printer/,'the feed calls it utility; the tab says Utilities');
+assert.doesNotMatch(document.getElementById('main').textContent,/No category yet/,'the unlabelled group belongs to All');
+assert.doesNotMatch(document.getElementById('main').textContent,/A Hub/);
+run("tab='business';render()");
+assert.match(document.getElementById('main').textContent,/H Business/);
+// An empty category says so, and says where the unlabelled apps are, instead of a blank panel.
+render(state(appRows.filter(a=>a.id!=='business'),{appTypes,feedCount:10}));
+run("tab='business';render()");
+assert.match(document.getElementById('main').textContent,/No Business apps on this feed yet\. 2 apps have no category yet; they are under All\./);
+render(state(appRows,{appTypes,feedCount:11}));
+// The controls that only shape an app list are not offered on the two non-app tabs.
+run("tab='plugin';render()");
+assert.equal(document.getElementById('sort').hidden,true);
+assert.equal(document.getElementById('q').hidden,true);
+run("tab='all';render()");
+assert.equal(document.getElementById('sort').hidden,false);
+// Opening a non-app tab asks once, on demand, and never polls; only verified rows get a download.
 posts.length=0;
-extDisclosure.open=true;extDisclosure.ontoggle();
+tabButtons().find(t=>t.textContent==='Plugin').fire('click');
 assert.deepEqual(posts.map(post=>post.action),['checkExtensions']);
+run("tab='plugin';render()");
+assert.equal(posts.length,1,'rendering the open tab again asks nothing');
 render(state(appRows,{extensions:{status:'loading'}}));
-assert.match(extBox.textContent,/Checking for published extensions/);
-assert.equal(extBox.querySelectorAll('button').length,0);
+assert.match(document.getElementById('main').textContent,/Checking for published extensions/);
+assert.equal(document.querySelectorAll('#main button').length,0);
 render(state(appRows,{extensions:{status:'unpublished'}}));
-assert.match(extBox.textContent,/Extensions and plugins are not published yet; nothing to download/);
-assert(!extBox.querySelectorAll('button').some(b=>b.textContent==='Download'));
+assert.match(document.getElementById('main').textContent,/Extensions and plugins are not published yet; nothing to download/);
+assert(!document.querySelectorAll('#main button').some(b=>b.textContent==='Download'));
 render(state(appRows,{extensions:{status:'failed'}}));
-assert.match(extBox.textContent,/Could not check/);
+assert.match(document.getElementById('main').textContent,/Could not check/);
 const extRows=['Video generator','Image generator','Audio generator'].map((name,i)=>({
   id:'test-extension-'+i,name,version:'10.20.'+i,summary:'Make '+name.split(' ')[0].toLowerCase()+' in Chrome.',
   kind:'extension',download:true}));
-// A plugin is the other category, listed only until it has a published download.
+// A plugin is the other kind, listed only until it has a published download.
 extRows.push({id:'efficient-orchestration',name:'Efficient Orchestration',version:'0.3.204',
   summary:'Coordinates work across Studio apps.',kind:'plugin',download:false});
 render(state(appRows,{extensions:{status:'available',entries:extRows}}));
-assert.equal(extBox.querySelectorAll('.extRow').length,4);
-assert.match(extBox.textContent,/Video generator · 10\.20\.0 · ExtensionMake video in Chrome/);
-assert.match(extBox.textContent,/Efficient Orchestration · 0\.3\.204 · PluginCoordinates work across Studio apps\.No public download yet/);
-assert.equal(extBox.querySelectorAll('button').length,3,'a plugin without a download offers no dead button');
-assert.match(markup,/Extensions and plugins/);
-assert.doesNotMatch(document.getElementById('main').textContent,/generator|Efficient Orchestration/,'extensions and plugins never become app rows');
+const extPanel = document.getElementById('extPanel');
+assert.equal(extPanel.querySelectorAll('.extRow').length,1,'the Plugin tab lists the plugin entry only');
+assert.match(extPanel.textContent,/Efficient Orchestration · 0\.3\.204Coordinates work across Studio apps\.No public download yet/);
+assert.equal(extPanel.querySelectorAll('button').length,0,'a plugin without a download offers no dead button');
+run("tab='extension';render()");
+assert.equal(document.getElementById('extPanel').querySelectorAll('.extRow').length,3,'the Extension tab lists the extension entries only');
+assert.match(document.getElementById('extPanel').textContent,/Video generator · 10\.20\.0Make video in Chrome/);
+assert.equal(document.querySelectorAll('#extPanel button').length,3);
+assert.doesNotMatch(document.getElementById('main').textContent,/Efficient Orchestration/,'a plugin is not drawn as an app or an extension');
+assert.equal(document.querySelectorAll('#main .card').length,0,'extensions and plugins never become app cards');
 posts.length=0;
-extBox.querySelectorAll('button')[1].fire('click');
+document.querySelectorAll('#extPanel button')[1].fire('click');
 assert.equal(posts.length,1);
 assert.equal(posts[0].action,'downloadExtension');
 assert.equal(posts[0].app,'test-extension-1');
 assert.equal(posts[0].url,undefined,'browser opening uses only the verified native catalog');
+// The tab row is keyboard-navigable: Right/Left move and activate, Home and End jump.
+run("tab='all';render()");
+const allTab=document.getElementById('tab-all');allTab.focus();
+allTab.fire('keydown',{key:'ArrowRight'});
+assert.equal(document.querySelectorAll('#tabs [aria-selected=true]')[0].textContent,'Business');
+document.getElementById('tab-business').fire('keydown',{key:'End'});
+assert.equal(document.querySelectorAll('#tabs [aria-selected=true]')[0].textContent,'Extension');
+document.getElementById('tab-extension').fire('keydown',{key:'ArrowRight'});
+assert.equal(document.querySelectorAll('#tabs [aria-selected=true]')[0].textContent,'All','Right from the last tab wraps to All');
+run("tab='all';render()");
 
 console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback, the empty list’s reason, the feed’s missing apps and the Scan drives control');
