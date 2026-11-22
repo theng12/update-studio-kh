@@ -267,7 +267,7 @@ struct KHUMain {
                                                     currentOnly: currentOnly, previousOmitted: { omitted.append($0) })
                 for line in written { print("\(line.app) \(line.version): \(line.url) — \(line.bytes) bytes") }
                 for app in omitted.sorted() {
-                    print("previous omitted for \(app): --current-only writes no downgrade path (the page is public).")
+                    print("previous omitted for \(app): the page does not carry that version's assets.")
                 }
                 print("signed mirror feed written to \(out) (\(written.count) installers)")
             } catch { fail("\(error)") }

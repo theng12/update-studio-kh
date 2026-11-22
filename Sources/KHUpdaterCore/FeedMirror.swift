@@ -5,11 +5,19 @@ public enum FeedMirror {
     /// feed restated for that page: every file it names is looked up in `names` (tab-separated app
     /// id, tag, feed file, stored asset name, sha256) and replaced by the stored name, and the entry
     /// carries that file's full address under `base`. Size and checksum are not touched, so the
-    /// release is the same one; `network` (the publisher's own hosts) and each patch (which the page
-    /// does not hold) are left out. Signed with the publisher's key. Returns the addresses written.
-    /// `currentOnly` writes a feed with no `previous` at all: a page anyone can download from needs
-    /// no downgrade path, and the builds before a release are exactly the ones a safety fix retired.
-    /// `previousOmitted` is told each app whose previous entry was left out, so the caller can say so.
+    /// release is the same one; each patch (which the page does not hold) is left out. Signed with
+    /// the publisher's key. Returns the addresses written.
+    ///
+    /// `previous` rides in the same envelope when the page carries those assets, so a Mac on the
+    /// public feed keeps the current + previous pair the rest of the estate keeps; an app whose
+    /// previous assets the page does not have is named through `previousOmitted`.
+    ///
+    /// `network` keeps its public `feedURLs` only. `controller` names the publisher's tailnet homes
+    /// as bare addresses, and the owner's public-safety scan (2026-11-21) refuses those in a file
+    /// anyone can download. Consequence, stated rather than hidden: a page-only Mac cannot follow a
+    /// controller handoff.
+    ///
+    /// `currentOnly` writes no `previous` at all for callers that must not keep a downgrade path.
     public static func export(feedDir: URL, keyFile: URL, out: URL, base: String, names: URL,
                               apps: [String], currentOnly: Bool = false,
                               previousOmitted: ((String) -> Void)? = nil) throws -> [(app: String, version: String, url: String, bytes: Int64)] {
@@ -84,12 +92,14 @@ public enum FeedMirror {
         for app in apps {
             guard var entry = feed.previous?[app] else { continue }
             if currentOnly { previousOmitted?(app); continue }
+            guard rows[app + "\u{0}" + entry.file] != nil else { previousOmitted?(app); continue }
             _ = try mirrored(app, &entry)
             previous[app] = entry
         }
         feed.apps = current
         feed.previous = previous.isEmpty ? nil : previous
-        feed.network = nil
+        // Public addresses only: `controller` and the host roles name the publisher's own tailnet.
+        feed.network = feed.network.map { FeedNetwork(feedURLs: $0.feedURLs) }
         let signed = try feed.validated()
         let data = JSON.encode(signed)
         try AtomicFile.writeJSON(Release(feed: data, signature: try Signing.sign(data, with: key)), to: out)
@@ -101,7 +111,8 @@ public enum FeedMirror {
             throw khuFail("the signed feed written to \(out.path) does not verify; nothing was handed out")
         }
         let back = try JSON.decode(Feed.self, from: body).validated()
-        guard back.network == nil, back.artifactIdentity == signed.artifactIdentity else {
+        guard back.network == signed.network, back.network?.controller == nil,
+              back.artifactIdentity == signed.artifactIdentity else {
             throw khuFail("the signed feed written to \(out.path) does not read back as this release")
         }
         return apps.sorted().compactMap { app in

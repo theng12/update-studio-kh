@@ -4228,6 +4228,13 @@ struct RunnerMain {
         expect(!Signing.verify(data, signature: sig, publicKey: Signing.generateKeyPair().privateKey.publicKey), "sig wrong key")
         expectThrows("traversal refused") { _ = try SafeName.component("../etc", what: "x") }
 
+        if ProcessInfo.processInfo.environment["MIRROR_ONLY"] == "1" {
+            mirrorExportTests()
+            mirrorOnlyTests()
+            mirrorFeedTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["CC_ONLY"] != nil {
             copyCompletenessTests()
             rollbackRetirementTests()

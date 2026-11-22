@@ -63,7 +63,8 @@ func mirrorExportTests() {
     expect(Signing.verify(body, signature: signature, publicKey: pair.privateKey.publicKey),
            "MX3 the mirrored feed verifies with the publisher's own key")
     let back = try! JSON.decode(Feed.self, from: body)
-    expect(back.network == nil, "MX4 the mirrored feed carries no network block")
+    expect(back.network?.feedURLs == ["http://100.64.0.7:8790/release.json"] && back.network?.controller == nil,
+           "MX4 the mirror keeps the public addresses and never the publisher's own controller")
     expect(back.apps["launcher"]?.sha256 == launcherSHA && back.apps["launcher"]?.bytes == Int64(launcherBytes.count),
            "MX5 sizes and checksums are untouched")
     expect(back.apps["launcher"]?.file == "Studio Launcher KH 0.1.65.dmg",

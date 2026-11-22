@@ -13,7 +13,7 @@
 #
 # The steps: read the feed · require the acceptance · obtain and hash the artifact · upload it under
 # the feed's own name and read the stored name back · verify the stored digest · carry the icon onto
-# the tag that stays · retire the row it replaced · rebuild the signed mirror on the publisher host
+# the tag that stays · keep the previous release · rebuild the signed mirror on the publisher host
 # with the feed re-read either side · commit that exact release.json and read both public addresses
 # back. Step 8 and step 9 run once for the whole page, after every app has its row.
 set -euo pipefail
@@ -118,6 +118,7 @@ pub() { ssh -i "$PUB_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$PUB_HOST" "$1"
 
 # The feed's own name for this app, and the feed's whole published_at line, as tab-separated rows:
 #   published_at<TAB><when>      app<TAB>id<TAB>version<TAB>file<TAB>sha256<TAB>bytes<TAB>icon<TAB>iconSha<TAB>previous version
+#                                <TAB>previous file<TAB>previous sha256<TAB>previous bytes<TAB>previous icon<TAB>previous iconSha
 feed_tsv() {
   python3 -I - "$1" <<'PY'
 import base64, json, sys
@@ -128,7 +129,9 @@ for app in sorted(feed["apps"]):
     e = feed["apps"][app]
     prev = (feed.get("previous") or {}).get(app) or {}
     print("\t".join([app, e["version"], e["file"], e["sha256"], str(e["bytes"]),
-                     e.get("icon") or "", e.get("iconSha256") or "", prev.get("version") or ""]))
+                     e.get("icon") or "", e.get("iconSha256") or "", prev.get("version") or "",
+                     prev.get("file") or "", prev.get("sha256") or "", str(prev.get("bytes") or ""),
+                     prev.get("icon") or "", prev.get("iconSha256") or ""]))
 PY
 }
 
@@ -176,8 +179,9 @@ sync_app() {
   # Tab is IFS *whitespace*, so `read` collapses runs of it and empty fields vanish: a null-icon
   # row parsed the previous version into A_ICON ("cannot download the icon 0.1.70", issue
   # 20261120-192). Split on a non-whitespace unit separator instead, where empties survive.
-  IFS=$'\x1f' read -r _ A_VER A_FILE A_SHA A_BYTES A_ICON A_ICONSHA A_PREV <<<"${ROW//$'\t'/$'\x1f'}"
+  IFS=$'\x1f' read -r _ A_VER A_FILE A_SHA A_BYTES A_ICON A_ICONSHA A_PREV A_PREVFILE A_PREVSHA A_PREVBYTES A_PREVICON A_PREVICONSHA <<<"${ROW//$'\t'/$'\x1f'}"
   A_SHA=$(printf %s "$A_SHA" | tr 'A-F' 'a-f'); A_ICONSHA=$(printf %s "$A_ICONSHA" | tr 'A-F' 'a-f')
+  A_PREVSHA=$(printf %s "$A_PREVSHA" | tr 'A-F' 'a-f'); A_PREVICONSHA=$(printf %s "$A_PREVICONSHA" | tr 'A-F' 'a-f')
   TAG="$APP-$A_VER"
   ok "$A_VER $A_FILE $A_BYTES bytes sha256 $A_SHA, published $WHEN"
 
@@ -196,8 +200,8 @@ sync_app() {
     begin digest; would "require the stored digest to be $A_SHA"
     begin icon
     if [ -z "$A_ICON" ]; then skip "the feed names no icon for $APP"; else would "put $A_ICON on $TAG and verify $A_ICONSHA"; fi
-    begin retire
-    if [ -z "$A_PREV" ]; then skip "the feed holds no previous version"; else would "delete the $APP-$A_PREV row"; fi
+    begin previous
+    if [ -z "$A_PREV" ]; then skip "the feed holds no previous version"; else would "keep the $APP-$A_PREV row, adding it when the page lacks it"; fi
     return 0
   fi
   A_SRC=""; A_HOW=""
@@ -284,26 +288,35 @@ PY
     did "put $A_ICON on $TAG, hash $A_ICONSHA"
   fi
 
-  # 7 — last, so nothing is retired before 5 and 6 have passed.
-  begin retire
-  if [ -z "$A_PREV" ]; then
+  # 7 — the previous release stays on the page. Retention is current + previous everywhere else,
+  # and a page that deletes the asset its own `previous` entry names breaks that rule, so this step
+  # makes the previous row present and never deletes one.
+  begin previous
+  if [ -z "$A_PREV" ] || [ -z "$A_PREVFILE" ]; then
     skip "the feed holds no previous version of $APP"
   else
     PREV_TAG="$APP-$A_PREV"
     [ "$PREV_TAG" != "$TAG" ] || refuse "the feed names $TAG as its own previous version"
-    page_releases || refuse "cannot list the page's releases to find $PREV_TAG"
-    PREV_ID=$(python3 -I - "$WORK/releases.json" "$PREV_TAG" <<'PY'
-import json, sys
-for r in json.load(open(sys.argv[1])):
-    if r.get("tag_name") == sys.argv[2]: print(r["id"]); break
-PY
-)
-    if [ -z "$PREV_ID" ]; then
-      skip "the page has no $PREV_TAG row"
+    if tag_assets "$PREV_TAG" | awk -F'\t' -v s="$A_PREVSHA" '$2==s {found=1} END {exit !found}'; then
+      ok "$PREV_TAG is on the page with the feed's bytes — kept"
     else
-      gh api -X DELETE "repos/$REPO/releases/$PREV_ID" >/dev/null 2>"$WORK/gh.err" \
-        || refuse "deleting $PREV_TAG failed: $(tail -1 "$WORK/gh.err")"
-      did "retired $PREV_TAG"
+      P_SRC="$WORK/$A_PREVFILE"
+      curl -fsL --retry 3 --connect-timeout 10 "$FEED_BASE/artifacts/$(url_quote "$A_PREVFILE")" -o "$P_SRC" \
+        || refuse "cannot download $A_PREVFILE from $FEED_BASE/artifacts/"
+      [ "$(sha_of "$P_SRC")" = "$A_PREVSHA" ] || refuse "the downloaded $A_PREVFILE hashes to $(sha_of "$P_SRC"), the feed says $A_PREVSHA"
+      if [ -f "$WORK/tag.json" ]; then
+        gh release upload "$PREV_TAG" "$P_SRC" -R "$REPO" >/dev/null 2>"$WORK/gh.err" \
+          || refuse "adding $A_PREVFILE to the existing release $PREV_TAG failed: $(tail -1 "$WORK/gh.err")"
+        did "kept $PREV_TAG and put $A_PREVFILE on it"
+      else
+        gh release create "$PREV_TAG" "$P_SRC" -R "$REPO" --title "$APP $A_PREV" \
+          --notes "Signed release from the KH Studio feed, kept as the previous version." \
+          >/dev/null 2>"$WORK/gh.err" \
+          || refuse "creating release $PREV_TAG failed: $(tail -1 "$WORK/gh.err")"
+        did "created $PREV_TAG with $A_PREVFILE as the page's previous version"
+      fi
+      tag_assets "$PREV_TAG" | awk -F'\t' -v s="$A_PREVSHA" '$2==s {found=1} END {exit !found}' \
+        || refuse "$PREV_TAG carries no asset with the feed's previous sha256 after the upload"
     fi
   fi
 }
@@ -344,24 +357,44 @@ for rel in rels:
     if best: owner.setdefault(best, []).append(rel)
 out, carrying = [], []
 for app in sorted(owner):
-    ver, file, sha, icon, iconsha = apps[app][1], apps[app][2], apps[app][3], apps[app][5], apps[app][6]
-    tag = app + "-" + ver
-    rel = next((r for r in owner[app] if r.get("tag_name") == tag), None)
-    if rel is None:
-        print("the page has no %s row (it has %s); run page-sync for %s first"
-              % (tag, ", ".join(sorted(r.get("tag_name","") for r in owner[app])), app)); raise SystemExit(3)
-    def stored(want):
-        return next((a["name"] for a in rel.get("assets", [])
+    r = apps[app]
+    ver, file, sha, icon, iconsha = r[1], r[2], r[3], r[5], r[6]
+    prev_ver = r[7] if len(r) > 7 else ""
+    prev_file = r[8] if len(r) > 8 else ""
+    prev_sha = r[9] if len(r) > 9 else ""
+    prev_icon = r[11] if len(r) > 11 else ""
+    prev_iconsha = r[12] if len(r) > 12 else ""
+
+    def release_for(version):
+        return next((x for x in owner[app] if x.get("tag_name") == app + "-" + version), None)
+
+    def stored(rel, want):
+        return next((a["name"] for a in (rel or {}).get("assets", [])
                      if (a.get("digest") or "").replace("sha256:", "") == want), None)
-    if not sha or not stored(sha):
-        print("the page's %s carries no asset with the feed's sha256; run page-sync for %s first" % (tag, app))
+
+    tag = app + "-" + ver
+    rel = release_for(ver)
+    if rel is None or not stored(rel, sha):
+        print("the page has no %s row (it has %s); run page-sync for %s first"
+              % (tag, ", ".join(sorted(x.get("tag_name", "") for x in owner[app])), app))
         raise SystemExit(3)
-    out.append("\t".join([app, tag, file, stored(sha), sha]))
+    out.append("\t".join([app, tag, file, stored(rel, sha), sha]))
     if icon:
-        if not iconsha or not stored(iconsha):
+        if not iconsha or not stored(rel, iconsha):
             print("the page's %s carries no %s with the feed's iconSha256; run page-sync for %s first" % (tag, icon, app))
             raise SystemExit(3)
-        out.append("\t".join([app, tag, icon, stored(iconsha), iconsha]))
+        out.append("\t".join([app, tag, icon, stored(rel, iconsha), iconsha]))
+    # The previous release rides in the mirror too, so a public Mac keeps current + previous.
+    if prev_ver and prev_file:
+        prev_rel = release_for(prev_ver)
+        if prev_rel is None or not stored(prev_rel, prev_sha):
+            print("the page has no %s row for the feed's previous version; run page-sync for %s first" % (app + "-" + prev_ver, app))
+            raise SystemExit(3)
+        out.append("\t".join([app, app + "-" + prev_ver, prev_file, stored(prev_rel, prev_sha), prev_sha]))
+        if prev_icon and prev_iconsha:
+            prev_icon_name = stored(prev_rel, prev_iconsha)
+            if prev_icon_name:
+                out.append("\t".join([app, app + "-" + prev_ver, prev_icon, prev_icon_name, prev_iconsha]))
     carrying.append(app)
 if not carrying:
     print("no app on the page is in the feed, so there is nothing to mirror"); raise SystemExit(3)
@@ -373,9 +406,10 @@ PY
 # The names table carries the name GitHub actually stored, so it is written from the readback above.
 pub 'K="$HOME/Library/KHUpdater"; mkdir -p "$K/page-sync" && cat > "$K/page-sync/names.tsv"' < "$WORK/names.tsv" \
   || refuse "cannot write the names table on $PUB_HOST"
+# No --current-only: the page keeps current + previous, like the rest of the estate.
 MIRROR_OUT=$(pub "K=\"\$HOME/Library/KHUpdater\"; H=\"\$K/base/current\"; [ -x \"\$H\" ] || H=\"\$K/bin/khu\"
 \"\$H\" mirror --feed \"\$K/feed\" --key \"\$K/keys/private.key\" --out \"\$K/page-sync/release.json\" \
-  --base '$MIRROR_BASE' --names \"\$K/page-sync/names.tsv\" --apps '$MIRROR_APPS' --current-only" 2>&1) \
+  --base '$MIRROR_BASE' --names \"\$K/page-sync/names.tsv\" --apps '$MIRROR_APPS'" 2>&1) \
   || refuse "the mirror build on $PUB_HOST failed: $(printf '%s' "$MIRROR_OUT" | tail -1)"
 pub 'cat "$HOME/Library/KHUpdater/page-sync/release.json"' > "$WORK/release.json" \
   || refuse "cannot read the mirror file back from $PUB_HOST"
@@ -403,12 +437,28 @@ def identity(entries):
                   for k, v in entries.items())
 # The feed carries apps the page has no row for (Hub, the updater helper); the mirror cannot name
 # them, so only the apps it carries are compared.
-if identity(mine["apps"]) != identity({a: after["apps"][a] for a in mine["apps"] if a in after["apps"]}):
-    print("the mirror does not name the feed's artifacts for the apps it carries"); raise SystemExit(3)
-if mine.get("previous"):
-    print("the public copy carries a previous entry; it is built --current-only"); raise SystemExit(3)
-if mine.get("network"):
-    print("the public copy carries a network block"); raise SystemExit(3)
+for app, entry in mine["apps"].items():
+    if app not in after["apps"]:
+        continue
+    if identity({app: after["apps"][app]}) != identity({app: entry}):
+        print("the mirror does not name the feed's artifacts for %s" % app); raise SystemExit(3)
+# The page carries the same shape as the feed: previous entries ride in the same envelope, and the
+# network block keeps its public addresses. A dropped key is invisible in version/sha/bytes — the
+# same reason `tagline` is in the identity comparison — so each is checked by name.
+fed_prev, mine_prev = after.get("previous") or {}, mine.get("previous") or {}
+for app in mine["apps"]:
+    p = fed_prev.get(app)
+    if not p:
+        continue
+    if app not in mine_prev:
+        print("the mirror dropped the feed's previous entry for %s" % app); raise SystemExit(3)
+    if identity({app: p}) != identity({app: mine_prev[app]}):
+        print("the mirror does not name the feed's previous artifacts for %s" % app); raise SystemExit(3)
+fed_urls = (after.get("network") or {}).get("feedURLs") or []
+if fed_urls and ((mine.get("network") or {}).get("feedURLs") or []) != fed_urls:
+    print("the mirror dropped the feed's network addresses"); raise SystemExit(3)
+if after.get("previousExtensions") and not mine.get("previousExtensions"):
+    print("the mirror dropped the feed's previous extensions"); raise SystemExit(3)
 # `com.terranash.<app>` is the reserved bundle-id domain: it sits in every copy's Info.plist and is
 # public wherever it appears, so it is allowed in every field — not only in `bundleID`, which made
 # the same string a leak in a changelog sentence and no leak in a plist. Everything else is still
@@ -429,7 +479,7 @@ PY
 ) || refuse "$MIRROR_WHEN"
 [ "$MIRROR_WHEN" = "$WHEN_BEFORE" ] && [ "$MIRROR_WHEN" = "$WHEN_AFTER" ] \
   || refuse "the mirror is dated $MIRROR_WHEN, the feed $WHEN_BEFORE then $WHEN_AFTER"
-did "built on $PUB_HOST for $MIRROR_APPS from the feed published $WHEN_BEFORE; the feed did not move; no previous entries (the page carries the newest only)"
+did "built on $PUB_HOST for $MIRROR_APPS from the feed published $WHEN_BEFORE; the feed did not move; controller withheld from the public copy by policy (a page-only Mac cannot follow a handoff)"
 
 # =====================================================================================
 # Step 9 — commit that exact file, then read both public addresses back.

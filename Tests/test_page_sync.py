@@ -146,12 +146,27 @@ feed = json.loads(base64.b64decode(json.load(open(os.path.join(opts["feed"], "re
 out = {}
 for app in opts["apps"].split(","):
     e = dict(feed["apps"][app])
+    if (app, e["file"]) not in names: sys.exit("fake khu: no row for " + app)
     tag, stored = names[(app, e["file"])]
     e["file"], e["url"] = stored, opts["base"] + "/" + tag + "/" + stored
     if e.get("icon"): e["icon"] = names[(app, e["icon"])][1]
     e.pop("delta", None)
     out[app] = e
 body = {"schema": feed["schema"], "published_at": feed["published_at"], "apps": out}
+if not opts.get("current"):
+    prev = {}
+    for app in opts["apps"].split(","):
+        p = (feed.get("previous") or {}).get(app)
+        if not p or (app, p["file"]) not in names: continue
+        q = dict(p); tag, stored = names[(app, p["file"])]
+        q["file"], q["url"] = stored, opts["base"] + "/" + tag + "/" + stored
+        if q.get("icon") and (app, q["icon"]) in names: q["icon"] = names[(app, q["icon"])][1]
+        q.pop("delta", None)
+        prev[app] = q
+    if prev: body["previous"] = prev
+if feed.get("network"): body["network"] = {"feedURLs": feed["network"].get("feedURLs", [])}
+if os.environ.get("FAKE_KHU_DROP"):
+    body.pop(os.environ["FAKE_KHU_DROP"], None)
 data = json.dumps(body, sort_keys=True).encode()
 open(opts["out"], "w").write(json.dumps({"feed": base64.b64encode(data).decode(),
                                          "signature": base64.b64encode(b"sig").decode()}))
@@ -323,20 +338,58 @@ def case_digest_mismatch_retires_nothing():
         fx.close()
 
 
-def case_retires_previous_after_the_checks_pass():
+def case_keeps_previous_and_mirrors_it():
     fx = Fixture(with_previous(), beta_on_page(alpha_previous=True), artifacts())
     try:
         r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)])
         check(r.returncode == 0, f"a page with a previous row must sync\n{r.stdout}\n{r.stderr}")
-        deleted = fx.publishes("DELETE")
-        check(len(deleted) == 1 and "releases/8" in deleted[0],
-              f"the previous row (id 8) must be retired: {deleted}")
-        calls = fx.gh_calls()
-        upload = next(i for i, c in enumerate(calls) if "\tcreate\t" in "\t" + c)
-        check(calls.index(deleted[0]) > upload, "the retire must come after the upload")
-        check("retired alpha-1.0.0" in r.stdout, f"the retirement must be reported\n{r.stdout}")
+        check(fx.publishes("DELETE") == [], f"the previous row is never retired: {fx.publishes('DELETE')}")
+        check("alpha          7 previous kept" in r.stdout or "alpha-1.0.0 is on the page with the feed's bytes — kept" in r.stdout,
+              f"the kept row must be reported\n{r.stdout}")
         doc = fx.committed()
-        check("previous" not in doc, "the public copy carries no downgrade path")
+        check(doc.get("previous", {}).get("alpha", {}).get("version") == "1.0.0",
+              f"the mirror must carry the feed's previous entry: {sorted(doc)}")
+        check(doc["previous"]["alpha"]["file"] == "aaa-Alpha.Studio.KH-1.0.0.dmg",
+              f"the previous entry names the page's own asset: {doc['previous']['alpha']}")
+    finally:
+        fx.close()
+
+
+def case_mirror_that_drops_previous_refuses():
+    fx = Fixture(with_previous(), beta_on_page(alpha_previous=True), artifacts())
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)], extra_env={"FAKE_KHU_DROP": "previous"})
+        check(r.returncode == 5, f"a mirror that drops previous must refuse (got {r.returncode})\n{r.stdout}")
+        check("dropped the feed's previous entry for alpha" in r.stdout,
+              f"it must name the key and the app\n{r.stdout}")
+    finally:
+        fx.close()
+
+
+def with_network():
+    doc = with_previous()
+    doc["network"] = {"feedURLs": ["https://theng12.github.io/kh-releases/release.json"],
+                      "controller": {"from": "http://100.75.85.116:8790/release.json",
+                                     "to": "http://100.82.91.102:8790/release.json"}}
+    return doc
+
+
+def case_mirror_keeps_public_network_and_refuses_a_drop():
+    fx = Fixture(with_network(), beta_on_page(alpha_previous=True), artifacts())
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)])
+        check(r.returncode == 0, f"a feed with a network block must mirror\n{r.stdout}\n{r.stderr}")
+        doc = fx.committed()
+        check(doc.get("network") == {"feedURLs": ["https://theng12.github.io/kh-releases/release.json"]},
+              f"the mirror keeps the public addresses and no controller: {doc.get('network')}")
+        check("controller withheld" in r.stdout, f"the withholding must be said, not silent\n{r.stdout}")
+    finally:
+        fx.close()
+    fx = Fixture(with_network(), beta_on_page(alpha_previous=True), artifacts())
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)], extra_env={"FAKE_KHU_DROP": "network"})
+        check(r.returncode == 5, f"a mirror that drops network must refuse (got {r.returncode})\n{r.stdout}")
+        check("dropped the feed's network addresses" in r.stdout, f"it must name the key\n{r.stdout}")
     finally:
         fx.close()
 
@@ -495,7 +548,8 @@ def case_bundle_id_naming_the_owner_is_not_a_leak():
 
 
 CASES = [case_happy_path_and_stored_name, case_digest_mismatch_retires_nothing,
-         case_retires_previous_after_the_checks_pass,
+         case_keeps_previous_and_mirrors_it, case_mirror_that_drops_previous_refuses,
+         case_mirror_keeps_public_network_and_refuses_a_drop,
          case_artifact_hash_mismatch_refuses_before_upload,
          case_unaccepted_sha_touches_nothing, case_mirror_staleness_refuses,
          case_second_run_changes_nothing, case_app_without_icon_skips,
