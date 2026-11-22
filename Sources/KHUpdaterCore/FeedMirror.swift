@@ -17,10 +17,13 @@ public enum FeedMirror {
     /// anyone can download. Consequence, stated rather than hidden: a page-only Mac cannot follow a
     /// controller handoff.
     ///
+    /// An app whose page row is behind the feed keeps the newest version the page does carry, named
+    /// through `behind`, instead of failing the whole build: one behind app must not freeze the page.
     /// `currentOnly` writes no `previous` at all for callers that must not keep a downgrade path.
     public static func export(feedDir: URL, keyFile: URL, out: URL, base: String, names: URL,
                               apps: [String], currentOnly: Bool = false,
-                              previousOmitted: ((String) -> Void)? = nil) throws -> [(app: String, version: String, url: String, bytes: Int64)] {
+                              previousOmitted: ((String) -> Void)? = nil,
+                              behind: ((String) -> Void)? = nil) throws -> [(app: String, version: String, url: String, bytes: Int64)] {
         let key = try Signing.loadPrivateKey(from: keyFile)
         guard var feed = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey) else {
             throw khuFail("nothing is published in \(feedDir.path)")
@@ -83,15 +86,24 @@ public enum FeedMirror {
 
         var current: [String: FeedApp] = [:]
         var chosen: [String: String] = [:]
+        var behindApps: Set<String> = []
         for app in apps {
             guard var entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
+            // The page has not caught up with this app: keep the newest version it does carry rather
+            // than failing every other app's build. The caller names the gap and decides its own exit.
+            if rows[app + "\u{0}" + entry.file] == nil, let older = feed.previous?[app],
+               rows[app + "\u{0}" + older.file] != nil {
+                entry = older
+                behindApps.insert(app)
+                behind?(app)
+            }
             chosen[app] = try mirrored(app, &entry)
             current[app] = entry
         }
         var previous: [String: FeedApp] = [:]
         for app in apps {
             guard var entry = feed.previous?[app] else { continue }
-            if currentOnly { previousOmitted?(app); continue }
+            if currentOnly || behindApps.contains(app) { previousOmitted?(app); continue }
             guard rows[app + "\u{0}" + entry.file] != nil else { previousOmitted?(app); continue }
             _ = try mirrored(app, &entry)
             previous[app] = entry

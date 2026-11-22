@@ -355,7 +355,7 @@ for rel in rels:
         if tag.startswith(app + "-") and version.match(tag[len(app) + 1:]):
             if best is None or len(app) > len(best): best = app
     if best: owner.setdefault(best, []).append(rel)
-out, carrying = [], []
+out, carrying, gaps = [], [], []
 for app in sorted(owner):
     r = apps[app]
     ver, file, sha, icon, iconsha = r[1], r[2], r[3], r[5], r[6]
@@ -372,12 +372,26 @@ for app in sorted(owner):
         return next((a["name"] for a in (rel or {}).get("assets", [])
                      if (a.get("digest") or "").replace("sha256:", "") == want), None)
 
-    tag = app + "-" + ver
     rel = release_for(ver)
-    if rel is None or not stored(rel, sha):
-        print("the page has no %s row (it has %s); run page-sync for %s first"
-              % (tag, ", ".join(sorted(x.get("tag_name", "") for x in owner[app])), app))
-        raise SystemExit(3)
+    behind = rel is None or not stored(rel, sha)
+    if behind:
+        # This app's page row is behind the feed. Keep the newest version the page does carry, so one
+        # behind app cannot fail every other row; the caller names it and decides its own exit code.
+        rel = release_for(prev_ver) if prev_ver else None
+        if rel is None or not stored(rel, prev_sha):
+            print("the page has no %s row and no %s row either (%s); run page-sync for %s first"
+                  % (app + "-" + ver, app + "-" + prev_ver, ", ".join(sorted(x.get("tag_name", "") for x in owner[app])), app))
+            raise SystemExit(3)
+        out.append("\t".join([app, app + "-" + prev_ver, prev_file, stored(rel, prev_sha), prev_sha]))
+        if prev_icon:
+            if not prev_iconsha or not stored(rel, prev_iconsha):
+                print("the page's %s carries no %s with the feed's iconSha256" % (app + "-" + prev_ver, prev_icon))
+                raise SystemExit(3)
+            out.append("\t".join([app, app + "-" + prev_ver, prev_icon, stored(rel, prev_iconsha), prev_iconsha]))
+        gaps.append(app)
+        carrying.append(app)
+        continue
+    tag = app + "-" + ver
     out.append("\t".join([app, tag, file, stored(rel, sha), sha]))
     if icon:
         if not iconsha or not stored(rel, iconsha):
@@ -399,9 +413,11 @@ for app in sorted(owner):
 if not carrying:
     print("no app on the page is in the feed, so there is nothing to mirror"); raise SystemExit(3)
 open(names_out, "w").write("\n".join(out) + "\n")
+open(names_out + ".behind", "w").write(",".join(gaps))
 print(",".join(carrying))
 PY
 ) || refuse "$MIRROR_APPS"
+BEHIND=$(cat "$WORK/names.tsv.behind" 2>/dev/null || true)
 
 # The names table carries the name GitHub actually stored, so it is written from the readback above.
 pub 'K="$HOME/Library/KHUpdater"; mkdir -p "$K/page-sync" && cat > "$K/page-sync/names.tsv"' < "$WORK/names.tsv" \
@@ -411,6 +427,16 @@ MIRROR_OUT=$(pub "K=\"\$HOME/Library/KHUpdater\"; H=\"\$K/base/current\"; [ -x \
 \"\$H\" mirror --feed \"\$K/feed\" --key \"\$K/keys/private.key\" --out \"\$K/page-sync/release.json\" \
   --base '$MIRROR_BASE' --names \"\$K/page-sync/names.tsv\" --apps '$MIRROR_APPS'" 2>&1) \
   || refuse "the mirror build on $PUB_HOST failed: $(printf '%s' "$MIRROR_OUT" | tail -1)"
+# A page row behind is named once and does not fail the run — unless it is this run's own app, in
+# which case the operator asked for something the page cannot carry yet.
+if [ -n "$BEHIND" ]; then
+  for app in ${BEHIND//,/ }; do
+    if [ "$ALL" = 1 ] || [ "$app" = "$APP" ]; then
+      refuse "$app's page row is behind the feed ($BEHIND); run page-sync for $app once its release is on the page"
+    fi
+  done
+  ok "page rows behind the feed, kept as they are: $BEHIND"
+fi
 pub 'cat "$HOME/Library/KHUpdater/page-sync/release.json"' > "$WORK/release.json" \
   || refuse "cannot read the mirror file back from $PUB_HOST"
 [ -s "$WORK/release.json" ] || refuse "the mirror file read back from $PUB_HOST is empty"
@@ -436,24 +462,26 @@ def identity(entries):
     return sorted("%s|%s|%s|%s|%s" % (k, v["version"], v["sha256"], v["bytes"], v.get("tagline", ""))
                   for k, v in entries.items())
 # The feed carries apps the page has no row for (Hub, the updater helper); the mirror cannot name
-# them, so only the apps it carries are compared.
+# them, so only the apps it carries are compared. A row the page is behind on is compared against
+# the feed's previous entry, which is the version the mirror carries for it.
 for app, entry in mine["apps"].items():
     if app not in after["apps"]:
         continue
-    if identity({app: after["apps"][app]}) != identity({app: entry}):
+    want = after["apps"][app]
+    if want.get("version") != entry.get("version"):
+        want = (after.get("previous") or {}).get(app) or {}
+    if want.get("version") != entry.get("version") or identity({app: want}) != identity({app: entry}):
         print("the mirror does not name the feed's artifacts for %s" % app); raise SystemExit(3)
 # The page carries the same shape as the feed: previous entries ride in the same envelope, and the
 # network block keeps its public addresses. A dropped key is invisible in version/sha/bytes — the
 # same reason `tagline` is in the identity comparison — so each is checked by name.
 fed_prev, mine_prev = after.get("previous") or {}, mine.get("previous") or {}
-for app in mine["apps"]:
+for app, entry in mine["apps"].items():
     p = fed_prev.get(app)
-    if not p:
+    if not p or app in mine_prev:
         continue
-    if app not in mine_prev:
+    if entry.get("version") != p.get("version"):   # a behind app keeps its newest page row instead
         print("the mirror dropped the feed's previous entry for %s" % app); raise SystemExit(3)
-    if identity({app: p}) != identity({app: mine_prev[app]}):
-        print("the mirror does not name the feed's previous artifacts for %s" % app); raise SystemExit(3)
 fed_urls = (after.get("network") or {}).get("feedURLs") or []
 if fed_urls and ((mine.get("network") or {}).get("feedURLs") or []) != fed_urls:
     print("the mirror dropped the feed's network addresses"); raise SystemExit(3)

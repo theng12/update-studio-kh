@@ -130,4 +130,25 @@ func mirrorExportTests() {
                                base: base, names: names, apps: ["launcher", "updater"],
                                previousOmitted: { strictOmitted.append($0) })
     expect(strictOmitted.isEmpty, "MX21 the default still carries every previous entry")
+
+    // A page row behind the feed: the mirror keeps the newest version the page does carry, names it
+    // once, and the other apps still build — one behind app must not freeze the page.
+    let behindNames = root.appendingPathComponent("behind.tsv")
+    let behindRows = [
+        "app\ttag\tfeed file\tstored asset\tsha256",
+        "launcher\tlauncher-v0.1.64\told-launcher.dmg\tStudio Launcher KH 0.1.64.dmg\t\(oldSHA)",
+        "launcher\tlauncher-v0.1.64\told-icon.png\ticon-old.png\t\(iconSHA)",
+        "updater\thelper-v0.1.65\tdef-khu\tkhu\t\(updaterSHA)",
+    ]
+    try! Data((behindRows.joined(separator: "\n") + "\n").utf8).write(to: behindNames)
+    var behindSeen: [String] = []
+    let behindOut = root.appendingPathComponent("behind.json")
+    _ = try! FeedMirror.export(feedDir: feedDir, keyFile: keyFile, out: behindOut, base: base,
+                               names: behindNames, apps: ["launcher", "updater"],
+                               behind: { behindSeen.append($0) })
+    let behindFeed = try! JSON.decode(Feed.self, from: try! AtomicFile.readJSON(Release.self, from: behindOut)!.feedData!)
+    expect(behindSeen == ["launcher"], "MX22 a page row behind the feed is reported once, by app (\(behindSeen))")
+    expect(behindFeed.apps["launcher"]?.version == "0.1.64", "MX23 the behind app keeps the newest page row")
+    expect(behindFeed.previous?["launcher"] == nil, "MX24 the behind app's previous is not repeated as its own current")
+    expect(behindFeed.apps["updater"]?.version == "0.1.65", "MX25 the other apps still build")
 }

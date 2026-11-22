@@ -143,21 +143,27 @@ for line in open(opts["names"]):
     f = line.rstrip("\n").split("\t")
     if len(f) == 5: names[(f[0], f[2])] = (f[1], f[3])
 feed = json.loads(base64.b64decode(json.load(open(os.path.join(opts["feed"], "release.json")))["feed"]))
-out = {}
+out, behind = {}, []
 for app in opts["apps"].split(","):
     e = dict(feed["apps"][app])
-    if (app, e["file"]) not in names: sys.exit("fake khu: no row for " + app)
+    p = (feed.get("previous") or {}).get(app)
+    if (app, e["file"]) not in names:
+        # A page row behind the feed: the mirror keeps the newest version the page does carry.
+        if not p or (app, p["file"]) not in names: sys.exit("fake khu: no row for " + app)
+        e = dict(p); behind.append(app)
     tag, stored = names[(app, e["file"])]
     e["file"], e["url"] = stored, opts["base"] + "/" + tag + "/" + stored
     if e.get("icon"): e["icon"] = names[(app, e["icon"])][1]
     e.pop("delta", None)
     out[app] = e
+for app in behind:
+    print("behind: %s — the page has no row for the feed's version, so its newest page row is mirrored." % app)
 body = {"schema": feed["schema"], "published_at": feed["published_at"], "apps": out}
 if not opts.get("current"):
     prev = {}
     for app in opts["apps"].split(","):
         p = (feed.get("previous") or {}).get(app)
-        if not p or (app, p["file"]) not in names: continue
+        if not p or app in behind or (app, p["file"]) not in names: continue
         q = dict(p); tag, stored = names[(app, p["file"])]
         q["file"], q["url"] = stored, opts["base"] + "/" + tag + "/" + stored
         if q.get("icon") and (app, q["icon"]) in names: q["icon"] = names[(app, q["icon"])][1]
@@ -394,6 +400,45 @@ def case_mirror_keeps_public_network_and_refuses_a_drop():
         fx.close()
 
 
+def case_behind_app_on_another_row_does_not_fail_the_run():
+    # beta's page row is a release behind the feed; alpha is current. Syncing alpha must build and
+    # must not be stopped by beta — one behind app freezes nothing.
+    doc = two_apps()
+    doc["apps"]["beta"] = entry("2.0.1", "bbb-Beta Studio KH-2.0.1.dmg", BETA_DMG, "bbb-icon.png", BETA_ICON)
+    doc["previous"] = {"beta": {"version": "2.0.0", "file": "bbb-Beta Studio KH-2.0.0.dmg",
+                                "sha256": sha(BETA_DMG), "bytes": len(BETA_DMG)}}
+    fx = Fixture(doc, beta_on_page(alpha_previous=True), artifacts())
+    try:
+        r = fx.run(["--app", "alpha", "--accepted", sha(ALPHA_DMG)])
+        check(r.returncode == 0, f"another app's behind row must not fail this run\n{r.stdout}\n{r.stderr}")
+        check("kept as they are: beta" in r.stdout, f"the gap must be named once\n{r.stdout}")
+        doc_committed = fx.committed()
+        check(doc_committed["apps"]["beta"]["version"] == "2.0.0",
+              f"beta keeps the page's newest row: {doc_committed['apps']['beta']}")
+    finally:
+        fx.close()
+
+
+def case_all_mode_refuses_an_app_it_cannot_carry():
+    # Asking for every app means every app must reach the page. A run asked for an app the page
+    # cannot be given fails naming it — here at its artifact, before the mirror, which is earlier
+    # and more precise than the mirror's own check. A single-app run is never stopped by another
+    # app's row (the case above), which is the failure this change exists to remove.
+    doc = two_apps()
+    doc["apps"]["beta"] = entry("2.0.1", "bbb-Beta Studio KH-2.0.1.dmg", b"beta 2.0.1 bytes",
+                                "bbb-icon.png", BETA_ICON)
+    fx = Fixture(doc, beta_on_page(alpha_previous=True), artifacts())
+    try:
+        accepted = fx.dir / "accepted.tsv"
+        accepted.write_text(f"alpha\t{sha(ALPHA_DMG)}\nbeta\t{sha(b'beta 2.0.1 bytes')}\n")
+        r = fx.run(["--all", "--accepted-file", str(accepted)])
+        check(r.returncode == 5, f"an app the page cannot be given must refuse (got {r.returncode})\n{r.stdout}")
+        check("beta stopped at step 10" in r.stdout or "beta" in r.stdout,
+              f"it must name the app that could not be carried\n{r.stdout}")
+    finally:
+        fx.close()
+
+
 def case_artifact_hash_mismatch_refuses_before_upload():
     fx = Fixture(two_apps(), beta_on_page(), dict(artifacts(), **{"aaa-Alpha Studio KH-1.0.1.dmg": b"wrong bytes"}))
     try:
@@ -550,6 +595,7 @@ def case_bundle_id_naming_the_owner_is_not_a_leak():
 CASES = [case_happy_path_and_stored_name, case_digest_mismatch_retires_nothing,
          case_keeps_previous_and_mirrors_it, case_mirror_that_drops_previous_refuses,
          case_mirror_keeps_public_network_and_refuses_a_drop,
+         case_behind_app_on_another_row_does_not_fail_the_run, case_all_mode_refuses_an_app_it_cannot_carry,
          case_artifact_hash_mismatch_refuses_before_upload,
          case_unaccepted_sha_touches_nothing, case_mirror_staleness_refuses,
          case_second_run_changes_nothing, case_app_without_icon_skips,

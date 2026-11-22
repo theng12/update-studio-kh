@@ -261,11 +261,16 @@ struct KHUMain {
             let ids = apps.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             do {
                 var omitted: [String] = []
+                var behind: [String] = []
                 let written = try FeedMirror.export(feedDir: URL(fileURLWithPath: feed), keyFile: URL(fileURLWithPath: key),
                                                     out: URL(fileURLWithPath: out), base: base,
                                                     names: URL(fileURLWithPath: names), apps: ids,
-                                                    currentOnly: currentOnly, previousOmitted: { omitted.append($0) })
+                                                    currentOnly: currentOnly, previousOmitted: { omitted.append($0) },
+                                                    behind: { behind.append($0) })
                 for line in written { print("\(line.app) \(line.version): \(line.url) — \(line.bytes) bytes") }
+                for app in behind.sorted() {
+                    print("behind: \(app) — the page has no row for the feed's version, so its newest page row is mirrored.")
+                }
                 for app in omitted.sorted() {
                     print("previous omitted for \(app): the page does not carry that version's assets.")
                 }
