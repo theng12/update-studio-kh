@@ -256,9 +256,11 @@ func mirrorFeedTests() {
         expect(refused?.exitCode != 0 && (refused?.stderr ?? "").contains("not an app this fleet publishes")
                && FeedPublisher.loadFeed(from: rig.feed)?.apps["printer"] == nil,
                "MF8 a wrong publish id is refused and creates no entry")
+        // A fleet publish names a complete row: label and both words.
         let created = try? SystemShell().run(khu, arguments: ["publish", "--feed", rig.feed.path, "--key", rig.key.path,
                                                               "--app", "printer", "--version", "1.0.0", "--artifact", art,
-                                                              "--kind", "fake-for-tests", "--changelog", log.path, "--new-app"], timeout: 20)
+                                                              "--kind", "fake-for-tests", "--changelog", log.path, "--new-app",
+                                                              "--type", "utility", "--tagline", "t", "--description", "d"], timeout: 20)
         expect(created?.exitCode == 0 && FeedPublisher.isKnownApp("printer", in: rig.feed),
                "MF8 --new-app publishes a genuinely new app")
         // The CLI path, exactly as the owner will run it on the publisher host.

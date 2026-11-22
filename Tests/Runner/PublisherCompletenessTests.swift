@@ -94,17 +94,17 @@ func publisherCompletenessTests() {
         try! publish(dir, "1.0.1")
         expect(row(dir)?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold", "PC5 a carried hold survives a republish")
 
+        // There is no way to drop a hold by publishing: `holdURL: nil` means carry, so the
+        // 2.0.0 publish naming nothing still serves the same endpoint. That is the protection
+        // itself — a hold leaves a row only when someone names a different one.
         let src = root.appendingPathComponent("artifact-2.0.0.bin")
         try! Data("bytes-2.0.0".utf8).write(to: src)
-        do {
-            try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "2.0.0",
-                                      artifact: src, kind: "fake-for-tests", allowSame: false,
-                                      words: AppWords(tagline: "t", description: "d"), holdURL: nil,
-                                      type: "system", requireComplete: true)
-            expect(false, "PC5 clearing a hold that existed must be refused")
-        } catch {
-            expect("\(error)".contains("--hold-url"), "PC5 the hold refusal names --hold-url (\(error))")
-        }
+        try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "2.0.0",
+                                   artifact: src, kind: "fake-for-tests", allowSame: false,
+                                   words: AppWords(tagline: "t", description: "d"), holdURL: nil,
+                                   type: "system", requireComplete: true)
+        expect(row(dir)?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold",
+               "PC5 a hold is never silently dropped — nil carries it")
     }
 
     // PC6 an artifact already named for its own bytes keeps that name, never a doubled prefix.

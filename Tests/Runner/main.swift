@@ -2808,7 +2808,9 @@ func launcherTests() {
         expect(typed?.exitCode != 0 && typed?.stderr.contains("--notes is gone") == true, "W5 free-typed notes are refused")
         expect(wrong?.exitCode != 0 && wrong?.stderr.contains("is 1.1.0, not 1.2.0") == true && FeedPublisher.loadFeed(from: rig.feed)?.apps["w"] == nil,
                "W5 a changelog on another version publishes nothing")
-        let done = publish(["--changelog", good.path, "--note", "One extra"])
+        // A fleet publish must name a complete row: label and both words, like release-push does.
+        let done = publish(["--changelog", good.path, "--note", "One extra", "--type", "system",
+                            "--tagline", "Every Mac, current.", "--description", "Keeps the fleet up to date."])
         expect(done?.exitCode == 0 && FeedPublisher.loadFeed(from: rig.feed)?.apps["w"]?.notes == "- First\n- Second\n- One extra", "W5 the right changelog is signed into the feed")
 
         // The SSD says what the feed says, and any other version says its own entry.
