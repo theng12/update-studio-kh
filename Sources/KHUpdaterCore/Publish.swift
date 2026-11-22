@@ -199,6 +199,14 @@ public enum FeedPublisher {
             let retiringPriors = feed.previous
             let (sha, bytes) = try Signing.sha256Hex(fileAt: artifact)
             guard bytes > 0 else { throw khuFail("\(artifact.path) is empty") }
+            // One published version is one artifact, forever. `--allow-same` exists to fix a row or
+            // its words, not to swap the bytes a version already names: a Mac that fetched the old
+            // bytes would never be offered the new ones under the same version.
+            if let existing = feed.apps[app], VersionCompare.compare(version, existing.version) == 0,
+               existing.sha256 != sha {
+                throw khuFail("refused \(version): --allow-same re-publishes a version only with its own bytes — "
+                              + "the feed has \(existing.sha256), this artifact is \(sha). Bump the version.")
+            }
             let base = String(try SafeName.component(artifact.lastPathComponent, what: "artifact").prefix(100))
             // A file already named for its own bytes — the artifact as it sits in artifacts/ — keeps
             // its name. Prefixing it again produced f4f8af7b9770-f4f8af7b9770-… and retired the
@@ -351,6 +359,38 @@ public enum FeedPublisher {
                                   + "moved to the Trash: \(error). Publishing any app again finishes this retirement.")
                 }
             }
+        }
+    }
+
+    /// A metadata-only update: rewrites one row's words or label under the publish lock, with no
+    /// artifact and no version. The row keeps its version, file, sha256, bytes, icon, hold, delta and
+    /// any unknown fields — only the named fields change. `published_at` moves strictly forward so an
+    /// agent's rollback guard still accepts the feed. This is how a lost tagline or label is fixed
+    /// without rebuilding a version that is already published.
+    public static func setMetadata(feedDir: URL, keyFile: URL, app: String, words: AppWords?, type: String?,
+                                   now: Date = Date()) throws {
+        _ = try SafeName.component(app, what: "app id")
+        if let type { try FeedPublisher.validateAppType(type) }
+        let key = try Signing.loadPrivateKey(from: keyFile)
+        try FileLock.withExclusive(feedDir.appendingPathComponent("publish.lock")) {
+            guard var feed = try loadVerifiedFeed(from: feedDir, publicKey: key.publicKey) else {
+                throw khuFail("refused: the feed at \(feedDir.path) has no verified release")
+            }
+            guard var entry = feed.apps[app] else {
+                throw khuFail("refused: the feed has no \(app) row; publish an artifact first")
+            }
+            // A named word replaces only itself, exactly as a publish does.
+            if let words {
+                if let v = words.tagline { entry.tagline = v }
+                if let v = words.description { entry.description = v }
+                if let v = words.features { entry.features = v }
+                if let v = words.accent { entry.accent = v }
+            }
+            if let type { entry.type = type }
+            feed.apps[app] = entry
+            let previous = feed.publishedAt ?? .distantPast
+            feed.published_at = ISO.string(max(now, previous.addingTimeInterval(0.001)))
+            try saveFeed(try feed.validated(), to: feedDir, key: key)
         }
     }
 

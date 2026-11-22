@@ -7,7 +7,8 @@ import CryptoKit
 func publisherCompletenessTests() {
     let root = tmpDir("publisher-complete")
     let keyFile = root.appendingPathComponent("fixture.key")
-    try! Signing.savePrivateKey(Curve25519.Signing.PrivateKey(), to: keyFile)
+    let key = Curve25519.Signing.PrivateKey()
+    try! Signing.savePrivateKey(key, to: keyFile)
 
     func feedDir(_ tag: String) -> URL {
         let dir = root.appendingPathComponent(tag)
@@ -15,22 +16,25 @@ func publisherCompletenessTests() {
         return dir
     }
     func publish(_ dir: URL, _ version: String, type: String? = "system", words: AppWords? = nil,
-                 holdURL: String? = nil, complete: Bool = true) {
+                 holdURL: String? = nil, complete: Bool = true, allowSame: Bool = false) throws {
         let src = root.appendingPathComponent("artifact-\(version).bin")
         try Data("bytes-\(version)".utf8).write(to: src)
-        try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: version,
-                                   artifact: src, kind: "fake-for-tests", allowSame: false,
-                                   words: words, holdURL: holdURL, type: type,
-                                   requireComplete: complete)
+        try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: version,
+                                  artifact: src, kind: "fake-for-tests", allowSame: allowSame,
+                                  words: words, holdURL: holdURL, type: type,
+                                  requireComplete: complete)
+    }
+    func feed(_ dir: URL) -> Feed? {
+        (try? FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)) ?? nil
     }
     func row(_ dir: URL, _ app: String = "launcher") -> FeedApp? {
-        (try? FeedPublisher.loadVerifiedFeed(from: dir, publicKey: try! Signing.loadPrivateKey(from: keyFile).publicKey))??.apps[app]
+        feed(dir)?.apps[app]
     }
 
     // PC1 a complete row publishes and keeps exactly what it named.
     do {
         let dir = feedDir("complete")
-        publish(dir, "1.0.0", words: AppWords(tagline: "Every app, installed.", description: "Installs and keeps every KH Studio app current."))
+        try! publish(dir, "1.0.0", words: AppWords(tagline: "Every app, installed.", description: "Installs and keeps every KH Studio app current."))
         let e = row(dir)
         expect(e?.type == "system", "PC1a a complete row publishes with its label")
         expect(e?.tagline == "Every app, installed." && e?.description == "Installs and keeps every KH Studio app current.",
@@ -45,7 +49,7 @@ func publisherCompletenessTests() {
     ] as [(String, String?, AppWords, String)] {
         let dir = feedDir("missing-" + label)
         do {
-            publish(dir, "1.0.0", type: type, words: words)
+            try publish(dir, "1.0.0", type: type, words: words)
             expect(false, "PC2 a row with no \(label) must be refused")
         } catch {
             expect("\(error)".contains(wanted), "PC2 the \(label) refusal names \(wanted) (\(error))")
@@ -57,9 +61,9 @@ func publisherCompletenessTests() {
     // PC3 a carried value never triggers it: a complete row republished naming no flags still passes.
     do {
         let dir = feedDir("carried")
-        publish(dir, "1.0.0", words: AppWords(tagline: "t", description: "d"))
+        try! publish(dir, "1.0.0", words: AppWords(tagline: "t", description: "d"))
         do {
-            publish(dir, "1.0.1")
+            try publish(dir, "1.0.1")
             expect(row(dir)?.tagline == "t" && row(dir)?.description == "d" && row(dir)?.type == "system",
                    "PC3 a republish naming no flags carries label and words")
         } catch {
@@ -70,15 +74,15 @@ func publisherCompletenessTests() {
     // PC4 a named word replaces only itself; the others survive. This is the defect that emptied rows.
     do {
         let dir = feedDir("merge")
-        publish(dir, "1.0.0", words: AppWords(tagline: "old tagline", description: "old description",
-                                                  accent: "#112233"))
-        publish(dir, "1.0.1", words: AppWords(tagline: "new tagline"))
+        try! publish(dir, "1.0.0", words: AppWords(tagline: "old tagline", description: "old description",
+                                                   accent: "#112233"))
+        try! publish(dir, "1.0.1", words: AppWords(tagline: "new tagline"))
         let e = row(dir)
         expect(e?.tagline == "new tagline", "PC4 the named tagline is written")
         expect(e?.description == "old description", "PC4 the unnamed description survives")
         expect(e?.accent == "#112233", "PC4 the unnamed accent survives")
         // The other direction too: a description-only publish leaves the tagline intact.
-        publish(dir, "1.0.2", words: AppWords(description: "newer description"))
+        try! publish(dir, "1.0.2", words: AppWords(description: "newer description"))
         expect(row(dir)?.description == "newer description" && row(dir)?.tagline == "new tagline",
                "PC4 a description-only publish leaves the tagline intact")
     }
@@ -86,12 +90,12 @@ func publisherCompletenessTests() {
     // PC5 a row that already served a hold keeps one without naming it; dropping it is refused.
     do {
         let dir = feedDir("hold")
-        publish(dir, "1.0.0", words: AppWords(tagline: "t", description: "d"), holdURL: "http://100.64.0.7:8790/hold")
-        publish(dir, "1.0.1")
+        try! publish(dir, "1.0.0", words: AppWords(tagline: "t", description: "d"), holdURL: "http://100.64.0.7:8790/hold")
+        try! publish(dir, "1.0.1")
         expect(row(dir)?.holdURL == "http://100.64.0.7:8790/hold", "PC5 a carried hold survives a republish")
 
         let src = root.appendingPathComponent("artifact-2.0.0.bin")
-        try Data("bytes-2.0.0".utf8).write(to: src)
+        try! Data("bytes-2.0.0".utf8).write(to: src)
         do {
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "2.0.0",
                                       artifact: src, kind: "fake-for-tests", allowSame: false,
@@ -109,11 +113,11 @@ func publisherCompletenessTests() {
         let bytes = Data("already-named".utf8)
         let sha = Signing.sha256Hex(bytes)
         let src = root.appendingPathComponent("\(sha.prefix(12))-payload.bin")
-        try bytes.write(to: src)
-        try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "1.0.0",
-                                  artifact: src, kind: "fake-for-tests", allowSame: false,
-                                  words: AppWords(tagline: "t", description: "d"), type: "system",
-                                  requireComplete: true)
+        try! bytes.write(to: src)
+        try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "1.0.0",
+                                   artifact: src, kind: "fake-for-tests", allowSame: false,
+                                   words: AppWords(tagline: "t", description: "d"), type: "system",
+                                   requireComplete: true)
         expect(row(dir)?.file == "\(sha.prefix(12))-payload.bin",
                "PC6 the stored name is the basename it was given (\(row(dir)?.file ?? "none"))")
     }
@@ -123,7 +127,7 @@ func publisherCompletenessTests() {
     // `updater` are exempt by name, so this uses an id the registry marks hold-serving.
     do {
         let dir = feedDir("registry")
-        try Data(#"["story"]"#.utf8).write(to: dir.appendingPathComponent("hold-apps.json"))
+        try! Data(#"["story"]"#.utf8).write(to: dir.appendingPathComponent("hold-apps.json"))
         func publishStory(_ version: String, holdURL: String? = nil, holdSince: String? = nil) throws {
             let src = root.appendingPathComponent("story-\(version).bin")
             try Data("story-\(version)".utf8).write(to: src)
@@ -158,7 +162,7 @@ func publisherCompletenessTests() {
     do {
         let dir = feedDir("extension")
         let src = root.appendingPathComponent("extension.zip")
-        try Data("extension-bytes".utf8).write(to: src)
+        try! Data("extension-bytes".utf8).write(to: src)
         do {
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "ext-one", version: "1.0.0",
                                       artifact: src, kind: "extension", allowSame: false,
@@ -167,6 +171,65 @@ func publisherCompletenessTests() {
                    "PC7 an extension row publishes without the app-only fields")
         } catch {
             expect(false, "PC7 an extension row must not be judged as an incomplete app (\(error))")
+        }
+    }
+
+    // PC9 a metadata-only update changes one word and nothing else: version, file, sha256, bytes,
+    // the unknown fields and the other words all survive, and published_at moves strictly forward.
+    do {
+        let dir = feedDir("meta")
+        let sha = String(repeating: "b", count: 64)
+        let json = """
+        {"schema":1,"published_at":"2026-11-22T10:00:00Z",
+         "apps":{"launcher":{"version":"1.2.3","file":"kept.bin","sha256":"\(sha)","bytes":42,
+           "kind":"app-dmg","type":"system","tagline":"old tagline","description":"old description",
+           "futureField":{"values":[1,true]}}}}
+        """
+        let data = Data(json.utf8)
+        let release = Release(feed: data, signature: try! Signing.sign(data, with: key))
+        try! AtomicFile.writeJSON(release, to: FeedPublisher.releaseFile(in: dir))
+        let before = feed(dir)
+        try! FeedPublisher.setMetadata(feedDir: dir, keyFile: keyFile, app: "launcher",
+                                       words: AppWords(tagline: "new tagline"), type: nil)
+        let after = feed(dir)
+        let e = after?.apps["launcher"]
+        expect(e?.tagline == "new tagline" && e?.description == "old description",
+               "PC9 a metadata update replaces only the word it names")
+        expect(e?.version == before?.apps["launcher"]?.version && e?.file == "kept.bin"
+               && e?.sha256 == sha && e?.bytes == 42,
+               "PC9 version, file, sha256 and bytes are untouched")
+        expect(e?.extras["futureField"] != nil, "PC9 unknown row fields survive a metadata update")
+        expect(after.map { $0.published_at > (before?.published_at ?? "") } ?? false,
+               "PC9 published_at moves strictly forward")
+        do {
+            try FeedPublisher.setMetadata(feedDir: dir, keyFile: keyFile, app: "nosuch",
+                                          words: AppWords(tagline: "x"), type: nil)
+            expect(false, "PC9 a metadata update of an app the feed does not name is refused")
+        } catch {
+            expect("\(error)".contains("no nosuch row"), "PC9 the refusal names the missing row (\(error))")
+        }
+    }
+
+    // PC10 --allow-same re-publishes a version only with its own bytes: the same bytes pass, a
+    // different artifact under the same version is refused by name.
+    do {
+        let dir = feedDir("same")
+        try! publish(dir, "1.0.0", words: AppWords(tagline: "t", description: "d"))
+        let sha = row(dir)?.sha256
+        try! publish(dir, "1.0.0", words: AppWords(tagline: "t2", description: "d"), allowSame: true)
+        expect(row(dir)?.sha256 == sha && row(dir)?.tagline == "t2",
+               "PC10 the same bytes republish the same version")
+        let other = root.appendingPathComponent("different.bin")
+        try! Data("different bytes".utf8).write(to: other)
+        do {
+            try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "1.0.0",
+                                      artifact: other, kind: "fake-for-tests", allowSame: true,
+                                      words: AppWords(tagline: "t", description: "d"),
+                                      type: "system", requireComplete: true)
+            expect(false, "PC10 different bytes under a published version must be refused")
+        } catch {
+            expect("\(error)".contains("--allow-same"), "PC10 the refusal names --allow-same (\(error))")
+            expect(row(dir)?.sha256 == sha, "PC10 the refusal left the row's bytes unchanged")
         }
     }
 }

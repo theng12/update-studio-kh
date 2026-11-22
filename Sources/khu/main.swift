@@ -137,7 +137,7 @@ struct KHUMain {
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, type: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
             var keep: Int?
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil, security = false
-            var newApp = false
+            var newApp = false, metaOnly = false
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -153,6 +153,7 @@ struct KHUMain {
                 case "--note": extra = value("--note", &i)
                 case "--notes": fail("--notes is gone: the notes come from --changelog, plus one optional --note line")
                 case "--allow-same": allowSame = true
+                case "--meta-only": metaOnly = true
                 case "--name": shown = value("--name", &i)
                 case "--main-mac-only": mainOnly = true
                 case "--hold-url": hold = value("--hold-url", &i)
@@ -173,7 +174,29 @@ struct KHUMain {
                 }
                 i += 1
             }
-            guard let f = feed, let k = key, let a = app, let v = version, let art = artifact else { usage() }
+            guard let f = feed, let k = key, let a = app else { usage() }
+            // A metadata-only update fixes a row that is already published: its words or label,
+            // never its version or bytes. It is refused if nothing is named, and it cannot carry
+            // the artifact-side flags.
+            if metaOnly {
+                guard wordsGiven || type != nil else {
+                    fail("--meta-only needs at least one of --tagline, --description, --feature, --accent or --type")
+                }
+                guard version == nil, artifact == nil, changelog == nil, kind == nil, hold == nil, holdSince == nil, shown == nil else {
+                    fail("--meta-only changes only the row's words and type; drop --version/--artifact/--changelog/--kind/--hold-url/--hold-since/--name")
+                }
+                do {
+                    let feedDir = URL(fileURLWithPath: f)
+                    guard FeedPublisher.isKnownApp(a, in: feedDir, allowNew: false) else {
+                        fail("\(a) is not an app this feed names")
+                    }
+                    try FeedPublisher.setMetadata(feedDir: feedDir, keyFile: URL(fileURLWithPath: k),
+                                                  app: a, words: wordsGiven ? words : nil, type: type)
+                    print("updated \(a) metadata")
+                } catch { fail("\(error)") }
+                return
+            }
+            guard let v = version, let art = artifact else { usage() }
             guard let changelog else { fail("publish needs --changelog <repo or CHANGELOG.md>: the notes come from its top entry") }
             if let type, !FeedPublisher.appTypes.contains(type) {
                 fail("--type must be business, entertainment, extension, media, plugin, system or utility, not \(type)")
