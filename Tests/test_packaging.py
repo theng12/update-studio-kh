@@ -642,9 +642,12 @@ try:
     check(called.endswith("base/current"),
           "release-push publishes with the host's current helper, not a stale bin/khu copy (%s)" % called)
     (kh / "base/current").unlink()
-    _, called = push_run()
-    check(called.endswith("bin/khu"),
-          "release-push falls back to bin/khu when the host has no current pointer (%s)" % called)
+    result, called = push_run()
+    check(result.returncode != 0 and called == "",
+          "release-push refuses a host with no current pointer instead of using bin/khu (rc=%d, called=%r)"
+          % (result.returncode, called))
+    check("bin/khu" in result.stderr and "base/current" in result.stderr,
+          "the refusal names both paths, so the host is fixable from the message")
     (kh / "bin/khu").unlink()
     result, called = push_run()
     check(result.returncode != 0 and called == "",

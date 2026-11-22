@@ -4084,6 +4084,7 @@ struct RunnerMain {
             controllerHandoffTests()
             feedMirrorTests()
             feedHostRuntimeTests()
+            feedLosslessTests()
             feedHostTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
@@ -4218,6 +4219,7 @@ struct RunnerMain {
         pinnedKeyTests()
         publicFeedTests()
         feedHostRuntimeTests()
+        feedLosslessTests()
         // Signing basics stay covered.
         let key = Signing.generateKeyPair()
         let data = Data("hello".utf8)

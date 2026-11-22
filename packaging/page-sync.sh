@@ -423,7 +423,7 @@ BEHIND=$(cat "$WORK/names.tsv.behind" 2>/dev/null || true)
 pub 'K="$HOME/Library/KHUpdater"; mkdir -p "$K/page-sync" && cat > "$K/page-sync/names.tsv"' < "$WORK/names.tsv" \
   || refuse "cannot write the names table on $PUB_HOST"
 # No --current-only: the page keeps current + previous, like the rest of the estate.
-MIRROR_OUT=$(pub "K=\"\$HOME/Library/KHUpdater\"; H=\"\$K/base/current\"; [ -x \"\$H\" ] || H=\"\$K/bin/khu\"
+MIRROR_OUT=$(pub "K=\"\$HOME/Library/KHUpdater\"; H=\"\$K/base/current\"; [ -x \"\$H\" ] || { echo \"page-sync: \$H is missing or not executable; refusing to fall back to \$K/bin/khu, a copy that can lag the installed version. Repair base/current on this host.\" >&2; exit 1; }
 \"\$H\" mirror --feed \"\$K/feed\" --key \"\$K/keys/private.key\" --out \"\$K/page-sync/release.json\" \
   --base '$MIRROR_BASE' --names \"\$K/page-sync/names.tsv\" --apps '$MIRROR_APPS'" 2>&1) \
   || refuse "the mirror build on $PUB_HOST failed: $(printf '%s' "$MIRROR_OUT" | tail -1)"

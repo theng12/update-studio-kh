@@ -46,10 +46,11 @@ SSH=(ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=10 "$HOST")
 "${SSH[@]}" "mkdir -p ~/$STAGE/changelogs"
 scp -i "$KEY" -o BatchMode=yes "$DMG" "$HOST:$STAGE/$BASE"
 scp -i "$KEY" -o BatchMode=yes "$LOG" "$HOST:$STAGE/changelogs/$APP.md"
-# base/current moves with the agent's own updates; bin/khu is a copy that can fall behind.
+# base/current moves with the agent's own updates; bin/khu is a copy that can fall behind, so it is
+# never used instead: a missing base/current is refused by name, both paths, and the host is fixed.
 # A genuinely new app says so once (`KHU_NEW_APP=1`); otherwise the host refuses an id it does not
 # know, so a mistyped one cannot become a second app beside the real one.
-"${SSH[@]}" "K=\$HOME/Library/KHUpdater; H=\"\$K/base/current\"; [ -x \"\$H\" ] || H=\"\$K/bin/khu\"; \"\$H\" publish --feed \"\$K/feed\" --key \"\$K/keys/private.key\" \
+"${SSH[@]}" "K=\$HOME/Library/KHUpdater; H=\"\$K/base/current\"; [ -x \"\$H\" ] || { echo \"release-push: \$H is missing or not executable; refusing to fall back to \$K/bin/khu, a copy that can lag the installed version. Repair base/current on this host.\" >&2; exit 1; }; \"\$H\" publish --feed \"\$K/feed\" --key \"\$K/keys/private.key\" \
   --app '$APP' --version '$VERSION' --artifact \"\$HOME/$STAGE/$BASE\" --changelog \"\$HOME/$STAGE/changelogs/$APP.md\" \
   ${KIND:+--kind '$KIND'} ${TYPE:+--type '$TYPE'} ${KHU_NEW_APP:+--new-app}"
 
