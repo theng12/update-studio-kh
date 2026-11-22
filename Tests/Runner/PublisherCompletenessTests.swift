@@ -90,9 +90,9 @@ func publisherCompletenessTests() {
     // PC5 a row that already served a hold keeps one without naming it; dropping it is refused.
     do {
         let dir = feedDir("hold")
-        try! publish(dir, "1.0.0", words: AppWords(tagline: "t", description: "d"), holdURL: "http://100.64.0.7:8790/hold")
+        try! publish(dir, "1.0.0", words: AppWords(tagline: "t", description: "d"), holdURL: "http://127.0.0.1:8790/api/maintenance/hold")
         try! publish(dir, "1.0.1")
-        expect(row(dir)?.holdURL == "http://100.64.0.7:8790/hold", "PC5 a carried hold survives a republish")
+        expect(row(dir)?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold", "PC5 a carried hold survives a republish")
 
         let src = root.appendingPathComponent("artifact-2.0.0.bin")
         try! Data("bytes-2.0.0".utf8).write(to: src)
@@ -144,17 +144,17 @@ func publisherCompletenessTests() {
             expect("\(error)".contains("--hold-url"), "PC8 the hold refusal names --hold-url (\(error))")
         }
         do {
-            try publishStory("1.0.0", holdURL: "http://100.64.0.7:8790/hold")
+            try publishStory("1.0.0", holdURL: "http://127.0.0.1:8790/api/maintenance/hold")
             expect(false, "PC8 a hold-serving app with no hold-since must be refused")
         } catch {
             expect("\(error)".contains("--hold-since"), "PC8 the refusal names --hold-since (\(error))")
         }
-        try! publishStory("1.0.0", holdURL: "http://100.64.0.7:8790/hold", holdSince: "0.9.0")
-        expect(row(dir, "story")?.holdURL == "http://100.64.0.7:8790/hold"
+        try! publishStory("1.0.0", holdURL: "http://127.0.0.1:8790/api/maintenance/hold", holdSince: "0.9.0")
+        expect(row(dir, "story")?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold"
                && row(dir, "story")?.holdSince == "0.9.0", "PC8 the pair is written as named")
         // A carried pair survives a republish that names neither.
         try! publishStory("1.0.1")
-        expect(row(dir, "story")?.holdURL == "http://100.64.0.7:8790/hold"
+        expect(row(dir, "story")?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold"
                && row(dir, "story")?.holdSince == "0.9.0", "PC8 the pair is carried")
     }
 
