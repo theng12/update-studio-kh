@@ -115,6 +115,24 @@ func feedGeneratorTests() {
         expect(feed.apps.keys.sorted() == ["story"], "FG4 a repo with no published release contributes no row")
     } catch { expect(false, "FG4 fixture: \(error)") }
 
+    // FG6 the encoder is byte-stable: the same inputs at the same moment produce the same bytes,
+    // so "already equal" means the encoder agrees, not that the clock changed.
+    do {
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(tag: "0.6.257", asset: "Hub.dmg", sha: sha, bytes: 7, digest: "sha256:\(sha)"),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        let moment = Date(timeIntervalSince1970: 1_800_000_000)
+        let key = Curve25519.Signing.PrivateKey()
+        let keyFile = tmpDir("feed-stable").appendingPathComponent("stable.key")
+        try! Signing.savePrivateKey(key, to: keyFile)
+        let first = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: moment), keyFile: keyFile)
+        let second = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: moment), keyFile: keyFile)
+        expect(first == second, "FG6 the signed feed is byte-stable for the same inputs and the same moment")
+        let later = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: moment.addingTimeInterval(1)), keyFile: keyFile)
+        expect(first != later, "FG6 a later generation changes published_at and therefore the bytes")
+    } catch { expect(false, "FG6 fixture: \(error)") }
+
     // FG5 an asset GitHub gives no digest for is refused, never hashed locally into the feed.
     do {
         let gh = FakeGitHub(paths: [
