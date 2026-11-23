@@ -46,6 +46,13 @@ struct KHUMain {
             limit.rlim_cur = min(4096, limit.rlim_max)
             _ = setrlimit(RLIMIT_NOFILE, &limit)
         }
+        // Test seam: one exchange and exit, so a test can kill a child exactly inside the swap
+        // window. Nothing in the app sets this variable.
+        if let spec = ProcessInfo.processInfo.environment["KHU_EXCHANGE_FIXTURE"] {
+            let parts = spec.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { exit(64) }
+            exit(Recipe.exchange(parts[0], parts[1]) ? 0 : 3)
+        }
         let args = Array(CommandLine.arguments.dropFirst())
         func usage() -> Never {
             FileHandle.standardError.write(Data("""

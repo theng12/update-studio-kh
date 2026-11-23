@@ -33,4 +33,51 @@ func atomicPromoteTests() {
         let still = (try? String(contentsOf: only.appendingPathComponent("marker"), encoding: .utf8)) ?? ""
         expect(still == "only", "AP2 a refused exchange leaves the existing bundle exactly as it was (\(still))")
     } catch { expect(false, "AP2 fixture: \(error)") }
+
+    // AP3/AP4 a kill inside the swap window. The child performs one exchange and is killed either
+    // just before or just after the rename — the window an interrupted install occupies. Either way
+    // the app at the installed path is whole and still launches: it is the old one or the new one,
+    // never neither, which is the failure this fix exists to remove.
+    func fixture(_ dir: URL, _ text: String) throws {
+        try fm.createDirectory(at: dir.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: dir.appendingPathComponent("marker"))
+        let run = dir.appendingPathComponent("Contents/MacOS/App")
+        try Data("#!/bin/sh\necho \(text)\n".utf8).write(to: run)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: run.path)
+    }
+    func child(staged: URL, installed: URL, kill: String) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "build/khu")
+        var env = ProcessInfo.processInfo.environment
+        env["KHU_EXCHANGE_FIXTURE"] = staged.path + "|" + installed.path
+        env["KHU_TEST_EXCHANGE_KILL"] = kill
+        p.environment = env
+        try? p.run(); p.waitUntilExit()
+        return p.terminationStatus
+    }
+    func launches(_ dir: URL) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = [dir.appendingPathComponent("Contents/MacOS/App").path]
+        let pipe = Pipe(); p.standardOutput = pipe
+        guard (try? p.run()) != nil else { return false }
+        p.waitUntilExit()
+        return p.terminationStatus == 0 && !(pipe.fileHandleForReading.readDataToEndOfFile().isEmpty)
+    }
+    for killPoint in ["before", "after"] {
+        do {
+            let root = tmpDir("atomic-kill-\(killPoint)")
+            let staged = root.appendingPathComponent("Staged.app")
+            let installed = root.appendingPathComponent("Applications/Target.app")
+            try fixture(staged, "new"); try fixture(installed, "old")
+            let status = child(staged: staged, installed: installed, kill: killPoint)
+            let installedText = (try? String(contentsOf: installed.appendingPathComponent("marker"), encoding: .utf8)) ?? "gone"
+            expect(status != 0, "AP3 the child died at the \(killPoint) edge of the swap (status \(status))")
+            expect((installedText == "old" || installedText == "new") && launches(installed),
+                   "AP3 killed \(killPoint) the exchange: the app is whole and launches, and it is the \(installedText) one")
+            let stagedText = (try? String(contentsOf: staged.appendingPathComponent("marker"), encoding: .utf8)) ?? "gone"
+            expect(killPoint == "before" ? stagedText == "new" : stagedText == "old",
+                   "AP3 killed \(killPoint): the other copy is still on disk (\(stagedText))")
+        } catch { expect(false, "AP3 \(killPoint) fixture: \(error)") }
+    }
 }

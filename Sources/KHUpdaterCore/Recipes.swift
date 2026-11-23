@@ -493,7 +493,13 @@ public enum Recipe {
     /// rename, so it needs no extra space and leaves both entries where they were when it fails.
     /// False means the platform or the volume refused, and the caller falls back to two moves.
     static func exchange(_ a: String, _ b: String) -> Bool {
-        renamex_np(a, b, UInt32(RENAME_SWAP)) == 0
+        // Test seam: a child process can die exactly here, which is the window an interrupted
+        // install occupies. Nothing in the app sets these variables.
+        let kill = ProcessInfo.processInfo.environment["KHU_TEST_EXCHANGE_KILL"]
+        if kill == "before" { raise(SIGKILL) }
+        let swapped = renamex_np(a, b, UInt32(RENAME_SWAP)) == 0
+        if kill == "after" { raise(SIGKILL) }
+        return swapped
     }
 
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
