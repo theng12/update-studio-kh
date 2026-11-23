@@ -73,7 +73,7 @@ final class FleetWindow: NSObject, WKUIDelegate, WKScriptMessageHandler,
         return Publisher(feedHost: host, ssh: "\(user)@\(sshHost)", key: key, knownHosts: knownHosts)
     }
 
-    private static func portAnswers(_ port: UInt16) -> Bool {
+    static func portAnswers(_ port: UInt16) -> Bool {
         let fd = socket(AF_INET, SOCK_STREAM, 0); guard fd >= 0 else { return false }
         defer { close(fd) }
         var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = port.bigEndian

@@ -1,9 +1,10 @@
 import AppKit
 import Foundation
 
-/// The first-run window's "Where updates come from" states, built headlessly — no window is shown
-/// and nothing takes the desktop. A kit with an address keeps today's publisher route; one without
-/// (a public download) starts on GitHub releases.
+/// The first-run window, built headlessly — no window is shown and nothing takes the desktop.
+/// Owner, 2026-11-24: one first run, one source. A copy shared from a Studio carries that Studio's
+/// address; every other copy carries none and reads the public signed feed. Nothing is chosen, typed
+/// or asked for before the one press, and a failure names what was tried and offers Retry.
 private func firstRunKit(_ tag: String, feed: String?) -> URL {
     let kit = tmpDir(tag).appendingPathComponent("kit")
     try! fm.createDirectory(at: kit, withIntermediateDirectories: true)
@@ -24,53 +25,43 @@ func connectionWindowTests() {
     _ = NSApplication.shared   // AppKit is initialized headlessly; nothing is shown or activated.
     let home = tmpDir("cw-home")
 
-    // A publisher kit: three sources, the kit's own route selected and still prefilled with a code.
+    // CW1 a copy shared from a Studio: its address is already known, read-only, and no code is asked
+    // for before the Studio has asked for one. The one press is the primary action.
     let kit = firstRunKit("cw-kit", feed: "http://demo-host.ts.net:8790/release.json")
     let window = ConnectionWindow.testFirstRun(kit: kit, home: home)
     var state = window.testState
-    expect(state.sources == ["GitHub releases", "Custom address", "This Mac's Update Studio"],
-           "CW1 a publisher kit builds all three sources in order (\(state.sources))")
-    expect(state.selected == 2, "CW1 a publisher kit starts on its own Update Studio route (\(state.selected))")
-    expect(state.address == "http://demo-host.ts.net:8790/release.json" && state.editable,
-           "CW1 the kit's address is prefilled and editable (\(state.address))")
-    expect(state.codeVisible, "CW1 the pairing code is shown for the kit route")
+    expect(state.address == "http://demo-host.ts.net:8790/release.json" && !state.editable,
+           "CW1 a Studio copy shows its own address and cannot be retyped (\(state.address))")
+    expect(!state.codeVisible, "CW1 no pairing code is requested before a Studio asks for one")
+    expect(state.primary == "Connect", "CW1 the one press is Connect (\(state.primary))")
+    expect(!state.name.isEmpty, "CW1 this Mac's name is already filled in (\(state.name))")
+    expect(state.intro.contains("demo-host.ts.net") && !state.intro.lowercased().contains("choose"),
+           "CW1 the window names the Studio it will use and asks no question (\(state.intro))")
 
-    // GitHub releases: the public link, no editing, no code, and the sentence that says so.
-    window.testSelect(0)
+    // CW2 a refusal names the failure and offers Retry; a Studio's refusal is what reveals the code.
+    window.testFail("the Studio did not answer")
     state = window.testState
-    expect(state.address == ConnectionWindow.publicFeedURL && !state.editable,
-           "CW2 GitHub releases shows the public link and cannot be edited (\(state.address))")
-    expect(!state.codeVisible, "CW2 GitHub releases asks for no pairing code")
-    expect(state.note.lowercased().contains("reports nothing to anyone"),
-           "CW2 GitHub releases says this Mac reports nothing to anyone")
-    expect((try? ConnectionWindow.route(state.address))?.publicFeed == true,
-           "CW2 the GitHub link routes to the public feed")
-    expect((try? ConnectionWindow.route(state.address))?.needsCode == false,
-           "CW2 the GitHub link needs no code")
+    expect(state.primary == "Retry", "CW2 a failed first run offers Retry (\(state.primary))")
+    expect(state.status.contains("Not connected: the Studio did not answer"),
+           "CW2 the failure names what was tried and what happened (\(state.status))")
+    expect(state.codeVisible, "CW2 a Studio's refusal reveals the pairing code rather than stranding the Mac")
 
-    // Custom: blank and editable, with the code row back for a publisher's Tailscale name.
-    window.testSelect(1)
-    state = window.testState
-    expect(state.address.isEmpty && state.editable, "CW3 a custom address starts blank and editable")
-    expect(state.codeVisible, "CW3 a custom address keeps the pairing code row")
-
-    // A public download's kit carries no address: two sources, GitHub by default.
+    // CW3 a copy downloaded for anyone: the public signed feed, no address typed, no code, no
+    // service named. Its one press is still the only thing between the person and a set-up Mac.
     let publicKit = firstRunKit("cw-public", feed: nil)
     let publicWindow = ConnectionWindow.testFirstRun(kit: publicKit, home: home)
     let publicState = publicWindow.testState
-    expect(publicState.sources == ["GitHub releases", "Custom address"],
-           "CW4 a kit without an address offers two sources (\(publicState.sources))")
-    expect(publicState.selected == 0 && publicState.address == ConnectionWindow.publicFeedURL,
-           "CW4 a kit without an address starts on GitHub releases (\(publicState.selected))")
+    expect(publicState.address == ConnectionWindow.publicFeedURL && !publicState.editable,
+           "CW3 a public copy shows the signed feed and cannot be retyped (\(publicState.address))")
+    expect(!publicState.codeVisible, "CW3 a public copy asks for no pairing code")
+    expect(!publicState.intro.contains("GitHub"), "CW3 the first run never names GitHub (\(publicState.intro))")
+    expect(!publicState.intro.contains("Update Studio"), "CW3 and never names a Studio (\(publicState.intro))")
+    expect(publicState.primary == "Connect", "CW3 one press sets this Mac up (\(publicState.primary))")
 
-    // The publisher route keeps its rules: a name needs the code, a numeric IP is refused with the fix.
-    expect((try? ConnectionWindow.route("demo-host.ts.net:8790"))?.needsCode == true,
-           "CW5 a Tailscale name still needs the pairing code")
-    do {
-        _ = try ConnectionWindow.route("100.64.0.7:8790")
-        expect(false, "CW5 a numeric IP is still refused")
-    } catch {
-        expect("\(error)".contains("App Transport Security") && "\(error)".contains("shown on the publisher's Update Studio window"),
-               "CW5 a numeric IP is refused and says to use the publisher's name (\(error))")
-    }
+    // CW4 a public copy's failure is a named failure with Retry, and no field appears for it.
+    publicWindow.testFail("the feed did not answer")
+    state = publicWindow.testState
+    expect(state.primary == "Retry" && state.status.contains("Not connected: the feed did not answer"),
+           "CW4 a public copy fails in one plain sentence and offers Retry (\(state.status))")
+    expect(!state.codeVisible, "CW4 a public copy never asks for a code it cannot use")
 }

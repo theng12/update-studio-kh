@@ -58,11 +58,26 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     }
 
     /// This Mac reads a public feed: no publisher, so no reports, no orders — and the page says what
-    /// that means and keeps the route back to Update Studio visible.
+    /// that means and keeps the route back to a Studio visible while this Mac is a Studio's own.
     private var publicFeed: Bool {
         guard !helper.config.feedURL.isEmpty, let url = URL(string: helper.config.feedURL) else { return false }
         return !FeedNetwork.authenticated(url)
     }
+
+    /// A Studio function is this Mac's own: it runs the Studio (the publisher answers on loopback),
+    /// or it has joined one. Every other Mac is a single-Mac screen with no Studio wording on it.
+    /// One rule for the page and the menu bar, so the two can never disagree.
+    nonisolated(unsafe) private static var lastPublisherProbe = (at: Date.distantPast, answers: false)
+    static func studioHere(config: AgentConfig) -> Bool {
+        if Connect.enrolled(feedURL: config.feedURL, token: config.token) { return true }
+        if let forced = ProcessInfo.processInfo.environment["KHU_TEST_PUBLISHER"] { return forced == "1" }
+        // Cached for a minute: reload() runs often, and this asks the same loopback port each time.
+        if Date().timeIntervalSince(lastPublisherProbe.at) > 60 {
+            lastPublisherProbe = (Date(), FleetWindow.portAnswers(8790))
+        }
+        return lastPublisherProbe.answers
+    }
+    private var isStudio: Bool { Self.studioHere(config: helper.config) }
     private var connectionBusy = false
     private static let roster = (try? JSONDecoder().decode([String: String].self, from: Data(Changelog.fleetRosterJSON.utf8))) ?? [:]
 
@@ -202,8 +217,11 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                            "checkedAt": connectionUI.checkedAt as Any, "ok": connectionUI.ok as Any, "note": connectionUI.note as Any,
                            "serverNote": connectionUI.serverNote as Any, "serverOk": connectionUI.serverOk as Any,
                            "pairAvailable": connectionUI.pairAvailable,
-                           // Offered only to a Mac enrolled to a publisher; absent on a GitHub Mac.
+                           // Offered only to a Mac enrolled to a publisher; absent on a public-feed Mac.
                            "canLeave": canLeaveFleet,
+                           // The Studio section is this Mac's own function. A single-Mac screen never
+                           // shows it, so no fleet or publisher wording reaches a plain install.
+                           "studio": isStudio,
                            // On a public feed there is no publisher: the page says so and offers the way back.
                            "publicFeed": publicFeed],
         ]
@@ -491,7 +509,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                 var note: String?, left = false
                 do {
                     let result = try Connect.leaveFleet(file: file)
-                    note = "Left this fleet. This Mac now updates from the GitHub feed, reports to no Studio and "
+                    note = "Left the Studio. This Mac now updates from the saved feed, reports to no Studio and "
                         + "takes no orders from one; your pinned key still verifies every update it reads. "
                         + "Your previous settings are kept in \(result.backup.path)."
                     left = true

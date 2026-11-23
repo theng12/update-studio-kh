@@ -245,7 +245,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         }
         menu.addItem(.separator())
         _ = action("Open Studio Launcher…", #selector(openWindow))
-        _ = action("Open Fleet…", #selector(openFleet))
+        // The fleet is a Studio function: a Mac that runs no Studio and has joined none has no
+        // fleet to open, and its menu does not offer one (owner, 2026-11-24).
+        if LauncherWindow.studioHere(config: config) { _ = action("Open Fleet…", #selector(openFleet)) }
         _ = action(showsAll ? "Show only apps needing attention" : "Show all apps in menu", #selector(toggleShowAll))
         _ = action("Check for Updates Now", #selector(checkNow))
         _ = action(settings.paused(at: Date()) ? "Resume Automatic Updates" : "Pause Automatic Updates for 24 Hours", #selector(togglePause))

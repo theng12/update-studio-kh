@@ -2,6 +2,15 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.81 — 2026-11-24
+
+- Setting up a Mac is one press. The copy already knows where its updates come from, so there is no source to choose, no address to type and no pairing code before the first try; a copy shared from a Studio uses that Studio, and every other copy uses the signed public feed.
+- A first run that cannot reach the feed says what was tried and what failed, in one sentence, and offers Retry. A Studio that wants a code asks for it after that refusal, not before.
+- The everyday screen no longer names the service behind the feed: the footer says "the saved feed", and the word GitHub is gone from the app.
+- The Studio — the fleet, the address, pairing, joining and leaving — is now its own Settings section, and it appears only on a Mac that runs a Studio or has joined one. A Mac with neither shows none of it: one list of apps, Install/Update, and the Automatic switch.
+- The fleet view opens from the Studio section (and its menu item is offered on the same Macs), never from the everyday footer.
+- Automatic updates have a visible switch on the main screen. It is on for a fresh Mac, it shows what the helper will really do — checking by hand shows it off — and a choice already saved on this Mac is never overwritten.
+
 ## 0.1.80 — 2026-11-22
 
 - Publisher diagnostics report free and total disk space, the exact served feed fingerprint and timestamp, and the two installed updater fingerprints. Unavailable values are reported as unknown without interrupting feed service.

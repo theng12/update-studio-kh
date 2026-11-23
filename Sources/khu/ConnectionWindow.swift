@@ -19,10 +19,6 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
 
     private enum State { case idle, working, refused, done }
 
-    /// Where a first run takes its updates from. Only `.firstRun` has a picker; the repair flows
-    /// keep the saved connection and never show it.
-    private enum Source: Int { case github, custom, kit }
-
     /// The public mirror: signed by this fleet's pinned key, no publisher on the other end.
     static let publicFeedURL = Connect.publicFeedURL
 
@@ -36,9 +32,6 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     private let destinationField = NSTextField()
     private let nameField = NSTextField()
     private let codeField = NSTextField()
-    private let sourcePicker = NSPopUpButton()
-    private let sourceNote = NSTextField(labelWithString: "")
-    private var source: Source = .kit
     private var codeRow: NSStackView?
     /// The kit's own address, or "" for a copy built for public download.
     private let kitAddress: String
@@ -67,11 +60,11 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         return nil
     }
 
-    /// Where typing starts: the code, or the only button a repair has.
+    /// Where typing starts: the code, or the one button a repair — and a first run — has. A first
+    /// run has no address to type and asks for no code until a publisher's own refusal names one.
     private var initialField: NSView {
-        if case .setupRepair = mode { return connectButton }
-        if case .firstRun = mode, source == .github { return connectButton }
-        return codeField
+        if case .repair = mode { return codeField }
+        return connectButton
     }
 
     private init(mode: Mode) {
@@ -99,7 +92,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         case .setupRepair: repair = false; setupRepair = true
         }
         window.title = setupRepair ? "Repair this Mac's setup" : repair ? "Pair again with Update Studio" : "Connect to Update Studio"
-        connectButton.title = savedAddressRefused ? "Use GitHub releases instead"
+        connectButton.title = savedAddressRefused ? "Use the saved feed instead"
             : setupRepair ? "Repair" : repair ? "Pair again" : "Connect"
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -111,11 +104,17 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         let destination = destinationField
         switch mode {
         case .firstRun:
-            intro = Self.wrap("Choose where this Mac’s updates come from. From GitHub releases, Studio Launcher installs only "
-                + "what that feed signs and reports nothing to anyone. From a Mac running Update Studio KH, Studio Launcher "
-                + "sets up its helper from inside this app: type that Mac’s address and the pairing code from Connect a Mac. "
-                + "The app’s pinned key verifies the connection either way.")
-            destination.setAccessibilityLabel("Update Studio address")
+            // One source, and this copy already knows it: a copy shared from a Studio carries that
+            // Studio's address, and a copy downloaded for anyone carries the public signed feed.
+            // Nothing here asks a person to choose, type an address or find a code up front.
+            intro = Self.wrap(kitAddress.isEmpty
+                ? "This Mac installs updates from its signed release feed. Nothing here is reported anywhere and no address or code is needed. Press Connect to set this Mac up."
+                : "This Mac takes its updates from the Studio at \(URL(string: kitAddress)?.host ?? kitAddress). Press Connect. If that Studio asks for a pairing code, this window asks for it after the first try.")
+            destination.setAccessibilityLabel("Updates come from")
+            destination.stringValue = kitAddress.isEmpty ? Self.publicFeedURL : kitAddress
+            destination.isEditable = false
+            destination.isBezeled = false
+            destination.drawsBackground = false
             nameField.stringValue = Connect.proposedName()
         case .repair(_, let plan):
             intro = Self.wrap("Your current sign-in file will be preserved in ~/Library/KHUpdater/_trash, and this Mac "
@@ -144,30 +143,13 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             // The exact state the owner photographed: address locked, Repair alone can never work.
             // Name the cause, then give the one press that ends it.
             intro.stringValue += "\n\nThe saved address \(savedAddress) is a bare IP, which macOS refuses for an "
-                + "unencrypted feed, so Repair cannot succeed. Use GitHub releases instead moves this Mac to the "
+                + "unencrypted feed, so Repair cannot succeed. Use the saved feed instead moves this Mac to the "
                 + "public feed and then repairs it from this app's own setup kit. Your apps, settings and pinned "
-                + "key are kept; nothing is reported to Update Studio."
+                + "key are kept; nothing is reported anywhere."
         }
         introText = intro.stringValue
         destination.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         destination.isSelectable = true
-
-        sourceNote.maximumNumberOfLines = 0
-        sourceNote.lineBreakMode = .byWordWrapping
-        sourceNote.textColor = .secondaryLabelColor
-        sourceNote.preferredMaxLayoutWidth = Self.inner
-        sourceNote.widthAnchor.constraint(equalToConstant: Self.inner).isActive = true
-        if case .firstRun = mode {
-            // GitHub releases is the primary choice; a kit that carries its publisher's address
-            // starts on that route so a Mac set up from a publisher kit is unchanged.
-            sourcePicker.addItems(withTitles: ["GitHub releases", "Custom address"]
-                + (kitAddress.isEmpty ? [] : ["This Mac's Update Studio"]))
-            sourcePicker.setAccessibilityLabel("Where updates come from")
-            sourcePicker.target = self
-            sourcePicker.action = #selector(sourceChanged)
-            source = kitAddress.isEmpty ? .github : .kit
-            sourcePicker.selectItem(at: source.rawValue)
-        }
 
         nameField.setAccessibilityLabel("Name for this Mac")
         codeField.placeholderString = "123-456"
@@ -175,7 +157,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
 
         let nameHint = Self.wrap(setupRepair || repair
             ? "This Mac keeps the name it is already enrolled under; it cannot be changed here."
-            : "This Mac appears in Update Studio under this name.")
+            : kitAddress.isEmpty ? "The name this Mac is known by." : "This Mac appears in the Studio under this name.")
         nameHint.textColor = .secondaryLabelColor
 
         statusLabel.isHidden = true
@@ -197,10 +179,12 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
 
         codeRow = setupRepair ? nil : Self.row("Pairing code", codeField)
         var rowViews: [NSView] = []
-        if case .firstRun = mode { rowViews.append(Self.row("Where updates come from", sourcePicker)) }
-        rowViews.append(Self.row("Update Studio", destination))
+        rowViews.append(Self.row("Updates from", destination))
         rowViews.append(Self.row("Name for this Mac", nameField))
         if let codeRow { rowViews.append(codeRow) }
+        // A first run asks for no code until a Studio refuses without one; the row is built now and
+        // revealed in the refusal, so the window never opens with a question a person cannot answer.
+        if case .firstRun = mode { codeRow?.isHidden = true }
         let rows = NSStackView(views: rowViews)
         rows.orientation = .vertical
         rows.alignment = .leading
@@ -220,7 +204,6 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         buttons.widthAnchor.constraint(equalToConstant: Self.inner).isActive = true
 
         var stackViews: [NSView] = [title, intro, rows]
-        if case .firstRun = mode { stackViews.append(sourceNote) }
         stackViews += [nameHint, statusRow, buttons]
         let stack = NSStackView(views: stackViews)
         stack.orientation = .vertical
@@ -240,7 +223,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             content.widthAnchor.constraint(equalToConstant: Self.width),
         ])
-        if case .firstRun = mode { applySource() }
+        if case .firstRun = mode { window.initialFirstResponder = connectButton }
         content.layoutSubtreeIfNeeded()
         window.setContentSize(content.fittingSize)
         window.initialFirstResponder = initialField
@@ -248,53 +231,11 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
 
     // MARK: where updates come from
 
-    @objc private func sourceChanged() {
-        source = Source(rawValue: sourcePicker.indexOfSelectedItem) ?? .custom
-        applySource()
-        window.setContentSize(window.contentView?.fittingSize ?? window.contentView?.frame.size ?? .zero)
-        window.initialFirstResponder = initialField
-        window.makeFirstResponder(initialField)
-    }
-
-    /// The one place a first-run source decides the field, the code row and the sentence under it.
-    private func applySource() {
-        guard case .firstRun = mode else { return }
-        switch source {
-        case .github:
-            destinationField.stringValue = Self.publicFeedURL
-            destinationField.placeholderString = ""
-            destinationField.isEditable = false
-            destinationField.isBezeled = false
-            destinationField.drawsBackground = false
-            sourceNote.stringValue = "GitHub releases: this Mac installs only what that feed signs and reports nothing to anyone. No pairing code is needed."
-        case .custom:
-            destinationField.stringValue = ""
-            destinationField.placeholderString = "Paste an https feed link, or type a name ending in .ts.net"
-            destinationField.isEditable = true
-            destinationField.isBezeled = true
-            destinationField.drawsBackground = true
-            sourceNote.stringValue = "An https feed link installs from that public feed and needs no pairing code. A publisher’s Tailscale name needs the code from its Update Studio window. A numeric IP can never work: macOS refuses plain http to an IP address."
-        case .kit:
-            destinationField.stringValue = kitAddress
-            destinationField.placeholderString = ""
-            destinationField.isEditable = true
-            destinationField.isBezeled = true
-            destinationField.drawsBackground = true
-            sourceNote.stringValue = "This Mac's Update Studio: use the address and pairing code shown in Update Studio KH on that Mac."
-        }
-        let code = source != .github
-        codeRow?.isHidden = !code
-        codeField.isHidden = !code
-        sourcePicker.isEnabled = state == .idle || state == .refused
-        window.initialFirstResponder = initialField
-    }
-
-    /// What a typed first-run address means: a public https feed, or a publisher that needs a code.
-    /// One rule for the window and its tests; `Connect.destination` still refuses an IP or a bare host.
-    static func route(_ address: String) throws -> (publicFeed: Bool, needsCode: Bool) {
-        let publicFeed = try Connect.destination(address).lowercased().hasPrefix("https://")
-        return (publicFeed, !publicFeed)
-    }
+    /// The one rule a first run follows: a copy shared from a Studio carries that Studio's address;
+    /// every other copy carries none and reads the public signed feed. The address is never typed, so
+    /// there is no source to choose and nothing to route. `Connect.destination` still refuses an
+    /// address macOS cannot reach.
+    private var firstRunIsPublic: Bool { kitAddress.isEmpty }
 
     /// First run: the kit's window, to completion — connected (the setup finished) or cancelled
     /// (the person left; a connect attempt still in flight is allowed to finish first, never
@@ -396,14 +337,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         guard state != .working else { return }
         let destination = destinationField.stringValue
         var publicFeed = false
-        if case .firstRun = mode {
-            guard !destination.trimmingCharacters(in: .whitespaces).isEmpty else {
-                show("Choose GitHub releases or this Mac's Update Studio above, or type the address of the Mac running Update Studio KH.",
-                     color: .systemRed, spinning: false); return
-            }
-            do { publicFeed = try Self.route(destination).publicFeed }
-            catch { show("\(error)", color: .systemRed, spinning: false); return }
-        }
+        if case .firstRun = mode { publicFeed = firstRunIsPublic }
         let machine: String
         var code = ""
         switch mode {
@@ -412,11 +346,10 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         case .firstRun:
             machine = nameField.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
             guard !machine.isEmpty else { show("Type the name for this Mac.", color: .systemRed, spinning: false); return }
-            // A public feed asks for no pairing code: there is no publisher to enrol with.
-            if !publicFeed {
-                code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
-                guard !code.isEmpty else { show("Type the pairing code from Update Studio.", color: .systemRed, spinning: false); return }
-            }
+            // A public feed asks for no pairing code: there is no publisher to enrol with. A Studio
+            // copy sends an empty code first — its owner may have the enrolment window open — and a
+            // refusal is what reveals the code row and asks for it.
+            code = codeField.stringValue.trimmingCharacters(in: .whitespaces)
         case .repair(_, let plan):
             // Empty is allowed: it works only when the publisher no longer lists this Mac and its
             // allow-a-Mac window is open; an enrolled Mac is refused with the publisher's own
@@ -429,7 +362,6 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         destinationField.isEnabled = false
         nameField.isEnabled = false
         codeField.isEnabled = false
-        sourcePicker.isEnabled = false
         connectButton.isEnabled = false
         cancelButton.isEnabled = true
         cancelButton.title = "Cancel"
@@ -481,7 +413,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
         guard state == .working else { return }
         if stopping { finish(.cancelled); return }
         destinationField.isEnabled = true
-        if case .firstRun = mode { nameField.isEnabled = true; sourcePicker.isEnabled = true }
+        if case .firstRun = mode { nameField.isEnabled = true }
         codeField.isEnabled = true
         connectButton.isEnabled = true
         cancelButton.isEnabled = true
@@ -490,7 +422,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             connectButton.title = "Continue"
             if savedAddressRefused {
                 // The dead end the owner photographed now ends here, in one press.
-                show("Repaired. This Mac now updates from GitHub releases and reports to nobody; its apps, "
+                show("Repaired. This Mac now updates from the saved feed and reports to nobody; its apps, "
                     + "settings and pinned key were kept.", color: .systemGreen, spinning: false)
             } else if case .repair = mode {
                 show("Paired. This Mac's sign-in is renewed — the next update check uses it.",
@@ -498,13 +430,19 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             } else if case .setupRepair = mode {
                 show("Repaired. The saved connection was kept and its helper was rebuilt.", color: .systemGreen, spinning: false)
             } else {
+                // First run: the press that set the Mac up is the only press. The window says what
+                // happened, then closes itself into the app, so there is no second "Continue".
                 show("Connected. Studio Launcher KH is set up on this Mac.", color: .systemGreen, spinning: false)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    guard let self, self.state == .done else { return }
+                    self.finish(.connected)
+                }
             }
         } else {
             state = .refused
             codeField.stringValue = ""
             if savedAddressRefused {
-                connectButton.title = "Use GitHub releases instead"
+                connectButton.title = "Use the saved feed instead"
                 show("Not repaired: \(failure ?? "the public feed could not be read")", color: .systemRed, spinning: false)
             } else if case .repair = mode {
                 connectButton.title = "Pair again"
@@ -512,6 +450,15 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             } else if case .setupRepair = mode {
                 connectButton.title = "Repair"
                 show("Not repaired: \(failure ?? "the saved setup could not be repaired")", color: .systemRed, spinning: false)
+            } else if case .firstRun = mode {
+                // One sentence naming what was attempted and what failed, then Retry. A Studio that
+                // refuses without a code is the one case that needs a second field, and the publisher's
+                // own sentence says so.
+                connectButton.title = "Retry"
+                if !firstRunIsPublic { codeRow?.isHidden = false; codeField.isHidden = false }
+                show("Not connected: \(failure ?? "the connection was refused") Retry when the connection is back.",
+                     color: .systemRed, spinning: false)
+                window.setContentSize(window.contentView?.fittingSize ?? window.contentView?.frame.size ?? .zero)
             } else {
                 connectButton.title = "Connect"
                 show("Not connected: \(failure ?? "the connection was refused")", color: .systemRed, spinning: false)
@@ -564,12 +511,13 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
     }
     var testPrimaryTitle: String { connectButton.title }
     var testIntro: String { introText }
-    /// Test-only: choose a source exactly as the picker's action does.
-    func testSelect(_ item: Int) { sourcePicker.selectItem(at: item); sourceChanged() }
-    var testState: (sources: [String], selected: Int, address: String, editable: Bool,
-                    codeVisible: Bool, note: String) {
-        (sourcePicker.itemTitles, sourcePicker.indexOfSelectedItem, destinationField.stringValue,
-         destinationField.isEditable, !(codeRow?.isHidden ?? true), sourceNote.stringValue)
+    /// Test-only: take the failure branch the real attempt takes when it comes back refused — no
+    /// network, no window, so a test proves what the window does next rather than what it hopes.
+    func testFail(_ reason: String) { state = .working; stopping = false; finished(success: false, failure: reason) }
+    var testState: (address: String, editable: Bool, codeVisible: Bool, name: String,
+                    primary: String, intro: String, status: String) {
+        (destinationField.stringValue, destinationField.isEditable, !(codeRow?.isHidden ?? true),
+         nameField.stringValue, connectButton.title, introText, statusLabel.stringValue)
     }
     #endif
 

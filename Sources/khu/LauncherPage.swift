@@ -117,13 +117,13 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 <div id=notices hidden></div>
 <section id=adoptions hidden></section>
 <main id=main role=tabpanel></main>
-<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=btn id=fleet style="margin-left:auto" title="Fleet: see the whole fleet on the publisher, and act on it" aria-label="Fleet: see the whole fleet on the publisher, and act on it">Fleet</button><button class=link id=support aria-label="Support this app">♡ Support this app</button></footer>
+<footer><button class=pill id=whatsNew title="What’s New in Studio Launcher KH"><span>Studio Launcher KH</span><span class=v id=wnver></span></button><button class="btn icon upd" id=update hidden title="Update Studio Launcher KH" aria-label="Update Studio Launcher KH"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.7 stroke-linecap=round stroke-linejoin=round><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6"/></svg></button><button class=pill id=auto aria-pressed=false hidden></button><span id=checked class=stat></span><span id=err class="stat err" role=status aria-live=polite></span><button class=link id=support style="margin-left:auto" aria-label="Support this app">♡ Support this app</button></footer>
 <script>
 const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.khu.postMessage(m);
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',tab=store.get('tab')||'all',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},addrDraft=null,connSourceSel=null,selected=new Set();
+let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',tab=store.get('tab')||'all',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},joinAddr=null,joinCode=null,selected=new Set();
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -277,13 +277,14 @@ const signature=()=>JSON.stringify([view,sort,tab,q,showHidden,detail,settingsOp
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  if(!viewFromMac&&S.settings&&S.settings.viewMode){view=S.settings.viewMode;viewFromMac=true}
- if(addrDraft!==null&&S.connection?.serverOk&&S.connection.destination===addrDraft.trim())addrDraft=null;
+ // A join that took effect clears both drafts, so a later open does not offer an address this Mac left.
+ if(joinAddr!==null&&S.connection?.destination===joinAddr.trim()){joinAddr=null;joinCode=null}
  const macLabel=S.connection?.displayName||S.connection?.machine;
  $('mac').textContent=macLabel?'Apps for '+macLabel:'Apps for this Mac';
  $('wnver').textContent=S.version?'v'+S.version:'';
  const u=S.apps.find(a=>a.id=='updater'&&a.status=='Update available'&&a.available&&!a.statusOnly);
  $('update').hidden=!u;if(u){$('update').title='Studio Launcher KH Helper '+u.available;$('update').setAttribute('aria-label','Studio Launcher KH Helper to '+u.available)}
- paintStatus();
+ paintStatus();paintAuto();
  // The published list is polled by nothing: a new answer writes into the open panel's own node,
  // exactly as a transfer tick does, because `extensions` is excluded from the redraw signature.
  if(!appsTab()&&$('extPanel'))drawExtensions(tab);
@@ -323,7 +324,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
   if(Number.isInteger(S.feedCount)&&S.feedPublishedAt){
    const stamp=new Date(S.feedPublishedAt).toLocaleString(undefined,{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'});
    const missing=S.missingFromFeed||[];
-   const source=S.checkedFeedSource?.startsWith('GitHub (')?'This page':'This feed';
+   const source='This feed';
    m.append(el('p',{class:'note',style:'margin:2px 0 8px'},source+' carries '+S.feedCount+' '+(S.feedCount===1?'app':'apps')+', last updated '+stamp+(missing.length?' · Not on it: '+missing.join(', '):'')));
   }
   if(!S.apps.length)m.append(el('p',{class:'empty'},S.error?'The publisher at '+(S.connection.destination||'the saved address')+' could not be reached: '+S.error:'Checking…'));
@@ -386,16 +387,25 @@ function drawAdoptions(){const list=S.adoptions||[],box=$('adoptions');box.hidde
    el('button',{class:'btn',onclick:()=>post({action:'adopt',app:o.id})},'Manage it'),
    el('button',{class:'link',onclick:()=>post({action:'declineAdoption',app:o.id})},'Not now')))))}
 /// One compact status line: a failure replaces the freshness line rather than sitting beside it.
+/// Nothing on this screen names a service, a provider or a kit: the feed is "the saved feed".
 function paintStatus(){const e=$('err'),c=$('checked'),err=S.error?'Last check failed: '+S.error+(S.lastAttempt?' · '+new Date(S.lastAttempt).toLocaleString():''):'';
- const source=S.configuredFeedSource||'the saved feed', n=S.sources.length;
+ const source='the saved feed', n=S.sources.length;
  const drives=n===1?'1 installer drive':n+' installer drives';
  const title='Check '+source+(n?' and '+drives:', and scan for installer drives');
  const refresh=$('check');if(refresh.getAttribute('title')!==title){refresh.setAttribute('title',title);refresh.setAttribute('aria-label',title)}
  e.textContent=err;e.hidden=!err;
- const checked=S.serverKnown&&S.lastRun&&S.checkedFeedSource;
- c.textContent=(checked?'Checked '+S.checkedFeedSource+' '+ago(S.lastRun):'Not checked yet: '+source)
+ c.textContent=(S.serverKnown&&S.lastRun?'Checked '+source+' '+ago(S.lastRun):'Not checked yet')
   +(S.lastDriveScan?(n?' · Scanned '+drives:' · No installer drives found'):' · Drives not scanned yet')
   +(S.paused?' · Automatic updates paused':'');c.hidden=!!err}
+/// The one Automatic switch on this Mac's own screen. It shows what the helper will really do —
+/// manual checking turns it off — and flipping it writes the same setting Settings shows. Each
+/// app's own switch stays in that app's … menu, where its origin is named.
+function autoOn(){return !S.settings.checkManually&&S.settings.autoInstall!==false}
+function paintAuto(){const a=$('auto'),manual=!!S.settings.checkManually,on=autoOn();
+ a.hidden=!S.apps.length;a.disabled=manual;a.setAttribute('aria-pressed',String(on));
+ a.textContent='Automatic updates '+(on?'on':'off');
+ a.title=manual?'Updates are checked by hand. Choose Automatically in Settings to use this switch.'
+  :on?'Updates install by themselves. Press to make them wait for you.':'Updates wait for you. Press to install them by themselves.'}
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
@@ -473,41 +483,30 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  // What the person typed but has not applied yet outlives a redraw; once the new address is saved,
  // the state carries it and the draft is dropped.
  // The address in use, never a guess: a saved one, else the default a Mac with no saved address
- // starts on. Both are shown here so nobody has to wonder which feed is live.
+ // starts on.
  const shownAddress=c.destination||c.defaultFeed||'';
- const chInput=el('input',{id:'addr',type:'text',value:addrDraft===null?shownAddress:addrDraft,placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address',oninput:e=>{addrDraft=e.target.value}});
- // The same three-way choice first run offers, here too: a GitHub Mac must have a way back to a
- // publisher that needs no reinstall, and a publisher Mac keeps its route unchanged.
- const pubAddr=el('input',{id:'pubaddr',type:'text',value:(c.destination&&!c.publicFeed)?c.destination:'',placeholder:'http://name.tail1234.ts.net:8790/release.json','aria-label':'Update Studio address for joining'});
- const pubCode=el('input',{id:'pubcode',type:'text',placeholder:'123-456','aria-label':'Pairing code'});
- if(connSourceSel===null)connSourceSel=c.publicFeed?'github':(c.canLeave?'publisher':'custom');
- // The house segment styling: the chosen route is visibly pressed, not three identical buttons.
- const pick=(v,l)=>el('button',{'aria-pressed':String(connSourceSel===v),onclick:()=>{connSourceSel=v;drawSettings()}},l);
- const connSection=el('section',{},el('h4',{},'Connection'),
-  el('div',{class:'row'},el('span',{},'Update Studio'),el('span',{class:'ver'},shownAddress+(c.destination?'':' (default)'))),
+ const pubAddr=el('input',{id:'pubaddr',type:'text',value:joinAddr===null?((c.destination&&!c.publicFeed)?c.destination:''):joinAddr,placeholder:'http://name.tail1234.ts.net:8790/release.json','aria-label':'Studio address for joining',oninput:e=>{joinAddr=e.target.value}});
+ const pubCode=el('input',{id:'pubcode',type:'text',value:joinCode===null?'':joinCode,placeholder:'123-456','aria-label':'Pairing code',oninput:e=>{joinCode=e.target.value}});
+ // The Studio functions — the fleet, the address, pairing, joining and leaving — belong to a Mac
+ // that runs a Studio or has joined one. Every other Mac shows none of it, and no service is named
+ // on its screen: the feed is simply "the saved feed".
+ const studio=!!c.studio;
+ const connSection=studio?el('section',{},el('h4',{},'Studio'),
+  el('div',{class:'row'},el('span',{},'Updates come from'),el('span',{class:'ver'},shownAddress+(c.destination?'':' (the signed feed)'))),
   el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.displayName&&c.machine&&c.displayName!==c.machine?c.displayName+' ('+c.machine+')':(c.displayName||c.machine||''))),
   connStatus(),
-  // What this Mac is, in one line, for the person wondering whether to link it back.
-  c.publicFeed?el('p',{class:'note',style:'margin-left:0'},'This Mac updates from the signed feed and reports to nobody. Joining Update Studio again needs a pairing code — choose This Mac’s Update Studio below.'):null,
-  el('h4',{style:'margin-top:12px'},'Where updates come from'),
-  el('div',{class:'row'},el('div',{class:'seg',role:'group','aria-label':'Where updates come from'},
-    pick('github','GitHub releases'),pick('publisher','This Mac’s Update Studio'),pick('custom','Custom address'))),
-  connSourceSel==='publisher'?el('div',{},
-   el('div',{class:'row'},pubAddr),
-   el('div',{class:'row'},pubCode,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'joinFleet',value:pubAddr.value,code:pubCode.value})},'Join Update Studio')),
-   el('p',{class:'note',style:'margin-left:0'},'Type that Mac’s address and the pairing code it shows; nothing is sent until you press Join.')):null,
-  // Offered only after a check the publisher refused with 401/403 (pairAvailable); the
-  // confirmation and the pairing code are collected by the native window that follows.
+  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection'),
+   el('button',{class:'btn',onclick:()=>post({action:'fleet'})},'Open the fleet…')),
   c.pairAvailable?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'pairAgain'})},'Pair again now')):null,
-  el('div',{class:'row'},chInput,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:chInput.value})},'Use this address')),
-  // The check sits after the address it checks, so the route picker itself is what a person sees first.
-  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection')),
-  // One click back to the public mirror, offered only while a publisher's address is saved.
-  c.destination&&c.defaultFeed&&c.destination!==c.defaultFeed?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:c.defaultFeed})},'Use GitHub releases instead')):null,
-  // Only a Mac enrolled to a publisher can leave one; a GitHub-only Mac has no such button.
-  c.canLeave?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>ask('Leave this fleet? This Mac keeps every app and every model. It stops taking orders from Update Studio and updates from the GitHub feed instead.','Leave this fleet',yes=>{if(yes)post({action:'leaveFleet'})})},'Leave this fleet')):null,
-  el('p',{class:'note',style:'margin-left:0'},(c.destination?'':'GitHub releases is the default while no address is saved. ')+'This Mac only accepts an address where Update Studio serves the updates its own key already signed. A different Update Studio needs its setup kit, not an address.'),
-  c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null);
+  c.canLeave?null:el('div',{},
+   el('h4',{style:'margin-top:12px'},'Join a Studio'),
+   el('div',{class:'row'},pubAddr),
+   el('div',{class:'row'},pubCode,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'joinFleet',value:pubAddr.value,code:pubCode.value})},'Join')),
+   el('p',{class:'note',style:'margin-left:0'},'Type that Mac’s address and the pairing code it shows; nothing is sent until you press Join.')),
+  c.destination&&c.defaultFeed&&c.destination!==c.defaultFeed?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:c.defaultFeed})},'Use the saved feed instead')):null,
+  c.canLeave?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>ask('Leave this Studio? This Mac keeps every app and every model. It stops taking orders from it and updates from the saved feed instead.','Leave this Studio',yes=>{if(yes)post({action:'leaveFleet'})})},'Leave this Studio')):null,
+  el('p',{class:'note',style:'margin-left:0'},'This Mac only accepts an address where the Studio serves updates its own key already signed. A different Studio needs its setup copy, not an address.'),
+  c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null):null;
  const updater=S.apps.find(a=>a.id=='updater');
  const sheet=el('div',{class:'sheet set',role:'dialog','aria-modal':true,'aria-label':'Settings',style:again?'animation:none':'',onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},el('div',{class:'t'},el('h3',{},'Settings'),el('div',{class:'sub'},'Studio Launcher KH '+S.version))),
@@ -519,19 +518,21 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
     // One app's Automatic value comes from one of three places; the app's … menu names which, using
     // the agent's own decision. Nothing here clears a Mac's switch: the controller keeps the value
     // it was last given, so a cleared switch would inherit this Mac's earlier choice, not a page one.
-    el('p',{class:'note'},'A switch set on this Mac rules while it is the later change; otherwise Update Studio’s value does, and where neither has one this Mac’s default does. Each app’s menu names which of the three is in force.'),
+    studio?el('p',{class:'note'},'A switch set on this Mac rules while it is the later change; otherwise the Studio’s value does, and where neither has one this Mac’s default does. Each app’s menu names which of the three is in force.'):null,
     check('retireHelpers','Keep the current and previous helper versions',s.retireHelpers,s.helperCleanupAvailable?'Older versions move to restorable _trash after '+(s.helperHealthySeconds/60).toLocaleString()+' minutes of repeated healthy reports.':'Cleanup settings could not be read. Older versions are kept.',!s.helperCleanupAvailable),
     // The updater's own switch is live data, and its automatic-on-connect default is stated, not implied.
-    updater?check('updaterAutomatic','Update Studio KH updates itself automatically',!!updater.automatic,
-      c.publicFeed?'From the signed feed: this Mac installs each new version that feed serves.':'Automatic is on when a Mac connects; change it in Update Studio KH’s … menu.',
+    updater?check('updaterAutomatic','Studio Launcher KH updates itself automatically',!!updater.automatic,
+      c.publicFeed?'From the signed feed: this Mac installs each new version that feed serves.':'Automatic is on when this Mac joins a Studio; change it in its own … menu.',
       !c.publicFeed):null),
    connSection,
-   el('section',{},el('h4',{},'This Mac and Update Studio'),
+   studio?el('section',{},el('h4',{},'This Mac and the Studio'),
     // Said from what the agent’s own report and recipes actually do; no budget is claimed here that
     // the updater does not enforce, and nothing here can be changed by reading it.
-    el('p',{class:'note',style:'margin-left:0'},'Update Studio is told this Mac’s name, which apps are installed here and at which versions and builds, whether each one started, the Automatic switches set on this Mac and any pause, and a read-only snapshot of the hardware, network addresses and app list. Results of installs go back to the same address.'),
+    el('p',{class:'note',style:'margin-left:0'},'The Studio is told this Mac’s name, which apps are installed here and at which versions and builds, whether each one started, the Automatic switches set on this Mac and any pause, and a read-only snapshot of the hardware, network addresses and app list. Results of installs go back to the same address.'),
     el('p',{class:'note',style:'margin-left:0'},'What is downloaded or copied from a connected drive stays on this Mac, as do these settings, the copy kept for Roll back and the icons this Mac has seen — under '+(S.stateDir||'this Mac’s own updater folder')+'. A file that is replaced moves to the restorable _trash folder there instead of being deleted.'),
-    el('p',{class:'note',style:'margin-left:0'},'The sign-in is sent only to the saved controller; this page never shows it, and a download mirror the signed feed names does not receive it. What arrives is bounded the way the updater already bounds it: '+(S.replyLimitBytes?'a reply bigger than '+mb(S.replyLimitBytes)+' is refused rather than buffered, and ':'')+'an installer is refused once it passes the size its signature names. One app installs at a time, so Pause and Cancel act on the transfer you can see. There is no separate storage budget to set here.')),
+    el('p',{class:'note',style:'margin-left:0'},'The sign-in is sent only to the saved controller; this page never shows it, and a download mirror the signed feed names does not receive it. What arrives is bounded the way the updater already bounds it: '+(S.replyLimitBytes?'a reply bigger than '+mb(S.replyLimitBytes)+' is refused rather than buffered, and ':'')+'an installer is refused once it passes the size its signature names. One app installs at a time, so Pause and Cancel act on the transfer you can see. There is no separate storage budget to set here.'))
+    :el('section',{},el('h4',{},'This Mac'),
+      el('p',{class:'note',style:'margin-left:0'},'Nothing is reported anywhere: this Mac reads its signed feed and keeps its own settings, the copy kept for Roll back and its downloads here'+(S.stateDir?', under '+S.stateDir:'')+'. A file that is replaced moves to the restorable _trash folder there instead of being deleted.')),
    el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','System'],['light','Light'],['dark','Dark']],s.appearance),
     el('p',{class:'note',style:'margin-left:0'},'System matches this Mac. Light and Dark force that look.')),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),
@@ -545,7 +546,8 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
 $('vgrid').onclick=()=>{view='grid';store.set('view',view);post({action:'setting',key:'viewMode',value:'grid'});render()};$('vlist').onclick=()=>{view='list';store.set('view',view);post({action:'setting',key:'viewMode',value:'list'});render()};
 $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q').oninput=e=>{q=e.target.value.trim().toLowerCase();render()};
 $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};$('whatsNew').onclick=showWhatsNew;
-$('update').onclick=()=>post({action:'update',app:'updater'});$('support').onclick=()=>post({action:'support'});$('fleet').onclick=()=>post({action:'fleet'});
+$('update').onclick=()=>post({action:'update',app:'updater'});$('support').onclick=()=>post({action:'support'});
+$('auto').onclick=()=>{if(S.settings.checkManually)return;post({action:'setting',key:'autoInstall',value:!autoOn()})};
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove())});
 document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(whatsNewOpen){whatsNewOpen=false;closeLayers()}else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;if(selected.size){selected.clear();render()};closeLayers()}}
  const editing=['INPUT','TEXTAREA','SELECT'].includes((e.target?.tagName||'').toUpperCase())||e.target?.isContentEditable;

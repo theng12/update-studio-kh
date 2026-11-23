@@ -7,8 +7,10 @@ never runs, routes or pauses production work.
 
 ## What it does
 
-- Lets each Mac update by click, with an optional automatic switch per app per
-  machine.
+- Sets a Mac up in one press: the copy already knows its one update source, so first
+  run asks no question and names a failure with Retry when the feed cannot be read.
+- Lets each Mac update by click, with Automatic on for a fresh Mac, a visible switch on
+  the main screen, and a per-app switch in each app's own menu.
 - Publishes signed releases with `khu keygen`, `khu publish`, `khu enrol` and `khu
   serve`; the 1301 host is the only feed writer and Macs pull from it.
 - Runs a headless `khu` agent with a one-run lock, outbox, re-send, ordered
@@ -23,12 +25,14 @@ never runs, routes or pauses production work.
   `packaging/release-push.sh` publishes and reads the served feed back.
 - Syncs an accepted release to the public page only when its SHA-256 matches the
   feed.
-- Shows this Mac's apps in the Launcher window and the publisher's page in a Fleet
-  window; the headless tools keep working without a menu bar.
+- Shows this Mac's apps in the Launcher window; the publisher's page opens from the
+  Studio section of Settings (and the menu bar's Fleet item) only on a Mac that runs a
+  Studio or has joined one. A single-Mac screen shows no fleet or Studio wording. The
+  headless tools keep working without a menu bar.
 - Shows the last verified feed’s app count and publication time, names roster apps it does
   not carry, and marks unfamiliar apps. The kit’s roster is updated at release.
-- Checks the source named in this Mac’s settings and scans installer drives. The footer
-  names the feed that answered. Apps can be sorted by the publisher’s type label.
+- Checks the saved feed and scans installer drives, in those plain words; no screen
+  names the service behind the feed. Apps can be sorted by the publisher’s type label.
 - Shows verified extension and plugin downloads in their own section when published: each row
   names its category. Chrome downloads install by hand; a plugin without a download is listed only.
 
