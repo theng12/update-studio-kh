@@ -125,18 +125,21 @@ enum Snapshot {
         return image
     }
 
+    /// nil means the page threw; an empty string means it answered with nothing, which is what
+    /// `render(...)` does on success — the first version confused the two and refused every state.
     private static func run(_ web: WKWebView, _ script: String) -> String? {
-        var out: String?
+        var out = ""
+        var threw = false
         var done = false
         web.evaluateJavaScript(script) { value, error in
+            if error != nil { threw = true }
             if let text = value as? String { out = text }
             else if let value { out = "\(value)" }
-            if error != nil { out = nil }
             done = true
         }
         let started = Date()
         while !done, Date().timeIntervalSince(started) < 10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
-        return out
+        return threw ? nil : out
     }
 
     /// Measured in the rendered page: the bar's own gap, every tab's height, the gaps between them,
