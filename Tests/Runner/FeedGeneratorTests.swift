@@ -459,4 +459,70 @@ func feedGeneratorTests() {
                    "FG9 a missing asset refuses by name (\(error))")
         }
     }
+
+    // FG17 a dropped connection is not a bad asset: measured 2026-11-23, three publishes died on
+    // transient NSURLErrorNetworkConnectionLost while curl fetched the same URL in 33 s. The proof
+    // tries again, and when every attempt fails the refusal is the one it always was.
+    do {
+        let body = Data("asset bytes".utf8)
+        let bodySha = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [FlakyAssetProtocol.self]
+        let session = URLSession(configuration: config)
+        let url = "https://example.test/Flaky.dmg"
+
+        FlakyAssetProtocol.body = body
+        FlakyAssetProtocol.failuresLeft = 2
+        let recovered = AnonymousAsset(attempts: 3, backoff: 0.05, session: session)
+        do {
+            try recovered.prove(url: url, repo: "o/r", tag: "1.0.0", asset: "Flaky.dmg",
+                                expectedSha: bodySha, expectedBytes: Int64(body.count))
+            expect(true, "FG17 two dropped connections, the third attempt proves the asset")
+        } catch {
+            expect(false, "FG17 a transient drop must not refuse a good asset (\(error))")
+        }
+
+        FlakyAssetProtocol.failuresLeft = 9
+        do {
+            try recovered.prove(url: url, repo: "o/r", tag: "1.0.0", asset: "Flaky.dmg",
+                                expectedSha: bodySha, expectedBytes: Int64(body.count))
+            expect(false, "FG17 a URL that never answers must still refuse")
+        } catch {
+            expect("\(error)".contains("did not download anonymously"),
+                   "FG17 the refusal is unchanged when every attempt fails (\(error))")
+        }
+
+        // And the guarantee itself is untouched: an asset that arrives but hashes differently is refused.
+        FlakyAssetProtocol.failuresLeft = 0
+        do {
+            try recovered.prove(url: url, repo: "o/r", tag: "1.0.0", asset: "Flaky.dmg",
+                                expectedSha: String(repeating: "0", count: 64), expectedBytes: Int64(body.count))
+            expect(false, "FG17 a wrong sha must still refuse")
+        } catch {
+            expect("\(error)".contains("downloaded") && "\(error)".contains("nothing was generated"),
+                   "FG17 the byte guarantee survives the retry (\(error))")
+        }
+    }
+}
+
+/// Drops the first N requests, then serves `body` — the flaky connection a publish actually met.
+final class FlakyAssetProtocol: URLProtocol {
+    nonisolated(unsafe) static var body = Data()
+    nonisolated(unsafe) static var failuresLeft = 0
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        if Self.failuresLeft > 0 {
+            Self.failuresLeft -= 1
+            client?.urlProtocol(self, didFailWithError:
+                NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost))
+            return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Length": "\(Self.body.count)"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

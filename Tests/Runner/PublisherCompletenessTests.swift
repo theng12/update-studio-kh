@@ -226,8 +226,11 @@ func publisherCompletenessTests() {
                                   to: FeedPublisher.releaseFile(in: dir))
         let art = root.appendingPathComponent("controller-art.bin")
         try! Data("controller bytes".utf8).write(to: art)
+        // `meta: nil` because this fixture is not a DMG: PC11 is about the network block, and the
+        // DMG identity read has its own guard and its own tests.
         try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "story", version: "1.0.1",
-                                   artifact: art, kind: "app-dmg", allowSame: false, requireComplete: false)
+                                   artifact: art, kind: "app-dmg", allowSame: false, meta: nil,
+                                   requireComplete: false)
         let after = feed(dir)
         expect(after?.network?.feedURLs == ["https://example.invalid/release.json"] && after?.network?.controller == nil,
                "PC11 a publish keeps feedURLs and never writes a controller handoff")

@@ -128,17 +128,47 @@ public protocol AssetVerifier: Sendable {
 }
 
 /// The real one: URLSession with no credentials, hashing what arrives.
+///
+/// Measured 2026-11-23: three publishes in a row died on a transient `NSURLErrorNetworkConnectionLost`
+/// (file-studio's asset once, media-studio's 255 MB one twice) while `curl` fetched the same URL in
+/// 33 s with a matching sha. A dropped connection is not a bad asset, so the proof tries again — and
+/// the refusal when every attempt has failed is exactly the one it always was.
 public struct AnonymousAsset: AssetVerifier {
-    public init() {}
+    let attempts: Int
+    let backoff: TimeInterval
+    let session: URLSession
+
+    public init(attempts: Int = 3, backoff: TimeInterval = 1, session: URLSession = .shared) {
+        self.attempts = attempts; self.backoff = backoff; self.session = session
+    }
+
     public func prove(url: String, repo: String, tag: String, asset: String, expectedSha: String, expectedBytes: Int64) throws {
         guard let address = URL(string: url) else {
             throw khuFail("refused: \(repo) \(tag)'s \(asset) is not a URL; nothing was generated")
         }
+        var outcome: Result<(String, Int64), Error> = .failure(khuFail("no answer"))
+        for attempt in 1...max(1, attempts) {
+            outcome = download(address)
+            if case .success = outcome { break }
+            if attempt < attempts, backoff > 0 { Thread.sleep(forTimeInterval: backoff * Double(attempt)) }
+        }
+        switch outcome {
+        case .failure(let error):
+            throw khuFail("refused: \(repo) \(tag)'s \(asset) did not download anonymously (\(error)); nothing was generated")
+        case .success(let held):
+            guard held.0 == expectedSha, held.1 == expectedBytes else {
+                throw khuFail("refused: \(repo) \(tag)'s \(asset) downloaded \(held.0) (\(held.1) B), not the \(expectedSha) (\(expectedBytes) B) the release names; nothing was generated")
+            }
+        }
+    }
+
+    /// One attempt. A failure is returned, never thrown, so the caller decides whether to retry.
+    private func download(_ address: URL) -> Result<(String, Int64), Error> {
         var request = URLRequest(url: address, timeoutInterval: 600)
         request.setValue("Studio Launcher KH feed check", forHTTPHeaderField: "User-Agent")
         let semaphore = DispatchSemaphore(value: 0)
         var outcome: Result<(String, Int64), Error> = .failure(khuFail("no answer"))
-        URLSession.shared.downloadTask(with: request) { file, response, error in
+        session.downloadTask(with: request) { file, response, error in
             defer { semaphore.signal() }
             if let error { outcome = .failure(error); return }
             guard let file, let http = response as? HTTPURLResponse else {
@@ -154,14 +184,7 @@ public struct AnonymousAsset: AssetVerifier {
             } catch { outcome = .failure(error) }
         }.resume()
         _ = semaphore.wait(timeout: .now() + 660)
-        switch outcome {
-        case .failure(let error):
-            throw khuFail("refused: \(repo) \(tag)'s \(asset) did not download anonymously (\(error)); nothing was generated")
-        case .success(let held):
-            guard held.0 == expectedSha, held.1 == expectedBytes else {
-                throw khuFail("refused: \(repo) \(tag)'s \(asset) downloaded \(held.0) (\(held.1) B), not the \(expectedSha) (\(expectedBytes) B) the release names; nothing was generated")
-            }
-        }
+        return outcome
     }
 }
 
