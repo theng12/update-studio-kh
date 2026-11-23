@@ -14,6 +14,9 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     /// from the click until `installing` names them, so a queued click is never drawn as nothing.
     var active: Set<String> = []
     let pacing = RunPacing()
+    /// The Launcher's own update hold (Sparkle's shim posts here before any check). Kept alive for
+    /// the life of the app; nil when its port could not be opened.
+    var holdServer: LauncherHold?
     let stateDir: URL
     let machine: String
     let version: String?

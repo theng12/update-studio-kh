@@ -510,6 +510,21 @@ struct KHUMain {
             // on 1301 each of 1,605 restarts logged the same count and nothing said why.
             agentLog.record("agent start: transfers=\(TransferMeter.completed) restarted-without-success=\(AgentRecycle.recycledSinceSuccess(stateDir: cfg.stateDir))")
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
+            // The Launcher's own update hold: fixed loopback port, its own 0600 token. A taken port
+            // is said and never stops the app.
+            if let menu {
+                do {
+                    let hold = LauncherHold(token: try LauncherHold.token(in: URL(fileURLWithPath: cfg.stateDir))) { [weak menu] in
+                        guard let menu else { return [] }
+                        menu.lock.lock(); defer { menu.lock.unlock() }
+                        return (menu.installingApp.map { [$0] } ?? []) + menu.active.sorted()
+                    }
+                    try hold.start()
+                    menu.holdServer = hold
+                } catch {
+                    FileHandle.standardError.write(Data("launcher hold: \(error)\n".utf8))
+                }
+            }
             let initialRequests = installs
             let startedAt = Date()
             func loop() {
