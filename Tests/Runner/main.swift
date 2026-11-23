@@ -4147,6 +4147,11 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["PACING_ONLY"] == "1" {
+            runPacingTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["STANDALONE_ONLY"] == "1" {
             standaloneLauncherTests()
             catalogSelectionTests()
@@ -4387,6 +4392,7 @@ r41HealthMustHold()
         connectionReloadTests()
         connectionWindowTests()
         publicFeedSweepTests()
+        runPacingTests()
         extensionCatalogTests()
         toolbarTests()
         inventoryTests()

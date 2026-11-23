@@ -214,7 +214,7 @@ public enum Recipe {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         guard !fm.fileExists(atPath: paths.journal.path) else {
-            throw khuFail("the earlier install is unresolved; journal kept at \(paths.journal.path)")
+            throw khuFail("the earlier install is unresolved; journal kept at \(paths.journal.path) — clear it only while the helper is stopped")
         }
 
         // 2. Verify and stage while the old app keeps running.

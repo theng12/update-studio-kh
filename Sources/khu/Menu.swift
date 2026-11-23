@@ -13,7 +13,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     /// The apps this run was asked for and has not started yet: their rows say "Receiving update…"
     /// from the click until `installing` names them, so a queued click is never drawn as nothing.
     var active: Set<String> = []
-    let wake = DispatchSemaphore(value: 0)
+    let pacing = RunPacing()
     let stateDir: URL
     let machine: String
     let version: String?
@@ -92,9 +92,11 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
 
     // MARK: the agent loop's side
 
-    /// Waits out the interval, or less when someone asks from the menu. Returns the apps to update now.
+    /// Waits out the interval, or less when a person asks from the menu. Returns the apps to update now.
+    /// A saved setting or a state change never shortens the wait — measured 2026-11-23, one state
+    /// change took this Mac from 7 runs a minute to 90.
     func waitForNextRun(seconds: Double) -> Set<String> {
-        _ = wake.wait(timeout: .now() + seconds)
+        _ = pacing.wait(interval: seconds)
         lock.lock(); defer { lock.unlock() }
         let asked = requested; requested = []; active = asked
         return asked
@@ -265,7 +267,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         if let url = URL(string: "https://nowpayments.io/donation/studiokh") { NSWorkspace.shared.open(url) }
     }
 
-    @objc private func checkNow() { wake.signal() }
+    @objc private func checkNow() { pacing.wakeByPerson() }
     @objc private func openWindow() { showWindow() }
     @objc private func openFleet() { showFleet() }
 
@@ -276,7 +278,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     func request(_ app: String) {
         // Only the agent's item-start callback owns live progress; a click just queues work.
         lock.lock(); requested.insert(app); lock.unlock()
-        wake.signal()
+        pacing.wakeByPerson()
     }
 
     @objc private func toggleAutomatic(_ sender: NSMenuItem) {
@@ -304,12 +306,13 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         if let item, let menu = item.menu { menuNeedsUpdate(menu) }
     }
 
-    /// A change is saved, then the agent runs at once so the page hears of it in one report.
+    /// A change is saved, then the loop wakes so the page hears of it — at the next scheduled run,
+    /// never sooner: saving a setting must not become a reason to run again.
     @discardableResult func save(_ settings: HelperSettings) -> Bool {
         do {
             try settings.save(to: stateDir)
             settingsNote = "Saved."
-            wake.signal()
+            pacing.wakeByState()
             return true
         } catch {
             settingsNote = "Could not save that change. Your previous settings are kept."

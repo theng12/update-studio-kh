@@ -339,7 +339,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                 settings.automatic[id] = .init(on: false, at: ISO.string(Date()))
                 try settings.save(to: helper.stateDir)
                 try FileManager.default.trashItem(at: URL(fileURLWithPath: p), resultingItemURL: nil)
-                helper.wake.signal()
+                helper.pacing.wakeByState()
             }
             catch { helper.alert("\(app?.name ?? id) was not moved to the Trash", "\(error)") }
         case "hide", "unhide":
@@ -403,7 +403,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             // The renewed sign-in is on disk; this window reads it again and then proves it.
             if let data = try? Data(contentsOf: file), let fresh = try? JSONDecoder().decode(AgentConfig.self, from: data) {
                 helper.config = fresh
-                helper.wake.signal()
+                helper.pacing.wakeByState()
                 runConnectionCheck()
             } else {
                 connectionUI.ok = false
@@ -427,7 +427,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                     self.connectionBusy = false
                     if let saved {
                         self.helper.config.feedURL = saved
-                        self.helper.wake.signal()
+                        self.helper.pacing.wakeByState()
                         self.connectionUI.serverOk = true
                         // A public feed changes what this Mac is: no publisher, no reports, no orders.
                         self.connectionUI.serverNote = saved.lowercased().hasPrefix("https://")
@@ -472,7 +472,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                     if let data = try? Data(contentsOf: joinFile),
                        let fresh = try? JSONDecoder().decode(AgentConfig.self, from: data) {
                         self.helper.config = fresh
-                        self.helper.wake.signal()
+                        self.helper.pacing.wakeByState()
                     }
                     self.reload()
                 }
@@ -506,7 +506,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                     if left, let data = try? Data(contentsOf: file),
                        let fresh = try? JSONDecoder().decode(AgentConfig.self, from: data) {
                         self.helper.config = fresh
-                        self.helper.wake.signal()
+                        self.helper.pacing.wakeByState()
                     }
                     self.reload()
                 }
@@ -550,7 +550,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                 helper.alert("\(AppNames.display(offer.appID)) could not be managed", "\(error)")
                 break
             }
-            helper.wake.signal()
+            helper.pacing.wakeByState()
             reload()
         case "setting":
             // The updater's own switch is this Mac's, on any feed: on a public feed there is no

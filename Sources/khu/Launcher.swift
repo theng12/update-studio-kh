@@ -4,7 +4,7 @@ extension HelperMenu {
     func showWindow() {
         // A Mac opened the window: re-inventory now, so the installed versions drawn are the
         // bundles on disk rather than the last periodic report.
-        wake.signal()
+        pacing.wakeByState()
         rescanSSDs()
         if window == nil { window = LauncherWindow(helper: self) }
         window?.reload()
@@ -34,7 +34,7 @@ extension HelperMenu {
         let found = SSDSource.scan()
         lock.lock(); ssd = found; lastDriveScan = Date(); lock.unlock()
         window?.reload()
-        wake.signal()
+        pacing.wakeByState()
     }
 }
 
