@@ -33,12 +33,11 @@ fi
 [ -f "$DMG" ] || { echo "no such DMG: $DMG" >&2; exit 2; }
 [ -f "$LOG" ] || { echo "no such changelog: $LOG" >&2; exit 2; }
 # 1301 is an operational Mac, not a release host (owner, 2026-11-23: "no one should publish to
-# 1301"). Its publish path stays behind an explicit flag so no caller reaches it by default: an
-# artifact now goes to its own app's repo, and the feed is generated from there.
-if [ "${KHU_LEGACY_1301_PUBLISH:-0}" != "1" ]; then
-  echo "release-push: $HOST is retired as a release host — 1301 runs apps, it does not publish them (owner, 2026-11-23). Put the artifact in its app's own repo instead: packaging/github-asset.sh <owner/repo> <tag> <dmg> <sha256> <bytes>. The legacy 1301 publish runs only with KHU_LEGACY_1301_PUBLISH=1." >&2
-  exit 2
-fi
+# 1301"). There is no flag that re-enables it: the escape hatch this used to carry is how gateway
+# 0.2.305 reached that host at 12:45Z on 2026-11-23 (issue 20261123-103). An artifact goes to its
+# own app's repo and the feed is generated from there.
+echo "release-push: $HOST is retired as a release host — 1301 runs apps, it does not publish them (owner, 2026-11-23). Put the artifact in its app's own repo instead: packaging/github-asset.sh <owner/repo> <tag> <dmg> <sha256> <bytes>." >&2
+exit 2
 # The `updater` entry is the raw helper, and a stale build/khu is not it: publish the bytes sealed
 # inside the Launcher that this version ships. Refusing beats publishing an unbuilt binary.
 if [ "$KIND" = "updater" ]; then
