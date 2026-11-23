@@ -489,6 +489,13 @@ public enum Recipe {
         }
     }
 
+    /// Atomic exchange of two existing paths on the same volume: `renamex_np(RENAME_SWAP)` is a
+    /// rename, so it needs no extra space and leaves both entries where they were when it fails.
+    /// False means the platform or the volume refused, and the caller falls back to two moves.
+    static func exchange(_ a: String, _ b: String) -> Bool {
+        renamex_np(a, b, UInt32(RENAME_SWAP)) == 0
+    }
+
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false,
@@ -599,15 +606,39 @@ public enum Recipe {
                     }
                 }
                 journal.phase = "moving"; try AtomicFile.writeJSON(journal, to: paths.journal)
-                do { try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path) }
-                catch {
-                    // One sentence the row can show: what was in the way, and that the app is untouched.
-                    throw khuFail("the previous rollback copy was in the way and the app could not be kept as the fallback; the app was left where it was")
+                // The replacement exists before the thing it replaces is removed. Measured
+                // 2026-11-23: the two-move order left this Mac with no Launcher at all — the old
+                // bundle went to the rollback path, the promote then failed, and nothing put the app
+                // back. An exchange is a rename: atomic, and space-neutral, so an update that fitted
+                // before still fits.
+                if Recipe.exchange(paths.staged.path, installedPath) {
+                    journal.phase = "promoted"; try AtomicFile.writeJSON(journal, to: paths.journal)
+                    // `staged` now holds the previous bundle; it becomes this Mac's fallback. A
+                    // failure here costs the fallback copy, never the installed app, so it is kept
+                    // where it is and reported rather than thrown.
+                    do { try fm.moveItem(at: paths.staged, to: paths.rollback) }
+                    catch {
+                        FileHandle.standardError.write(Data("note: the previous version stayed at \(paths.staged.path) instead of the rollback copy (\(error)); it is still on disk and nothing was deleted\n".utf8))
+                    }
+                } else {
+                    // Different volume, or the platform refused the exchange: the old order, but
+                    // every step restores before it reports, so the app is never in neither place.
+                    do { try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path) }
+                    catch {
+                        throw khuFail("the previous rollback copy was in the way and the app could not be kept as the fallback; the app was left where it was")
+                    }
+                    journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
+                    do { try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath)) }
+                    catch {
+                        _ = try? fm.moveItem(at: paths.rollback, to: URL(fileURLWithPath: installedPath))
+                        throw khuFail("the new bundle could not be put in place, so the previous one was put back; nothing changed")
+                    }
                 }
+            } else {
+                // With nothing installed, an existing rollback bundle is kept: it is the only fallback.
+                journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
+                try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath))
             }
-            // With nothing installed, an existing rollback bundle is kept: it is the only fallback.
-            journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
-            try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath))
             journal.phase = "promoted"; try AtomicFile.writeJSON(journal, to: paths.journal)
             // One bundle per bundle id: a leftover copy can start its own services and fight over
             // ports, so an install retires any other copy to the feed's Trash.

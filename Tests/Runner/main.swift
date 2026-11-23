@@ -4189,6 +4189,7 @@ struct RunnerMain {
             agentAndServerTests()
             downloadResumeTests()
             repairedPathTests()
+        atomicPromoteTests()
             oneShotLockTests()
             ownedServiceTests()
             updateHoldTests()
