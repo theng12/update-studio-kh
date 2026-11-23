@@ -463,7 +463,10 @@ public enum FeedGenerator {
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
             let made = try row(app: app, repo: repo, registry: registry, served: previous?.apps[app], gh: gh, verifier: verifier)
             guard var row = made.row else {
-                unpublished.append(app)
+                // A withdrawal says why, and says it every time: measured 2026-11-23, a row vanished
+                // ten minutes after a receipt that said "done", and only the drop's own line can
+                // stop two sessions believing different things.
+                unpublished.append("\(app) — \(made.changes.first ?? "its repo publishes no usable release")")
                 notes += made.changes
                 continue
             }
