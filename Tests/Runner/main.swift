@@ -441,19 +441,16 @@ func recipeTests() {
         expect(res?.status == "updated" && !app.events.contains("launch") && !app.running,
                "R30 an app that was stopped stays stopped (events \(app.events))")
     }
-    // R31: a first install on a Mac where nothing was running is done when the bundle is in place.
-    // Requiring the app's UI to run kept the journal "promoted" for ever on an unattended Mac
-    // (measured 2026-11-23: health said "app not running", the journal stayed, the agent retried
-    // every ~63 s).
+    // R31: a first install is launched and health-checked even when nothing was running. It has no
+    // earlier version to fall back to, so "the bundle is in place" is not "the app works" — the
+    // earlier shape of this test encoded the opposite and R2-5 caught it.
     do {
         let rig = RecipeRig("first-install", installedVersion: nil)
         let app = FakeApp(installed: rig.installed, running: false, healthy: ["1.2.3"])
         let res = try? rig.run(app).get()
-        expect(res?.status == "updated" && !app.events.contains("launch") && !app.running,
-               "R31 a first install nothing was running is left closed, not health-checked (events \(app.events))")
-        expect(res?.reason?.contains("first install was left closed") == true,
-               "R31 the report says the first install was left closed (\(res?.reason ?? "nil"))")
-        expect(marker(rig.installed) == "1.2.3", "R31 the first install still promoted the new version")
+        expect(res?.status == "updated" && app.events.contains("launch") && app.control.healthy("1.2.3"),
+               "R31 a first install is launched and health-checked (events \(app.events))")
+        expect(marker(rig.installed) == "1.2.3", "R31 the first install promoted the new version")
     }
     // R29: with nothing installed, an existing rollback bundle is kept as the fallback.
     do {
