@@ -1,0 +1,97 @@
+{
+  "_about": "Words registry for generated feeds (RELEASE-POLICY 2c): a DATEED STOPGAP. The app's own app-meta.json at its release tag wins; when a repo gains one, its entry here is deleted in the same change. `khu feed --registry feed-registry.json` reads this file; a stale entry is reported, never silently used.",
+  "apps": {
+    "displays-studio": {
+      "file": "839cd8a5f1b3-Displays Studio KH-0.1.6.dmg",
+      "name": "Displays Studio KH",
+      "bundle_id": "app.displaysstudiokh.desktop",
+      "bundle_name": "Displays Studio KH.app",
+      "type": "utility",
+      "tagline": "Set the brightness of external monitors from the menu bar.",
+      "description": "Set the brightness, contrast and volume of your external monitors from the menu bar, with the Mac's own brightness keys, one slider that moves every display, and controls that appear only when a monitor reports them.",
+      "hold_url": "http://127.0.0.1:8650/api/maintenance/hold",
+      "hold_since": "0.1.3",
+      "kind": "app-dmg"
+    },
+    "file-studio": {
+      "file": "b182dd5dd8da-File Studio KH-0.6.2-arm64.dmg",
+      "name": "File Studio KH",
+      "bundle_id": "kh.filestudio.app",
+      "bundle_name": "File Studio KH.app",
+      "type": "utility",
+      "tagline": "Tidy a messy folder without touching a file until you confirm.",
+      "description": "Scan a folder of photos, PDFs, videos and documents, preview a bulk action as a dry run, and apply only the rows you confirm. Moves, renames, sequential numbering and duplicate cleanup, with soft _trash and undo.",
+      "hold_url": "http://127.0.0.1:8651/api/maintenance/hold",
+      "hold_since": "0.6.0",
+      "kind": "app-dmg"
+    },
+    "gateway": {
+      "file": "cd28a73a4211-Gateway Studio KH-0.2.304-3980deb-202611220925.dmg",
+      "name": "Gateway Studio KH",
+      "bundle_id": "kh.gateway.menubar",
+      "bundle_name": "gateway-kh.app",
+      "type": "media",
+      "tagline": "One address in front of your Macs and cloud models.",
+      "description": "Puts one address in front of your Macs and cloud model providers, so Story Studio asks a single API for every model, price and job.",
+      "hold_url": "http://127.0.0.1:8787/admin/api/maintenance/drain",
+      "hold_since": "0.2.262",
+      "kind": "app-dmg"
+    },
+    "launcher": {
+      "file": "cc2763fd8bca-Studio Launcher KH-0.1.80.dmg",
+      "name": "Studio Launcher KH",
+      "bundle_id": "com.khupdater.launcher",
+      "bundle_name": "Studio Launcher KH.app",
+      "type": "system",
+      "tagline": "Every KH Studio app, installed and kept up to date.",
+      "description": "See every KH Studio app this Mac can run, install the ones you pick, and keep them current from one window.",
+      "kind": "app-dmg"
+    },
+    "media-studio": {
+      "file": "ed8816480c37-Business Studio KH-0.1.123.dmg",
+      "name": "Business Studio KH",
+      "bundle_id": "com.terranash.mediastudiokh",
+      "bundle_name": "Business Studio KH.app",
+      "type": "business",
+      "tagline": "Product photos, labels and catalogs, from one product library",
+      "description": "Runs the day-to-day of the businesses: product photos, labels, catalogs, purchasing, fuel, fixed assets and people. Product details are entered once and drive everything else. It works on one Mac or on several Macs sharing one catalog, with a browser view for phones.",
+      "hold_url": "http://127.0.0.1:13181/api/maintenance/hold",
+      "hold_since": "0.1.110",
+      "kind": "app-dmg"
+    },
+    "printer-studio": {
+      "file": "4d8125a47030-Printer Studio KH-1.0.40.dmg",
+      "name": "Printer Studio KH",
+      "bundle_id": "com.theng12.printerstudio",
+      "bundle_name": "Printer Studio KH.app",
+      "type": "utility",
+      "tagline": "Print from any device to a USB-only printer",
+      "description": "Makes a USB printer such as the HP LaserJet reachable from every device on your network, with per-device tokens, a test page and saved sticker sizes, and nothing to install on the printer.",
+      "hold_url": "http://127.0.0.1:8642/api/maintenance/hold",
+      "hold_since": "1.0.31",
+      "kind": "app-dmg"
+    },
+    "storage-studio": {
+      "file": "72fec5d6b911-Storage Studio KH-0.1.25.dmg",
+      "name": "Storage Studio KH",
+      "bundle_id": "app.storagestudiokh.desktop",
+      "bundle_name": "Storage Studio KH.app",
+      "type": "utility",
+      "tagline": "Keep your drives, NAS shares and archives mounted and tidy.",
+      "description": "Keep your drives and NAS shares mounted and organised: reconnects them at login, retries when the NAS comes back, archives what you are finished with, and never loses your settings while a share is unreachable.",
+      "hold_url": "http://127.0.0.1:8646/api/maintenance/hold",
+      "hold_since": "0.1.11",
+      "kind": "app-dmg"
+    },
+    "updater": {
+      "asset": "khu",
+      "file": "10e22658328f-khu",
+      "name": "Studio Launcher KH Helper",
+      "bundle_id": "com.khupdater.agent",
+      "type": "system",
+      "tagline": "Keeps this Mac's KH apps up to date in the background.",
+      "description": "Check for new versions on a schedule, install them with no window open, and pause an app for a moment instead of interrupting its work.",
+      "kind": "updater"
+    }
+  }
+}

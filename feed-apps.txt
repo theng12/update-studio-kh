@@ -1,0 +1,10 @@
+# app=owner/repo, one per line. `khu feed --repos feed-apps.txt --registry feed-registry.json`.
+# An app whose repo has no published release gets no row and is named in the run's output.
+displays-studio=theng12/displays-studio-kh
+file-studio=theng12/file-studio-kh
+gateway=theng12/gateway-studio-kh
+launcher=theng12/update-studio-kh
+media-studio=theng12/media-studio-kh
+printer-studio=theng12/printer-studio-kh
+storage-studio=theng12/storage-studio-kh
+updater=theng12/update-studio-kh

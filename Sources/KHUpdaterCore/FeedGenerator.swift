@@ -40,7 +40,74 @@ public struct RepoAppMeta: Codable, Sendable, Equatable {
     public var hold_since: String?
     public var kind: String?
     public var main_mac_only: Bool?
-    public init() {}
+    public init(name: String? = nil, bundle_id: String? = nil, bundle_name: String? = nil, type: String? = nil,
+                tagline: String? = nil, description: String? = nil, hold_url: String? = nil,
+                hold_since: String? = nil, kind: String? = nil, main_mac_only: Bool? = nil) {
+        self.name = name; self.bundle_id = bundle_id; self.bundle_name = bundle_name; self.type = type
+        self.tagline = tagline; self.description = description; self.hold_url = hold_url
+        self.hold_since = hold_since; self.kind = kind; self.main_mac_only = main_mac_only
+    }
+}
+
+/// One entry in the Launcher repo's words registry. It is a **dated stopgap** (RELEASE-POLICY §2c):
+/// the app's own `app-meta.json` at its release tag wins, and when a repo gains one its entry is
+/// deleted in the same change — so a leftover entry is reported as stale, never silently used.
+///
+/// `asset` selects which asset of the release becomes the row: a suffix (`.dmg`, the default) or an
+/// exact asset name (`khu`, the helper published from the same Launcher release). It is a field, not
+/// a special case in code, because one repo really publishes two feed rows.
+public struct RegistryEntry: Codable, Sendable, Equatable {
+    public var asset: String?
+    /// The row's `file`: the local artifact name this fleet keeps (`Displays Studio KH-0.1.6.dmg`),
+    /// never derived from the asset's address name (`Displays.Studio.KH-0.1.6.dmg`). Absent = the
+    /// asset's own name.
+    public var file: String?
+    public var name: String?
+    public var bundle_id: String?
+    public var bundle_name: String?
+    public var type: String?
+    public var tagline: String?
+    public var description: String?
+    public var hold_url: String?
+    public var hold_since: String?
+    public var kind: String?
+    public var main_mac_only: Bool?
+    public init(asset: String? = nil, file: String? = nil, name: String? = nil, bundle_id: String? = nil, bundle_name: String? = nil,
+                type: String? = nil, tagline: String? = nil, description: String? = nil, hold_url: String? = nil,
+                hold_since: String? = nil, kind: String? = nil, main_mac_only: Bool? = nil) {
+        self.asset = asset; self.file = file; self.name = name; self.bundle_id = bundle_id; self.bundle_name = bundle_name
+        self.type = type; self.tagline = tagline; self.description = description; self.hold_url = hold_url
+        self.hold_since = hold_since; self.kind = kind; self.main_mac_only = main_mac_only
+    }
+    public var meta: RepoAppMeta {
+        RepoAppMeta(name: name, bundle_id: bundle_id, bundle_name: bundle_name, type: type, tagline: tagline,
+                    description: description, hold_url: hold_url, hold_since: hold_since, kind: kind,
+                    main_mac_only: main_mac_only)
+    }
+}
+
+/// The whole registry: app id → its words and asset selector.
+public struct FeedRegistry: Codable, Sendable, Equatable {
+    public var apps: [String: RegistryEntry]
+    public init(apps: [String: RegistryEntry] = [:]) { self.apps = apps }
+    public static func load(from url: URL) throws -> FeedRegistry {
+        do { return try JSONDecoder().decode(FeedRegistry.self, from: Data(contentsOf: url)) }
+        catch { throw khuFail("cannot read the registry \(url.path): \(error)") }
+    }
+}
+
+/// What one generation produced, and what it had to say about where the words came from.
+public struct FeedGeneration: Sendable {
+    public var feed: Feed
+    /// app → `tag:<version>` or `registry`: which ref supplied that row's words.
+    public var sources: [String: String]
+    /// Apps whose repo has no published release: no row, and the reason a row may disappear.
+    public var unpublished: [String]
+    /// One line per registry entry that was ignored because the tag now carries `app-meta.json`.
+    public var stale: [String]
+    public init(feed: Feed, sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = []) {
+        self.feed = feed; self.sources = sources; self.unpublished = unpublished; self.stale = stale
+    }
 }
 
 /// Raw JSON for one `gh api <path>` call. Production runs `gh`; fixtures answer from a table.
@@ -71,63 +138,144 @@ public enum FeedGenerator {
         return RepoRelease(tag: tag, publishedAt: object["published_at"] as? String, assets: assets)
     }
 
+    /// Which asset of the release becomes the row: a suffix (`.dmg`, the default) or an exact name.
+    static func asset(entry: RegistryEntry?, release: RepoRelease, repo: String) throws -> RepoRelease.Asset {
+        let want = entry?.asset ?? ".dmg"
+        // The selector matches an exact asset name, else a suffix: `.dmg` picks the DMG (its names
+        // carry a hash prefix), `khu` picks the helper's `10e22658328f-khu`. The address and the row
+        // still take the asset's own name and url, so neither is ever derived from the selector.
+        let match = release.assets.first { $0.name == want }
+            ?? release.assets.first { $0.name.lowercased().hasSuffix(want.lowercased()) }
+        guard let match else {
+            throw khuFail("refused: \(repo) \(release.tag) has no \(want) asset; nothing was generated")
+        }
+        return match
+    }
+
+    /// The row's address must be absolute https on github.com, inside that repo's own releases.
+    /// A relative or foreign address is refused for the whole run: publishing one makes every Mac
+    /// on the feed download nothing, which is exactly how the fleet lost its install path on
+    /// 2026-11-23.
+    static func checkedURL(_ raw: String, repo: String, asset: String) throws -> String {
+        guard let url = URL(string: raw), url.scheme == "https", url.host == "github.com" else {
+            throw khuFail("refused: \(repo) \(asset) has no absolute https address on github.com (\(raw)); nothing was generated")
+        }
+        guard url.path.contains("/\(repo)/releases/download/") else {
+            throw khuFail("refused: \(repo) \(asset)'s address is not in that repo's own releases (\(raw)); nothing was generated")
+        }
+        return raw
+    }
+
+    /// The words, and where they came from: the tag's own `app-meta.json` first, else the registry.
+    /// A registry entry that the tag now supersedes is reported, never silently used.
+    static func words(app: String, repo: String, tag: String, entry: RegistryEntry?,
+                      gh: GitHubReader) throws -> (RepoAppMeta, String, String?) {
+        if let data = try? gh.json("repos/\(repo)/contents/app-meta.json?ref=\(tag)"),
+           let encoded = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+           let content = encoded["content"], let decoded = Data(base64Encoded: content.filter { !$0.isWhitespace }),
+           let meta = try? JSON.decode(RepoAppMeta.self, from: decoded),
+           // One repo can publish two rows (the Launcher and the helper inside it). The tag's file
+           // describes the app whose bundle id it names; another app's row keeps its registry words.
+           entry == nil || entry?.bundle_id == nil || meta.bundle_id == nil || meta.bundle_id == entry?.bundle_id {
+            try requireMeta(meta, repo: repo, where: "app-meta.json at \(tag)")
+            let stale = entry == nil ? nil
+                : "\(app): words from tag \(tag); registry entry is stale and was ignored — delete it in the commit that added the tag file"
+            return (meta, "tag:\(tag)", stale)
+        }
+        guard let entry else {
+            throw khuFail("refused: \(repo) publishes \(tag) but has no app-meta.json at that tag and no registry entry for \(app). Nothing was generated.")
+        }
+        try requireMeta(entry.meta, repo: repo, where: "\(app)'s registry entry")
+        return (entry.meta, "registry", nil)
+    }
+
+    static func requireMeta(_ meta: RepoAppMeta, repo: String, where at: String) throws {
+        let missing = requiredMetaFields.filter { $0.1(meta)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true }.map(\.0)
+        guard missing.isEmpty else {
+            throw khuFail("refused: \(repo) \(at) is missing \(missing.joined(separator: ", ")). Nothing was generated.")
+        }
+    }
+
     /// One row, or nil when the repo has no published release.
-    public static func row(for repo: String, gh: GitHubReader) throws -> FeedApp? {
-        guard let release = try latestRelease(repo: repo, gh: gh) else { return nil }
+    public static func row(app: String, repo: String, registry: FeedRegistry?,
+                           gh: GitHubReader) throws -> (row: FeedApp?, source: String?, stale: String?) {
+        guard let release = try latestRelease(repo: repo, gh: gh) else { return (nil, nil, nil) }
         var version = release.tag
         if version.hasPrefix("v") { version = String(version.dropFirst()) }
         guard VersionCompare.isValid(version) else {
             throw khuFail("refused: \(repo) publishes tag \(release.tag), which is not a dotted numeric version; nothing was generated")
         }
-        guard let dmg = release.assets.first(where: { $0.name.lowercased().hasSuffix(".dmg") }) else {
-            throw khuFail("refused: \(repo) publishes \(release.tag) with no .dmg asset; nothing was generated")
-        }
-        guard let digest = dmg.digest?.lowercased(), digest.hasPrefix("sha256:") else {
-            throw khuFail("refused: \(repo) \(release.tag)'s \(dmg.name) has no sha256 digest from GitHub; nothing was generated")
+        let entry = registry?.apps[app]
+        let asset = try asset(entry: entry, release: release, repo: repo)
+        guard let digest = asset.digest?.lowercased(), digest.hasPrefix("sha256:") else {
+            throw khuFail("refused: \(repo) \(release.tag)'s \(asset.name) has no sha256 digest from GitHub; nothing was generated")
         }
         let sha = String(digest.dropFirst("sha256:".count))
-        guard sha.count == 64, dmg.bytes > 0 else {
-            throw khuFail("refused: \(repo) \(release.tag)'s \(dmg.name) names no usable digest or size; nothing was generated")
+        guard sha.count == 64, asset.bytes > 0 else {
+            throw khuFail("refused: \(repo) \(release.tag)'s \(asset.name) names no usable digest or size; nothing was generated")
         }
-        guard let metaData = try? gh.json("repos/\(repo)/contents/app-meta.json?ref=\(release.tag)") else {
-            throw khuFail("refused: \(repo) publishes \(release.tag) but has no app-meta.json at that tag; add name, bundle_id, type, tagline and description there. Nothing was generated.")
-        }
-        guard let encoded = try? JSONSerialization.jsonObject(with: metaData) as? [String: String],
-              let content = encoded["content"], let decoded = Data(base64Encoded: content.filter { !$0.isWhitespace }),
-              let meta = try? JSON.decode(RepoAppMeta.self, from: decoded) else {
-            throw khuFail("refused: \(repo) \(release.tag)'s app-meta.json cannot be read; nothing was generated")
-        }
-        let missing = requiredMetaFields.filter { $0.1(meta)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true }.map(\.0)
-        guard missing.isEmpty else {
-            throw khuFail("refused: \(repo) app-meta.json at \(release.tag) is missing \(missing.joined(separator: ", ")). Nothing was generated.")
-        }
-        var entry = FeedApp(version: version, file: dmg.name, sha256: sha, bytes: dmg.bytes,
-                            kind: meta.kind ?? "app-dmg")
-        entry.url = dmg.url
-        entry.name = meta.name
-        entry.bundleID = meta.bundle_id
-        entry.bundleName = meta.bundle_name
-        entry.type = meta.type
-        entry.tagline = meta.tagline
-        entry.description = meta.description
-        entry.holdURL = meta.hold_url
-        entry.holdSince = meta.hold_since
-        entry.mainMacOnly = meta.main_mac_only
-        entry.released = release.publishedAt
-        return entry
+        let (meta, source, stale) = try words(app: app, repo: repo, tag: release.tag, entry: entry, gh: gh)
+        var row = FeedApp(version: version, file: entry?.file ?? asset.name, sha256: sha, bytes: asset.bytes,
+                          kind: meta.kind ?? "app-dmg")
+        // The address is the asset's own, as GitHub serves it; `file` keeps the local name. Both come
+        // from the API, so neither is ever derived from the other.
+        row.url = try checkedURL(asset.url, repo: repo, asset: asset.name)
+        row.name = meta.name
+        row.bundleID = meta.bundle_id
+        row.bundleName = meta.bundle_name
+        row.type = meta.type
+        row.tagline = meta.tagline
+        row.description = meta.description
+        row.holdURL = meta.hold_url
+        row.holdSince = meta.hold_since
+        row.mainMacOnly = meta.main_mac_only
+        row.released = release.publishedAt
+        return (row, source, stale)
     }
 
-    /// The whole feed: one row per repo with a published release. No `previous`, no `network`, no
-    /// compatibility row — the generated feed is the only feed.
-    public static func feed(apps: [String: String], gh: GitHubReader, now: Date = Date()) throws -> Feed {
+    /// The whole feed: one row per repo with a published release, no `previous`, no `network`, no
+    /// compatibility row. Every app with no published release is reported by name — that list is the
+    /// only thing that may legally disappear from a published feed.
+    /// `previous` is the feed the world reads now, when there is one. A publish may change the row
+    /// it publishes, but it may never lose a field: what the publisher host added to a row of the
+    /// same version (its icon, notes, features, delta) is carried forward, and the top level keeps
+    /// its `network` block and pins. A new version drops the version-specific ones — the integrity
+    /// check then says so, which is the point.
+    public static func generate(apps: [String: String], registry: FeedRegistry? = nil, previous: Feed? = nil,
+                                gh: GitHubReader, now: Date = Date()) throws -> FeedGeneration {
         var feed = Feed(published_at: ISO.string(now))
+        var sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = []
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
-            // The helper is not a feed app (owner ruling 2026-11-23): it ships inside the Launcher and
-            // comes with it. A line naming it is dropped here, never turned into a row every Mac reads.
-            if app == "updater" { continue }
-            if let entry = try row(for: repo, gh: gh) { feed.apps[app] = entry }
+            let made = try row(app: app, repo: repo, registry: registry, gh: gh)
+            guard var row = made.row else { unpublished.append(app); continue }
+            if let old = previous?.apps[app], old.version == row.version {
+                if row.icon == nil { row.icon = old.icon; row.iconSha256 = old.iconSha256 }
+                if row.notes == nil { row.notes = old.notes }
+                if row.features == nil { row.features = old.features }
+                if row.accent == nil { row.accent = old.accent }
+                if row.delta == nil { row.delta = old.delta }
+                if row.security == nil { row.security = old.security }
+                for (key, value) in old.extras where row.extras[key] == nil { row.extras[key] = value }
+            }
+            feed.apps[app] = row
+            if let source = made.source { sources[app] = source }
+            if let note = made.stale { stale.append(note) }
         }
-        return try feed.validated()
+        if let previous {
+            feed.network = previous.network
+            feed.extras = previous.extras
+            var pins = (previous.previous ?? [:]).filter { feed.apps[$0.key] != nil }
+            for (app, row) in feed.apps {
+                if let before = previous.apps[app], before.version != row.version { pins[app] = before }
+            }
+            feed.previous = pins.isEmpty ? nil : pins
+        }
+        return FeedGeneration(feed: try feed.validated(), sources: sources, unpublished: unpublished, stale: stale)
+    }
+
+    /// The feed alone, for callers that do not need the report.
+    public static func feed(apps: [String: String], gh: GitHubReader, now: Date = Date()) throws -> Feed {
+        try generate(apps: apps, gh: gh, now: now).feed
     }
 
     /// The signed envelope for those bytes, exactly what a client verifies. The signature is
