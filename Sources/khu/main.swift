@@ -316,6 +316,10 @@ struct KHUMain {
                     try AtomicFile.writeJSON(previous, to: beforeFile)
                     try AtomicFile.write(envelope, to: afterFile)
                     var checkArgs = [checker, beforeFile.path, afterFile.path]
+                    // The generated feed carries no `previous` block; dropping the old one whole is a
+                    // reshape the checker permits only when it is named. Every other difference
+                    // still fails, so this is passed only when the block is really going.
+                    if previous.previous != nil, feed.previous == nil { checkArgs.append("--allow-previous-dropped") }
                     for app in published { checkArgs += ["--published", app] }
                     for app in removed { checkArgs += ["--allow-removed", app] }
                     let run = Process()
