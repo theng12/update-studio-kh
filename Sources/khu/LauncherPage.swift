@@ -478,7 +478,7 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  const chInput=el('input',{id:'addr',type:'text',value:addrDraft===null?shownAddress:addrDraft,placeholder:'http://100.64.0.7:8790/release.json','aria-label':'Update Studio address',oninput:e=>{addrDraft=e.target.value}});
  // The same three-way choice first run offers, here too: a GitHub Mac must have a way back to a
  // publisher that needs no reinstall, and a publisher Mac keeps its route unchanged.
- const pubAddr=el('input',{id:'pubaddr',type:'text',value:(c.destination&&!c.publicFeed)?c.destination:'',placeholder:'http://name.tail1234.ts.net:8790/release.json','aria-label':'Update Studio address for joining'});
+ const pubAddr=el('input',{id:'pubaddr',type:'text',value:(c.destination&&!c.publicFeed)?c.destination:'',placeholder:'http://publisher-host:8790/release.json','aria-label':'Update Studio address for joining'});
  const pubCode=el('input',{id:'pubcode',type:'text',placeholder:'123-456','aria-label':'Pairing code'});
  if(connSourceSel===null)connSourceSel=c.publicFeed?'github':(c.canLeave?'publisher':'custom');
  // The house segment styling: the chosen route is visibly pressed, not three identical buttons.

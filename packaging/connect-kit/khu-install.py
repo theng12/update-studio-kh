@@ -132,11 +132,11 @@ def publisher_config(raw: dict, *, allow_test: bool = False) -> dict:
         if address is not None:
             if not (allow_test and address.is_loopback):
                 raise ValueError("publisher feed address is a bare IP (%s); macOS refuses plain "
-                                 "http to an IP address — use the publisher's Tailscale name "
-                                 "ending in .ts.net" % host)
+                                 "http to an IP address — use the publisher's "
+                                 "private-network host name" % host)
         elif not host.endswith(".ts.net"):
-            raise ValueError("publisher feed address must be the publisher's Tailscale name "
-                             "ending in .ts.net, not %r" % host)
+            raise ValueError("publisher feed address must be the publisher's private-network "
+                             "host name, not %r" % host)
         if (parsed.scheme != "http" or parsed.username or parsed.password or parsed.query
                 or parsed.fragment or parsed.path != path
                 or (not allow_test and parsed.port != 8790)):

@@ -357,7 +357,7 @@ func connectionFlowTests() {
         expectThrows("CF7 a numeric IP as a URL is refused too", contains: "App Transport Security") {
             _ = try Connect.destination("http://100.127.1.2/")
         }
-        expectThrows("CF7 any other name is refused for the same reason", contains: "ts.net") {
+        expectThrows("CF7 any other name is refused for the same reason", contains: "private-network") {
             _ = try Connect.destination("update-studio.example")
         }
         expectThrows("CF7 a zero port is refused", contains: "port") { _ = try Connect.destination("host.tail1234.ts.net:0") }

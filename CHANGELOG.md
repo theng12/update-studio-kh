@@ -68,7 +68,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 ## 1.0.30 — 2026-11-13
 
 - Re-pairing a Mac no longer needs a Remove on the publisher Mac: entering its pairing code replaces the older sign-in, and the previous token stops working.
-- The Launcher's address field accepts the publisher's Tailscale name (ending in .ts.net) and says plainly why a numeric IP cannot be used.
+- The Launcher's address field accepts the publisher's private-network host name and says plainly why a numeric IP cannot be used.
 - Includes Studio Launcher KH 0.1.28 with the same connection fixes.
 
 ## 1.0.29 — 2026-11-13

@@ -269,7 +269,7 @@ final class ConnectionWindow: NSObject, NSWindowDelegate {
             sourceNote.stringValue = "GitHub releases: this Mac installs only what that feed signs and reports nothing to anyone. No pairing code is needed."
         case .custom:
             destinationField.stringValue = ""
-            destinationField.placeholderString = "Paste an https feed link, or type a name ending in .ts.net"
+            destinationField.placeholderString = "Paste an https feed link, or type the publisher's private-network host name"
             destinationField.isEditable = true
             destinationField.isBezeled = true
             destinationField.drawsBackground = true

@@ -28,7 +28,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - The footer's fleet button reads "Fleet" in full (it was cut to "Fleet…"); its tooltip keeps the full sentence.
 - In Settings, "Where updates come from" has its own spacing, "Check connection" sits under the address it checks, and the Join note is one line — so the route picker and the Join controls are visible without scrolling at the default window size.
 - Connecting from GitHub releases no longer fails on a Mac that has used Studio Launcher before: leftover updater state made the installer refuse a plain run ("KH Updater already exists"), and the app showed only "Local setup could not be completed". The app now asks for the installer's repair mode when anything is already there, and a real failure shows the installer's own last line.
-- The custom-address field says plainly that a numeric IP can never work: macOS refuses plain http to an IP address, so only the name ending in .ts.net (or an https feed link) can be used.
+- The custom-address field says plainly that a numeric IP can never work: macOS refuses plain http to an IP address, so only the publisher's private-network host name (or an https feed link) can be used.
 - An app Studio Launcher knows but the feed it reads does not carry is now named in the list ("This feed does not carry …"), never a silent gap.
 - The refresh control moved to the top right beside the view toggles and reads "Scan drives", so what it checks is on the button; the footer keeps "Drives scanned … · Server …" and says "Drives not scanned yet" before the first scan.
 
@@ -48,7 +48,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 - First run now asks where updates come from, as a drop-down: GitHub releases, a custom address, or — when this copy came from a publisher's kit — that Mac's own Update Studio. GitHub is the default on a copy downloaded for anyone, so setting up a Mac no longer starts at one particular publisher's address.
 - Choosing GitHub releases needs no pairing code and shows the public feed link, read-only, with one line saying this Mac installs only what that feed signs and reports nothing to anyone.
-- A custom address accepts an https feed link (no pairing code) or a publisher's Tailscale name ending in .ts.net (the code from its Update Studio window). A numeric IP is still refused — macOS blocks plain http to one — and the sentence says to use the name shown on the publisher's window.
+- A custom address accepts an https feed link (no pairing code) or the publisher's private-network host name (the code from its Update Studio window). A numeric IP is still refused — macOS blocks plain http to one — and the sentence says to use the name shown on the publisher's window.
 - A Mac set up from a publisher's kit opens on that Mac's own Update Studio, prefilled with its address and the pairing code, exactly as before. Pair again and Repair keep their saved connection and show no picker.
 - GitHub releases is now the built-in starting address when nothing is saved — it keeps working when Update Studio is off. A saved or typed address always wins over it, and Settings shows the address actually in use, marked as the default when it is that one.
 - An already-paired Mac can move to the public feed in one click: Settings has "Use GitHub releases instead". The mirror is checked against this Mac's own pinned key before it is saved; the saved sign-in is kept, so switching back is one address away. After the switch Settings says this Mac no longer reports to or takes orders from Update Studio.
@@ -144,7 +144,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 
 ## 0.1.62 — 2026-11-18
 
-- A download mirror can now be named by its Tailscale host name — the `something…ts.net` name Tailscale shows for that Mac — which is the one kind of name macOS will download an unencrypted feed from. Before, a mirror had to be named by a bare tailnet IP, and macOS refuses those every time, so a mirror could be set up and never actually used. Every other rule is unchanged: plain HTTP ending in `/release.json`, no sign-in detail in the address, a port from 1 to 65535, and a tailnet address, this Mac, or a `ts.net` name.
+- A download mirror can now be named by its private-network host name — the name Tailscale shows for that Mac — which is the one kind of name macOS will download an unencrypted feed from. Before, a mirror had to be named by a bare tailnet IP, and macOS refuses those every time, so a mirror could be set up and never actually used. Every other rule is unchanged: plain HTTP ending in `/release.json`, no sign-in detail in the address, a port from 1 to 65535, and a tailnet address, this Mac, or the publisher's private-network host name.
 
 ## 0.1.61 — 2026-11-18
 
@@ -351,7 +351,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 ## 0.1.28 — 2026-11-13
 
 - Re-pairing works from this Mac: entering the pairing code replaces the older sign-in, no Remove on the publisher Mac needed, and the old token stops working.
-- The address field accepts the publisher's Tailscale name (ending in .ts.net); a numeric IP is refused with the reason macOS gives.
+- The address field accepts the publisher's private-network host name; a numeric IP is refused with the reason macOS gives.
 - A refused sign-in still offers Pair again, and pairing reconnects without a step on the publisher Mac.
 
 ## 0.1.26 — 2026-11-13
