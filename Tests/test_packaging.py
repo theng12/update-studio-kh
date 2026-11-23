@@ -136,8 +136,8 @@ try:
           and (out / "bin/khu").read_text() == universal_blob
           and (out / "bin/khu-stub").read_text() == universal_blob,
           "kit ships universal inputs unchanged")
-    check((out / "fleet-roster.json").read_bytes() == (ROOT / "packaging/fleet-roster.json").read_bytes(),
-          "the kit includes the release roster without changing its data")
+    check(not (out / "fleet-roster.json").exists(),
+          "the kit ships no build-time roster: Hub refuses an unexpected entry in a kit")
     check(run(fake_builder, "1.0.0", out, env=univ_env).returncode != 0
           and (out / "bin/khu").read_text() == universal_blob,
           "overwrite refusal still follows the universal check")

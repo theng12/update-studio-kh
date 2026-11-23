@@ -109,9 +109,8 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         self.assertEqual((kit / "bin/khu-stub").read_text(), "signed fixture stub")
         pins = json.loads((kit / "MANIFEST.json").read_text())["files"]
         self.assertIn("bin/khu", pins)
-        roster = (ROOT / "packaging/fleet-roster.json").read_bytes()
-        self.assertEqual((kit / "fleet-roster.json").read_bytes(), roster)
-        self.assertEqual(pins["fleet-roster.json"], {"bytes": len(roster), "sha256": hashlib.sha256(roster).hexdigest()})
+        self.assertNotIn("fleet-roster.json", pins)
+        self.assertFalse((kit / "fleet-roster.json").exists())
 
     def test_shipped_kit_keeps_the_key_but_not_the_address(self):
         # A DMG anyone can download must not hand out the publisher's machine name.

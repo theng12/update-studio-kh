@@ -46,7 +46,7 @@ PY
 /usr/bin/python3 -I -c '
 import hashlib, json, pathlib, sys
 kit = pathlib.Path(sys.argv[1])
-names = [n for n in ["VERSION", "agent-config.example.json", "AppIcon.icns", "bin/khu", "bin/khu-stub", "com.khupdater.agent.plist", "install-agent.sh", "publisher.json", "fleet-roster.json"] if (kit / n).exists()]
+names = [n for n in ["VERSION", "agent-config.example.json", "AppIcon.icns", "bin/khu", "bin/khu-stub", "com.khupdater.agent.plist", "install-agent.sh", "publisher.json"] if (kit / n).exists()]
 files = {n: {"bytes": len((kit / n).read_bytes()), "sha256": hashlib.sha256((kit / n).read_bytes()).hexdigest()} for n in names}
 (kit / "MANIFEST.json").write_text(json.dumps({"agent_version": sys.argv[2], "files": files,
     "format": "studiohub.khu-agent.v1", "stage": "bootstrap-only"}, indent=2) + "\n")
