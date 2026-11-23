@@ -57,7 +57,11 @@ if ! EXISTING=$(releases); then EXISTING=""; fi
 # published release exactly as it was, which is what clients keep installing.
 DECISION=create
 if [ -n "$EXISTING" ]; then
-  DECISION=$(/usr/bin/python3 -I - "$NAME" "$BYTES" "$SHA" "$EXISTING" <<'PY'
+  # One release legitimately carries more than one asset (the Launcher DMG and the helper binary
+  # the updater row names), so a conflict is only another asset of the same kind as this one.
+  KIND="${NAME##*.}"
+  case "$NAME" in *.*) ;; *) KIND="" ;; esac
+  DECISION=$(/usr/bin/python3 -I - "$NAME" "$BYTES" "$SHA" "$EXISTING" "$KIND" <<'PY' 
 import json, sys
 name, want_bytes, want_sha, raw = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 rel = json.loads(raw)
@@ -68,9 +72,12 @@ assets = rel.get("assets") or []
 mine = [a for a in assets if a.get("name") == name]
 if mine and mine[0].get("size") == want_bytes and (not mine[0].get("digest") or mine[0].get("digest") == "sha256:" + want_sha):
     print("reuse"); raise SystemExit(0)
-if assets:
+kind, others = sys.argv[5], []
+if kind:
+    others = [a for a in assets if str(a.get("name", "")).endswith("." + kind) and a.get("name") != name]
+if others:
     print("github-asset: this version's release already holds %s, not the artifact being published (%s); a published version keeps its bytes, so nothing was changed"
-          % (", ".join(sorted(a.get("name", "?") for a in assets)), name), file=sys.stderr)
+          % (", ".join(sorted(a.get("name", "?") for a in others)), name), file=sys.stderr)
     print("conflict"); raise SystemExit(0)
 print("attach")
 PY
