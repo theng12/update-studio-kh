@@ -529,8 +529,8 @@ struct KHUMain {
                         menu?.finished(r, error: nil)
                         // What this check actually did, beside the memory: "running" and "reaching
                         // the publisher" are different facts, and only the second one counts.
-                        AgentReport.record(kind: r.statusPosted ? "ok" : "unreachable",
-                                           reason: r.statusPosted ? nil : (r.feedError ?? "no report reached the publisher"),
+                        AgentReport.record(kind: r.publicFeed ? "public-feed" : (r.statusPosted ? "ok" : "unreachable"),
+                                           reason: r.publicFeed ? nil : (r.statusPosted ? nil : (r.feedError ?? "no report reached the publisher")),
                                            stateDir: URL(fileURLWithPath: cfg.stateDir), now: Date())
                         if r.restartRequested { print("updater switched to a new version; exiting so the stub starts it"); exit(0) }
                     } catch {

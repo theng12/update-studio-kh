@@ -684,8 +684,17 @@ public enum Recipe {
         // A waiting update installs on the tick after its app is closed, and reopens it: the person
         // was told it would install by itself, so it comes back rather than arriving silently closed.
         let reopens = wasRunning || relaunchIfClosed
-        guard reopens || journal.previousVersion == nil else {
-            return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
+        guard reopens else {
+            // Nothing was running here, so nothing of the person's has to come back — and a first
+            // install has no earlier version to fall back to either. Requiring the app's UI to run
+            // left the journal "promoted" for ever on a Mac whose installs are unattended
+            // (measured 2026-11-23: health said "app not running" on every run, and the agent
+            // retried the feed every ~63 s instead of every 5 minutes). The bundle's bytes were
+            // verified before staging; the helper that performed the install reports this.
+            return finish(settled(RecipeResult(status: "updated",
+                reason: journal.previousVersion == nil
+                    ? "nothing was running here before, so the first install was left closed"
+                    : "it was not running, so it was left stopped")))
         }
         control.launch()
         mark("launched")

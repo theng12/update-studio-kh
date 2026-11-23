@@ -8,6 +8,9 @@ public struct AgentRunResult: Sendable, Equatable {
     public var commandsRun: Int
     public var updates: Int
     public var restartRequested = false
+    /// This run read a public feed, so nothing could be reported to a publisher: "unreachable" would
+    /// be false, and the honest kind is `public-feed`.
+    public var publicFeed = false
     public var notes: [String] = []
     /// No fresh verified server feed was available; SSD offers do not claim server currency.
     public var feedError: String?
@@ -969,6 +972,7 @@ public enum Agent {
             // A public feed has no publisher to report to, and none is contacted: the run installs
             // only what the signed feed offers, from the addresses that feed names.
             statusCode = nil; statusReply = nil
+            result.publicFeed = true
             result.notes.append("reading a public feed: nothing is reported to it; only this feed's own apps are offered")
         }
         if let statusCode {
