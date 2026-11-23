@@ -678,7 +678,8 @@ if args[0] == "api":
     tag = args[1].rsplit("/", 1)[-1]
     found = [r for r in rels() if r["tag"] == tag]
     if not found:
-        sys.stderr.write("gh: Not Found (HTTP 404)\n"); sys.exit(1)
+        # Real gh prints the API error body on stdout and still exits non-zero.
+        print(json.dumps({"message": "Not Found", "status": "404"})); sys.exit(1)
     print(json.dumps({"tag": tag, "draft": found[0]["draft"], "assets": found[0]["assets"]}))
 elif args[0] == "release" and args[1] in ("create", "upload"):
     tag = args[2]

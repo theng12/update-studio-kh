@@ -33,6 +33,10 @@ REAL_SHA=$(shasum -a 256 "$ART" | awk '{print $1}')
 # The signed `file` name is <sha12>-<basename>, and an artifact already carrying that prefix keeps
 # it (Publish.swift's `name`), so GitHub is given exactly the row's own name and never a second one.
 BASE=$(basename "$ART")
+# A space in a download address has to be encoded, and an encoded address is one more thing to get
+# wrong, so the asset name uses dots where the artifact's own name has spaces (what the public page
+# did). The row is generated from this release, so its `file` and this name agree by construction.
+BASE="${BASE// /.}"
 PRE=${SHA:0:12}
 NAME="$BASE"
 case "$BASE" in "$PRE"-*) ;; *) NAME="$PRE-$BASE" ;; esac
@@ -43,7 +47,10 @@ ln "$ART" "$STAGE/$NAME" 2>/dev/null || cp "$ART" "$STAGE/$NAME"
 
 releases() { gh api "repos/$REPO/releases/tags/$TAG" 2>/dev/null; }
 
-EXISTING=$(releases || true)
+# gh prints an API error body on stdout with a non-zero status: that is "no such release",
+# never a release that happens to hold no assets.
+EXISTING=""
+if ! EXISTING=$(releases); then EXISTING=""; fi
 # Releases are added, never withdrawn (RELEASE-POLICY §2c): this decides "reuse the asset already
 # there", "add the one asset a half-finished run left off", or "refuse" — never delete, never
 # overwrite a different artifact, never touch the previous tag. A refusal leaves the repo's newest
