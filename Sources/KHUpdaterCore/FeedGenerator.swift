@@ -359,7 +359,7 @@ public enum FeedGenerator {
             }
             return value
         }
-        let meta = RepoAppMeta(
+        var meta = RepoAppMeta(
             name: pick("name", fromTag?.name, entry?.name, served?.name),
             bundle_id: pick("bundle_id", fromTag?.bundle_id, entry?.bundle_id, served?.bundleID),
             bundle_name: pick("bundle_name", fromTag?.bundle_name, entry?.bundle_name, served?.bundleName),
@@ -370,6 +370,9 @@ public enum FeedGenerator {
             hold_since: pick("hold_since", fromTag?.hold_since, entry?.hold_since, served?.holdSince),
             kind: pick("kind", fromTag?.kind, entry?.kind, served?.kind),
             main_mac_only: fromTag?.main_mac_only ?? entry?.main_mac_only ?? served?.mainMacOnly)
+        // The app's own local artifact name is a statement by the release, never a fallback: a tag
+        // that does not name one keeps today's behaviour, so nothing rewrites itself meanwhile.
+        meta.localFile = fromTag?.localFile
         let missing = requiredMetaFields.filter { clean($0.1(meta)) == nil }.map(\.0)
         guard missing.isEmpty else {
             throw khuFail("refused: \(repo) \(tag) has no \(missing.joined(separator: ", ")) in its app-meta.json, the registry, or the served feed. Nothing was generated.")
