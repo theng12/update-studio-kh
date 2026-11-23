@@ -509,8 +509,8 @@ func feedGeneratorTests() {
     // address was published and its receipt still said "published".
     do {
         let backed = FakeGitHub(paths: [
-            "repos/o/backed": "{\"full_name\":\"o/backed\",\"private\":false}",
-            "repos/o/backed/releases?per_page=100": "[{\"tag_name\":\"backed-1.0.0\",\"assets\":[{\"browser_download_url\":\"https://example.test/B.dmg\"}]}]",
+            "repos/o/backed": Data("{\"full_name\":\"o/backed\",\"private\":false}".utf8),
+            "repos/o/backed/releases?per_page=100": Data("[{\"tag_name\":\"backed-1.0.0\",\"assets\":[{\"browser_download_url\":\"https://example.test/B.dmg\"}]}]".utf8),
         ])
         do {
             try FeedPublisher.verifyBacked(repo: "o/backed", app: "backed", version: "1.0.0", gh: backed)
@@ -527,8 +527,8 @@ func feedGeneratorTests() {
         }
 
         let noAsset = FakeGitHub(paths: [
-            "repos/o/quiet": "{\"full_name\":\"o/quiet\",\"private\":false}",
-            "repos/o/quiet/releases?per_page=100": "[{\"tag_name\":\"quiet-1.0.0\",\"assets\":[]}]",
+            "repos/o/quiet": Data("{\"full_name\":\"o/quiet\",\"private\":false}".utf8),
+            "repos/o/quiet/releases?per_page=100": Data("[{\"tag_name\":\"quiet-1.0.0\",\"assets\":[]}]".utf8),
         ])
         do {
             try FeedPublisher.verifyBacked(repo: "o/quiet", app: "quiet", version: "1.0.0", gh: noAsset)
