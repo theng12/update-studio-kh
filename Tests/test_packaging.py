@@ -847,14 +847,15 @@ exit 0
           % result.returncode)
     # One release carries the Launcher DMG and the helper binary the updater row names: a second
     # asset of a different kind attaches instead of reading as a second artifact for one version.
-    helper_name = sha[:12] + "-khu"
+    helper_sha = hashlib.sha256(b"khu").hexdigest()
+    helper_name = helper_sha[:12] + "-khu"
     helper_path = gh_serve / "theng12/push-app/releases/download/gateway-9.9.9" / helper_name
     helper_path.write_text("khu")
-    (work / "push-helper").write_text("khu")
+    (work / "khu").write_text("khu")
     (gh_state / "releases.json").write_text(json.dumps([{"tag": "gateway-9.9.9", "draft": False,
         "assets": [{"name": asset_name, "size": 3, "digest": "sha256:" + sha}]}]))
-    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", work / "push-helper", sha, "3",
-                 env={**push_env2, "KHU_ASSET_FETCH_CHECK": "1"})
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", work / "khu", helper_sha, "3",
+                 env=push_env2)
     check(result.returncode == 0 and helper_name in result.stdout,
           "a second asset of another kind joins the same release instead of being refused (rc=%d, %s)"
           % (result.returncode, (result.stderr or "").strip().splitlines()[-1:]))
