@@ -1,6 +1,7 @@
 import Foundation
 import SystemConfiguration
 import CryptoKit
+import Darwin
 
 public struct AgentRunResult: Sendable, Equatable {
     public var statusPosted: Bool
@@ -2503,8 +2504,41 @@ public enum Agent {
             try fm.moveItem(at: staging, to: binary)
         }
         let moved = try FileLock.withExclusive(layout.switchLock) { try StubSwitcher(layout: layout).install(version: entry.version) }
-        guard moved else { return RecipeResult(status: "current", reason: "\(entry.version) is already running") }
-        return RecipeResult(status: "switched", reason: "the stub starts \(entry.version) next and rolls back if it misbehaves")
+        // The CLI copy an install already keeps (`bin/khu`) is refreshed in the same switch: it is
+        // what the publisher host's release path and `GET /status` report, and it used to stay on
+        // the version the tree had just left. A plain copy, never a link, so the old file stays whole.
+        // A failed copy is said in the result but never hides a switch that already happened.
+        let refreshNote: String
+        do { refreshNote = try refreshCLICopy(binary, layout: layout) ? "; bin/khu was refreshed to it" : "" }
+        catch { refreshNote = "; bin/khu could not be refreshed: \(error)" }
+        guard moved else {
+            return RecipeResult(status: "current", reason: "\(entry.version) is already running" + refreshNote)
+        }
+        return RecipeResult(status: "switched", reason: "the stub starts \(entry.version) next and rolls back if it misbehaves"
+                            + refreshNote)
+    }
+
+    /// Replace `base/bin/khu` with a copy of `binary` when an install keeps one there already.
+    /// Returns whether it was replaced. Atomic: the new file is written beside it and renamed over,
+    /// so a reader sees the old copy or the new one, never half of each.
+    @discardableResult
+    private static func refreshCLICopy(_ binary: URL, layout: StubLayout) throws -> Bool {
+        let dest = layout.base.appendingPathComponent("bin/khu")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dest.path) else { return false }
+        let wanted = try Signing.sha256Hex(fileAt: binary)
+        if let held = try? Signing.sha256Hex(fileAt: dest), held.hex == wanted.hex, held.bytes == wanted.bytes {
+            return false
+        }
+        let staging = dest.deletingLastPathComponent().appendingPathComponent(".khu.khu-tmp-\(UUID().uuidString)")
+        defer { _ = try? fm.removeItem(at: staging) }
+        try fm.copyItem(at: binary, to: staging)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path)
+        guard rename(staging.path, dest.path) == 0 else {
+            throw khuFail("cannot refresh \(dest.path) (errno \(errno)); the version was switched, the copy was not")
+        }
+        AtomicFile.syncDirectory(dest.deletingLastPathComponent())
+        return true
     }
 }
 

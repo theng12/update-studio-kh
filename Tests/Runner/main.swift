@@ -3005,6 +3005,48 @@ func helperTests() {
         expect(downStub?.status == "refused" && (downStub?.reason ?? "").contains("no downgrade"),
                "H5d installUpdater refuses a direct downgrade (\(downStub?.reason ?? "nil"))")
     }
+    // UB1. A served updater version lands as versions/<v>, current moves to it, and an install that
+    // keeps bin/khu gets a fresh copy of the new binary there — never a link to the old one.
+    do {
+        let rig = Rig("updater-base")
+        let artifact = rig.artifact("helper.bin", "new helper bytes")
+        try! rig.publish("updater", "0.1.60", artifact)
+        let feedU = try! FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey)!
+        let entry = feedU.apps["updater"]!
+        let baseU = rig.root.appendingPathComponent("updater-base")
+        let layoutU = StubLayout(base: baseU)
+        let oldBin = try! layoutU.binary(for: "0.1.59")
+        try! fm.createDirectory(at: oldBin.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! "#!/bin/sh\nexit 0\n".write(to: oldBin, atomically: true, encoding: .utf8)
+        chmod(oldBin.path, 0o755)
+        try! StubSwitcher(layout: layoutU).install(version: "0.1.59")
+        let binDir = baseU.appendingPathComponent("bin")
+        try! fm.createDirectory(at: binDir, withIntermediateDirectories: true)
+        let cli = binDir.appendingPathComponent("khu")
+        try! Data("old copy".utf8).write(to: cli)
+        var cfgU = agentConfig(rig, token: "unused", apps: [:])
+        cfgU.stubBase = baseU.path
+        let result = try? Agent.installUpdater(entry, artifact: artifact, config: cfgU)
+        let installedPath = try! layoutU.binary(for: "0.1.60").path
+        expect(result?.status == "switched", "UB1 a served updater version is switched to (\(result?.reason ?? "nil"))")
+        expect((try? Signing.sha256Hex(fileAt: URL(fileURLWithPath: installedPath)).hex) == entry.sha256,
+               "UB1 versions/0.1.60/khu holds the served bytes")
+        expect(layoutU.currentBinary().map(StubLayout.version) == "0.1.60", "UB1 base/current moves to the new version")
+        let cliSha = try? Signing.sha256Hex(fileAt: cli).hex
+        let cliLinks = (try? fm.attributesOfItem(atPath: cli.path))?[.referenceCount] as? Int
+        expect(cliSha == entry.sha256 && cliLinks == 1,
+               "UB1 bin/khu is a fresh copy of the new version, not a link (\(cliSha ?? "none"), links \(cliLinks ?? -1))")
+        // A version already current still refreshes a copy left stale.
+        try! Data("stale".utf8).write(to: cli)
+        let again = try? Agent.installUpdater(entry, artifact: artifact, config: cfgU)
+        expect(again?.status == "current" && (try? Signing.sha256Hex(fileAt: cli).hex) == entry.sha256,
+               "UB1 a current version still refreshes a stale bin/khu")
+        // An install that never kept one does not grow one.
+        try! fm.removeItem(at: cli)
+        let absent = try? Agent.installUpdater(entry, artifact: artifact, config: cfgU)
+        expect(absent?.status == "current" && !fm.fileExists(atPath: cli.path),
+               "UB1 installUpdater does not invent a bin/khu an install does not keep")
+    }
     // H6. A report with too many switches is refused and changes nothing.
     do {
         let (rig, cfg, _) = setup("h6")
