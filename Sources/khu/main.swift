@@ -52,6 +52,7 @@ struct KHUMain {
             khu <subcommand> ...
               keygen <dir>
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|extension|media|plugin|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--meta-only] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
+              feed --repos <apps.txt> --key <keyfile> (--out <release.json> | --publish --repo <owner/name>)   (generates the whole feed from each app repo's latest published release: app=owner/repo per line)
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -223,6 +224,50 @@ struct KHUMain {
                                           holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep,
                                           requireComplete: true)
                 print("published \(a) \(v)")
+            } catch { fail("\(error)") }
+        case "feed":
+            // The feed is generated from the app repos on every publish — no stored feed, no
+            // mirror, no compatibility row. `app=owner/repo` per line; `#` starts a comment.
+            var reposFile: String?, keyArg: String?, out: String?, publishRepo: String?
+            var publishFlag = false
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--repos": reposFile = value("--repos", &i)
+                case "--key": keyArg = value("--key", &i)
+                case "--out": out = value("--out", &i)
+                case "--publish": publishFlag = true
+                case "--repo": publishRepo = value("--repo", &i)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let reposFile, let keyArg else { usage() }
+            if publishFlag != (publishRepo != nil) { fail("--publish needs --repo <owner/name>; neither means --out") }
+            if publishFlag == (out != nil) { fail("name exactly one of --out <file> and --publish --repo <owner/name>") }
+            var apps: [String: String] = [:]
+            do {
+                for raw in try String(contentsOf: URL(fileURLWithPath: reposFile), encoding: .utf8).split(separator: "\n") {
+                    let line = raw.split(separator: "#", maxSplits: 1).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+                    if line.isEmpty { continue }
+                    let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                    guard parts.count == 2, !parts[0].isEmpty, parts[1].split(separator: "/").count == 2 else {
+                        fail("\(reposFile): each line is app=owner/repo, not \(line)")
+                    }
+                    apps[parts[0]] = parts[1]
+                }
+            } catch { fail("cannot read \(reposFile): \(error)") }
+            guard !apps.isEmpty else { fail("\(reposFile) names no app") }
+            do {
+                let feed = try FeedGenerator.feed(apps: apps, gh: GhReader())
+                let envelope = try FeedGenerator.signed(feed, keyFile: URL(fileURLWithPath: keyArg))
+                if let out {
+                    try AtomicFile.write(envelope, to: URL(fileURLWithPath: out))
+                    print("feed: \(feed.apps.count) app(s) written to \(out)")
+                } else if let publishRepo {
+                    try FeedPages.publish(envelope, repo: publishRepo)
+                    print("feed: \(feed.apps.count) app(s) published, published_at \(feed.published_at)")
+                }
             } catch { fail("\(error)") }
         case "unpublish", "retire":
             // Retire is the same removal under the name its purpose has: the entry leaves the
