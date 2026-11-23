@@ -250,7 +250,10 @@ PY
           || refuse "the upload of $A_FILE to $TAG failed: $(tail -1 "$WORK/gh.err")"
         did "uploaded $A_FILE to the existing release $TAG"
       else
-        gh release create "$TAG" "$A_SRC" -R "$REPO" --title "$APP $A_VER" \
+        # GitHub marks the most recently *created* release as "Latest", not the highest version:
+        # creating the previous tag after the current one made the previous version "Latest"
+        # (gateway 0.2.305 over 0.2.306, 2026-11-24). Say it explicitly at both calls.
+        gh release create "$TAG" "$A_SRC" -R "$REPO" --title "$APP $A_VER" --latest \
           --notes "Signed release from the KH Studio feed. The install guide is in the README." \
           >/dev/null 2>"$WORK/gh.err" \
           || refuse "creating release $TAG failed: $(tail -1 "$WORK/gh.err")"
@@ -309,7 +312,7 @@ PY
           || refuse "adding $A_PREVFILE to the existing release $PREV_TAG failed: $(tail -1 "$WORK/gh.err")"
         did "kept $PREV_TAG and put $A_PREVFILE on it"
       else
-        gh release create "$PREV_TAG" "$P_SRC" -R "$REPO" --title "$APP $A_PREV" \
+        gh release create "$PREV_TAG" "$P_SRC" -R "$REPO" --title "$APP $A_PREV" --latest=false \
           --notes "Signed release from the KH Studio feed, kept as the previous version." \
           >/dev/null 2>"$WORK/gh.err" \
           || refuse "creating release $PREV_TAG failed: $(tail -1 "$WORK/gh.err")"
