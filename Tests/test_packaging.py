@@ -606,69 +606,16 @@ try:
                            capture_output=True, text=True)
     check(found.returncode == 0 and found.stdout.strip() == "build/Studio Launcher KH.app/Contents/Resources/khu-agent/bin/khu",
           "inside a built tree it names the helper the DMG ships (%s)" % (found.stdout.strip() or found.stderr.strip()))
-    # On the release host bin/khu is a copy that fell behind base/current (2026-11-18), so
-    # release-push runs the current pointer and falls back to the copy only when it has none.
-    push = packaging / "release-push.sh"
-    push_bin = work / "push-bin"
-    push_bin.mkdir()
-    (push_bin / "ssh").write_text(
-        '#!/bin/bash\nfor last; do :; done\nHOME="$FAKE_REMOTE_HOME" exec /bin/sh -c "$last"\n')
-    (push_bin / "scp").write_text("#!/bin/bash\nexit 0\n")
-    (push_bin / "ssh").chmod(0o755)
-    (push_bin / "scp").chmod(0o755)
-    remote_home = work / "push-remote-home"
-    kh = remote_home / "Library/KHUpdater"
-    (kh / "base/versions/0.1.62").mkdir(parents=True)
-    (kh / "bin").mkdir()
-    khu_body = '#!/bin/bash\nprintf "%s\\n" "$0" >> "$FAKE_KHU_LOG"\nexit 0\n'
-    for helper in (kh / "base/versions/0.1.62/khu", kh / "bin/khu"):
-        helper.write_text(khu_body)
-        helper.chmod(0o755)
-    (kh / "base/current").symlink_to("versions/0.1.62/khu")
-    dmg, changelog, khu_calls = work / "push.dmg", work / "push.md", work / "push-khu-calls"
-    dmg.write_text("dmg")
-    changelog.write_text("changes")
-    push_env = {**fake_env, "PATH": f"{push_bin}:{fake_env['PATH']}", "KHU_RELEASE_HOST": "fixture@127.0.0.1",
-                "KHU_RELEASE_KEY": "/dev/null", "KHU_RELEASE_STAGE": "release-stage",
-                "FAKE_REMOTE_HOME": str(remote_home), "FAKE_KHU_LOG": str(khu_calls),
-                "KHU_LEGACY_1301_PUBLISH": "1"}
-
-    def push_run():
-        if khu_calls.exists():
-            khu_calls.unlink()
-        result = run(push, "gateway", "9.9.9", dmg, changelog, env=push_env)
-        return result, (khu_calls.read_text().strip() if khu_calls.exists() else "")
-
-    # 1301 is an operational Mac, not a release host (owner 2026-11-23): nothing reaches it by default.
-    if khu_calls.exists():
-        khu_calls.unlink()
-    result = run(push, "gateway", "9.9.9", dmg, changelog,
-                 env={k: v for k, v in push_env.items() if k != "KHU_LEGACY_1301_PUBLISH"})
-    check(result.returncode == 2 and "retired as a release host" in result.stderr and not khu_calls.exists(),
-          "release-push refuses a 1301 publish unless the caller names the legacy flag (rc=%d)" % result.returncode)
-
-    _, called = push_run()
-    check(called.endswith("base/current"),
-          "release-push publishes with the host's current helper, not a stale bin/khu copy (%s)" % called)
-    (kh / "base/current").unlink()
-    result, called = push_run()
-    check(result.returncode != 0 and called == "",
-          "release-push refuses a host with no current pointer instead of using bin/khu (rc=%d, called=%r)"
-          % (result.returncode, called))
-    check("bin/khu" in result.stderr and "base/current" in result.stderr,
-          "the refusal names both paths, so the host is fixable from the message")
-    (kh / "bin/khu").unlink()
-    result, called = push_run()
-    check(result.returncode != 0 and called == "",
-          "with neither helper the remote command fails and release-push exits non-zero (rc=%d)" % result.returncode)
-
-    # --- GitHub-first upload (§2a/§2b) -------------------------------------------------
-    # A fake gh stores what it was given and reports it the way GitHub does (size and digest), so a
-    # helper that trusts its own copy instead of the readback fails here rather than in a release.
+    # 1301 is not a release host (owner 2026-11-23): release-push publishes nowhere. It resolves
+    # the sealed helper and puts the artifact in the app's own repo, which is what these fixtures
+    # exercise — a fake gh that stores what it is given and reports it the way GitHub does.
+    import hashlib
+    import http.server
+    import threading
     gh_state = work / "push-gh-state"
     gh_state.mkdir()
     push_gh_calls, push_order = work / "push-gh-calls", work / "push-order"
-    push_gh = push_bin / "gh"
+    push_gh = fake_bin / "gh"
     push_gh.write_text(r'''#!/usr/bin/env python3
 import hashlib, json, os, sys
 STATE = os.environ["FAKE_GH_STATE"]
@@ -712,31 +659,11 @@ else:
     sys.stderr.write("fake gh: unsupported " + " ".join(args) + "\n"); sys.exit(2)
 ''')
     push_gh.chmod(0o755)
-    push_args = work / "push-khu-args"
-    khu_url_body = '''#!/bin/bash
-if [ "$1" = publish ] && [ "$2" = "--help" ]; then
-  [ -n "$FAKE_KHU_URL_FLAG" ] && echo "  --url <address>  absolute https artifact address"
-  exit 0
-fi
-printf "%s\\n" "$0" >> "$FAKE_KHU_LOG"
-printf "%s\\n" "$*" >> "$FAKE_KHU_ARGS"
-printf "publish\\n" >> "$FAKE_GH_ORDER"
-exit 0
-'''
-    for helper in (kh / "base/versions/0.1.62/khu", kh / "bin/khu"):
-        helper.write_text(khu_url_body)
-        helper.chmod(0o755)
-    (kh / "base/current").symlink_to("versions/0.1.62/khu")
-    push_env2 = {**push_env, "FAKE_GH_STATE": str(gh_state), "FAKE_GH_CALLS": str(push_gh_calls),
-                 "FAKE_GH_ORDER": str(push_order), "FAKE_KHU_ARGS": str(push_args),
-                 "KHU_PUBLIC_REPO": "theng12/push-app"}
     # The helper fetches the asset back the way a client does, so the fixture serves the release
     # path over loopback: the download check is the one that proves a stranger can install it.
-    import hashlib
-    import http.server
-    import threading
     gh_serve = work / "push-gh-serve"
-    asset_name = hashlib.sha256(b"dmg").hexdigest()[:12] + "-push.dmg"
+    sha = hashlib.sha256(b"dmg").hexdigest()
+    asset_name = sha[:12] + "-push.dmg"
     asset_path = gh_serve / "theng12/push-app/releases/download/gateway-9.9.9" / asset_name
     asset_path.parent.mkdir(parents=True)
     asset_path.write_text("dmg")
@@ -748,112 +675,67 @@ exit 0
     server = http.server.ThreadingHTTPServer(
         ("127.0.0.1", 0), lambda *a, **k: Quiet(*a, directory=str(gh_serve), **k))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    push_env2["KHU_ASSET_BASE"] = "http://127.0.0.1:%d" % server.server_address[1]
-    push_env2["KHU_RELEASE_PORT"] = str(server.server_address[1])
-    asset_url = ("%s/theng12/push-app/releases/download/gateway-9.9.9/%s"
-                 % (push_env2["KHU_ASSET_BASE"], asset_name))
-    sha = hashlib.sha256(b"dmg").hexdigest()
+    asset_url = ("http://127.0.0.1:%d/theng12/push-app/releases/download/gateway-9.9.9/%s"
+                 % (server.server_address[1], asset_name))
+    push_env = {**fake_env, "KHU_PUBLIC_REPO": "theng12/push-app",
+                "KHU_ASSET_BASE": "http://127.0.0.1:%d" % server.server_address[1],
+                "FAKE_GH_STATE": str(gh_state), "FAKE_GH_CALLS": str(push_gh_calls),
+                "FAKE_GH_ORDER": str(push_order)}
+    push = packaging / "release-push.sh"
     gh_asset = packaging / "github-asset.sh"
 
-    def serve_feed(row_url=None):
-        row = {"version": "9.9.9", "file": asset_name, "sha256": hashlib.sha256(b"dmg").hexdigest(),
-               "bytes": 3, "kind": "app"}
-        if row_url:
-            row["url"] = row_url
-        doc = {"schema": 1, "published_at": "2026-11-23T00:00:00Z", "apps": {"gateway": row}, "previous": {}}
-        (gh_serve / "release.json").write_text(json.dumps(
-            {"feed": base64.b64encode(json.dumps(doc).encode()).decode(), "signature": "sig"}))
-
-    def push_run2(**extra):
-        for path in (khu_calls, push_args, push_order, push_gh_calls):
+    def push_run(**extra):
+        for path in (push_gh_calls, push_order):
             if path.exists():
                 path.unlink()
         (gh_state / "releases.json").write_text("[]")
-        return run(push, "gateway", "9.9.9", dmg, changelog, env={**push_env2, **extra})
+        env = {**push_env, **extra}
+        env = {k: v for k, v in env.items() if v is not None}
+        return run(push, "gateway", "9.9.9", dmg, changelog, env=env)
 
-    def order():
-        return push_order.read_text().split() if push_order.exists() else []
+    result = push_run()
+    check(result.returncode == 0 and asset_url in result.stdout,
+          "release-push uploads to the app's own repo and prints the address (rc=%d)" % result.returncode)
+    check(push_order.exists() and push_order.read_text().split() == ["create"],
+          "the release is created, and nothing else is written (%r)"
+          % (push_order.read_text().split() if push_order.exists() else []))
 
-    serve_feed(asset_url)
-    result = push_run2(FAKE_KHU_URL_FLAG="1")
-    check(order() == ["create", "publish"],
-          "the artifact reaches its GitHub release before the publish that names it (%r)" % order())
-    args = push_args.read_text()
-    check(asset_url in args, "the publish carries the release's absolute address")
-    check("--url" in args, "the address reaches the publisher as --url")
-    check("downloaded anonymously and hashes to the signed sha256" in result.stderr,
-          "the address was fetched the way a client does and hashed")
-    check(result.returncode == 0, "the served row names the address, so the publish is done (%d: %s)"
-          % (result.returncode, (result.stdout + result.stderr).strip().splitlines()[-1:] or [""]))
+    result = push_run(KHU_PUBLIC_REPO=None)
+    check(result.returncode == 2 and "no public repo named" in result.stderr and not push_gh_calls.exists(),
+          "with no repo named it refuses instead of publishing anywhere (rc=%d)" % result.returncode)
 
-    serve_feed()
-    result = push_run2(FAKE_KHU_URL_FLAG="1")
-    check(result.returncode != 0 and "does not name" in result.stdout,
-          "a row that lost the address fails the readback instead of passing (rc=%d)" % result.returncode)
+    result = push_run(FAKE_GH_DRAFT="1")
+    check(result.returncode != 0 and "draft" in result.stderr,
+          "a draft release stops the release step (rc=%d)" % result.returncode)
 
-    result = push_run2(KHU_PUBLIC_REPO="", FAKE_KHU_URL_FLAG="1")
-    check(not push_gh_calls.exists() and order() == ["publish"],
-          "an app with no public repo is published without any upload (%r)" % order())
-    check("--url" not in push_args.read_text(),
-          "and its row stays base-relative, so 1301 still serves it")
-    check("no public repo named for gateway" in result.stdout,
-          "the skip is one readable line, not silence")
-
-    result = push_run2()
-    check(not push_gh_calls.exists() and "does not understand publish --url" in result.stdout,
-          "a host helper without --url skips the upload and says why, instead of half-publishing")
-
-    result = push_run2(FAKE_KHU_URL_FLAG="1", FAKE_GH_DRAFT="1")
-    check(result.returncode != 0 and "draft" in result.stderr and "publish" not in order(),
-          "a draft release stops the publish before the feed is written (rc=%d, order=%r)"
-          % (result.returncode, order()))
-
-    result = push_run2(FAKE_KHU_URL_FLAG="1", FAKE_GH_CORRUPT="1")
-    check(result.returncode != 0 and "digest" in result.stderr and "publish" not in order(),
-          "bytes GitHub did not store are refused before the publish (rc=%d, order=%r)"
-          % (result.returncode, order()))
+    result = push_run(FAKE_GH_CORRUPT="1")
+    check(result.returncode != 0 and "digest" in result.stderr,
+          "bytes GitHub did not store are refused (rc=%d)" % result.returncode)
 
     asset_path.write_text("a different build")
-    result = push_run2(FAKE_KHU_URL_FLAG="1")
-    check(result.returncode != 0 and "served" in result.stderr and "publish" not in order(),
-          "bytes the public address does not serve are refused before the publish (rc=%d, order=%r)"
-          % (result.returncode, order()))
+    result = push_run()
+    check(result.returncode != 0 and "served" in result.stderr,
+          "bytes the public address does not serve are refused (rc=%d)" % result.returncode)
     asset_path.write_text("dmg")
 
-    if push_gh_calls.exists():
-        push_gh_calls.unlink()
-    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "a" * 64, "2147483648", env=push_env2)
-    check(result.returncode != 0 and "2 GiB" in result.stderr and not push_gh_calls.exists(),
-          "at GitHub's 2 GiB cap the upload is refused before anything moves")
-    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "b" * 64, "3", env=push_env2)
-    check(result.returncode != 0 and "not the signed" in result.stderr and not push_gh_calls.exists(),
-          "an artifact that is not the signed one is refused before any upload")
-    result = run(gh_asset, "theng12/push-app'; rm -rf /", "gateway-9.9.9", dmg, sha, "3", env=push_env2)
-    check(result.returncode != 0 and "may hold only" in result.stderr and not push_gh_calls.exists(),
-          "a repo name a shell would read as syntax is refused, not escaped into the release host")
-    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3",
-                 env={**push_env2, "KHU_ASSET_BASE": "http://example.com"})
-    check(result.returncode != 0 and "must be an https address" in result.stderr,
-          "a cleartext address clients would refuse is refused here instead")
-
-    serve_feed(asset_url)
-    result = push_run2(FAKE_KHU_URL_FLAG="1", FAKE_GH_NO_DIGEST="1")
+    result = push_run(FAKE_GH_NO_DIGEST="1")
     check(result.returncode == 0 and "reported no digest" in result.stderr,
-          "without a GitHub digest the fetched bytes are the proof, and the publish still holds")
+          "without a GitHub digest the fetched bytes are the proof")
 
     # Releases are added, never withdrawn: a rerun reuses what is there, and a release holding a
     # different artifact for the same version is left alone rather than overwritten.
     (gh_state / "releases.json").write_text(json.dumps([{"tag": "gateway-9.9.9", "draft": False,
         "assets": [{"name": asset_name, "size": 3, "digest": "sha256:" + sha}]}]))
-    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3", env=push_env2)
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3", env=push_env)
     check(result.returncode == 0 and "nothing was re-uploaded" in result.stderr,
           "a rerun with the same bytes reuses the stored asset instead of uploading again")
     (gh_state / "releases.json").write_text(json.dumps([{"tag": "gateway-9.9.9", "draft": False,
         "assets": [{"name": "ffffffffffff-other.dmg", "size": 9, "digest": "sha256:" + "f" * 64}]}]))
-    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3", env=push_env2)
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3", env=push_env)
     check(result.returncode == 5 and "keeps its bytes" in result.stderr,
           "a version already published with a different artifact is refused, not overwritten (rc=%d)"
           % result.returncode)
+
     # One release carries the Launcher DMG and the helper binary the updater row names: a second
     # asset of a different kind attaches instead of reading as a second artifact for one version.
     helper_sha = hashlib.sha256(b"khu").hexdigest()
@@ -863,12 +745,28 @@ exit 0
     (work / "khu").write_text("khu")
     (gh_state / "releases.json").write_text(json.dumps([{"tag": "gateway-9.9.9", "draft": False,
         "assets": [{"name": asset_name, "size": 3, "digest": "sha256:" + sha}]}]))
-    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", work / "khu", helper_sha, "3",
-                 env=push_env2)
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", work / "khu", helper_sha, "3", env=push_env)
     check(result.returncode == 0 and helper_name in result.stdout,
           "a second asset of another kind joins the same release instead of being refused (rc=%d, %s)"
           % (result.returncode, (result.stderr or "").strip().splitlines()[-1:]))
     (gh_state / "releases.json").write_text("[]")
+
+    if push_gh_calls.exists():
+        push_gh_calls.unlink()
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "a" * 64, "2147483648", env=push_env)
+    check(result.returncode != 0 and "2 GiB" in result.stderr and not push_gh_calls.exists(),
+          "at GitHub's 2 GiB cap the upload is refused before anything moves")
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "b" * 64, "3", env=push_env)
+    check(result.returncode != 0 and "not the signed" in result.stderr and not push_gh_calls.exists(),
+          "an artifact that is not the signed one is refused before any upload")
+    result = run(gh_asset, "theng12/push-app'; rm -rf /", "gateway-9.9.9", dmg, sha, "3", env=push_env)
+    check(result.returncode != 0 and "may hold only" in result.stderr and not push_gh_calls.exists(),
+          "a repo name a shell would read as syntax is refused, not escaped into the release host")
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3",
+                 env={**push_env, "KHU_ASSET_BASE": "http://example.com"})
+    check(result.returncode != 0 and "must be an https address" in result.stderr,
+          "a cleartext address clients would refuse is refused here instead")
+
     # Closing the listener matters: a socket left listening with nobody accepting hangs a client.
     server.shutdown()
     server.server_close()
