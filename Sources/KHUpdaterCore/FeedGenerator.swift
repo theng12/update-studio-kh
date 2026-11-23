@@ -448,7 +448,14 @@ public enum FeedGenerator {
         // Only a version change owns that release's notes: the release body is this version's
         // changelog. An untouched row keeps the notes it already serves, whatever its release body
         // says — six rows' curated notes are not replaced by a 39-character body.
-        if served?.version != version, let body = release.body, !body.isEmpty { row.notes = body }
+        // `GATE PASS …` is the machine line the release convention puts at the top of every body; it
+        // stays in the body as audit and never reaches a card, which would open with jargon.
+        if served?.version != version, let body = release.body {
+            let prose = body.split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("GATE PASS") }
+                .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !prose.isEmpty { row.notes = prose }
+        }
         // The row's summary source: what supplied the words it actually has. Fields no source had
         // are left out, so "tag" means every word came from the release, not just most of them.
         let used = made.sources.values.filter { $0 != "none" }

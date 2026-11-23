@@ -12,7 +12,9 @@ wire=theng12/wire-studio-kh
 # Fleet apps whose repos do not publish yet. Listed on purpose: a publish then names each one it
 # cannot carry, instead of the gap living only in the Launcher's "Unlabelled" rows.
 hub=theng12/hub-studio-kh
-library=theng12/library-studio-kh
-music=theng12/music-studio-kh
-relay=theng12/relay-studio-kh
-story=theng12/story-studio-kh
+# library=theng12/library-studio-kh — held out: its repo is PRIVATE (gh api .private = true), so its
+# asset 404s anonymously. Restore when the owner flips visibility and the asset answers 200.
+music-studio=theng12/music-studio-kh
+relay-studio=theng12/relay-studio-kh
+# story=theng12/story-studio-kh — held out: no app-meta.json at its tag and no registry entry, and a
+# row with no words refuses the whole run rather than just itself. Restore when either exists.
