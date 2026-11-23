@@ -505,6 +505,25 @@ func feedGeneratorTests() {
                    "FG17 the byte guarantee survives the retry (\(error))")
         }
     }
+
+    // FG20 a release tag that names the app's own local artifact file keeps that name in `file`,
+    // while `url` stays how GitHub stores the bytes (RELEASE-POLICY §229). Measured 2026-11-23, the
+    // generator wrote the dotted stored name and split a row from the name it had served for months.
+    do {
+        let local = metaJSON(["name": "Hub Studio KH", "bundle_id": "com.t.hub", "type": "system",
+                              "tagline": "One hub.", "description": "Everything in one place.",
+                              "localFile": "Hub Studio KH-0.6.257.dmg"])
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.Studio.KH-0.6.257.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": local,
+        ])
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset())
+        let hub = made.feed.apps["hub"]
+        expect(hub?.file == "Hub Studio KH-0.6.257.dmg",
+               "FG20 the tag's local file name is the row's file (\(hub?.file ?? "nil"))")
+        expect(hub?.url?.hasSuffix("Hub.Studio.KH-0.6.257.dmg") == true,
+               "FG20 the url keeps GitHub's stored name (\(hub?.url ?? "nil"))")
+    }
 }
 
 /// Drops the first N requests, then serves `body` — the flaky connection a publish actually met.

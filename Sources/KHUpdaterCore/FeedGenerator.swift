@@ -42,12 +42,18 @@ public struct RepoAppMeta: Codable, Sendable, Equatable {
     public var hold_since: String?
     public var kind: String?
     public var main_mac_only: Bool?
+    /// The app's own local artifact name, spaces and all (RELEASE-POLICY §229): `file` keeps it while
+    /// `url` is how GitHub stores the bytes, and the divergence is evidence the bytes were checked
+    /// against the right name. Nil keeps today's behaviour, so no row rewrites itself in the meantime.
+    public var localFile: String?
     public init(name: String? = nil, bundle_id: String? = nil, bundle_name: String? = nil, type: String? = nil,
                 tagline: String? = nil, description: String? = nil, hold_url: String? = nil,
-                hold_since: String? = nil, kind: String? = nil, main_mac_only: Bool? = nil) {
+                hold_since: String? = nil, kind: String? = nil, main_mac_only: Bool? = nil,
+                localFile: String? = nil) {
         self.name = name; self.bundle_id = bundle_id; self.bundle_name = bundle_name; self.type = type
         self.tagline = tagline; self.description = description; self.hold_url = hold_url
         self.hold_since = hold_since; self.kind = kind; self.main_mac_only = main_mac_only
+        self.localFile = localFile
     }
 }
 
@@ -399,7 +405,7 @@ public enum FeedGenerator {
         // back to the asset's own name, so a version and its file name can never disagree.
         var fileNote: String?
         let untouched = served?.version == version
-        let rowFile: String
+        var rowFile: String
         if untouched {
             rowFile = served?.file ?? asset.name
         } else if let pinned = entry?.file, !pinned.isEmpty, pinned.contains(version) {
@@ -416,6 +422,11 @@ public enum FeedGenerator {
                            expectedSha: sha, expectedBytes: asset.bytes)
         let made = try words(app: app, repo: repo, tag: release.tag, entry: entry, served: served, gh: gh)
         let meta = made.meta
+        // A release tag that names the app's own local artifact file wins over the registry pin and
+        // over GitHub's stored name — measured 2026-11-23, the generator wrote the dotted stored name
+        // into `file` and split a row from the name it had served for months. `url` keeps the stored
+        // name; the two differing is the evidence the bytes were matched to the right local file.
+        if let stated = meta.localFile, !stated.isEmpty { rowFile = stated }
         var row = FeedApp(version: version, file: rowFile, sha256: sha, bytes: asset.bytes,
                           kind: meta.kind ?? "app-dmg")
         // The address is the asset's own, as GitHub serves it; `file` keeps the local name. Both come
