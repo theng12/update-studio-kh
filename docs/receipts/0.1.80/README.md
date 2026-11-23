@@ -20,7 +20,8 @@ The Launcher DMG was downloaded anonymously and hashed here on 2026-11-23 before
 
 ## Feed readback
 - `release.json` served from GitHub Pages, envelope signature verifies against the key installed
-  clients pin (`~/.kh-signing/private.key`, public half `057b6e66…`; restorable copy on the KH drive)
+  clients pin (public half `057b6e66…`). That key's own location and backup are deliberately not
+  recorded here: this file is served publicly by the Pages site.
 - both rows present at `launcher`/`updater` 0.1.80, `type: system`
 
 ## What is proven, and what is not
