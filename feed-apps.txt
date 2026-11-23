@@ -16,5 +16,4 @@ hub=theng12/hub-studio-kh
 # asset 404s anonymously. Restore when the owner flips visibility and the asset answers 200.
 music-studio=theng12/music-studio-kh
 relay-studio=theng12/relay-studio-kh
-# story=theng12/story-studio-kh — held out: no app-meta.json at its tag and no registry entry, and a
-# row with no words refuses the whole run rather than just itself. Restore when either exists.
+story-studio=theng12/story-studio-kh
