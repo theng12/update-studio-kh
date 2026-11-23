@@ -494,7 +494,7 @@ public enum Recipe {
     /// Atomic exchange of two existing paths on the same volume: `renamex_np(RENAME_SWAP)` is a
     /// rename, so it needs no extra space and leaves both entries where they were when it fails.
     /// False means the platform or the volume refused, and the caller falls back to two moves.
-    static func exchange(_ a: String, _ b: String) -> Bool {
+    public static func exchange(_ a: String, _ b: String) -> Bool {
         // Test seam: a child process can die exactly here, which is the window an interrupted
         // install occupies. Nothing in the app sets these variables.
         let kill = ProcessInfo.processInfo.environment["KHU_TEST_EXCHANGE_KILL"]
