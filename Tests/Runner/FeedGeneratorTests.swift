@@ -523,7 +523,7 @@ func feedGeneratorTests() {
                "FG20 the tag's local file name is the row's file (\(hub?.file ?? "nil"))")
         expect(hub?.url?.hasSuffix("Hub.Studio.KH-0.6.257.dmg") == true,
                "FG20 the url keeps GitHub's stored name (\(hub?.url ?? "nil"))")
-    }
+    } catch { expect(false, "FG20 fixture: \(error)") }
 }
 
 /// Drops the first N requests, then serves `body` — the flaky connection a publish actually met.
