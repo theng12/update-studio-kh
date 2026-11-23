@@ -1,7 +1,7 @@
 #!/bin/bash
 # The release path: this Mac builds, the app's own GitHub repo holds the artifact.
 #
-#   packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog> [kind]
+#   packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file> [--gate-line <file>]
 #
 # 1301 is an operational Mac, not a release host (owner, 2026-11-23: "no one should publish to
 # 1301"). This wrapper used to scp the artifact there and run `khu publish`; that half is deleted
@@ -10,13 +10,15 @@
 # anonymously, and the feed is generated from that release.
 set -euo pipefail
 SELF=$(cd -- "$(dirname -- "$0")" && pwd)
-[ $# -ge 4 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file>" >&2; exit 2; }
+[ $# -ge 4 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file> [--gate-line <file>]" >&2; exit 2; }
 APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; shift 4
-KIND=""; RECEIPT=""
+KIND=""; RECEIPT=""; GATE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --scan-receipt) [ $# -ge 2 ] && [ -n "$2" ] || { echo "release-push: --scan-receipt needs a file" >&2; exit 2; }
                     RECEIPT="$2"; shift 2 ;;
+    --gate-line) [ $# -ge 2 ] && [ -n "$2" ] || { echo "release-push: --gate-line needs a file" >&2; exit 2; }
+                 GATE="$2"; shift 2 ;;
     -*) echo "release-push: unknown option $1" >&2; exit 2 ;;
     *) [ -z "$KIND" ] || { echo "release-push: unexpected argument $1" >&2; exit 2; }
        KIND="$1"; shift ;;
@@ -45,6 +47,25 @@ if [ "$KIND" = "updater" ]; then
     DMG="$SEALED"
   fi
 fi
+# The gate line travels with the body (RELEASE-POLICY, Main 2026-11-23): copied verbatim from the file
+# the gate wrote, never retyped here, because a retyped line is where the typo class lives. No line
+# given keeps today's changelog-only body; a line for another app is a refusal, not a warning.
+NOTES="$LOG"; NOTES_TMP=""
+if [ -n "$GATE" ]; then
+  [ -f "$GATE" ] || { echo "release-push: no such gate line file: $GATE — pass the file the gate wrote, not a line typed here" >&2; exit 2; }
+  COUNT=$(grep -c '^GATE PASS ' "$GATE" || true)
+  [ "$COUNT" = "1" ] || { echo "release-push: $GATE holds $COUNT 'GATE PASS' lines; the body takes exactly one" >&2; exit 2; }
+  GL=$(grep '^GATE PASS ' "$GATE")
+  GL_APP=$(printf '%s\n' "$GL" | awk '{print $3}')
+  [ "$GL_APP" = "$APP" ] || {
+    echo "release-push: $GATE is a gate line for $GL_APP, not $APP; another app's gate is not this release's evidence" >&2
+    exit 2
+  }
+  NOTES_TMP=$(mktemp "${TMPDIR:-/tmp}/kh-notes.XXXXXX")
+  trap 'rm -f "$NOTES_TMP"' EXIT
+  { printf '%s\n\n' "$GL"; cat "$LOG"; } > "$NOTES_TMP"
+  NOTES="$NOTES_TMP"
+fi
 # There is one place a release goes: the app's own repo. No repo named is a refusal, not a fallback.
 [ -n "${KHU_PUBLIC_REPO:-}" ] || {
   echo "release-push: no public repo named for $APP — set KHU_PUBLIC_REPO=<owner/repo>; there is no other release host (1301 runs apps, it does not publish them)." >&2
@@ -66,5 +87,5 @@ grep -Eqi 'clean|SCAN_EXIT=0|"exit": *0|SCAN PASS|no findings' "$RECEIPT" || {
   exit 2
 }
 URL=$("$SELF"/github-asset.sh "$KHU_PUBLIC_REPO" "${KHU_GITHUB_TAG:-$APP-$VERSION}" \
-        "$DMG" "$SHA" "$(stat -f %z "$DMG")" "$LOG") || exit $?
+        "$DMG" "$SHA" "$(stat -f %z "$DMG")" "$NOTES") || exit $?
 echo "release-push: $KHU_PUBLIC_REPO holds the artifact at $URL"

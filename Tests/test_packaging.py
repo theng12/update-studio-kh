@@ -642,7 +642,20 @@ if args[0] == "api":
     print(json.dumps({"tag": tag, "draft": found[0]["draft"], "assets": found[0]["assets"]}))
 elif args[0] == "release" and args[1] in ("create", "upload"):
     tag = args[2]
-    files = [a for a in args[3:] if not a.startswith("-") and os.path.exists(a)]
+    # A flag's value is not an artifact: `--notes-file <path>` carries the body, and reading it as
+    # one more asset would hide whatever the wrapper actually wrote there.
+    files, notes, i = [], None, 3
+    while i < len(args):
+        a = args[i]
+        if a == "--notes-file":
+            notes = open(args[i + 1]).read(); i += 2; continue
+        if a == "--notes":
+            notes = args[i + 1]; i += 2; continue
+        if a == "--title":
+            i += 2; continue
+        if not a.startswith("-") and os.path.exists(a):
+            files.append(a)
+        i += 1
     open(os.environ["FAKE_GH_ORDER"], "a").write(args[1] + "\n")
     releases = rels()
     found = [r for r in releases if r["tag"] == tag]
@@ -650,7 +663,7 @@ elif args[0] == "release" and args[1] in ("create", "upload"):
         found[0]["assets"] += [asset(f) for f in files]
     else:
         releases.append({"tag": tag, "draft": bool(os.environ.get("FAKE_GH_DRAFT")),
-                         "assets": [asset(f) for f in files]})
+                         "assets": [asset(f) for f in files], "notes": notes})
     save(releases)
 elif args[0] == "repo" and args[1] == "view":
     # `--jq .visibility` prints the bare value, which is what the check reads.
@@ -694,14 +707,15 @@ else:
     push = packaging / "release-push.sh"
     gh_asset = packaging / "github-asset.sh"
 
-    def push_run(**extra):
+    def push_run(extra_args=(), **extra):
         for path in (push_gh_calls, push_order):
             if path.exists():
                 path.unlink()
         (gh_state / "releases.json").write_text("[]")
         env = {**push_env, **extra}
         env = {k: v for k, v in env.items() if v is not None}
-        return run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", receipt, env=env)
+        return run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", receipt,
+                   *extra_args, env=env)
 
     result = push_run()
     check(result.returncode == 0 and asset_url in result.stdout,
@@ -737,6 +751,35 @@ else:
     check(result.returncode == 2 and "not PUBLIC" in result.stderr
           and not (push_order.exists() and push_order.read_text().strip()),
           "a private repo is refused before anything is uploaded (rc=%d)" % result.returncode)
+
+    # The gate line travels with the body, copied verbatim from the file the gate wrote. A line for
+    # another app is the one way a verbatim copy still goes wrong, so it is refused.
+    gate = work / "push-GATE-PASS.txt"
+    gate.write_text("GATE PASS gateway f95fff15f1200f42622c751457e3104501296f21 2026-11-23T12:45:04Z\n")
+    result = push_run(("--gate-line", str(gate)))
+    recorded = json.loads((gh_state / "releases.json").read_text() or "[]")
+    body = (recorded[0].get("notes") or "") if recorded else ""
+    check(result.returncode == 0
+          and body.startswith("GATE PASS gateway f95fff15f1200f42622c751457e3104501296f21 2026-11-23T12:45:04Z\n\n")
+          and body.strip().endswith("changes"),
+          "the gate line is copied verbatim above the changelog (%r)" % body[:70])
+
+    result = push_run()
+    recorded = json.loads((gh_state / "releases.json").read_text() or "[]")
+    body = (recorded[0].get("notes") or "") if recorded else ""
+    check(result.returncode == 0 and "GATE PASS" not in body and body.strip() == "changes",
+          "with no gate line named the body is the changelog alone (%r)" % body[:70])
+
+    wrong = work / "wrong-app-GATE-PASS.txt"
+    wrong.write_text("GATE PASS storage deadbeef 2026-11-23T12:45:04Z\n")
+    result = push_run(("--gate-line", str(wrong)))
+    check(result.returncode == 2 and "not gateway" in result.stderr
+          and not (push_order.exists() and push_order.read_text().strip()),
+          "a gate line naming another app is refused, not copied (rc=%d)" % result.returncode)
+
+    result = push_run(("--gate-line", str(work / "no-gate.txt")))
+    check(result.returncode == 2 and "no such gate line" in result.stderr,
+          "a gate line file that does not exist is refused (rc=%d)" % result.returncode)
 
     result = push_run(FAKE_GH_DRAFT="1")
     check(result.returncode != 0 and "draft" in result.stderr,
