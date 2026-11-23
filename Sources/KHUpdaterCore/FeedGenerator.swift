@@ -475,8 +475,13 @@ public enum FeedGenerator {
             // The release body is this version's own notes when it carries one; otherwise the notes
             // a publish does not own carry forward, exactly as the icon does.
             if row.notes == nil, let old = previous?.apps[app] { row.notes = old.notes }
-            if let old = previous?.apps[app], old.version == row.version {
-                if row.features == nil { row.features = old.features }
+            // Fields no repo can author are never re-derived: `khu publish` writes features, accent,
+            // delta, security and unknown extras, and a bulk run reading a repo cannot know them.
+            // Measured 2026-11-23: regenerating for gateway 0.2.305 dropped file-studio's features
+            // and delta and printer-studio's delta, and the integrity guard rightly refused the
+            // whole publish — a version bump is not a reason to forget what a person wrote.
+            if let old = previous?.apps[app] {
+                if row.features == nil || row.features?.isEmpty == true { row.features = old.features }
                 if row.accent == nil { row.accent = old.accent }
                 if row.delta == nil { row.delta = old.delta }
                 if row.security == nil { row.security = old.security }

@@ -341,8 +341,10 @@ func feedGeneratorTests() {
                "FG15 the icon carries across a version change")
         expect(made.feed.apps["hub"]?.notes == "What 0.6.257 changed.",
                "FG15 with no release body the served notes are carried")
-        expect(made.feed.apps["hub"]?.features == nil,
-               "FG15 a feature list does not carry onto a different version")
+        // A version bump is not a reason to forget what a publish wrote: features carry, and a
+        // release whose own app-meta states features wins over the served list.
+        expect(made.feed.apps["hub"]?.features?.first?.title == "Old",
+               "FG15 features written by a publish carry across a version change")
         let withBody = FakeGitHub(paths: [
             "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.258",
                                                              body: "What 0.6.258 changed.", assets: [("Hub.dmg", sha, 7, digest)]),
