@@ -10,7 +10,7 @@ private struct FakeGitHub: GitHubReader {
     }
 }
 
-private func releaseJSON(repo: String, tag: String,
+private func releaseJSON(repo: String, tag: String, body: String? = nil,
                          assets: [(name: String, sha: String, bytes: Int, digest: String?)]) -> Data {
     let list: [[String: Any]] = assets.map { asset in
         var object: [String: Any] = ["name": asset.name, "size": asset.bytes,
@@ -18,8 +18,9 @@ private func releaseJSON(repo: String, tag: String,
         if let digest = asset.digest { object["digest"] = digest }
         return object
     }
-    let object: [String: Any] = ["tag_name": tag, "draft": false, "prerelease": false,
+    var object: [String: Any] = ["tag_name": tag, "draft": false, "prerelease": false,
                                  "published_at": "2026-11-23T02:00:00Z", "assets": list]
+    if let body { object["body"] = body }
     return try! JSONSerialization.data(withJSONObject: object)
 }
 
@@ -57,7 +58,7 @@ func feedGeneratorTests() {
             "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
             "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
         ])
-        let made = try FeedGenerator.generate(apps: ["story": storyRepo, "hub": hubRepo], gh: gh)
+        let made = try FeedGenerator.generate(apps: ["story": storyRepo, "hub": hubRepo], gh: gh, verifier: UnverifiedAsset())
         let feed = made.feed
         let story = feed.apps["story"], hub = feed.apps["hub"]
         expect(story?.version == "1.4.418" && story?.file == "Story.dmg" && story?.sha256 == sha && story?.bytes == 42,
@@ -96,7 +97,7 @@ func feedGeneratorTests() {
             "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
         ])
         do {
-            _ = try FeedGenerator.generate(apps: ["story": storyRepo, "hub": hubRepo], gh: gh)
+            _ = try FeedGenerator.generate(apps: ["story": storyRepo, "hub": hubRepo], gh: gh, verifier: UnverifiedAsset())
             expect(false, "FG2 a repo publishing without words must refuse the run")
         } catch {
             let said = "\(error)"
@@ -112,14 +113,14 @@ func feedGeneratorTests() {
         ])
         let thin = RegistryEntry(name: "Hub", bundle_id: "com.t.hub", type: "system", tagline: "One hub.")
         do {
-            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": thin]), gh: gh)
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": thin]), gh: gh, verifier: UnverifiedAsset())
             expect(false, "FG3 a registry entry missing description must refuse")
         } catch {
             expect("\(error)".contains("description") && "\(error)".contains(hubRepo),
                    "FG3 the refusal names the missing field and the repo (\(error))")
         }
         let full = registryWords(name: "Hub Studio KH", bundle: "com.t.hub")
-        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": full]), gh: gh)
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": full]), gh: gh, verifier: UnverifiedAsset())
         expect(made.feed.apps["hub"]?.tagline == "Scene by scene." && made.sources["hub"] == "registry",
                "FG3 the registry supplies the words and the row records that it did")
         expect(made.stale.isEmpty, "FG3 no stale note when the tag carries no metadata")
@@ -134,7 +135,7 @@ func feedGeneratorTests() {
         let noType = RegistryEntry(name: "Hub", bundle_id: "com.t.hub", tagline: "One hub.",
                                    description: "Everything in one place.")
         do {
-            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": noType]), gh: gh)
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": noType]), gh: gh, verifier: UnverifiedAsset())
             expect(false, "FG3b a registry entry without type must refuse")
         } catch {
             expect("\(error)".contains("type") && "\(error)".contains(hubRepo),
@@ -147,7 +148,7 @@ func feedGeneratorTests() {
             "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": tagless,
         ])
         do {
-            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh2)
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh2, verifier: UnverifiedAsset())
             expect(false, "FG3b an app-meta.json without type must refuse")
         } catch {
             expect("\(error)".contains("type"),
@@ -162,7 +163,7 @@ func feedGeneratorTests() {
             "repos/\(storyRepo)/releases/latest": releaseJSON(repo: storyRepo, tag: "1.4.418", assets: [("Story.dmg", sha, 42, digest)]),
             "repos/\(storyRepo)/contents/app-meta.json?ref=1.4.418": storyMeta,
         ])
-        let made = try FeedGenerator.generate(apps: ["story": storyRepo, "empty": "o/empty-kh"], gh: gh)
+        let made = try FeedGenerator.generate(apps: ["story": storyRepo, "empty": "o/empty-kh"], gh: gh, verifier: UnverifiedAsset())
         expect(made.feed.apps.keys.sorted() == ["story"], "FG4 a repo with no published release contributes no row")
         expect(made.unpublished == ["empty"], "FG4 it is named in the run's unpublished list (\(made.unpublished))")
     } catch { expect(false, "FG4 fixture: \(error)") }
@@ -181,7 +182,7 @@ func feedGeneratorTests() {
         let keyFile = tmpDir("feed-stable").appendingPathComponent("stable.key")
         try! Signing.savePrivateKey(key, to: keyFile)
         func signedFeed(at date: Date) throws -> Data {
-            let envelope = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: date), keyFile: keyFile)
+            let envelope = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset(), now: date), keyFile: keyFile)
             let release = try JSON.decode(Release.self, from: envelope)
             guard let data = release.feedData, let signature = release.signatureData,
                   Signing.verify(data, signature: signature, publicKey: key.publicKey) else {
@@ -202,7 +203,7 @@ func feedGeneratorTests() {
             "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
         ])
         do {
-            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh)
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset())
             expect(false, "FG5 a missing digest must refuse")
         } catch {
             expect("\(error)".contains("digest") && "\(error)".contains(hubRepo),
@@ -227,7 +228,7 @@ func feedGeneratorTests() {
                                    bundle_id: "com.khupdater.agent", type: "system",
                                    tagline: "Keeps apps up to date.", description: "Background checks.")
         let made = try FeedGenerator.generate(apps: ["launcher": repo, "updater": repo],
-                                             registry: registry(["updater": helper]), gh: gh)
+                                             registry: registry(["updater": helper]), gh: gh, verifier: UnverifiedAsset())
         expect(made.feed.apps["launcher"]?.file == "Studio.Launcher.KH-0.1.80.dmg",
                "FG7 the Launcher row is the DMG")
         expect(made.feed.apps["updater"]?.file == "10e22658328f-khu"
@@ -246,7 +247,7 @@ func feedGeneratorTests() {
             "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
         ])
         let made = try FeedGenerator.generate(apps: ["hub": hubRepo],
-                                             registry: registry(["hub": registryWords(name: "Old Name", bundle: "com.t.hub")]), gh: gh)
+                                             registry: registry(["hub": registryWords(name: "Old Name", bundle: "com.t.hub")]), gh: gh, verifier: UnverifiedAsset())
         expect(made.feed.apps["hub"]?.name == "Hub Studio KH" && made.sources["hub"] == "tag:0.6.257",
                "FG8 the tag's app-meta.json wins over the registry")
         expect(made.stale.count == 1 && made.stale[0].contains("registry entry is stale")
@@ -254,26 +255,171 @@ func feedGeneratorTests() {
                "FG8 the ignored registry entry is reported by name and tag (\(made.stale))")
     } catch { expect(false, "FG8 fixture: \(error)") }
 
-    // FG10 a fallback pin is only kept when it carries its own address. The 2026-11-23 pins all
-    // pointed at artifacts that no longer exist, so the generated feed carries no `previous` at all.
+    // FG10 the generated feed carries no `previous` block at all, whatever the old feed had: a pin
+    // whose artifact is gone reads as a rollback that works and installs nothing.
     do {
         let gh = FakeGitHub(paths: [
             "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
             "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
         ])
-        var dead = FeedApp(version: "0.6.250", file: "Hub-0.6.250.dmg", sha256: sha, bytes: 5, kind: "app-dmg")
-        dead.url = nil
-        var oldFeed = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": dead])
-        oldFeed.previous = ["hub": dead]
-        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: oldFeed, gh: gh)
-        expect(made.feed.previous == nil, "FG10 a url-less fallback pin is dropped, not republished")
-        var live = dead; live.url = "https://github.com/\(hubRepo)/releases/download/0.6.250/Hub-0.6.250.dmg"
-        var oldLive = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": live])
-        oldLive.previous = ["hub": live]
-        let kept = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: oldLive, gh: gh)
-        expect(kept.feed.previous?["hub"]?.url == live.url && kept.feed.previous?["hub"]?.version == "0.6.250",
-               "FG10 a fallback pin with its own address is kept")
+        var live = FeedApp(version: "0.6.250", file: "Hub-0.6.250.dmg", sha256: sha, bytes: 5, kind: "app-dmg")
+        live.url = "https://github.com/\(hubRepo)/releases/download/0.6.250/Hub-0.6.250.dmg"
+        var oldFeed = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": live])
+        oldFeed.previous = ["hub": live]
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: oldFeed, gh: gh, verifier: UnverifiedAsset())
+        expect(made.feed.previous == nil, "FG10 no previous block is emitted, even from a pin with its own address")
     } catch { expect(false, "FG10 fixture: \(error)") }
+
+    // FG11 a prefixed tag is accepted only for its own app; another app's prefix refuses.
+    do {
+        let repo = "o/wire-kh"
+        let wireTag = releaseJSON(repo: repo, tag: "wire-0.5.0", assets: [("Wire.dmg", sha, 9, digest)])
+        let gh = FakeGitHub(paths: [
+            "repos/\(repo)/releases/latest": wireTag,
+            "repos/\(repo)/contents/app-meta.json?ref=wire-0.5.0": metaJSON([
+                "name": "Wire Studio KH", "bundle_id": "com.t.wire", "type": "media",
+                "tagline": "One caption.", "description": "Posts it."]),
+        ])
+        let made = try FeedGenerator.generate(apps: ["wire": repo], gh: gh, verifier: UnverifiedAsset())
+        expect(made.feed.apps["wire"]?.version == "0.5.0",
+               "FG11 `wire-0.5.0` is read as version 0.5.0 for the wire app")
+        // Another app's tag in this repo is a stray: no row for hub, printed by name, no refusal.
+        let stray = try FeedGenerator.generate(apps: ["hub": repo], gh: gh, verifier: UnverifiedAsset())
+        expect(stray.feed.apps.isEmpty && stray.unpublished == ["hub"],
+               "FG11 a repo holding only another app's release gives that app no row")
+        expect(stray.notes.contains { $0.contains("stray release ignored") && $0.contains("wire-0.5.0") },
+               "FG11 the stray release is printed by name (\(stray.notes))")
+        // With an older acceptable release behind it, the run falls through to that one.
+        var older = releaseJSON(repo: repo, tag: "hub-0.6.1", assets: [("Hub.dmg", sha, 8, digest)])
+        let listed = try! JSONSerialization.jsonObject(with: releaseJSON(repo: repo, tag: "hub-0.6.1",
+                                assets: [("Hub-0.6.1.dmg", sha, 8, digest)])) as! [String: Any]
+        _ = older
+        let listJSON = try! JSONSerialization.data(withJSONObject: [listed])
+        let hubMetaAt = metaJSON(["name": "Hub Studio KH", "bundle_id": "com.t.hub", "type": "system",
+                                  "tagline": "One hub.", "description": "Everything."])
+        let gh2 = FakeGitHub(paths: [
+            "repos/\(repo)/releases/latest": wireTag,
+            "repos/\(repo)/releases?per_page=20": listJSON,
+            "repos/\(repo)/contents/app-meta.json?ref=hub-0.6.1": hubMetaAt,
+        ])
+        let fell = try FeedGenerator.generate(apps: ["hub": repo], gh: gh2, verifier: UnverifiedAsset())
+        expect(fell.feed.apps["hub"]?.version == "0.6.1" && (fell.feed.apps["hub"]?.file ?? "").contains("0.6.1"),
+               "FG11 the run falls through to the repo's next acceptable release (\(fell.feed.apps["hub"]?.version ?? "nil"))")
+        expect(fell.notes.contains { $0.contains("wire-0.5.0") },
+               "FG11 the skipped stray is still printed (\(fell.notes))")
+    } catch { expect(false, "FG11 fixture: \(error)") }
+
+    // FG12 the row's file is the release's own asset name; a registry pin from an older version is
+    // reported and ignored, never shipped — a version and its file name can never disagree.
+    do {
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.258", assets: [("Hub-0.6.258.dmg", sha, 7, digest)]),
+        ])
+        var stale = registryWords(name: "Hub Studio KH", bundle: "com.t.hub")
+        stale.file = "Hub-0.6.250.dmg"
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": stale]), gh: gh, verifier: UnverifiedAsset())
+        expect(made.feed.apps["hub"]?.file == "Hub-0.6.258.dmg",
+               "FG12 the row names the release's own file (\(made.feed.apps["hub"]?.file ?? "nil"))")
+        expect(made.stale.contains { $0.contains("Hub-0.6.250.dmg") && $0.contains("ignored") },
+               "FG12 the stale registry file is reported, not silently dropped (\(made.stale))")
+    } catch { expect(false, "FG12 fixture: \(error)") }
+
+    // FG15 an icon is the app's identity and carries across a version change; so do the notes,
+    // unless that release carries its own body — which is this version's changelog and wins.
+    do {
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.258", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.258": hubMeta,
+        ])
+        var old = FeedApp(version: "0.6.257", file: "Hub.dmg", sha256: sha, bytes: 7, kind: "app-dmg")
+        old.icon = "421c66bdb1cc-icon.png"; old.iconSha256 = "aa11"; old.notes = "What 0.6.257 changed."
+        old.features = [AppFeature(title: "Old", text: "Only in 0.6.257.")]
+        let before = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": old])
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh, verifier: UnverifiedAsset())
+        expect(made.feed.apps["hub"]?.icon == "421c66bdb1cc-icon.png"
+               && made.feed.apps["hub"]?.iconSha256 == "aa11",
+               "FG15 the icon carries across a version change")
+        expect(made.feed.apps["hub"]?.notes == "What 0.6.257 changed.",
+               "FG15 with no release body the served notes are carried")
+        expect(made.feed.apps["hub"]?.features == nil,
+               "FG15 a feature list does not carry onto a different version")
+        let withBody = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.258",
+                                                             body: "What 0.6.258 changed.", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.258": hubMeta,
+        ])
+        let bodied = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: withBody, verifier: UnverifiedAsset())
+        expect(bodied.feed.apps["hub"]?.notes == "What 0.6.258 changed.",
+               "FG15 on a version change the release body is this version's notes and wins (\(bodied.feed.apps["hub"]?.notes ?? "nil"))")
+        // An untouched row keeps its served notes even though its release carries a body.
+        let sameVersion = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: bodied.feed, gh: withBody, verifier: UnverifiedAsset())
+        expect(sameVersion.feed.apps["hub"]?.notes == "What 0.6.258 changed.",
+               "FG15 an unchanged version keeps the notes it already serves")
+    } catch { expect(false, "FG15 fixture: \(error)") }
+
+    // FG16 an untouched row is untouched, byte for byte: same version, spaced local `file`, curated
+    // notes, an icon — and a release whose body is the 39-character placeholder the feed's own tool
+    // writes. This is the exact shape that failed twice tonight, so it is a guard, not a one-off.
+    do {
+        let body = "Signed release from the KH Studio feed."
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", body: body,
+                                                             assets: [("Hub-0.6.257.dmg", sha, 7, digest)]),
+        ])
+        var served = FeedApp(version: "0.6.257", file: "2b5b71b24b31-Hub Studio KH-0.6.257.dmg",
+                             sha256: sha, bytes: 7, kind: "app-dmg")
+        served.url = "https://github.com/\(hubRepo)/releases/download/0.6.257/Hub-0.6.257.dmg"
+        served.name = "Hub Studio KH"; served.bundleID = "com.t.hub"; served.type = "system"
+        served.tagline = "One hub."; served.description = "Everything in one place."
+        served.notes = "- **A curated note.** It is long, and it is not the placeholder."
+        served.icon = "2b5b71b24b31-icon.png"; served.iconSha256 = "ff00"
+        served.released = "2026-11-23T02:00:00Z"
+        let before = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": served])
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh, verifier: UnverifiedAsset())
+        let after = made.feed.apps["hub"]
+        expect(after == served, "FG16 an untouched row is byte-identical to the served one")
+        expect(after?.file == "2b5b71b24b31-Hub Studio KH-0.6.257.dmg",
+               "FG16 the spaced local file name is not normalised")
+        expect(after?.notes != body, "FG16 the release body does not replace an untouched row's notes")
+    } catch { expect(false, "FG16 fixture: \(error)") }
+
+    // FG14 an asset that does not download anonymously is a finding, never a row. The check runs
+    // before the row is built, so a draft or orphan release passes nothing through.
+    do {
+        struct Missing: AssetVerifier {
+            func prove(url: String, repo: String, tag: String, asset: String, expectedSha: String, expectedBytes: Int64) throws {
+                throw khuFail("answered 404")
+            }
+        }
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        do {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: Missing())
+            expect(false, "FG14 an asset that does not download must refuse")
+        } catch {
+            expect("\(error)".contains("404"),
+                   "FG14 the refusal carries the download's own answer (\(error))")
+        }
+    } catch { expect(false, "FG14 fixture: \(error)") }
+
+    // FG13 a row may not vanish while its repo still publishes.
+    do {
+        var old = FeedApp(version: "0.4.3", file: "Wire.dmg", sha256: sha, bytes: 9, kind: "app-dmg")
+        old.url = "https://github.com/o/wire-kh/releases/download/wire-0.4.3/Wire.dmg"
+        let before = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["wire": old])
+        let gh = FakeGitHub(paths: [
+            "repos/o/wire-kh/releases/latest": releaseJSON(repo: "o/wire-kh", tag: "wire-0.5.0", assets: [("Wire.dmg", sha, 9, digest)]),
+        ])
+        do {
+            _ = try FeedGenerator.generate(apps: [:], previous: before, gh: gh, verifier: UnverifiedAsset())
+            expect(false, "FG13 a row disappearing while its repo publishes must refuse")
+        } catch {
+            expect("\(error)".contains("wire") && "\(error)".contains("still publishes"),
+                   "FG13 the refusal names the row and the repo (\(error))")
+        }
+    } catch { expect(false, "FG13 fixture: \(error)") }
 
     // FG9 the address guards: a relative url, a foreign host, or a url outside the app's own repo
     // refuses the whole run. This is the negative control for the 2026-11-23 outage.
@@ -293,7 +439,7 @@ func feedGeneratorTests() {
                 "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
             ])
             do {
-                _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh)
+                _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset())
                 expect(false, "FG9 a \(label) url must refuse the whole run")
             } catch {
                 expect("\(error)".contains("refused") && "\(error)".contains(hubRepo),
@@ -306,7 +452,7 @@ func feedGeneratorTests() {
             "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
         ])
         do {
-            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh)
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset())
             expect(false, "FG9 a missing .dmg asset must refuse")
         } catch {
             expect("\(error)".contains("no .dmg asset"),

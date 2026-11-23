@@ -8,3 +8,4 @@ media-studio=theng12/media-studio-kh
 printer-studio=theng12/printer-studio-kh
 storage-studio=theng12/storage-studio-kh
 updater=theng12/update-studio-kh
+wire=theng12/wire-studio-kh

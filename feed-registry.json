@@ -2,7 +2,6 @@
   "_about": "Words registry for generated feeds (RELEASE-POLICY 2c): a DATEED STOPGAP. The app's own app-meta.json at its release tag wins; when a repo gains one, its entry here is deleted in the same change. `khu feed --registry feed-registry.json` reads this file; a stale entry is reported, never silently used.",
   "apps": {
     "displays-studio": {
-      "file": "839cd8a5f1b3-Displays Studio KH-0.1.6.dmg",
       "name": "Displays Studio KH",
       "bundle_id": "app.displaysstudiokh.desktop",
       "bundle_name": "Displays Studio KH.app",
@@ -14,7 +13,6 @@
       "kind": "app-dmg"
     },
     "file-studio": {
-      "file": "b182dd5dd8da-File Studio KH-0.6.2-arm64.dmg",
       "name": "File Studio KH",
       "bundle_id": "kh.filestudio.app",
       "bundle_name": "File Studio KH.app",
@@ -26,7 +24,6 @@
       "kind": "app-dmg"
     },
     "gateway": {
-      "file": "cd28a73a4211-Gateway Studio KH-0.2.304-3980deb-202611220925.dmg",
       "name": "Gateway Studio KH",
       "bundle_id": "kh.gateway.menubar",
       "bundle_name": "gateway-kh.app",
@@ -38,7 +35,6 @@
       "kind": "app-dmg"
     },
     "launcher": {
-      "file": "cc2763fd8bca-Studio Launcher KH-0.1.80.dmg",
       "name": "Studio Launcher KH",
       "bundle_id": "com.khupdater.launcher",
       "bundle_name": "Studio Launcher KH.app",
@@ -48,7 +44,6 @@
       "kind": "app-dmg"
     },
     "media-studio": {
-      "file": "ed8816480c37-Business Studio KH-0.1.123.dmg",
       "name": "Business Studio KH",
       "bundle_id": "com.terranash.mediastudiokh",
       "bundle_name": "Business Studio KH.app",
@@ -60,7 +55,6 @@
       "kind": "app-dmg"
     },
     "printer-studio": {
-      "file": "4d8125a47030-Printer Studio KH-1.0.40.dmg",
       "name": "Printer Studio KH",
       "bundle_id": "com.theng12.printerstudio",
       "bundle_name": "Printer Studio KH.app",
@@ -72,7 +66,6 @@
       "kind": "app-dmg"
     },
     "storage-studio": {
-      "file": "72fec5d6b911-Storage Studio KH-0.1.25.dmg",
       "name": "Storage Studio KH",
       "bundle_id": "app.storagestudiokh.desktop",
       "bundle_name": "Storage Studio KH.app",
@@ -85,13 +78,24 @@
     },
     "updater": {
       "asset": "khu",
-      "file": "10e22658328f-khu",
       "name": "Studio Launcher KH Helper",
       "bundle_id": "com.khupdater.agent",
       "type": "system",
       "tagline": "Keeps this Mac's KH apps up to date in the background.",
       "description": "Check for new versions on a schedule, install them with no window open, and pause an app for a moment instead of interrupting its work.",
       "kind": "updater"
+    },
+    "wire": {
+      "name": "Wire Studio KH",
+      "bundle_id": "com.terranash.wirestudiokh",
+      "bundle_name": "Wire Studio KH.app",
+      "type": "media",
+      "tagline": "Posts one caption to your social accounts.",
+      "description": "Composes one caption and sends it to your social accounts, each named by you rather than a technical key, with a Gateway connection you can check at any time.",
+      "hold_url": "http://127.0.0.1:8649/api/maintenance/hold",
+      "hold_since": "0.1.0",
+      "kind": "app-dmg",
+      "file": "Wire Studio KH_0.5.0_aarch64.dmg"
     }
   }
 }

@@ -287,6 +287,8 @@ struct KHUMain {
                     print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
                 }
                 for note in made.stale { print("note: \(note)") }
+                for change in made.wordChanges { print("words: \(change)") }
+                for note in made.notes { print("note: \(note)") }
                 if !made.unpublished.isEmpty {
                     print("no row (repo has no published release): \(made.unpublished.joined(separator: ", "))")
                 }
