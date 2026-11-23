@@ -809,9 +809,6 @@ exit 0
           "bytes the public address does not serve are refused before the publish (rc=%d, order=%r)"
           % (result.returncode, order()))
     asset_path.write_text("dmg")
-    # Closing the listener matters: a socket left listening with nobody accepting hangs a client.
-    server.shutdown()
-    server.server_close()
 
     if push_gh_calls.exists():
         push_gh_calls.unlink()
@@ -848,6 +845,9 @@ exit 0
           "a version already published with a different artifact is refused, not overwritten (rc=%d)"
           % result.returncode)
     (gh_state / "releases.json").write_text("[]")
+    # Closing the listener matters: a socket left listening with nobody accepting hangs a client.
+    server.shutdown()
+    server.server_close()
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")
