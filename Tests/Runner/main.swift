@@ -4152,8 +4152,14 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["AGENT_JOB_ONLY"] == "1" {
+            agentJobTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["HOLD_ENDPOINT_ONLY"] == "1" {
             launcherHoldTests()
+        agentJobTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }

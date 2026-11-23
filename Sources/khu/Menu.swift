@@ -17,6 +17,8 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     /// The Launcher's own update hold (Sparkle's shim posts here before any check). Kept alive for
     /// the life of the app; nil when its port could not be opened.
     var holdServer: LauncherHold?
+    /// Kept alive for the process's life: the signal source that writes the agent's stop line.
+    var stopSource: DispatchSourceSignal?
     let stateDir: URL
     let machine: String
     let version: String?

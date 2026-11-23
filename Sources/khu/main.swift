@@ -524,6 +524,23 @@ struct KHUMain {
                 } catch {
                     FileHandle.standardError.write(Data("launcher hold: \(error)\n".utf8))
                 }
+                // A launchd definition that is merely present is not proof: check the job itself and
+                // put it back from the kit the app ships when it is gone (measured 2026-11-23).
+                // One line when this process is asked to stop, beside the agent's start line: a Mac
+                // that stops taking updates is then visible in its own record (20261123-60).
+                signal(SIGTERM, SIG_IGN)
+                let stop = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+                stop.setEventHandler {
+                    agentLog.record("agent stop: asked to stop")
+                    exit(0)
+                }
+                stop.resume()
+                menu.stopSource = stop
+                if let kit = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/khu-agent") as URL?,
+                   FileManager.default.fileExists(atPath: kit.path),
+                   let line = AgentJob.ensure(kit: kit, shell: SystemShell()) {
+                    FileHandle.standardError.write(Data("\(line)\n".utf8))
+                }
             }
             let initialRequests = installs
             let startedAt = Date()
