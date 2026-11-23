@@ -68,12 +68,18 @@ enum Snapshot {
         guard loaded else { fail("\(shot)/\(scheme)/\(width): the page did not finish loading"); return false }
 
         let render = "render(\(state))" + (shot == "settings" ? ";settingsOpen=true;drawSettings()" : "")
-        guard run(web, render) != nil else { fail("\(shot)/\(scheme)/\(width): the page refused its state"); return false }
+        if let refusal = evaluate(web, render).refusal {
+            fail("\(shot)/\(scheme)/\(width): the page refused its state — \(refusal)")
+            return false
+        }
         // Let layout and the 0.22s sheet animation settle before measuring or rasterising.
         RunLoop.current.run(until: Date().addingTimeInterval(0.45))
 
-        if let measure = run(web, measureScript(width: width))?.data(using: .utf8) {
-            try? measure.write(to: dir.appendingPathComponent("measure-\(shot)-\(scheme)-\(width).json"))
+        let measured = evaluate(web, measureScript(width: width))
+        if let refusal = measured.refusal {
+            fail("\(shot)/\(scheme)/\(width): the tab bar could not be measured — \(refusal)")
+        } else if let data = measured.value.data(using: .utf8) {
+            try? data.write(to: dir.appendingPathComponent("measure-\(shot)-\(scheme)-\(width).json"))
         }
 
         var pdf: Data?
@@ -125,21 +131,25 @@ enum Snapshot {
         return image
     }
 
-    /// nil means the page threw; an empty string means it answered with nothing, which is what
-    /// `render(...)` does on success — the first version confused the two and refused every state.
-    private static func run(_ web: WKWebView, _ script: String) -> String? {
-        var out = ""
-        var threw = false
+    /// The page's answer and, when it threw, its own reason. "It refused its state" with no reason
+    /// is the same defect class as "Internal error": the page knows which state it declined and why.
+    /// Success is an answer of no value or empty text — `render(...)` returns nothing when it works.
+    private static func evaluate(_ web: WKWebView, _ script: String) -> (value: String, refusal: String?) {
+        var value = ""
+        var refusal: String?
         var done = false
-        web.evaluateJavaScript(script) { value, error in
-            if error != nil { threw = true }
-            if let text = value as? String { out = text }
-            else if let value { out = "\(value)" }
+        web.evaluateJavaScript(script) { result, error in
+            if let error { refusal = "\(error)" }
+            if let text = result as? String { value = text }
+            else if let result { value = "\(result)" }
             done = true
         }
         let started = Date()
-        while !done, Date().timeIntervalSince(started) < 10 { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
-        return threw ? nil : out
+        while !done, Date().timeIntervalSince(started) < 10 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        if !done { refusal = "no answer within 10 s" }
+        return (value, refusal)
     }
 
     /// Measured in the rendered page: the bar's own gap, every tab's height, the gaps between them,
