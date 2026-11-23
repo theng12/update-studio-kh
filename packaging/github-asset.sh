@@ -121,7 +121,9 @@ case "$BASE_URL" in
 esac
 URL="$BASE_URL/$REPO/releases/download/$TAG/$NAME"
 case "$URL" in *[!A-Za-z0-9._:/@+-]*) echo "github-asset: $URL holds a character an address cannot carry; nothing was published" >&2; exit 2 ;; esac
-SERVED=$(curl -fsSL "$URL" | shasum -a 256 | awk '{print $1}') \
+# A server that accepts and then says nothing must not hold a release open: bound the connect and
+# the stall, never the whole transfer (a 1.5 GB artifact legitimately takes minutes).
+SERVED=$(curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 120 "$URL" | shasum -a 256 | awk '{print $1}') \
   || { echo "github-asset: $URL could not be downloaded anonymously; a private or unpublished release strands every client, so nothing was published" >&2; exit 5; }
 [ "$SERVED" = "$SHA" ] || { echo "github-asset: $URL served $SERVED, not the signed $SHA; nothing was published" >&2; exit 5; }
 echo "github-asset: $URL downloaded anonymously and hashes to the signed sha256" >&2

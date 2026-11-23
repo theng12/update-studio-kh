@@ -809,7 +809,9 @@ exit 0
           "bytes the public address does not serve are refused before the publish (rc=%d, order=%r)"
           % (result.returncode, order()))
     asset_path.write_text("dmg")
+    # Closing the listener matters: a socket left listening with nobody accepting hangs a client.
     server.shutdown()
+    server.server_close()
 
     if push_gh_calls.exists():
         push_gh_calls.unlink()
