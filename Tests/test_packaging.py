@@ -612,6 +612,9 @@ try:
     import hashlib
     import http.server
     import threading
+    dmg, changelog = work / "push.dmg", work / "push.md"
+    dmg.write_text("dmg")
+    changelog.write_text("changes")
     gh_state = work / "push-gh-state"
     gh_state.mkdir()
     push_gh_calls, push_order = work / "push-gh-calls", work / "push-order"
