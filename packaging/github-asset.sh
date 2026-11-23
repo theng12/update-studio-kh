@@ -30,6 +30,16 @@ REAL_BYTES=$(stat -f %z "$ART")
 REAL_SHA=$(shasum -a 256 "$ART" | awk '{print $1}')
 [ "$REAL_SHA" = "$SHA" ] || { echo "github-asset: $ART hashes to $REAL_SHA, not the signed $SHA; nothing was uploaded" >&2; exit 2; }
 
+# A private repo strands every client: the release is real and GitHub lists it, and a stranger gets a
+# 404 (library 0.7.34, story 1.4.418 — both measured tonight). Checked before a byte moves, so the
+# cost is a message instead of a release nothing can download.
+VISIBILITY=$(gh repo view "$REPO" --json visibility --jq .visibility 2>/dev/null) \
+  || { echo "github-asset: cannot read $REPO's visibility; nothing was uploaded" >&2; exit 2; }
+[ "$VISIBILITY" = "PUBLIC" ] || {
+  echo "github-asset: $REPO is $VISIBILITY, not PUBLIC — anonymous clients get a 404, so nothing was uploaded; make the repo public first" >&2
+  exit 2
+}
+
 # The signed `file` name is <sha12>-<basename>, and an artifact already carrying that prefix keeps
 # it (Publish.swift's `name`), so GitHub is given exactly the row's own name and never a second one.
 BASE=$(basename "$ART")

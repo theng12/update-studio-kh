@@ -652,6 +652,9 @@ elif args[0] == "release" and args[1] in ("create", "upload"):
         releases.append({"tag": tag, "draft": bool(os.environ.get("FAKE_GH_DRAFT")),
                          "assets": [asset(f) for f in files]})
     save(releases)
+elif args[0] == "repo" and args[1] == "view":
+    # `--jq .visibility` prints the bare value, which is what the check reads.
+    print(os.environ.get("FAKE_GH_VISIBILITY", "PUBLIC"))
 elif args[0] == "release" and args[1] == "view":
     tag = args[2]
     found = [r for r in rels() if r["tag"] == tag]
@@ -670,6 +673,10 @@ else:
     asset_path = gh_serve / "theng12/push-app/releases/download/gateway-9.9.9" / asset_name
     asset_path.parent.mkdir(parents=True)
     asset_path.write_text("dmg")
+    # A scan receipt is a file carrying the artifact's sha and a verdict, never a sentence in a
+    # message (row 20261123-131).
+    receipt = work / "push-SCAN.txt"
+    receipt.write_text('scan-receipt {"sha256": "%s", "exit": 0}\nSCAN_EXIT=0\n' % sha)
 
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):
@@ -694,7 +701,7 @@ else:
         (gh_state / "releases.json").write_text("[]")
         env = {**push_env, **extra}
         env = {k: v for k, v in env.items() if v is not None}
-        return run(push, "gateway", "9.9.9", dmg, changelog, env=env)
+        return run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", receipt, env=env)
 
     result = push_run()
     check(result.returncode == 0 and asset_url in result.stdout,
@@ -708,6 +715,28 @@ else:
     result = push_run(KHU_PUBLIC_REPO=None)
     check(result.returncode == 2 and "no public repo named" in result.stderr and not push_gh_calls.exists(),
           "with no repo named it refuses instead of publishing anywhere (rc=%d)" % result.returncode)
+
+    # A receipt nobody can open is not a receipt, and one about another artifact is worse: it reads
+    # as a pass. Both are refused before the release host is touched.
+    result = run(push, "gateway", "9.9.9", dmg, changelog, env=push_env)
+    check(result.returncode == 2 and "no scan receipt named" in result.stderr and not push_gh_calls.exists(),
+          "a publish with no receipt named is refused, not assumed scanned (rc=%d)" % result.returncode)
+    result = run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", work / "nowhere.txt", env=push_env)
+    check(result.returncode == 2 and "no such scan receipt" in result.stderr and not push_gh_calls.exists(),
+          "a receipt that exists only in a message is refused and named (rc=%d)" % result.returncode)
+    stranger = work / "stranger-SCAN.txt"
+    stranger.write_text("%s\nclean\n" % ("a" * 64))
+    result = run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", stranger, env=push_env)
+    check(result.returncode == 2 and "different artifact" in result.stderr and not push_gh_calls.exists(),
+          "a receipt scanned for another artifact is refused (rc=%d)" % result.returncode)
+    receipt.write_text("%s\nSCAN_EXIT=0\n" % sha)
+
+    # A private repo is the other way a publish strands every client: the release is real and the
+    # anonymous fetch 404s. Refused before the upload, not after.
+    result = push_run(FAKE_GH_VISIBILITY="PRIVATE")
+    check(result.returncode == 2 and "not PUBLIC" in result.stderr
+          and not (push_order.exists() and push_order.read_text().strip()),
+          "a private repo is refused before anything is uploaded (rc=%d)" % result.returncode)
 
     result = push_run(FAKE_GH_DRAFT="1")
     check(result.returncode != 0 and "draft" in result.stderr,

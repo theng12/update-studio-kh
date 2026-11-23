@@ -10,12 +10,34 @@
 # anonymously, and the feed is generated from that release.
 set -euo pipefail
 SELF=$(cd -- "$(dirname -- "$0")" && pwd)
-[ $# -eq 4 ] || [ $# -eq 5 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind]" >&2; exit 2; }
-APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; KIND="${5:-}"
+[ $# -ge 4 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file>" >&2; exit 2; }
+APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; shift 4
+KIND=""; RECEIPT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --scan-receipt) [ $# -ge 2 ] && [ -n "$2" ] || { echo "release-push: --scan-receipt needs a file" >&2; exit 2; }
+                    RECEIPT="$2"; shift 2 ;;
+    -*) echo "release-push: unknown option $1" >&2; exit 2 ;;
+    *) [ -z "$KIND" ] || { echo "release-push: unexpected argument $1" >&2; exit 2; }
+       KIND="$1"; shift ;;
+  esac
+done
 [ -f "$DMG" ] || { echo "no such DMG: $DMG" >&2; exit 2; }
 [ -f "$LOG" ] || { echo "no such changelog: $LOG" >&2; exit 2; }
+# A scan receipt in a message is not a receipt (row 20261123-131: library 0.7.34's verdict was
+# pasted into chat and written nowhere). The publish names the file, so a receipt that exists
+# nowhere is a refusal rather than a fact someone remembers reading.
+[ -n "$RECEIPT" ] || {
+  echo "release-push: no scan receipt named — pass --scan-receipt <file>; without one this publish cannot be told apart from an unscanned artifact" >&2
+  exit 2
+}
+[ -f "$RECEIPT" ] || {
+  echo "release-push: no such scan receipt: $RECEIPT — write the file with the artifact's sha256 and its verdict before publishing" >&2
+  exit 2
+}
 # The `updater` entry is the raw helper, and a stale build/khu is not it: publish the bytes sealed
 # inside the Launcher that this version ships. Refusing beats publishing an unbuilt binary.
+ORIG_SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
 if [ "$KIND" = "updater" ]; then
   SEALED=$("$SELF"/sealed-helper.sh "$VERSION") || exit 2
   if ! cmp -s "$DMG" "$SEALED"; then
@@ -29,6 +51,20 @@ fi
   exit 2
 }
 SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
+# The receipt has to be about this artifact. A sealed helper is covered by the DMG it was taken from
+# (the `cmp` above proves it is that helper), so either sha binds an honest receipt.
+BOUND=""
+for s in "$SHA" "$ORIG_SHA"; do
+  if [ -n "$s" ] && grep -qi "$s" "$RECEIPT"; then BOUND=1; break; fi
+done
+[ -n "$BOUND" ] || {
+  echo "release-push: $RECEIPT names neither $SHA nor the DMG it was scanned from ($ORIG_SHA) — that receipt is about a different artifact" >&2
+  exit 2
+}
+grep -Eqi 'clean|SCAN_EXIT=0|"exit": *0|SCAN PASS|no findings' "$RECEIPT" || {
+  echo "release-push: $RECEIPT carries no verdict; a receipt without one is a file, not a pass" >&2
+  exit 2
+}
 URL=$("$SELF"/github-asset.sh "$KHU_PUBLIC_REPO" "${KHU_GITHUB_TAG:-$APP-$VERSION}" \
         "$DMG" "$SHA" "$(stat -f %z "$DMG")" "$LOG") || exit $?
 echo "release-push: $KHU_PUBLIC_REPO holds the artifact at $URL"
