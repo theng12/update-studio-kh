@@ -385,6 +385,54 @@ func feedGeneratorTests() {
         expect(after?.notes != body, "FG16 the release body does not replace an untouched row's notes")
     } catch { expect(false, "FG16 fixture: \(error)") }
 
+    // FG21 `--refresh-notes` is a named repair, not a rule: only an app named on the command line,
+    // and only a row whose notes are exactly the tool's placeholder, takes its release body. A
+    // person's sentence is never replaced, and naming an app this run does not generate is refused.
+    do {
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", body: "What 0.6.257 changed.",
+                                                             assets: [("Hub-0.6.257.dmg", sha, 7, digest)]),
+        ])
+        var served = FeedApp(version: "0.6.257", file: "Hub-0.6.257.dmg", sha256: sha, bytes: 7, kind: "app-dmg")
+        served.name = "Hub Studio KH"; served.bundleID = "com.t.hub"; served.type = "system"
+        served.tagline = "One hub."; served.description = "Everything in one place."
+        served.notes = FeedGenerator.placeholderNotes
+        let before = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": served])
+        let unnamed = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh, verifier: UnverifiedAsset())
+        expect(unnamed.feed.apps["hub"]?.notes == FeedGenerator.placeholderNotes,
+               "FG21 an unnamed row of the same version keeps its placeholder")
+        let named = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh,
+                                               verifier: UnverifiedAsset(), refreshNotes: ["hub"])
+        expect(named.feed.apps["hub"]?.notes == "What 0.6.257 changed.",
+               "FG21 a named row whose notes are exactly the placeholder takes the release body")
+        expect(named.notes.contains { $0.hasPrefix("notes refreshed: hub —") && $0.contains("What 0.6.257 changed.") },
+               "FG21 the replacement is reported with its new first line")
+        var curated = served
+        curated.notes = "A sentence a person wrote."
+        let kept = try FeedGenerator.generate(apps: ["hub": hubRepo],
+                                              previous: Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": curated]),
+                                              gh: gh, verifier: UnverifiedAsset(), refreshNotes: ["hub"])
+        expect(kept.feed.apps["hub"]?.notes == "A sentence a person wrote.",
+               "FG21 a person's notes are never replaced, even when the app is named")
+        expect(kept.notes.contains { $0.hasPrefix("notes kept: hub") },
+               "FG21 a named row that was not replaced says why")
+        // Exact equality is the safety property: the same words plus one newline are refused too,
+        // because a comparison loose enough to accept them is loose enough to replace a person.
+        var almost = served
+        almost.notes = FeedGenerator.placeholderNotes + "\n"
+        let nearMiss = try FeedGenerator.generate(apps: ["hub": hubRepo],
+                                                  previous: Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": almost]),
+                                                  gh: gh, verifier: UnverifiedAsset(), refreshNotes: ["hub"])
+        expect(nearMiss.feed.apps["hub"]?.notes == FeedGenerator.placeholderNotes + "\n",
+               "FG21 the placeholder plus a newline is not the placeholder, so it is kept")
+        expect(nearMiss.notes.contains { $0.hasPrefix("notes kept: hub") },
+               "FG21 ... and the run says why")
+        expectThrows("FG21 naming an app this run does not generate is refused", contains: "hub-studio") {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh,
+                                           verifier: UnverifiedAsset(), refreshNotes: ["hub-studio"])
+        }
+    } catch { expect(false, "FG21 fixture: \(error)") }
+
     // FG14 an asset that does not download anonymously is a finding, never a row. The check runs
     // before the row is built, so a draft or orphan release passes nothing through.
     do {

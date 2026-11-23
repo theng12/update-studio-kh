@@ -52,7 +52,7 @@ struct KHUMain {
             khu <subcommand> ...
               keygen <dir>
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|extension|media|plugin|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--meta-only] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
-              feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>)   (one row per app repo's latest published release, app=owner/repo per line; words from the tag's app-meta.json, else the registry; a row's asset comes from its registry entry, so one repo can publish two rows)
+              feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>) [--refresh-notes <app>...]   (one row per app repo's latest published release, app=owner/repo per line; words from the tag's app-meta.json, else the registry; a row's asset comes from its registry entry, so one repo can publish two rows; --refresh-notes re-reads the release body of the named apps only, and only for a row whose notes are exactly the tool's placeholder)
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -231,6 +231,7 @@ struct KHUMain {
             // come from the release tag's own app-meta.json, else the Launcher repo's registry.
             var reposFile: String?, registryFile: String?, keyArg: String?, out: String?, publishRepo: String?, previousFile: String?
             var publishFlag = false
+            var refreshNotes: Set<String> = []
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -241,6 +242,11 @@ struct KHUMain {
                 case "--out": out = value("--out", &i)
                 case "--publish": publishFlag = true
                 case "--repo": publishRepo = value("--repo", &i)
+                case "--refresh-notes":
+                    var named: [String] = []
+                    while i + 1 < args.count, !args[i + 1].hasPrefix("--") { named.append(args[i + 1]); i += 1 }
+                    guard !named.isEmpty else { fail("--refresh-notes needs at least one app id") }
+                    refreshNotes = Set(named)
                 default: usage()
                 }
                 i += 1
@@ -281,7 +287,8 @@ struct KHUMain {
                         previousPublic = try JSON.decode(Feed.self, from: feedData)
                     } catch { fail("refused: cannot read the public feed to compare against (\(error)); nothing was published") }
                 }
-                let made = try FeedGenerator.generate(apps: apps, registry: registry, previous: previousPublic, gh: GhReader())
+                let made = try FeedGenerator.generate(apps: apps, registry: registry, previous: previousPublic,
+                                                      gh: GhReader(), refreshNotes: refreshNotes)
                 let feed = made.feed
                 for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
                     print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
@@ -289,6 +296,10 @@ struct KHUMain {
                 for note in made.stale { print("note: \(note)") }
                 for change in made.wordChanges { print("words: \(change)") }
                 for note in made.notes { print("note: \(note)") }
+                if !refreshNotes.isEmpty {
+                    let done = made.notes.filter { $0.hasPrefix("notes refreshed:") }.count
+                    print("notes: \(done) of \(refreshNotes.count) named row(s) refreshed")
+                }
                 if !made.unpublished.isEmpty {
                     print("no row (repo has no published release): \(made.unpublished.joined(separator: ", "))")
                 }

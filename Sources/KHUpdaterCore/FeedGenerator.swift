@@ -384,11 +384,24 @@ public enum FeedGenerator {
         return (meta, sources, changes, stale)
     }
 
+    /// The tool's own sentence, written when a release has no changelog. A card showing exactly this
+    /// has no changelog to show; anything else is a sentence a person wrote.
+    public static let placeholderNotes = "Signed release from the KH Studio feed."
+
+    /// The opening line of a notes string, short enough to read in a change line.
+    static func firstLine(_ text: String?) -> String {
+        guard let text else { return "none" }
+        let line = text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+        return line.count > 60 ? String(line.prefix(60)) + "…" : line
+    }
+
     /// One row, or nil when the repo has no published release.
     public static func row(app: String, repo: String, registry: FeedRegistry?, served: FeedApp? = nil,
-                           gh: GitHubReader, verifier: AssetVerifier = AnonymousAsset())
+                           gh: GitHubReader, verifier: AssetVerifier = AnonymousAsset(),
+                           refreshNotes: Bool = false)
         throws -> (row: FeedApp?, source: String?, stale: String?, changes: [String]) {
         let chosen = try release(for: app, repo: repo, gh: gh)
+        var repair: [String] = []
         guard let release = chosen.release else { return (nil, nil, nil, chosen.notes) }
         guard let version = verdict(release.tag, app: app, repo: repo).version else {
             throw khuFail("refused: \(repo) publishes \(release.tag); nothing was generated")
@@ -448,13 +461,23 @@ public enum FeedGenerator {
         // Only a version change owns that release's notes: the release body is this version's
         // changelog. An untouched row keeps the notes it already serves, whatever its release body
         // says — six rows' curated notes are not replaced by a 39-character body.
+        // `--refresh-notes` is the one named exception, and it cannot overwrite a person: the row's
+        // notes must be exactly the tool's placeholder, byte for byte.
         // `GATE PASS …` is the machine line the release convention puts at the top of every body; it
         // stays in the body as audit and never reaches a card, which would open with jargon.
-        if served?.version != version, let body = release.body {
+        // Byte for byte, not "looks like": the same words with one stray space are refused too, because
+        // a comparison loose enough to accept them is loose enough to overwrite someone's sentence.
+        let placeholder = refreshNotes && served?.notes == Self.placeholderNotes
+        if served?.version != version || placeholder, let body = release.body {
             let prose = body.split(separator: "\n", omittingEmptySubsequences: false)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("GATE PASS") }
                 .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !prose.isEmpty { row.notes = prose }
+            if !prose.isEmpty {
+                if placeholder, prose != served?.notes {
+                    repair = ["notes refreshed: \(app) — \"\(Self.firstLine(served?.notes))\" → \"\(Self.firstLine(prose))\""]
+                }
+                row.notes = prose
+            }
         }
         // The row's summary source: what supplied the words it actually has. Fields no source had
         // are left out, so "tag" means every word came from the release, not just most of them.
@@ -464,7 +487,7 @@ public enum FeedGenerator {
         else if !used.isEmpty && used.allSatisfy({ $0 == "tag" }) { source = "tag:\(release.tag)" }
         else if used.contains("served") { source = "served" }
         else { source = "none" }
-        return (row, source, made.stale ?? fileNote, chosen.notes + made.changes)
+        return (row, source, made.stale ?? fileNote, chosen.notes + made.changes + repair)
     }
 
     /// The whole feed: one row per repo with a published release, no compatibility row. Every app
@@ -477,12 +500,17 @@ public enum FeedGenerator {
     /// check then says so, which is the point.
     public static func generate(apps: [String: String], registry: FeedRegistry? = nil, previous: Feed? = nil,
                                 gh: GitHubReader, verifier: AssetVerifier = AnonymousAsset(),
-                                now: Date = Date()) throws -> FeedGeneration {
+                                refreshNotes: Set<String> = [], now: Date = Date()) throws -> FeedGeneration {
+        // A named repair that names an app this run does not generate is a typo, not a no-op.
+        if let unknown = refreshNotes.subtracting(apps.keys).sorted().first {
+            throw khuFail("refused: --refresh-notes names \(unknown), which this run does not generate; nothing was generated")
+        }
         var feed = Feed(published_at: ISO.string(now))
         var sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = [], wordChanges: [String] = []
         var notes: [String] = []
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
-            let made = try row(app: app, repo: repo, registry: registry, served: previous?.apps[app], gh: gh, verifier: verifier)
+            let made = try row(app: app, repo: repo, registry: registry, served: previous?.apps[app], gh: gh,
+                               verifier: verifier, refreshNotes: refreshNotes.contains(app))
             guard var row = made.row else {
                 unpublished.append(app)
                 notes += made.changes
@@ -508,11 +536,19 @@ public enum FeedGenerator {
                 if row.security == nil { row.security = old.security }
                 for (key, value) in old.extras where row.extras[key] == nil { row.extras[key] = value }
             }
+            // A named row that was not replaced says why, so a named app with no change is never silence.
+            if refreshNotes.contains(app), let old = previous?.apps[app], old.version == row.version {
+                if old.notes != placeholderNotes {
+                    notes += ["notes kept: \(app) — its notes are not the placeholder; nothing was replaced"]
+                } else if row.notes == old.notes {
+                    notes += ["notes kept: \(app) — its release body carries nothing but the placeholder"]
+                }
+            }
             feed.apps[app] = row
             if let source = made.source { sources[app] = source }
             if let note = made.stale { stale.append(note) }
-            wordChanges += made.changes
-            notes += made.changes.filter { $0.hasPrefix("stray release ignored:") }
+            wordChanges += made.changes.filter { !$0.hasPrefix("notes refreshed:") }
+            notes += made.changes.filter { $0.hasPrefix("stray release ignored:") || $0.hasPrefix("notes refreshed:") }
         }
         if let previous {
             // A row may not disappear while its repo still publishes: an app dropped from the list
