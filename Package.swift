@@ -16,6 +16,10 @@ let package = Package(
         .target(name: "KHUpdaterCore", dependencies: ["KHUStub"]),
         .executableTarget(name: "khu", dependencies: ["KHUpdaterCore"]),
         .executableTarget(name: "khu-stub", dependencies: ["KHUStub"]),
-        .testTarget(name: "KHUpdaterTests", dependencies: ["KHUpdaterCore", "KHUStub"]),
+        // The suite lives in Tests/Runner and is built by ./build.sh test (it is a custom harness,
+        // not XCTest). This target only re-runs build/khu-tests so `swift test` tells the truth
+        // instead of failing with a language error (row 20261123-123).
+        .testTarget(name: "KHUpdaterTests", dependencies: ["KHUpdaterCore", "KHUStub"],
+                    path: "Tests/KHUpdaterTests", exclude: ["Runner"]),
     ]
 )
