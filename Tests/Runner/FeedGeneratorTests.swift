@@ -115,8 +115,10 @@ func feedGeneratorTests() {
         expect(feed.apps.keys.sorted() == ["story"], "FG4 a repo with no published release contributes no row")
     } catch { expect(false, "FG4 fixture: \(error)") }
 
-    // FG6 the encoder is byte-stable: the same inputs at the same moment produce the same bytes,
-    // so "already equal" means the encoder agrees, not that the clock changed.
+    // FG6 the encoder is stable: the same inputs at the same moment produce the same feed bytes, so
+    // "already equal" means the encoder agrees, not that the clock changed. The envelope is not
+    // byte-stable and never claimed to be — this CryptoKit's Ed25519 signatures differ between two
+    // signings of identical bytes (measured 2026-11-23) — so the comparison is on `feed`.
     do {
         let gh = FakeGitHub(paths: [
             "repos/\(hubRepo)/releases/latest": releaseJSON(tag: "0.6.257", asset: "Hub.dmg", sha: sha, bytes: 7, digest: "sha256:\(sha)"),
@@ -126,12 +128,32 @@ func feedGeneratorTests() {
         let key = Curve25519.Signing.PrivateKey()
         let keyFile = tmpDir("feed-stable").appendingPathComponent("stable.key")
         try! Signing.savePrivateKey(key, to: keyFile)
-        let first = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: moment), keyFile: keyFile)
-        let second = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: moment), keyFile: keyFile)
-        expect(first == second, "FG6 the signed feed is byte-stable for the same inputs and the same moment")
-        let later = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: moment.addingTimeInterval(1)), keyFile: keyFile)
+        func signedFeed(at date: Date) throws -> Data {
+            let envelope = try FeedGenerator.signed(FeedGenerator.feed(apps: ["hub": hubRepo], gh: gh, now: date), keyFile: keyFile)
+            let release = try JSON.decode(Release.self, from: envelope)
+            guard let data = release.feedData, let signature = release.signatureData,
+                  Signing.verify(data, signature: signature, publicKey: key.publicKey) else {
+                throw khuFail("the envelope does not verify")
+            }
+            return data
+        }
+        let first = try signedFeed(at: moment), second = try signedFeed(at: moment)
+        expect(first == second, "FG6 the feed is byte-stable for the same inputs and the same moment")
+        let later = try signedFeed(at: moment.addingTimeInterval(1))
         expect(first != later, "FG6 a later generation changes published_at and therefore the bytes")
     } catch { expect(false, "FG6 fixture: \(error)") }
+
+    // FG7. The helper is not a feed app (owner ruling 2026-11-23): a line naming it produces no row,
+    // and the generated feed carries no updater entry at all.
+    do {
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(tag: "0.6.257", asset: "Hub.dmg", sha: sha, bytes: 7, digest: "sha256:\(sha)"),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        let feed = try FeedGenerator.feed(apps: ["hub": hubRepo, "updater": "o/launcher-kh"], gh: gh)
+        expect(feed.apps["updater"] == nil, "FG7 a line naming the helper produces no updater row")
+        expect(feed.apps.keys.sorted() == ["hub"], "FG7 every other app is still generated")
+    } catch { expect(false, "FG7 fixture: \(error)") }
 
     // FG5 an asset GitHub gives no digest for is refused, never hashed locally into the feed.
     do {

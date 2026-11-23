@@ -29,7 +29,7 @@ public struct RepoRelease: Sendable, Equatable {
 
 /// What `app-meta.json` at a release tag carries. `bundle_name` is optional (the bundle id is the
 /// identity; the name is what a person sees).
-public struct AppMeta: Codable, Sendable, Equatable {
+public struct RepoAppMeta: Codable, Sendable, Equatable {
     public var name: String?
     public var bundle_id: String?
     public var bundle_name: String?
@@ -50,7 +50,7 @@ public protocol GitHubReader: Sendable {
 
 public enum FeedGenerator {
     /// Every field a row takes from `app-meta.json`, with the flag-free name the refusal uses.
-    static let requiredMetaFields: [(String, (AppMeta) -> String?)] = [
+    static let requiredMetaFields: [(String, (RepoAppMeta) -> String?)] = [
         ("name", { $0.name }), ("bundle_id", { $0.bundle_id }), ("type", { $0.type }),
         ("tagline", { $0.tagline }), ("description", { $0.description }),
     ]
@@ -94,7 +94,7 @@ public enum FeedGenerator {
         }
         guard let encoded = try? JSONSerialization.jsonObject(with: metaData) as? [String: String],
               let content = encoded["content"], let decoded = Data(base64Encoded: content.filter { !$0.isWhitespace }),
-              let meta = try? JSON.decode(AppMeta.self, from: decoded) else {
+              let meta = try? JSON.decode(RepoAppMeta.self, from: decoded) else {
             throw khuFail("refused: \(repo) \(release.tag)'s app-meta.json cannot be read; nothing was generated")
         }
         let missing = requiredMetaFields.filter { $0.1(meta)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true }.map(\.0)
@@ -122,6 +122,9 @@ public enum FeedGenerator {
     public static func feed(apps: [String: String], gh: GitHubReader, now: Date = Date()) throws -> Feed {
         var feed = Feed(published_at: ISO.string(now))
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
+            // The helper is not a feed app (owner ruling 2026-11-23): it ships inside the Launcher and
+            // comes with it. A line naming it is dropped here, never turned into a row every Mac reads.
+            if app == "updater" { continue }
             if let entry = try row(for: repo, gh: gh) { feed.apps[app] = entry }
         }
         return try feed.validated()

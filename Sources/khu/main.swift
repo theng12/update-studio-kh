@@ -52,7 +52,7 @@ struct KHUMain {
             khu <subcommand> ...
               keygen <dir>
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|extension|media|plugin|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--meta-only] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
-              feed --repos <apps.txt> --key <keyfile> (--out <release.json> | --publish --repo <owner/name>)   (generates the whole feed from each app repo's latest published release: app=owner/repo per line)
+              feed --repos <apps.txt> --key <keyfile> (--out <release.json> | --publish --repo <owner/name>)   (generates the whole feed from each app repo's latest published release: app=owner/repo per line; the helper is not a feed app — it ships inside the Launcher)
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -258,6 +258,10 @@ struct KHUMain {
                 }
             } catch { fail("cannot read \(reposFile): \(error)") }
             guard !apps.isEmpty else { fail("\(reposFile) names no app") }
+            if apps.removeValue(forKey: "updater") != nil {
+                print("note: updater: not a feed app — it ships inside the Launcher; that line is ignored")
+            }
+            guard !apps.isEmpty else { fail("\(reposFile) names only the helper, which is not a feed app: it ships inside the Launcher") }
             do {
                 let feed = try FeedGenerator.feed(apps: apps, gh: GhReader())
                 let envelope = try FeedGenerator.signed(feed, keyFile: URL(fileURLWithPath: keyArg))
