@@ -738,6 +738,18 @@ exit 0
         ("127.0.0.1", 0), lambda *a, **k: Quiet(*a, directory=str(gh_serve), **k))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     push_env2["KHU_ASSET_BASE"] = "http://127.0.0.1:%d" % server.server_address[1]
+    push_env2["KHU_RELEASE_PORT"] = str(server.server_address[1])
+    asset_url = ("%s/theng12/push-app/releases/download/gateway-9.9.9/%s"
+                 % (push_env2["KHU_ASSET_BASE"], asset_name))
+
+    def serve_feed(row_url=None):
+        row = {"version": "9.9.9", "file": asset_name, "sha256": hashlib.sha256(b"dmg").hexdigest(),
+               "bytes": 3, "kind": "app"}
+        if row_url:
+            row["url"] = row_url
+        doc = {"schema": 1, "published_at": "2026-11-23T00:00:00Z", "apps": {"gateway": row}, "previous": {}}
+        (gh_serve / "release.json").write_text(json.dumps(
+            {"feed": base64.b64encode(json.dumps(doc).encode()).decode(), "signature": "sig"}))
 
     def push_run2(**extra):
         for path in (khu_calls, push_args, push_order, push_gh_calls):
@@ -749,15 +761,22 @@ exit 0
     def order():
         return push_order.read_text().split() if push_order.exists() else []
 
+    serve_feed(asset_url)
     result = push_run2(FAKE_KHU_URL_FLAG="1")
     check(order() == ["create", "publish"],
           "the artifact reaches its GitHub release before the publish that names it (%r)" % order())
     args = push_args.read_text()
-    check(push_env2["KHU_ASSET_BASE"] + "/theng12/push-app/releases/download/gateway-9.9.9/" in args,
-          "the publish carries the release's absolute address (%s)" % args.strip()[:120])
+    check(asset_url in args, "the publish carries the release's absolute address")
     check("--url" in args, "the address reaches the publisher as --url")
     check("downloaded anonymously and hashes to the signed sha256" in result.stderr,
-          "the address was fetched the way a client does and hashed (%s)" % result.stderr.strip()[-90:])
+          "the address was fetched the way a client does and hashed")
+    check(result.returncode == 0, "the served row names the address, so the publish is done (%d: %s)"
+          % (result.returncode, (result.stdout + result.stderr).strip().splitlines()[-1:] or [""]))
+
+    serve_feed()
+    result = push_run2(FAKE_KHU_URL_FLAG="1")
+    check(result.returncode != 0 and "does not name" in result.stdout,
+          "a row that lost the address fails the readback instead of passing (rc=%d)" % result.returncode)
 
     result = push_run2(KHU_PUBLIC_REPO="", FAKE_KHU_URL_FLAG="1")
     check(not push_gh_calls.exists() and order() == ["publish"],
@@ -788,6 +807,8 @@ exit 0
     server.shutdown()
 
     gh_asset = packaging / "github-asset.sh"
+    if push_gh_calls.exists():
+        push_gh_calls.unlink()
     result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "a" * 64, "2147483648", env=push_env2)
     check(result.returncode != 0 and "2 GiB" in result.stderr and not push_gh_calls.exists(),
           "at GitHub's 2 GiB cap the upload is refused before anything moves")

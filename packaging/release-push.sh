@@ -74,10 +74,10 @@ scp -i "$KEY" -o BatchMode=yes "$LOG" "$HOST:$STAGE/changelogs/$APP.md"
   --app '$APP' --version '$VERSION' --artifact \"\$HOME/$STAGE/$BASE\" --changelog \"\$HOME/$STAGE/changelogs/$APP.md\" \
   ${KIND:+--kind '$KIND'} ${TYPE:+--type '$TYPE'} ${KHU_NEW_APP:+--new-app} ${URL:+--url '$URL'}"
 
-/usr/bin/python3 -I - "$HOST" "$APP" "$VERSION" "$URL" <<'PY'
+/usr/bin/python3 -I - "http://${HOST#*@}:${KHU_RELEASE_PORT:-8790}/release.json" "$APP" "$VERSION" "$URL" <<'PY'
 import base64, json, sys, urllib.request
-host, app, want, url = sys.argv[1].split("@")[-1], sys.argv[2], sys.argv[3], sys.argv[4]
-feed = json.loads(base64.b64decode(json.load(urllib.request.urlopen(f"http://{host}:8790/release.json", timeout=20))["feed"]))
+feed_url, app, want, url = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+feed = json.loads(base64.b64decode(json.load(urllib.request.urlopen(feed_url, timeout=20))["feed"]))
 got = feed["apps"].get(app, {}).get("version")
 previous = (feed.get("previous") or {}).get(app, {}).get("version")
 print(f"feed offers {app} {got} (previous {previous}); expected {want}")
