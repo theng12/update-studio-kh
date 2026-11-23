@@ -37,6 +37,9 @@ struct KHUMain {
         // invisible in a 4 KB buffer until the process restarted, and the log looked dead while
         // installs were happening. Line-buffered stdout makes every "agent run:" land at once.
         setvbuf(stdout, nil, _IOLBF, 0)
+        // The release's own screenshots, rendered offscreen from this build with demo state; a normal
+        // run never sets KHU_SNAPSHOT_DIR, so this returns at once (RELEASE-POLICY §5d).
+        if let snapshotExit = Snapshot.runIfAsked() { exit(snapshotExit) }
         rotateAgentLog()
         // An app launched by LaunchServices inherits 256 descriptors, and an install that runs
         // ditto, codesign and launchctl then dies with -24 "Too many open files". Raise our own
