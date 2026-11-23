@@ -340,6 +340,13 @@ public enum FeedPublisher {
                     throw khuFail("refused: \(app) would be published incomplete — \(missing.joined(separator: "; ")). Nothing was published.")
                 }
             }
+            // A row with no address cannot be installed by anyone: measured 2026-11-23, `khu publish`
+            // wrote one to the production feed host and its receipt still said "published". The
+            // estate's only producer is `khu feed`, which takes the address from the app's own
+            // GitHub release; the words belong in the tag's app-meta.json.
+            guard let address = entry.url, !address.isEmpty else {
+                throw khuFail("refused: \(app) \(version)'s row would carry no address. The address comes from the app's own GitHub release via `khu feed`; the words belong in the tag's app-meta.json.")
+            }
             feed.apps[app] = entry
             // Owner policy (RELEASE-POLICY §2c): a controller handoff is a one-shot pointer carrying
             // private addresses, and the signed feed is read by every Mac; publishing never writes one.
