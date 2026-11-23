@@ -30,11 +30,14 @@ input::placeholder{color:var(--sub)}input,textarea{cursor:text;-webkit-user-sele
 main{flex:1;padding:18px 22px 8px}
 /* One row of sections across the top at any width where all eight fit; below that it wraps rather
    than scrolls, so no section is ever hidden behind a sideways swipe. */
-.tabs{display:flex;flex-wrap:wrap;gap:2px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
-.tabs [role=tab]{height:40px;padding:0 12px;border:0;border-bottom:2px solid transparent;background:none;color:var(--sub);font-weight:600;white-space:nowrap;flex:none}
-.tabs [role=tab]:hover{color:var(--text)}
-.tabs [role=tab][aria-selected=true]{color:var(--text);border-bottom-color:var(--accent)}
-@media (max-width:520px){.tabs [role=tab]{height:38px;padding:0 10px}}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+/* A tab is a control, not a word on a line: its own 32px target, a 6px gap, and the selected one
+   filled with the accent the owner chose (2026-11-24). The fill is the cue, so the underline is
+   gone; the accent appears on the selected tab only, never on hover. */
+.tabs [role=tab]{height:32px;padding:0 14px;border:1px solid transparent;border-radius:6px;background:none;color:var(--sub);font-weight:600;white-space:nowrap;flex:none}
+.tabs [role=tab]:hover{color:var(--text);background:var(--muted-bg)}
+.tabs [role=tab][aria-selected=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);box-shadow:0 1px 2px rgba(0,0,0,.16)}
+@media (max-width:520px){.tabs{gap:6px;padding:6px 10px}.tabs [role=tab]{height:32px;padding:0 12px}}
 .tabnote{margin:0;padding:8px 22px;color:var(--sub);font-size:12.5px;background:var(--panel);border-bottom:1px solid var(--line2)}
 #extPanel p{margin:8px 0;color:var(--sub);overflow-wrap:anywhere}
 .extRow{display:flex;justify-content:space-between;align-items:center;gap:8px 16px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
@@ -92,6 +95,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 .menu .why{margin:0 10px 5px 32px;font-size:11.5px;line-height:1.35;color:var(--sub)}
 .set{width:min(640px,100%)}.set .body{padding:6px 24px 22px}.set section{padding:14px 0;border-bottom:1px solid var(--line2)}.set section:last-child{border-bottom:0}
 .set h4{margin-bottom:12px}.row{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:8px 0}
+.set details{margin:12px 0 0}.set summary{cursor:pointer;font-weight:600;color:var(--sub);font-size:12.5px;padding:4px 0}
 .row label{display:flex;gap:9px;align-items:flex-start}.row input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;margin:1px 0 0}
 .note{font-size:12px;color:var(--sub);margin:2px 0 0 24px}.dis{opacity:.5}
 .bottom{display:flex;justify-content:flex-end;padding:14px 24px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--panel);z-index:1}
@@ -476,43 +480,42 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  const set=(key,value)=>post({action:'setting',key,value});
  const check=(key,label,on,note,disabled)=>el('div',{},el('div',{class:'row'+(disabled?' dis':'')},el('label',{},el('input',{type:'checkbox',checked:on,disabled,onchange:e=>set(key,e.target.checked)}),label)),note?el('p',{class:'note'},note):null);
  const seg=(key,opts,cur)=>el('div',{class:'seg',role:'group'},opts.map(([v,l])=>el('button',{'aria-pressed':String(cur==v),onclick:()=>set(key,v)},l)));
- const connStatus=()=>c.checking?el('p',{class:'note',style:'margin-left:0'},'Checking the connection…')
-  :c.note?el('p',{style:'color:var(--bad);font-size:12px;margin:6px 0 0'},c.note)
-  :(c.ok&&c.checkedAt)?el('div',{class:'meta',style:'margin-top:6px'},el('span',{class:'chip ok'},'Connected'),el('span',{class:'when num'},'checked '+ago(c.checkedAt)))
-  :el('p',{class:'note',style:'margin-left:0'},'The address has not been checked yet.');
- // What the person typed but has not applied yet outlives a redraw; once the new address is saved,
- // the state carries it and the draft is dropped.
  // The address in use, never a guess: a saved one, else the default a Mac with no saved address
  // starts on.
  const shownAddress=c.destination||c.defaultFeed||'';
+ // Only a Mac that saved a non-default address has anything to disclose, and only a Mac that runs or
+ // joined a Studio has those controls at all. Everything else is one line and one button.
+ const customAddress=!!c.destination&&!!c.defaultFeed&&c.destination!==c.defaultFeed;
+ const studio=!!c.studio;
  const pubAddr=el('input',{id:'pubaddr',type:'text',value:joinAddr===null?((c.destination&&!c.publicFeed)?c.destination:''):joinAddr,placeholder:'http://name.tail1234.ts.net:8790/release.json','aria-label':'Studio address for joining',oninput:e=>{joinAddr=e.target.value}});
  const pubCode=el('input',{id:'pubcode',type:'text',value:joinCode===null?'':joinCode,placeholder:'123-456','aria-label':'Pairing code',oninput:e=>{joinCode=e.target.value}});
- // The Studio functions — the fleet, the address, pairing, joining and leaving — belong to a Mac
- // that runs a Studio or has joined one. Every other Mac shows none of it, and no service is named
- // on its screen: the feed is simply "the saved feed".
- const studio=!!c.studio;
- const connSection=studio?el('section',{},el('h4',{},'Studio'),
-  el('div',{class:'row'},el('span',{},'Updates come from'),el('span',{class:'ver'},shownAddress+(c.destination?'':' (the signed feed)'))),
-  el('div',{class:'row'},el('span',{},'This Mac'),el('span',{},c.displayName&&c.machine&&c.displayName!==c.machine?c.displayName+' ('+c.machine+')':(c.displayName||c.machine||''))),
-  connStatus(),
-  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking…':'Check connection'),
-   el('button',{class:'btn',onclick:()=>post({action:'fleet'})},'Open the fleet…')),
+ // The Studio's own controls — the address, pairing, joining, leaving and the fleet — live behind
+ // Advanced, which exists only where an address other than the saved feed is in use and only on a
+ // Mac that runs a Studio or has joined one. A single-Mac screen cannot reach any of it.
+ const advanced=studio&&customAddress?el('details',{class:'adv'},el('summary',{},'Advanced'),
+  el('p',{class:'ver',style:'margin:8px 0 4px'},shownAddress),
+  el('p',{class:'note',style:'margin-left:0'},'This Mac reports its apps and versions to the Studio it joined. Nothing else leaves this Mac.'),
+  el('p',{class:'note',style:'margin-left:0'},'This Mac: '+(c.displayName&&c.machine&&c.displayName!==c.machine?c.displayName+' ('+c.machine+')':(c.displayName||c.machine||''))),
+  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking\u2026':'Check the connection'),
+   el('button',{class:'btn',onclick:()=>post({action:'fleet'})},'Open the fleet\u2026')),
   c.pairAvailable?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'pairAgain'})},'Pair again now')):null,
   c.canLeave?null:el('div',{},
-   el('h4',{style:'margin-top:12px'},'Join a Studio'),
    el('div',{class:'row'},pubAddr),
    el('div',{class:'row'},pubCode,el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'joinFleet',value:pubAddr.value,code:pubCode.value})},'Join')),
-   el('p',{class:'note',style:'margin-left:0'},'Type that Mac’s address and the pairing code it shows; nothing is sent until you press Join.')),
-  c.destination&&c.defaultFeed&&c.destination!==c.defaultFeed?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:c.defaultFeed})},'Use the saved feed instead')):null,
+   el('p',{class:'note',style:'margin-left:0'},'Type that Mac\u2019s address and the pairing code it shows; nothing is sent until you press Join.')),
+  el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'changeServer',value:c.defaultFeed})},'Use the saved feed instead')),
   c.canLeave?el('div',{class:'row'},el('button',{class:'btn',disabled:!!c.checking,onclick:()=>ask('Leave this Studio? This Mac keeps every app and every model. It stops taking orders from it and updates from the saved feed instead.','Leave this Studio',yes=>{if(yes)post({action:'leaveFleet'})})},'Leave this Studio')):null,
-  el('p',{class:'note',style:'margin-left:0'},'This Mac only accepts an address where the Studio serves updates its own key already signed. A different Studio needs its setup copy, not an address.'),
   c.serverNote?el('p',{style:'font-size:12px;margin:6px 0 0;color:'+(c.serverOk?'var(--ok)':'var(--bad)')},c.serverNote):null):null;
  const updater=S.apps.find(a=>a.id=='updater');
  const sheet=el('div',{class:'sheet set',role:'dialog','aria-modal':true,'aria-label':'Settings',style:again?'animation:none':'',onclick:e=>e.stopPropagation()},
   el('div',{class:'top'},el('div',{class:'t'},el('h3',{},'Settings'),el('div',{class:'sub'},'Studio Launcher KH '+S.version))),
   el('div',{class:'body'},
    S.settingsNote?el('p',{class:'note',role:'status','aria-live':'polite'},S.settingsNote):null,
-   el('section',{},el('h4',{},'Updates'),el('div',{class:'row'},el('span',{},'Check for updates'),seg('checkManually',[[false,'Automatically'],[true,'Manually']],s.checkManually)),
+   el('section',{},el('h4',{},'Updates'),
+    el('p',{class:'note',style:'margin-left:0'},studio?'Updates come from the Studio\u2019s signed feed.':'Updates come from this Mac\u2019s signed feed.'),
+    el('div',{class:'row'},el('span',{class:'sub',style:'min-width:0;overflow-wrap:anywhere'},c.checking?'Checking the connection\u2026':(c.note||c.serverNote||(c.ok&&c.checkedAt?'Connected \u00b7 checked '+ago(c.checkedAt):''))),
+     el('button',{class:'btn',disabled:!!c.checking,onclick:()=>post({action:'connectionCheck'})},c.checking?'Checking\u2026':'Check now')),
+    el('div',{class:'row'},el('span',{},'Check for updates'),seg('checkManually',[[false,'Automatically'],[true,'Manually']],s.checkManually)),
     check('autoInstall','Install updates automatically',s.autoInstall&&!s.checkManually,s.checkManually?'Off while checking manually. Use Check for updates now, then Update.':'Each app’s own switch is in its … menu.',s.checkManually),
     check('notify','Notify me when an update is ready',s.notify,null),
     // One app's Automatic value comes from one of three places; the app's … menu names which, using
@@ -523,16 +526,8 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
     // The updater's own switch is live data, and its automatic-on-connect default is stated, not implied.
     updater?check('updaterAutomatic','Studio Launcher KH updates itself automatically',!!updater.automatic,
       c.publicFeed?'From the signed feed: this Mac installs each new version that feed serves.':'Automatic is on when this Mac joins a Studio; change it in its own … menu.',
-      !c.publicFeed):null),
-   connSection,
-   studio?el('section',{},el('h4',{},'This Mac and the Studio'),
-    // Said from what the agent’s own report and recipes actually do; no budget is claimed here that
-    // the updater does not enforce, and nothing here can be changed by reading it.
-    el('p',{class:'note',style:'margin-left:0'},'The Studio is told this Mac’s name, which apps are installed here and at which versions and builds, whether each one started, the Automatic switches set on this Mac and any pause, and a read-only snapshot of the hardware, network addresses and app list. Results of installs go back to the same address.'),
-    el('p',{class:'note',style:'margin-left:0'},'What is downloaded or copied from a connected drive stays on this Mac, as do these settings, the copy kept for Roll back and the icons this Mac has seen — under '+(S.stateDir||'this Mac’s own updater folder')+'. A file that is replaced moves to the restorable _trash folder there instead of being deleted.'),
-    el('p',{class:'note',style:'margin-left:0'},'The sign-in is sent only to the saved controller; this page never shows it, and a download mirror the signed feed names does not receive it. What arrives is bounded the way the updater already bounds it: '+(S.replyLimitBytes?'a reply bigger than '+mb(S.replyLimitBytes)+' is refused rather than buffered, and ':'')+'an installer is refused once it passes the size its signature names. One app installs at a time, so Pause and Cancel act on the transfer you can see. There is no separate storage budget to set here.'))
-    :el('section',{},el('h4',{},'This Mac'),
-      el('p',{class:'note',style:'margin-left:0'},'Nothing is reported anywhere: this Mac reads its signed feed and keeps its own settings, the copy kept for Roll back and its downloads here'+(S.stateDir?', under '+S.stateDir:'')+'. A file that is replaced moves to the restorable _trash folder there instead of being deleted.')),
+      !c.publicFeed):null,
+    advanced),
    el('section',{},el('h4',{},'Appearance'),seg('appearance',[['system','System'],['light','Light'],['dark','Dark']],s.appearance),
     el('p',{class:'note',style:'margin-left:0'},'System matches this Mac. Light and Dark force that look.')),
    el('section',{},el('h4',{},'In the background'),check('menuBarWhenClosed','Keep the icon in the menu bar when this window is closed',s.menuBarWhenClosed,null),

@@ -10,6 +10,8 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - The Studio — the fleet, the address, pairing, joining and leaving — is now its own Settings section, and it appears only on a Mac that runs a Studio or has joined one. A Mac with neither shows none of it: one list of apps, Install/Update, and the Automatic switch.
 - The fleet view opens from the Studio section (and its menu item is offered on the same Macs), never from the everyday footer.
 - Automatic updates have a visible switch on the main screen. It is on for a fresh Mac, it shows what the helper will really do — checking by hand shows it off — and a choice already saved on this Mac is never overwritten.
+- The category tabs are proper controls: 6px apart, 32px tall, and the selected one is filled with the accent instead of underlined, so it reads at a glance and in greyscale. The accent still means "primary action" everywhere else.
+- Settings is one screen: a line saying where updates come from, Check now, and the updates, appearance, background and log switches. The address and a Studio's own controls sit behind Advanced, which only appears when an address other than the saved feed is in use.
 
 ## 0.1.80 — 2026-11-22
 

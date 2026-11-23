@@ -137,3 +137,66 @@ func publicFeedTests() {
     }
     expect(!Connect.isSetUp(home: home2), "PF19 a refused public setup installed nothing")
 }
+
+/// Owner, 2026-11-24: the gate carries a cold first run from a data dir that does not exist, because
+/// the drives carry 0.1.75 and a Mac set up tomorrow may pull this build first. This walks the
+/// window's own one-press state into the setup call and reads the result back off disk.
+func firstRunWalkTests() {
+    _ = NSApplication.shared
+    let root = tmpDir("first-run-walk")
+    let fleet = Signing.generateKeyPair()
+    PinnedKey.test = fleet.publicKeyBase64
+    defer { PinnedKey.test = nil }
+    var feed = Feed(published_at: ISO.string(Date()))
+    feed.apps["updater"] = FeedApp(version: "0.1.81", file: "khu", sha256: Signing.sha256Hex(Data("u".utf8)),
+                                    bytes: 1, kind: "updater")
+
+    // A copy downloaded for anyone: it carries the pinned key and no address.
+    let kit = root.appendingPathComponent("kit")
+    try! fm.createDirectory(at: kit, withIntermediateDirectories: true)
+    let script = "#!/bin/bash\nset -e\nmkdir -p \"$2/Library/KHUpdater/base\"\ncp \"$1\" \"$2/Library/KHUpdater/base/config.json\"\necho installed\n"
+    let files: [String: Data] = ["publisher.json": try! JSON.encode(["publicKey": fleet.publicKeyBase64]),
+                                 "install-agent.sh": Data(script.utf8)]
+    var pins: [String: Any] = [:]
+    for (n, d) in files {
+        try! d.write(to: kit.appendingPathComponent(n)); pins[n] = ["bytes": d.count, "sha256": Signing.sha256Hex(d)]
+    }
+    try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: kit.appendingPathComponent("install-agent.sh").path)
+    try! JSONSerialization.data(withJSONObject: ["format": "fixture", "files": pins])
+        .write(to: kit.appendingPathComponent("MANIFEST.json"))
+
+    // The window a fresh Mac opens: its feed is already named, nothing is asked for, one press.
+    let home = root.appendingPathComponent("home")   // deliberately never created
+    let window = ConnectionWindow.testFirstRun(kit: kit, home: home)
+    let state = window.testState
+    expect(state.address == ConnectionWindow.publicFeedURL && !state.editable,
+           "FW1 a fresh Mac's first run already names its feed and cannot be retyped (\(state.address))")
+    expect(!state.codeVisible && state.primary == "Connect",
+           "FW1 and it asks for nothing before the one press (code \(state.codeVisible), \(state.primary))")
+    window.testFail("the feed did not answer")
+    expect(window.testState.primary == "Retry" && window.testState.status.contains("the feed did not answer"),
+           "FW2 an unreachable feed is a named failure with Retry (\(window.testState.status))")
+
+    // The press, from nothing on disk.
+    let body = try! JSON.encode(feed)
+    let release = try! JSON.encode(Release(feed: body, signature: try! Signing.sign(body, with: fleet.privateKey)))
+    let http = RecordingHTTP(feed: release)
+    do {
+        _ = try Connect.usePublicFeed(kit: kit, home: home, machine: "fresh-mac", address: state.address, http: http)
+        expect(true, "FW3 the one press set this Mac up")
+    } catch { expect(false, "FW3 the one press set this Mac up (\(error))") }
+    let cfgFile = home.appendingPathComponent("Library/KHUpdater/base/config.json")
+    let cfg = (try? Data(contentsOf: cfgFile)).flatMap { try? JSON.decode(AgentConfig.self, from: $0) }
+    expect(cfg?.feedURL == ConnectionWindow.publicFeedURL && cfg?.token == "",
+           "FW4 the saved settings name the public feed and carry no token (\(cfg?.feedURL ?? "nothing saved"))")
+    expect(cfg?.apps["updater"]?.automatic == true,
+           "FW5 the helper this Mac just installed updates itself automatically")
+    expect(HelperSettings.load(from: home.appendingPathComponent("Library/KHUpdater/state")).installsAutomatically,
+           "FW6 and with nothing saved this Mac installs updates automatically")
+    do {
+        _ = try Connect.usePublicFeed(kit: kit, home: home, machine: "fresh-mac", address: state.address, http: http)
+        expect(false, "FW7 a second first run is refused")
+    } catch {
+        expect("\(error)".contains("already set up"), "FW7 a second first run is refused (\(error))")
+    }
+}

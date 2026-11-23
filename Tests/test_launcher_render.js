@@ -197,15 +197,14 @@ assert.equal(document.querySelector('.card'), card, 'R1 a push that says nothing
 run('settingsOpen=true;drawSettings()');
 const sheet = document.querySelector('.scrim.s .sheet');
 assert(sheet && sheet.getAttribute('aria-modal') == 'true', 'R2 Settings opens as a modal dialog');
-const codeBox = document.getElementById('pubcode');
-codeBox.focus();
-codeBox.value = '123-456';
-codeBox.fire('input');
+const searchBox = document.getElementById('q');
+searchBox.focus();
+searchBox.value = 'sto';
 render(state([row({ progress: downloading(700000) })]));
 assert.equal(document.querySelector('.scrim.s .sheet'), sheet, 'R2 a transfer tick must not rebuild the open dialog');
-assert.equal(document.getElementById('pubcode'), codeBox, 'R2 …nor replace the field the person is typing in');
-assert.equal(codeBox.value, '123-456', 'R2 what was typed is not thrown away');
-assert.equal(document.activeElement, codeBox, 'R2 focus stays where the person left it');
+assert.equal(document.getElementById('q'), searchBox, 'R2 …nor replace the field the person is typing in');
+assert.equal(searchBox.value, 'sto', 'R2 what was typed is not thrown away');
+assert.equal(document.activeElement, searchBox, 'R2 focus stays where the person left it');
 
 // R3 real news does redraw, and the redraw must not replay the dialog's entrance or lose the draft.
 const failed = 'the app did not quit; nothing was changed';
@@ -213,8 +212,9 @@ render(state([row({ status: 'Failed', reason: failed })], { error: failed }));
 const redrawn = document.querySelector('.scrim.s .sheet');
 assert(redrawn && redrawn !== sheet, 'R3 a real change does refresh the open dialog');
 assert.match(redrawn.style.cssText || '', /animation:\s*none/, 'R3 …without replaying its entry animation (the flash)');
-assert.equal(document.getElementById('pubcode').value, '123-456', 'R3 the unapplied join draft outlives the redraw');
-assert.equal(document.activeElement, document.getElementById('pubcode'), 'R3 focus is handed back to the same control');
+assert.equal(document.getElementById('q').value, 'sto', 'R3 what was typed outlives the redraw');
+assert.equal(document.activeElement, document.getElementById('q'), 'R3 focus is handed back to the same control');
+run('q="";document.getElementById("q").value=""');
 assert.match(document.getElementById('err').textContent, /^Last check failed: the app did not quit/, 'R3 the failure is said loudly, in the footer too');
 
 // R4 a stopped attempt must never read as ongoing work.
@@ -331,7 +331,8 @@ render(state([row({status:'Up to date'})],{lastRun:checked,lastAttempt:attempted
 assert.equal(run('S.lastRun'),checked,'a failed check does not rewrite when the server last answered');
 assert.match(document.getElementById('err').textContent,/Offline · /);
 assert(!/Checked /.test(document.getElementById('checked').textContent), 'a failed check does not claim verified source coverage');
-// Ordinary settings report their save, and the feed's address is never a field a screen retypes.
+// Ordinary settings report their save; the feed's address is never a field a screen retypes, and
+// the screen is one line plus one button unless a non-default address is saved.
 run('detail=null;settingsOpen=true;closeLayers();drawSettings()');
 render(state([row()],{settingsNote:'Saved.'}));
 assert.match(document.querySelector('.scrim.s .sheet').textContent,/Saved\./);
@@ -345,48 +346,50 @@ assert(!document.getElementById('addr'),'no screen offers a field that would cha
 const failedConnection=Object.assign({},state([]).connection,{serverOk:false,serverNote:'Address refused'});
 render(state([row()],{settingsNote:'Could not save that change. Your previous settings are kept.',connection:failedConnection}));
 assert.match(document.querySelector('.scrim.s .sheet').textContent,/Could not save that change/);
-assert.match(document.querySelector('.scrim.s .sheet').textContent,/Address refused/,'a refused connection check is shown in the Studio section');
+assert.match(document.querySelector('.scrim.s .sheet').textContent,/Address refused/,'a refused connection check is shown beside Check now');
 
-// One source, and nothing to choose or retype: the Studio section shows the address in use as a
-// fact. There is no source picker, no editable address, and no screen names the service behind it.
+// One source, one line, one button: the address is a fact behind Advanced, never a picker or a
+// field. No screen names the service behind the feed.
 const mirror='https://theng12.github.io/kh-releases/release.json';
 const sheetNow=()=>document.querySelector('.scrim.s .sheet').textContent;
-run('joinAddr=null;joinCode=null;settingsOpen=false;closeLayers()');
-render(state([row()],{connection:Object.assign({},state([]).connection,{destination:'',defaultFeed:mirror})}));
-run('settingsOpen=true;drawSettings()');
-assert.match(sheetNow(),/\(the signed feed\)/,'with no saved address the Studio section names the signed feed it uses');
-assert.doesNotMatch(sheetNow(),/Where updates come from/,'there is no source picker left in Settings');
-assert(!document.getElementById('addr'),'the address is a fact on screen, never a field to retype');
-assert.doesNotMatch(sheetNow(),/GitHub/,'no screen names the service behind the feed');
 run('settingsOpen=false;closeLayers()');
-render(state([row()],{connection:Object.assign({},state([]).connection,{defaultFeed:mirror})}));
+render(state([row()],{connection:Object.assign({},state([]).connection,{destination:mirror,defaultFeed:mirror,studio:false})}));
 run('settingsOpen=true;drawSettings()');
-assert.match(sheetNow(),/http:\/\/100\.64\.0\.7:8790\/release\.json/,'the saved address is the one shown');
+assert.match(sheetNow(),/Updates come from this Mac’s signed feed\./,'one line says where updates come from');
+assert(document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Check now'),'one button checks it');
+assert(!document.querySelector('.scrim.s details'),'with the saved feed in use there is nothing behind Advanced');
+assert.doesNotMatch(sheetNow(),/Where updates come from/,'there is no source picker left in Settings');
+assert(!document.getElementById('addr'),'the address is never a field to retype');
+assert.doesNotMatch(sheetNow(),/GitHub/,'no screen names the service behind the feed');
+assert.doesNotMatch(sheetNow(),/pairing code|fleet|Leave this/,'and no Studio wording reaches a plain Mac');
 
-// The way back to the saved feed stays, in plain words, while a Studio's address is saved.
+// A saved address that is not the signed feed is disclosed behind Advanced, for a Studio Mac.
+const studioConn=Object.assign({},state([]).connection,{defaultFeed:mirror,canLeave:true});
+run('settingsOpen=false;closeLayers()');
+render(state([row()],{connection:studioConn}));
+run('settingsOpen=true;drawSettings()');
+const adv=document.querySelector('.scrim.s details');
+assert(adv&&adv.querySelector('summary').textContent=='Advanced','a saved non-default address sits behind Advanced');
+assert.match(adv.textContent,/http:\/\/100\.64\.0\.7:8790\/release\.json/,'Advanced shows the address in use');
+assert(adv.textContent.includes('reports its apps and versions'),'and says plainly what the Studio is told');
 posts.length=0;
-const back=document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='Use the saved feed instead');
+const back=document.querySelectorAll('.scrim.s details button').find(b=>b.textContent=='Use the saved feed instead');
 assert(back,'the way back to the saved feed is offered while a Studio address is saved');
 back.fire('click');
 assert.equal(posts[0].action,'changeServer');
 assert.equal(posts[0].value,mirror,'it posts the saved feed as the new address');
-run('settingsOpen=false;closeLayers()');
-render(state([row()],{connection:Object.assign({},state([]).connection,{destination:mirror,defaultFeed:mirror})}));
-run('settingsOpen=true;drawSettings()');
-assert(!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Use the saved feed instead'),
-       'no way-back button once the saved feed is the address in use');
 
 // Leaving a Studio: offered only to a Mac enrolled to one, confirmed in the page, gone afterwards.
 run('settingsOpen=false;closeLayers()');
-render(state([row()],{connection:Object.assign({},state([]).connection,{canLeave:false})}));
+render(state([row()],{connection:Object.assign({},studioConn,{canLeave:false})}));
 run('settingsOpen=true;drawSettings()');
 assert(!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Leave this Studio'),
        'a Mac that has joined no Studio is never offered Leave');
 run('settingsOpen=false;closeLayers()');
-render(state([row()],{connection:Object.assign({},state([]).connection,{canLeave:true})}));
+render(state([row()],{connection:studioConn}));
 run('settingsOpen=true;drawSettings()');
 posts.length=0;
-document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='Leave this Studio').fire('click');
+document.querySelectorAll('.scrim.s details button').find(b=>b.textContent=='Leave this Studio').fire('click');
 assert.equal(posts.length,0,'the button asks first, in the page, before anything is sent');
 const leaveDialog=[...document.querySelectorAll('[role=dialog]')].find(d=>/Leave this Studio\?/.test(d.textContent));
 assert(leaveDialog&&/keeps every app and every model/.test(leaveDialog.textContent)&&/saved feed instead/.test(leaveDialog.textContent),
@@ -394,24 +397,22 @@ assert(leaveDialog&&/keeps every app and every model/.test(leaveDialog.textConte
 confirmAction('Leave this Studio');
 assert.equal(posts[0].action,'leaveFleet','confirming posts the one leave action');
 run('settingsOpen=false;closeLayers()');
-render(state([row()],{connection:Object.assign({},state([]).connection,{destination:mirror,defaultFeed:mirror,canLeave:false})}));
+render(state([row()],{connection:Object.assign({},studioConn,{destination:mirror,canLeave:false})}));
 run('settingsOpen=true;drawSettings()');
-assert(!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Leave this Studio')
-       &&!document.querySelectorAll('.scrim.s button').some(b=>b.textContent=='Use the saved feed instead'),
-       'after leaving, both Studio buttons are gone — the saved feed is simply the address in use');
+assert(!document.querySelector('.scrim.s details'),'after leaving, the Studio controls are gone with the address');
 
 // Joining stays possible for a Mac that is meant for a Studio: the same address and code fields,
-// in the Studio section, and only for a Mac that has not joined one yet.
+// inside Advanced, and only for a Mac that has not joined one yet.
 const upd=()=>row({id:'updater',name:'Studio Launcher KH',status:'Up to date',automatic:true,installed:'0.1.76',available:null,managed:true,helper:true});
 const sheetText=()=>document.querySelector('.scrim.s .sheet').textContent;
-run('settingsOpen=false;closeLayers()');
-render(state([upd()],{connection:Object.assign({},state([]).connection,{canLeave:false,studio:true})}));
+run('settingsOpen=false;closeLayers();joinAddr=null;joinCode=null');
+render(state([upd()],{connection:Object.assign({},studioConn,{canLeave:false})}));
 run('settingsOpen=true;drawSettings()');
 assert(document.getElementById('pubaddr')&&document.getElementById('pubcode'),'a Studio Mac that has not joined one is offered its address and code');
 posts.length=0;
 document.getElementById('pubaddr').value='http://studio.tail1234.ts.net:8790/release.json';
 document.getElementById('pubcode').value='123-456';
-document.querySelectorAll('.scrim.s button').find(b=>b.textContent=='Join').fire('click');
+document.querySelectorAll('.scrim.s details button').find(b=>b.textContent=='Join').fire('click');
 assert.equal(posts[0].action,'joinFleet');
 assert.match(posts[0].value,/studio\.tail1234\.ts\.net/);
 assert.equal(posts[0].code,'123-456');
@@ -421,8 +422,8 @@ assert.equal(posts[0].code,'123-456');
 run('settingsOpen=false;closeLayers()');
 render(state([upd()],{connection:Object.assign({},state([]).connection,{destination:mirror,defaultFeed:mirror,publicFeed:true,canLeave:false,studio:false})}));
 run('settingsOpen=true;drawSettings()');
-assert.match(sheetText(),/Nothing is reported anywhere/,'a single-Mac install says plainly that it reports to nobody');
-for (const word of ['Update Studio','fleet','Fleet','GitHub','pairing code','Join','Studio section','leave this']) {
+assert.match(sheetText(),/Updates come from this Mac’s signed feed\./,'a single-Mac install says where its updates come from');
+for (const word of ['Update Studio','fleet','Fleet','GitHub','pairing code','Join','leave this','Advanced']) {
   assert(!sheetText().includes(word),'a single-Mac screen never shows "'+word+'"');
 }
 assert(!document.getElementById('pubaddr')&&!document.getElementById('pubcode'),'and offers no join fields');
@@ -471,22 +472,16 @@ assert.doesNotMatch(sheetSSD,/NOVA/,'a drive that is not the source is not talke
 render(state([row({status:'Update available',installed:'1.0',available:'2.0',fromSSD:null,source:'Feed',ssdNote:null,ssdVersion:null})]));
 run("openDetail('story')");
 assert.match(document.querySelector('.sheet').textContent,/comes from the signed feed, so its installer is downloaded/,'a feed offer is a download, said plainly');
-// Settings says what leaves this Mac, where its own files stay, and the limits the updater applies.
+// The Updates screen is one line and one button; the long privacy paragraphs are gone, and the
+// Log section still says what it is. Reading it sends nothing.
 run('detail=null;settingsOpen=true;closeLayers();drawSettings()');
 posts.length=0;
 render(state([row()],{stateDir:'/Users/test/Library/KHUpdater',replyLimitBytes:8388608}));
 const said=document.querySelector('.scrim.s .sheet').textContent;
-assert.match(said,/The Studio is told this Mac’s name/,'what the controller is told is written out');
-assert.match(said,/under \/Users\/test\/Library\/KHUpdater/,'the folder this Mac keeps its files in is named');
-assert.match(said,/restorable _trash/,'replaced files are retired, not deleted');
-assert.match(said,/a reply bigger than 8 MB is refused rather than buffered/,'the cap shown is the cap the updater carries');
-assert.match(said,/no separate storage budget to set here/,'no budget is offered that nothing enforces');
-assert.match(said,/A switch set on this Mac rules while it is the later change/,'the three-way rule is stated once, beside the switches');
-assert.equal(posts.length,0,'reading the explanation sends nothing and starts nothing');
-render(state([row()],{stateDir:null,replyLimitBytes:null}));
-const unsaid=document.querySelector('.scrim.s .sheet').textContent;
-assert.doesNotMatch(unsaid,/is refused rather than buffered/,'a limit the helper did not send is not stated as a number');
-assert.match(unsaid,/this Mac’s own updater folder/,'the folder is still named in plain words');
+assert.match(said,/Updates come from (this Mac|the Studio)’s signed feed\./,'the source is one line');
+assert.doesNotMatch(said,/is told this Mac’s name|refused rather than buffered|no separate storage budget/,'the three long privacy paragraphs are gone');
+assert.match(said,/What the helper did on this Mac/,'the Log section still says what the log is');
+assert.equal(posts.length,0,'reading Settings sends nothing and starts nothing');
 // R9 What's New is the page's own pop-up, not a native alert: it shows the notes already in the
 // state, sends nothing, and closes with one Done or Esc.
 run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
@@ -552,6 +547,20 @@ assert.match(document.querySelector('.empty').textContent, /^Checking…$/, 'R11
 // R12 the appearance segment offers exactly System, Light and Dark — no Default.
 assert(!script.includes("'default','Default'"), 'R12 the appearance segment no longer offers Default');
 assert.match(script, /\['system','System'\],\['light','Light'\],\['dark','Dark'\]/, 'R12 exactly three appearance choices');
+// R16 the tab bar is a row of controls, not a row of words (owner, 2026-11-24): a 6px gap, a 32px
+// target, and the selected tab filled with the accent rather than underlined. The layout numbers
+// are measured in the shipped window; this pins the rules that produce them.
+const tabsBar = (source.match(/\.tabs\{[^}]*\}/) || [''])[0];
+assert.match(tabsBar, /gap:6px/, 'R16 tabs are 6px apart');
+assert.match(tabsBar, /padding:8px 14px/, 'R16 the bar has its own padding');
+const tabRule = (source.match(/\.tabs \[role=tab\]\{[^}]*\}/) || [''])[0];
+assert.match(tabRule, /height:32px/, 'R16 each tab is a 32px target');
+assert.match(tabRule, /border-radius:6px/, 'R16 and reads as a control');
+const tabSelected = (source.match(/\.tabs \[role=tab\]\[aria-selected=true\]\{[^}]*\}/) || [''])[0];
+assert.match(tabSelected, /background:var\(--accent\)/, 'R16 the selected tab is filled with the accent');
+assert.match(tabSelected, /color:var\(--accent-ink\)/, 'R16 with the ink the primary button uses');
+assert.doesNotMatch(tabSelected, /border-bottom/, 'R16 the fill is the cue, so the underline is gone');
+assert.doesNotMatch(tabRule, /:hover[^}]*accent/, 'R16 and accent never appears on hover');
 // R13 a click is acknowledged at once: the row says the update is being received and offers no
 // second action while it waits; an app with no recipe the agent would run draws no Install at all.
 render(state([row({ status: 'Receiving update…' })]));
@@ -652,7 +661,7 @@ render(state([
   row({ id: 'a1', name: 'App One', status: 'Update available', installed: '1.0', available: '2.0' }),
   row({ id: 'a2', name: 'App Two', status: 'Failed', installed: '1.0', available: '2.0', reason: 'App Two did not answer its update hold in time' }),
   row({ id: 'a3', name: 'App Three', status: 'Needs attention', installed: '1.0', available: '2.0', reason: 'App Three failed: HTTP 404 from download mirror' }),
-], { connection: { destination: 'http://100.64.0.7:8790/release.json', machine: 'mac-id-1', displayName: 'Edit Suite 1103', checking: false, studio: true } }));
+], { connection: { destination: 'http://100.64.0.7:8790/release.json', machine: 'mac-id-1', displayName: 'Edit Suite 1103', checking: false, studio: true, defaultFeed: 'https://theng12.github.io/kh-releases/release.json' } }));
 assert.equal(document.getElementById('all').textContent, 'Update all (2)', 'Update all counts Failed rows below ceiling, not Needs attention');
 assert.equal(document.getElementById('mac').textContent, 'Apps for Edit Suite 1103', 'header names This Mac from displayName');
 const holdTimeoutPlain = run('plain("demo did not answer its update hold within 35 s (it was asked to settle for 20 s); nothing was changed.")');
@@ -673,7 +682,7 @@ run('settingsOpen=false;closeLayers()');
 // The fleet lives in the Studio section of Settings — a Studio function, not an everyday button.
 // One click asks the helper to open it; the page itself reaches no network.
 run('settingsOpen=false;detail=null;whatsNewOpen=false;closeLayers()');
-render(state([row({ status: 'Up to date', installed: '0.1.53', available: '0.1.53' })], { version: '0.1.53' }));
+render(state([row({ status: 'Up to date', installed: '0.1.53', available: '0.1.53' })], { version: '0.1.53', connection: Object.assign({}, state([]).connection, { defaultFeed: 'https://theng12.github.io/kh-releases/release.json' }) }));
 assert(!document.getElementById('fleet'), 'no Fleet button sits in the everyday footer');
 assert(!markup.includes('id=fleet'), 'and the markup carries none to show by accident');
 run('settingsOpen=true;drawSettings()');
