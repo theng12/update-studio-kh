@@ -72,6 +72,13 @@ that carried `Authorization`, and every vendor (`officialHosts`) request, still 
 The feed fetch itself carries the token, so it still refuses one. The icon sits beside the named
 artifact when `url` is present.
 
+`packaging/release-push.sh` fills it for an app whose own GitHub repo is public: the artifact is
+uploaded to that repo's `<app>-<version>` release first and its stored digest and size read back
+(`packaging/github-asset.sh`), then fetched back anonymously and hashed so an address a client
+cannot download is refused before any row names it, then the publish carries `--url <asset
+address>`, and the row read back afterwards must name it. A private or not-yet-migrated repo names nothing and the row stays
+base-relative, which every client generation already reads.
+
 `khu mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]`
 writes that mirror feed from the live one: each named file is looked up in the names table
 (`app id, tag, feed file, stored asset name, sha256` — the release page's own names, never guessed),

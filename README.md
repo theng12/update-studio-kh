@@ -22,7 +22,12 @@ Mac pulls from it. A publish run on this Mac reaches nobody.
    latest two installers and retires the rest to `_trash`.
 3. `packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog>` copies the DMG and its
    changelog to the host's staging folder, publishes there with the host's own key, and reads the
-   served feed back to prove the version it now offers.
+   served feed back to prove the version it now offers. With `KHU_PUBLIC_REPO=<owner/name>` set
+   (the app's own repo, per RELEASE-POLICY §2b) it first uploads the artifact to that repo's
+   `<app>-<version>` release with `packaging/github-asset.sh`, proves GitHub stored those exact
+   bytes, fetches the asset back anonymously and hashes it — the download a client would make — and
+   gives the publish that address; the served row is read back to prove the address survived. An app whose repo is private or not yet migrated sets nothing and keeps a
+   base-relative row that 1301 serves, so no client is stranded.
 4. `packaging/page-sync.sh --app <feed-app-id> --accepted <sha256> --repo <owner/name> --feed-url <url>`
    carries an accepted release onto the public page: it reads the 1301 feed, refuses unless the
    accepted sha256 is the feed's, uploads the artifact and its icon to the page's release tag, reads
