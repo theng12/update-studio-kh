@@ -54,6 +54,7 @@ struct KHUMain {
             FileHandle.standardError.write(Data("""
             khu <subcommand> ...
               keygen <dir>
+              page --out <file> [--state <demo-state.json>]   (this build's Launcher page, with a state applied)
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|extension|media|plugin|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--meta-only] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
@@ -109,6 +110,33 @@ struct KHUMain {
                 print("public key: \(key.publicKeyBase64)")
                 print("private key: \(keyFile.path)")
             } catch { fail("\(error)") }
+        case "page":
+            // The Launcher page exactly as this build carries it, with an optional demo state
+            // applied, so the release's screenshots come from the served artifact's own HTML
+            // (RELEASE-POLICY §5d) and no second copy of the page exists to drift.
+            var out: String?, state: String?
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--out": i += 1; if i < args.count { out = args[i] }
+                case "--state":
+                    i += 1
+                    if i < args.count,
+                       let text = try? String(contentsOfFile: args[i], encoding: .utf8) {
+                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty { state = trimmed }
+                    }
+                default: break
+                }
+                i += 1
+            }
+            guard let out, !out.isEmpty else { usage() }
+            var html = LauncherPage.html
+            if let state {
+                html = html.replacingOccurrences(of: "</body>", with: "<script>render(\(state))</script></body>")
+            }
+            do { try html.write(toFile: out, atomically: true, encoding: .utf8); print(out) }
+            catch { fail("the page could not be written: \(error)") }
         case "helper-bundle":
             var out: String?, shown: String?, bundleID: String?, source: String?
             var executableName: String?, bundleVersion: String?, icon: String?

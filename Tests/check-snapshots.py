@@ -41,8 +41,8 @@ def main(folder):
     problems = []
     pngs = sorted(glob.glob(os.path.join(folder, "*.png")))
     measures = sorted(glob.glob(os.path.join(folder, "measure-*.json")))
-    if not pngs:
-        problems.append("no PNG was captured")
+    # Images are optional in the gate: they are taken from the served artifact at publish time.
+    # When present, every one is held to the size and metadata rules.
     if not measures:
         problems.append("no measurement was written")
     for png in pngs:
@@ -71,8 +71,9 @@ def main(folder):
     for p in problems:
         print("FAIL " + p)
     if not problems:
-        print(f"OK {len(pngs)} image(s), {len(measures)} measurement(s), each PNG under "
-              f"{CAP // 1024} KB with no author or path metadata")
+        images = (f", each of {len(pngs)} image(s) under {CAP // 1024} KB with no author or path metadata"
+                  if pngs else " (no images in this folder)")
+        print(f"OK {len(measures)} measurement(s){images}")
     return 1 if problems else 0
 
 

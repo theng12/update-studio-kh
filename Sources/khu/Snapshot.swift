@@ -1,16 +1,18 @@
 import AppKit
 import WebKit
-import PDFKit
 
-/// Offscreen captures of this app's own page for `docs/screenshots/`, produced from the build that
-/// ships and only when `KHU_SNAPSHOT_DIR` names an output folder (RELEASE-POLICY §5d). No window is
-/// ordered in, made key or activated, and nothing is typed or clicked: the page is rendered in a
-/// window that is never shown, with the demo state the caller hands it, and rasterised from a PDF.
+/// Measures this app's own page, in the build that ships, for the release's tab acceptance
+/// (RELEASE-POLICY §5d): the 6px gap, every tab's 32px target, the gaps between them, and the
+/// selected tab's real ink and fill contrast. `KHU_SNAPSHOT_DIR` turns it on; nothing in a normal
+/// run reads it. No window is ordered in or made key, nothing is typed or clicked, and the app is
+/// `.accessory` throughout, so nothing appears on anyone's screen.
 ///
-/// The same run measures the tab bar — the 6px gap, the 32px target and the selected fill's real
-/// contrast — so the numbers in the receipt come from the rendered page, not from the stylesheet.
+/// The images for `docs/screenshots/` are taken from `khu page` instead — the same HTML, written by
+/// the served artifact — because WebKit answers a bitmap request from a bare binary with nothing
+/// (measured 2026-11-24: createPDF and takeSnapshot both returned no data and no error), while its
+/// layout and computed styles are exact, which is what the acceptance needs.
 enum Snapshot {
-    /// nil when snapshots were not asked for; otherwise the process's exit code.
+    /// nil when no measurement was asked for; otherwise the process's exit code.
     static func runIfAsked() -> Int32? {
         let env = ProcessInfo.processInfo.environment
         guard let dirPath = env["KHU_SNAPSHOT_DIR"], !dirPath.isEmpty else { return nil }
@@ -26,21 +28,20 @@ enum Snapshot {
         let widths = (env["KHU_SNAPSHOT_WIDTHS"] ?? "1440").split(separator: ",").compactMap { Int($0) }.filter { $0 >= 320 }
         let shots = (env["KHU_SNAPSHOT_SCREENS"] ?? "apps").split(separator: ",").map(String.init)
         let schemes = (env["KHU_SNAPSHOT_SCHEMES"] ?? "light").split(separator: ",").map(String.init)
-        guard !widths.isEmpty, !shots.isEmpty, !schemes.isEmpty else { fail("no widths, screens or schemes to capture"); return 64 }
+        guard !widths.isEmpty, !shots.isEmpty, !schemes.isEmpty else { fail("no widths, screens or schemes to measure"); return 64 }
 
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)   // no Dock tile, no activation, no front window
         var failed = 0
         for shot in shots {
             for scheme in schemes {
-                for width in widths {
-                    if capture(shot: shot, scheme: scheme, width: width, state: state, dir: dir) { continue }
+                for width in widths where !measure(shot: shot, scheme: scheme, width: width, state: state, dir: dir) {
                     failed += 1
                 }
             }
         }
-        print(failed == 0 ? "snapshot: wrote \(shots.count * schemes.count * widths.count) file(s) to \(dir.path)"
-                          : "snapshot: \(failed) capture(s) failed in \(dir.path)")
+        print(failed == 0 ? "snapshot: wrote \(shots.count * schemes.count * widths.count) measurement(s) to \(dir.path)"
+                          : "snapshot: \(failed) measurement(s) failed in \(dir.path)")
         return failed == 0 ? 0 : 1
     }
 
@@ -48,15 +49,22 @@ enum Snapshot {
         FileHandle.standardError.write(Data("snapshot: \(text)\n".utf8))
     }
 
-    /// One page, one size, one scheme: render, measure, rasterise, write. Never shown on screen.
-    private static func capture(shot: String, scheme: String, width: Int, state: String, dir: URL) -> Bool {
+    /// One page, one size, one scheme: render, let it settle, measure. The window is attached so
+    /// WebKit lays the page out, fully transparent so it takes no pixels, and ordered out at once.
+    private static func measure(shot: String, scheme: String, width: Int, state: String, dir: URL) -> Bool {
         let frame = NSRect(x: 0, y: 0, width: width, height: 900)
         let web = WKWebView(frame: frame, configuration: WKWebViewConfiguration())
         web.appearance = NSAppearance(named: scheme == "dark" ? .darkAqua : .aqua)
+        web.wantsLayer = true
         let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = web
         window.appearance = web.appearance
-        window.setIsVisible(false)          // laid out, never on screen
+        window.alphaValue = 0
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.ignoresMouseEvents = true
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
         web.loadHTMLString(LauncherPage.html, baseURL: nil)
 
         var loaded = false
@@ -72,63 +80,17 @@ enum Snapshot {
             fail("\(shot)/\(scheme)/\(width): the page refused its state — \(refusal)")
             return false
         }
-        // Let layout and the 0.22s sheet animation settle before measuring or rasterising.
-        RunLoop.current.run(until: Date().addingTimeInterval(0.45))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.45))   // the sheet's 0.22s entry
 
         let measured = evaluate(web, measureScript(width: width))
         if let refusal = measured.refusal {
             fail("\(shot)/\(scheme)/\(width): the tab bar could not be measured — \(refusal)")
-        } else if let data = measured.value.data(using: .utf8) {
-            try? data.write(to: dir.appendingPathComponent("measure-\(shot)-\(scheme)-\(width).json"))
+            return false
         }
-
-        var pdf: Data?
-        let pdfDone = DispatchSemaphore(value: 0)
-        let config = WKPDFConfiguration()
-        config.rect = NSRect(x: 0, y: 0, width: width, height: 900)
-        web.createPDF(configuration: config) { result in
-            if case .success(let data) = result { pdf = data }
-            pdfDone.signal()
-        }
-        _ = pdfDone.wait(timeout: .now() + 30)
-        guard let pdf, !pdf.isEmpty else { fail("\(shot)/\(scheme)/\(width): no PDF was produced"); return false }
-        guard let image = rasterise(pdf, width: width) else { fail("\(shot)/\(scheme)/\(width): the PDF could not be drawn"); return false }
-
-        // PNG from the bitmap itself: no EXIF, no tEXt/iTXt chunks, so no author or path is written.
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(image.size.width),
-                                        pixelsHigh: Int(image.size.height), bitsPerSample: 8, samplesPerPixel: 4,
-                                        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                                        bytesPerRow: 0, bitsPerPixel: 0) else { return false }
-        rep.size = image.size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        image.draw(in: NSRect(origin: .zero, size: image.size))
-        NSGraphicsContext.restoreGraphicsState()
-        guard let png = rep.representation(using: .png, properties: [:]) else { return false }
-        let name = "\(shot)-\(scheme)-\(width).png"
-        do { try png.write(to: dir.appendingPathComponent(name)) }
+        let name = "measure-\(shot)-\(scheme)-\(width).json"
+        do { try Data(measured.value.utf8).write(to: dir.appendingPathComponent(name)) }
         catch { fail("\(name) could not be written: \(error)"); return false }
-        print("snapshot: \(name) \(png.count) bytes")
         return true
-    }
-
-    /// The page is rendered once at the view's own width and twice the pixel density, so text is
-    /// readable in the repository and the file stays inside the 400 KB cap.
-    private static func rasterise(_ pdf: Data, width: Int) -> NSImage? {
-        guard let document = PDFDocument(data: pdf), let page = document.page(at: 0) else { return nil }
-        let bounds = page.bounds(for: .mediaBox)
-        let scale: CGFloat = 2
-        let height = bounds.height * CGFloat(width) / max(bounds.width, 1)
-        let image = NSImage(size: NSSize(width: CGFloat(width) * scale, height: height * scale))
-        image.lockFocus()
-        if let context = NSGraphicsContext.current?.cgContext {
-            context.setFillColor(NSColor.white.cgColor)
-            context.fill(CGRect(origin: .zero, size: image.size))
-            context.scaleBy(x: CGFloat(width) * scale / max(bounds.width, 1), y: CGFloat(width) * scale / max(bounds.width, 1))
-            page.draw(with: .mediaBox, to: context)
-        }
-        image.unlockFocus()
-        return image
     }
 
     /// The page's answer and, when it threw, its own reason. "It refused its state" with no reason
