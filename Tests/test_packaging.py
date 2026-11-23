@@ -630,13 +630,22 @@ try:
     changelog.write_text("changes")
     push_env = {**fake_env, "PATH": f"{push_bin}:{fake_env['PATH']}", "KHU_RELEASE_HOST": "fixture@127.0.0.1",
                 "KHU_RELEASE_KEY": "/dev/null", "KHU_RELEASE_STAGE": "release-stage",
-                "FAKE_REMOTE_HOME": str(remote_home), "FAKE_KHU_LOG": str(khu_calls)}
+                "FAKE_REMOTE_HOME": str(remote_home), "FAKE_KHU_LOG": str(khu_calls),
+                "KHU_LEGACY_1301_PUBLISH": "1"}
 
     def push_run():
         if khu_calls.exists():
             khu_calls.unlink()
         result = run(push, "gateway", "9.9.9", dmg, changelog, env=push_env)
         return result, (khu_calls.read_text().strip() if khu_calls.exists() else "")
+
+    # 1301 is an operational Mac, not a release host (owner 2026-11-23): nothing reaches it by default.
+    if khu_calls.exists():
+        khu_calls.unlink()
+    result = run(push, "gateway", "9.9.9", dmg, changelog,
+                 env={k: v for k, v in push_env.items() if k != "KHU_LEGACY_1301_PUBLISH"})
+    check(result.returncode == 2 and "retired as a release host" in result.stderr and not khu_calls.exists(),
+          "release-push refuses a 1301 publish unless the caller names the legacy flag (rc=%d)" % result.returncode)
 
     _, called = push_run()
     check(called.endswith("base/current"),
