@@ -264,9 +264,16 @@ public enum FeedGenerator {
         if let previous {
             feed.network = previous.network
             feed.extras = previous.extras
-            var pins = (previous.previous ?? [:]).filter { feed.apps[$0.key] != nil }
+            // `previous` is a fallback a distributor may install: a pin with no address is a dead
+            // downgrade path, so only pins that carry their own url are kept. The 2026-11-23 pins
+            // all pointed at artifacts that no longer exist (kh-releases holds no releases), and
+            // none can be given one, so the generated feed carries no `previous` at all.
+            var pins = (previous.previous ?? [:]).filter {
+                feed.apps[$0.key] != nil && ($0.value.url?.isEmpty == false)
+            }
             for (app, row) in feed.apps {
-                if let before = previous.apps[app], before.version != row.version { pins[app] = before }
+                if let before = previous.apps[app], before.version != row.version,
+                   let url = before.url, !url.isEmpty { pins[app] = before }
             }
             feed.previous = pins.isEmpty ? nil : pins
         }

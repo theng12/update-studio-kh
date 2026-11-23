@@ -224,6 +224,27 @@ func feedGeneratorTests() {
                "FG8 the ignored registry entry is reported by name and tag (\(made.stale))")
     } catch { expect(false, "FG8 fixture: \(error)") }
 
+    // FG10 a fallback pin is only kept when it carries its own address. The 2026-11-23 pins all
+    // pointed at artifacts that no longer exist, so the generated feed carries no `previous` at all.
+    do {
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        var dead = FeedApp(version: "0.6.250", file: "Hub-0.6.250.dmg", sha256: sha, bytes: 5, kind: "app-dmg")
+        dead.url = nil
+        var oldFeed = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": dead])
+        oldFeed.previous = ["hub": dead]
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: oldFeed, gh: gh)
+        expect(made.feed.previous == nil, "FG10 a url-less fallback pin is dropped, not republished")
+        var live = dead; live.url = "https://github.com/\(hubRepo)/releases/download/0.6.250/Hub-0.6.250.dmg"
+        var oldLive = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": live])
+        oldLive.previous = ["hub": live]
+        let kept = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: oldLive, gh: gh)
+        expect(kept.feed.previous?["hub"]?.url == live.url && kept.feed.previous?["hub"]?.version == "0.6.250",
+               "FG10 a fallback pin with its own address is kept")
+    } catch { expect(false, "FG10 fixture: \(error)") }
+
     // FG9 the address guards: a relative url, a foreign host, or a url outside the app's own repo
     // refuses the whole run. This is the negative control for the 2026-11-23 outage.
     do {
