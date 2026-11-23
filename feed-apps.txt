@@ -12,16 +12,7 @@ wire=theng12/wire-studio-kh
 # Fleet apps whose repos do not publish yet. Listed on purpose: a publish then names each one it
 # cannot carry, instead of the gap living only in the Launcher's "Unlabelled" rows.
 hub=theng12/hub-studio-kh
-# library-studio-kh is PRIVATE (gh api: private=true, 2026-11-23): its 0.7.34 release exists but its
-# asset 404s anonymously, and one such asset refuses the WHOLE run — so it is held out here until the
-# owner makes the repo public. Restore this line the moment `curl -sL <asset>` answers 200; then also
-# retire the duplicate release (`0.7.34` vs `library-studio-0.7.34`, both 13:22:05Z).
-# library=theng12/library-studio-kh
+library=theng12/library-studio-kh
 music=theng12/music-studio-kh
-# relay 0.3.38 and story 1.4.418 are PUBLIC with downloadable assets but carry no words anywhere —
-# no app-meta.json at the tag (404) and no feed-registry.json entry — so the generator refuses the
-# whole run for them. Held out until each supplies a tag `app-meta.json` with the five required
-# fields (and `localFile`), or a registry entry. That refusal is correct: a row with no tagline is
-# the defect row 20261122-274 was filed for.
-# relay=theng12/relay-studio-kh
-# story=theng12/story-studio-kh
+relay=theng12/relay-studio-kh
+story=theng12/story-studio-kh
