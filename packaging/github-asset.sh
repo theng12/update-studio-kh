@@ -44,20 +44,45 @@ ln "$ART" "$STAGE/$NAME" 2>/dev/null || cp "$ART" "$STAGE/$NAME"
 releases() { gh api "repos/$REPO/releases/tags/$TAG" 2>/dev/null; }
 
 EXISTING=$(releases || true)
-if [ -n "$EXISTING" ] && printf '%s' "$EXISTING" | grep -q '"draft":[[:space:]]*true'; then
-  echo "github-asset: release $TAG in $REPO is a draft; clients cannot see it, so nothing was published — publish it and rerun" >&2
-  exit 3
-fi
+# Releases are added, never withdrawn (RELEASE-POLICY §2c): this decides "reuse the asset already
+# there", "add the one asset a half-finished run left off", or "refuse" — never delete, never
+# overwrite a different artifact, never touch the previous tag. A refusal leaves the repo's newest
+# published release exactly as it was, which is what clients keep installing.
+DECISION=create
 if [ -n "$EXISTING" ]; then
-  gh release upload "$TAG" "$STAGE/$NAME" -R "$REPO" --clobber >/dev/null \
-    || { echo "github-asset: uploading $NAME to $TAG failed; nothing was published" >&2; exit 4; }
-  echo "github-asset: uploaded $NAME to the existing release $TAG" >&2
-else
-  gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" \
-    --notes "Signed release from the KH Studio feed." >/dev/null \
-    || { echo "github-asset: creating release $TAG failed; nothing was published" >&2; exit 4; }
-  echo "github-asset: created $TAG in $REPO with $NAME" >&2
+  DECISION=$(/usr/bin/python3 -I - "$NAME" "$BYTES" "$SHA" "$EXISTING" <<'PY'
+import json, sys
+name, want_bytes, want_sha, raw = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+rel = json.loads(raw)
+if rel.get("draft"):
+    print("github-asset: release %s is a draft; clients cannot see it, so nothing was published — publish it and rerun" % rel.get("tag", ""), file=sys.stderr)
+    print("draft"); raise SystemExit(0)
+assets = rel.get("assets") or []
+mine = [a for a in assets if a.get("name") == name]
+if mine and mine[0].get("size") == want_bytes and (not mine[0].get("digest") or mine[0].get("digest") == "sha256:" + want_sha):
+    print("reuse"); raise SystemExit(0)
+if assets:
+    print("github-asset: this version's release already holds %s, not the artifact being published (%s); a published version keeps its bytes, so nothing was changed"
+          % (", ".join(sorted(a.get("name", "?") for a in assets)), name), file=sys.stderr)
+    print("conflict"); raise SystemExit(0)
+print("attach")
+PY
+) || { echo "github-asset: could not read release $TAG; nothing was published" >&2; exit 4; }
 fi
+case "$DECISION" in
+  draft) exit 3 ;;
+  conflict) exit 5 ;;
+  reuse) echo "github-asset: $TAG already holds $NAME with these bytes; nothing was re-uploaded" >&2 ;;
+  attach)
+    gh release upload "$TAG" "$STAGE/$NAME" -R "$REPO" >/dev/null \
+      || { echo "github-asset: uploading $NAME to $TAG failed; the release and everything already on it are unchanged" >&2; exit 4; }
+    echo "github-asset: uploaded $NAME to the existing release $TAG" >&2 ;;
+  create)
+    gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" \
+      --notes "Signed release from the KH Studio feed." >/dev/null \
+      || { echo "github-asset: creating release $TAG failed; nothing was published" >&2; exit 4; }
+    echo "github-asset: created $TAG in $REPO with $NAME" >&2 ;;
+esac
 
 # Read back what GitHub actually stored. A name and a size is not the artifact; the digest is.
 STORED=$(gh release view "$TAG" -R "$REPO" --json isDraft,assets)

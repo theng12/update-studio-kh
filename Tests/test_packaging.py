@@ -742,6 +742,8 @@ exit 0
     push_env2["KHU_RELEASE_PORT"] = str(server.server_address[1])
     asset_url = ("%s/theng12/push-app/releases/download/gateway-9.9.9/%s"
                  % (push_env2["KHU_ASSET_BASE"], asset_name))
+    sha = hashlib.sha256(b"dmg").hexdigest()
+    gh_asset = packaging / "github-asset.sh"
 
     def serve_feed(row_url=None):
         row = {"version": "9.9.9", "file": asset_name, "sha256": hashlib.sha256(b"dmg").hexdigest(),
@@ -809,7 +811,6 @@ exit 0
     asset_path.write_text("dmg")
     server.shutdown()
 
-    gh_asset = packaging / "github-asset.sh"
     if push_gh_calls.exists():
         push_gh_calls.unlink()
     result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "a" * 64, "2147483648", env=push_env2)
@@ -818,7 +819,6 @@ exit 0
     result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "b" * 64, "3", env=push_env2)
     check(result.returncode != 0 and "not the signed" in result.stderr and not push_gh_calls.exists(),
           "an artifact that is not the signed one is refused before any upload")
-    sha = hashlib.sha256(b"dmg").hexdigest()
     result = run(gh_asset, "theng12/push-app'; rm -rf /", "gateway-9.9.9", dmg, sha, "3", env=push_env2)
     check(result.returncode != 0 and "may hold only" in result.stderr and not push_gh_calls.exists(),
           "a repo name a shell would read as syntax is refused, not escaped into the release host")
@@ -831,6 +831,21 @@ exit 0
     result = push_run2(FAKE_KHU_URL_FLAG="1", FAKE_GH_NO_DIGEST="1")
     check(result.returncode == 0 and "reported no digest" in result.stderr,
           "without a GitHub digest the fetched bytes are the proof, and the publish still holds")
+
+    # Releases are added, never withdrawn: a rerun reuses what is there, and a release holding a
+    # different artifact for the same version is left alone rather than overwritten.
+    (gh_state / "releases.json").write_text(json.dumps([{"tag": "gateway-9.9.9", "draft": False,
+        "assets": [{"name": asset_name, "size": 3, "digest": "sha256:" + sha}]}]))
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3", env=push_env2)
+    check(result.returncode == 0 and "nothing was re-uploaded" in result.stderr,
+          "a rerun with the same bytes reuses the stored asset instead of uploading again")
+    (gh_state / "releases.json").write_text(json.dumps([{"tag": "gateway-9.9.9", "draft": False,
+        "assets": [{"name": "ffffffffffff-other.dmg", "size": 9, "digest": "sha256:" + "f" * 64}]}]))
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3", env=push_env2)
+    check(result.returncode == 5 and "keeps its bytes" in result.stderr,
+          "a version already published with a different artifact is refused, not overwritten (rc=%d)"
+          % result.returncode)
+    (gh_state / "releases.json").write_text("[]")
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")
