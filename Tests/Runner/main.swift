@@ -4152,6 +4152,11 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["UPDATER_ROW_ONLY"] == "1" {
+            updaterRowTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["STANDALONE_ONLY"] == "1" {
             standaloneLauncherTests()
             catalogSelectionTests()
@@ -4393,6 +4398,7 @@ r41HealthMustHold()
         connectionWindowTests()
         publicFeedSweepTests()
         runPacingTests()
+        updaterRowTests()
         extensionCatalogTests()
         toolbarTests()
         inventoryTests()
