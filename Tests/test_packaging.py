@@ -702,6 +702,8 @@ else:
     check(push_order.exists() and push_order.read_text().split() == ["create"],
           "the release is created, and nothing else is written (%r)"
           % (push_order.read_text().split() if push_order.exists() else []))
+    check(push_gh_calls.exists() and "--notes-file" in push_gh_calls.read_text(),
+          "the release body is the changelog, not a placeholder line the card would show")
 
     result = push_run(KHU_PUBLIC_REPO=None)
     check(result.returncode == 2 and "no public repo named" in result.stderr and not push_gh_calls.exists(),

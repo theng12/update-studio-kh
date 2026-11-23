@@ -7,8 +7,8 @@
 # publish that follows names it: a draft is invisible to clients, so a draft is a refusal, not a
 # publish. Idempotent — re-running with the same bytes reuses the asset it finds.
 set -euo pipefail
-[ $# -eq 5 ] || { echo "usage: $0 <owner/repo> <tag> <artifact> <sha256> <bytes>" >&2; exit 2; }
-REPO="$1"; TAG="$2"; ART="$3"; SHA="$4"; BYTES="$5"
+[ $# -ge 5 ] && [ $# -le 6 ] || { echo "usage: $0 <owner/repo> <tag> <artifact> <sha256> <bytes> [changelog]" >&2; exit 2; }
+REPO="$1"; TAG="$2"; ART="$3"; SHA="$4"; BYTES="$5"; NOTES="${6:-}"
 command -v gh >/dev/null || { echo "github-asset: no gh on PATH; nothing was uploaded" >&2; exit 2; }
 [ -f "$ART" ] || { echo "github-asset: no such artifact: $ART" >&2; exit 2; }
 case "$REPO" in */*) ;; *) echo "github-asset: repo must be owner/name, not $REPO" >&2; exit 2 ;; esac
@@ -92,9 +92,17 @@ case "$DECISION" in
       || { echo "github-asset: uploading $NAME to $TAG failed; the release and everything already on it are unchanged" >&2; exit 4; }
     echo "github-asset: uploaded $NAME to the existing release $TAG" >&2 ;;
   create)
-    gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" \
-      --notes "Signed release from the KH Studio feed." >/dev/null \
-      || { echo "github-asset: creating release $TAG failed; nothing was published" >&2; exit 4; }
+    # The release body is the card's own words: the feed's `notes` come from here, so a placeholder
+    # body becomes a placeholder card (Wire 0.5.1 read "Signed release from the KH Studio feed.").
+    if [ -n "$NOTES" ] && [ -s "$NOTES" ]; then
+      gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" \
+        --notes-file "$NOTES" >/dev/null \
+        || { echo "github-asset: creating release $TAG failed; nothing was published" >&2; exit 4; }
+    else
+      gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" \
+        --notes "Signed release from the KH Studio feed." >/dev/null \
+        || { echo "github-asset: creating release $TAG failed; nothing was published" >&2; exit 4; }
+    fi
     echo "github-asset: created $TAG in $REPO with $NAME" >&2 ;;
 esac
 

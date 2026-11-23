@@ -30,5 +30,5 @@ fi
 }
 SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
 URL=$("$SELF"/github-asset.sh "$KHU_PUBLIC_REPO" "${KHU_GITHUB_TAG:-$APP-$VERSION}" \
-        "$DMG" "$SHA" "$(stat -f %z "$DMG")") || exit $?
+        "$DMG" "$SHA" "$(stat -f %z "$DMG")" "$LOG") || exit $?
 echo "release-push: $KHU_PUBLIC_REPO holds the artifact at $URL"
