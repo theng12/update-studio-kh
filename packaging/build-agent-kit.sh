@@ -25,7 +25,9 @@ mkdir "$OUT/bin"
 cp "$ROOT/build/khu" "$ROOT/build/khu-stub" "$OUT/bin/"
 # The icon only names the background bundles; a kit built before the app still installs.
 if [[ -f "$ROOT/build/AppIcon.icns" ]]; then cp "$ROOT/build/AppIcon.icns" "$OUT/"; fi
-cp "$ROOT/packaging/install-agent.sh" "$ROOT/packaging/fleet-roster.json" "$OUT/"
+# The roster is a build-time input to generate-ui.py, never a runtime file: shipping it in the kit
+# makes Hub's strict validator refuse the kit as an unexpected entry.
+cp "$ROOT/packaging/install-agent.sh" "$OUT/"
 cp "$ROOT/packaging/com.khupdater.agent.plist" "$OUT/"
 cp "$ROOT/examples/agent-config.json" "$OUT/agent-config.example.json"
 printf '%s\n' "$VERSION" > "$OUT/VERSION"
