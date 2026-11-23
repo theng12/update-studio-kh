@@ -51,16 +51,24 @@ public enum FeedPages {
             print("feed: committed sha256 \(Signing.sha256Hex(envelope)) to \(repo)")
         }
         let pages = pagesURL ?? URL(string: "https://\(repo.split(separator: "/").first ?? "").github.io/\(repo.split(separator: "/").last ?? "")/release.json")!
+        // The page proves the publish, not the commit: bounded, and the expiry sentence names the
+        // URL, the bytes expected and the bytes still served.
         let deadline = Date().addingTimeInterval(wait)
+        var served = "nothing (no answer)"
         while Date() < deadline {
-            if let (data, code) = try? http.get(pages, headers: [:]), code == 200, data == envelope {
-                print("feed: \(pages.absoluteString) serves the exact signed bytes")
-                try verifyOneAsset(envelope: envelope, http: http)
-                return
+            if let (data, code) = try? http.get(pages, headers: [:]) {
+                if code == 200, data == envelope {
+                    print("feed: \(pages.absoluteString) serves the exact signed bytes")
+                    try verifyOneAsset(envelope: envelope, http: http)
+                    return
+                }
+                served = code == 200 ? "sha256 \(Signing.sha256Hex(data))" : "HTTP \(code)"
             }
             Thread.sleep(forTimeInterval: 5)
         }
-        throw khuFail("\(pages.absoluteString) does not serve the signed bytes yet; the commit was made, re-run the readback when Pages has built")
+        throw khuFail("\(pages.absoluteString) does not serve the signed bytes within \(Int(wait))s "
+                      + "(expected sha256 \(Signing.sha256Hex(envelope)); it still serves \(served)). "
+                      + "The commit was made; re-run the readback when Pages has built.")
     }
 
     /// Downloads one asset the feed names and matches its sha256 and size against the row.

@@ -127,10 +127,17 @@ public enum FeedGenerator {
         return try feed.validated()
     }
 
-    /// The signed envelope for those bytes, exactly what a client verifies.
+    /// The signed envelope for those bytes, exactly what a client verifies. The signature is
+    /// verified here with the key's own public half before anything can be written: a bad key or a
+    /// mis-encoded feed fails before it reaches `main`, never after.
     public static func signed(_ feed: Feed, keyFile: URL) throws -> Data {
         let key = try Signing.loadPrivateKey(from: keyFile)
         let data = try JSON.encode(feed.validated())
-        return try JSON.encode(Release(feed: data, signature: try Signing.sign(data, with: key)))
+        let release = Release(feed: data, signature: try Signing.sign(data, with: key))
+        guard let feedData = release.feedData, let signature = release.signatureData,
+              Signing.verify(feedData, signature: signature, publicKey: key.publicKey) else {
+            throw khuFail("the signed feed does not verify with the key's own public half; nothing was written")
+        }
+        return try JSON.encode(release)
     }
 }

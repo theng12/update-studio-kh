@@ -210,6 +210,38 @@ func publisherCompletenessTests() {
         }
     }
 
+    // PC11 a publish never writes a controller handoff into the feed every Mac reads, and asking
+    // `khu network` to write one is refused by name — the handoff travels on that Mac instead.
+    do {
+        let dir = feedDir("controller")
+        let sha = String(repeating: "d", count: 64)
+        let json = """
+        {"schema":1,"published_at":"2026-11-22T10:00:00Z",
+         "network":{"feedURLs":["https://example.invalid/release.json"],"hosts":{},
+           "controller":{"from":"https://a.example/release.json","to":"https://b.example/release.json"}},
+         "apps":{"story":{"version":"1.0.0","file":"s.bin","sha256":"\(sha)","bytes":9,"kind":"app-dmg"}}}
+        """
+        let data = Data(json.utf8)
+        try! AtomicFile.writeJSON(Release(feed: data, signature: try Signing.sign(data, with: key)),
+                                  to: FeedPublisher.releaseFile(in: dir))
+        let art = root.appendingPathComponent("controller-art.bin")
+        try! Data("controller bytes".utf8).write(to: art)
+        try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "story", version: "1.0.1",
+                                   artifact: art, kind: "app-dmg", allowSame: false, requireComplete: false)
+        let after = feed(dir)
+        expect(after?.network?.feedURLs == ["https://example.invalid/release.json"] && after?.network?.controller == nil,
+               "PC11 a publish keeps feedURLs and never writes a controller handoff")
+        do {
+            try FeedPublisher.configureNetwork(feedDir: dir, keyFile: keyFile,
+                                               network: FeedNetwork(feedURLs: ["https://example.invalid/release.json"], hosts: [:],
+                                                                    controller: ControllerHandoff(from: "https://a.example/release.json",
+                                                                                                  to: "https://b.example/release.json")))
+            expect(false, "PC11 khu network must refuse a controller handoff")
+        } catch {
+            expect("\(error)".contains("controller handoff"), "PC11 the refusal names the handoff (\(error))")
+        }
+    }
+
     // PC10 --allow-same re-publishes a version only with its own bytes: the same bytes pass, a
     // different artifact under the same version is refused by name.
     do {
