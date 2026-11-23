@@ -672,7 +672,8 @@ def save(r): json.dump(r, open(os.path.join(STATE, "releases.json"), "w"))
 def asset(path):
     data = open(path, "rb").read()
     digest = hashlib.sha256(b"corrupt" if os.environ.get("FAKE_GH_CORRUPT") else data).hexdigest()
-    return {"name": os.path.basename(path), "size": len(data), "digest": "sha256:" + digest}
+    return {"name": os.path.basename(path), "size": len(data),
+            "digest": "" if os.environ.get("FAKE_GH_NO_DIGEST") else "sha256:" + digest}
 if args[0] == "api":
     tag = args[1].rsplit("/", 1)[-1]
     found = [r for r in rels() if r["tag"] == tag]
@@ -783,6 +784,8 @@ exit 0
           "an app with no public repo is published without any upload (%r)" % order())
     check("--url" not in push_args.read_text(),
           "and its row stays base-relative, so 1301 still serves it")
+    check("no public repo named for gateway" in result.stdout,
+          "the skip is one readable line, not silence")
 
     result = push_run2()
     check(not push_gh_calls.exists() and "does not understand publish --url" in result.stdout,
@@ -815,6 +818,19 @@ exit 0
     result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, "b" * 64, "3", env=push_env2)
     check(result.returncode != 0 and "not the signed" in result.stderr and not push_gh_calls.exists(),
           "an artifact that is not the signed one is refused before any upload")
+    sha = hashlib.sha256(b"dmg").hexdigest()
+    result = run(gh_asset, "theng12/push-app'; rm -rf /", "gateway-9.9.9", dmg, sha, "3", env=push_env2)
+    check(result.returncode != 0 and "may hold only" in result.stderr and not push_gh_calls.exists(),
+          "a repo name a shell would read as syntax is refused, not escaped into the release host")
+    result = run(gh_asset, "theng12/push-app", "gateway-9.9.9", dmg, sha, "3",
+                 env={**push_env2, "KHU_ASSET_BASE": "http://example.com"})
+    check(result.returncode != 0 and "must be an https address" in result.stderr,
+          "a cleartext address clients would refuse is refused here instead")
+
+    serve_feed(asset_url)
+    result = push_run2(FAKE_KHU_URL_FLAG="1", FAKE_GH_NO_DIGEST="1")
+    check(result.returncode == 0 and "reported no digest" in result.stderr,
+          "without a GitHub digest the fetched bytes are the proof, and the publish still holds")
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

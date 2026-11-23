@@ -61,6 +61,8 @@ if [ -n "${KHU_PUBLIC_REPO:-}" ]; then
   else
     echo "release-push: skipped the GitHub upload — the host helper does not understand publish --url yet, so $APP's row stays base-relative and 1301 serves it"
   fi
+else
+  echo "release-push: no public repo named for $APP — the row stays base-relative and 1301 serves the artifact"
 fi
 
 "${SSH[@]}" "mkdir -p ~/$STAGE/changelogs"

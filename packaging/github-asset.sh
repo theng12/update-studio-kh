@@ -12,6 +12,10 @@ REPO="$1"; TAG="$2"; ART="$3"; SHA="$4"; BYTES="$5"
 command -v gh >/dev/null || { echo "github-asset: no gh on PATH; nothing was uploaded" >&2; exit 2; }
 [ -f "$ART" ] || { echo "github-asset: no such artifact: $ART" >&2; exit 2; }
 case "$REPO" in */*) ;; *) echo "github-asset: repo must be owner/name, not $REPO" >&2; exit 2 ;; esac
+# These reach the release host inside a quoted command, so anything a shell would read as syntax
+# (a quote, a space, a `;`) is refused by name here rather than escaped later.
+case "$REPO" in *[!A-Za-z0-9._/-]*) echo "github-asset: repo may hold only letters, digits, dot, dash, slash: not $REPO" >&2; exit 2 ;; esac
+case "$TAG" in ''|*[!A-Za-z0-9._-]*) echo "github-asset: tag may hold only letters, digits, dot and dash: not $TAG" >&2; exit 2 ;; esac
 case "$SHA" in [0-9a-f]*) [ ${#SHA} -eq 64 ] || { echo "github-asset: sha256 must be 64 hex characters" >&2; exit 2; } ;; *) echo "github-asset: sha256 must be 64 hex characters" >&2; exit 2 ;; esac
 case "$BYTES" in ''|*[!0-9]*) echo "github-asset: bytes must be a whole number, not $BYTES" >&2; exit 2 ;; esac
 
@@ -26,9 +30,13 @@ REAL_BYTES=$(stat -f %z "$ART")
 REAL_SHA=$(shasum -a 256 "$ART" | awk '{print $1}')
 [ "$REAL_SHA" = "$SHA" ] || { echo "github-asset: $ART hashes to $REAL_SHA, not the signed $SHA; nothing was uploaded" >&2; exit 2; }
 
-# The signed `file` name is <sha12>-<basename> (Publish.swift, `name`), so GitHub is given that name.
+# The signed `file` name is <sha12>-<basename>, and an artifact already carrying that prefix keeps
+# it (Publish.swift's `name`), so GitHub is given exactly the row's own name and never a second one.
 BASE=$(basename "$ART")
-NAME="${SHA:0:12}-$BASE"
+PRE=${SHA:0:12}
+NAME="$BASE"
+case "$BASE" in "$PRE"-*) ;; *) NAME="$PRE-$BASE" ;; esac
+case "$NAME" in *[!A-Za-z0-9._-]*) echo "github-asset: $BASE cannot be an asset name (letters, digits, dot, dash only)" >&2; exit 2 ;; esac
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/kh-asset.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
 ln "$ART" "$STAGE/$NAME" 2>/dev/null || cp "$ART" "$STAGE/$NAME"
@@ -68,7 +76,8 @@ if a.get("size") != want_bytes:
           % (a.get("size"), name, want_bytes), file=sys.stderr); raise SystemExit(3)
 digest = a.get("digest") or ""
 if not digest:
-    print("github-asset: GitHub reported no digest for %s; size and name matched, the digest was not proven" % name, file=sys.stderr)
+    # Nothing to compare, so the fetch below is the proof: it hashes the bytes a client receives.
+    print("github-asset: GitHub reported no digest for %s; size matched and the fetched bytes are the proof" % name, file=sys.stderr)
 elif digest != "sha256:" + want_sha:
     print("github-asset: GitHub stored %s with digest %s, not the signed sha256; nothing was published"
           % (name, digest), file=sys.stderr); raise SystemExit(3)
@@ -77,15 +86,19 @@ PY
 # Fetch it back the way an installed client does — anonymously, from the address the row will carry.
 # A release whose asset a stranger cannot download is a row that strands every Mac, so it is refused
 # here rather than discovered on a client. Streaming, so a 1.5 GB artifact is never held in memory.
+# Anonymous https only: a cleartext address is refused by every client's `Feed.artifactURL`, so a
+# row naming one would be a row nobody can install. Loopback is allowed so the fixtures can serve.
 BASE_URL="${KHU_ASSET_BASE:-https://github.com}"
+case "$BASE_URL" in
+  https://*) ;;
+  http://127.0.0.1|http://127.0.0.1:*|http://localhost|http://localhost:*) ;;
+  *) echo "github-asset: KHU_ASSET_BASE must be an https address, not $BASE_URL; nothing was published" >&2; exit 2 ;;
+esac
 URL="$BASE_URL/$REPO/releases/download/$TAG/$NAME"
-if [ "${KHU_ASSET_FETCH_CHECK:-1}" = "0" ]; then
-  echo "github-asset: $URL was not fetched back (KHU_ASSET_FETCH_CHECK=0); only what GitHub reports is proven" >&2
-else
-  SERVED=$(curl -fsSL "$URL" | shasum -a 256 | awk '{print $1}') \
-    || { echo "github-asset: $URL could not be downloaded anonymously; a private or unpublished release strands every client, so nothing was published" >&2; exit 5; }
-  [ "$SERVED" = "$SHA" ] || { echo "github-asset: $URL served $SERVED, not the signed $SHA; nothing was published" >&2; exit 5; }
-  echo "github-asset: $URL downloaded anonymously and hashes to the signed sha256" >&2
-fi
+case "$URL" in *[!A-Za-z0-9._:/@+-]*) echo "github-asset: $URL holds a character an address cannot carry; nothing was published" >&2; exit 2 ;; esac
+SERVED=$(curl -fsSL "$URL" | shasum -a 256 | awk '{print $1}') \
+  || { echo "github-asset: $URL could not be downloaded anonymously; a private or unpublished release strands every client, so nothing was published" >&2; exit 5; }
+[ "$SERVED" = "$SHA" ] || { echo "github-asset: $URL served $SERVED, not the signed $SHA; nothing was published" >&2; exit 5; }
+echo "github-asset: $URL downloaded anonymously and hashes to the signed sha256" >&2
 
 echo "$URL"
