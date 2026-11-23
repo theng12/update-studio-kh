@@ -553,7 +553,12 @@ struct KHUMain {
                         let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))
                         let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
                         ranOK = r.statusPosted
-                        agentLog.record("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)", at: .quiet)
+                        // A run that could not report says why on its own line: `updates=0` alone is
+                        // what made a fifteen-runs-a-minute loop invisible until the process count
+                        // showed it (measured 2026-11-23).
+                        let whyNotPosted = r.statusPosted ? ""
+                            : " — not reported: \(r.publicFeed ? "a public feed is never reported to, by design" : (r.feedError ?? "no report reached the publisher"))"
+                        agentLog.record("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)\(whyNotPosted)", at: .quiet)
                         for note in r.notes { agentLog.record("note: \(note)") }
                         if agentLog.verbosity == .verbose {
                             for app in r.apps { agentLog.record("app \(app.app): \(app.installed ?? "not installed") → \(app.available ?? "—") \(app.status)", at: .verbose) }
