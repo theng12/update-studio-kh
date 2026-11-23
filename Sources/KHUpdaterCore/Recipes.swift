@@ -210,7 +210,8 @@ public enum Recipe {
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil,
                               clock: @escaping () -> TimeInterval = Mono.now,
-                              beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
+                              beforeStop: (() throws -> Void)? = nil,
+                              exchange: (String, String) -> Bool = Recipe.exchange) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         guard !fm.fileExists(atPath: paths.journal.path) else {
@@ -274,7 +275,8 @@ public enum Recipe {
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
                                     refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall,
                                     relaunchIfClosed: relaunchIfClosed,
-                                    clock: clock, appearCeiling: appearCeiling, beforeStop: beforeStop)
+                                    clock: clock, appearCeiling: appearCeiling, beforeStop: beforeStop,
+                                    exchange: exchange)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -508,7 +510,8 @@ public enum Recipe {
                                  relaunchAfterInstall: Bool = true, relaunchIfClosed: Bool = false,
                                  clock: @escaping () -> TimeInterval = Mono.now,
                                  appearCeiling: TimeInterval = Recipe.appearCeiling,
-                                 beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
+                                 beforeStop: (() throws -> Void)? = nil,
+                                 exchange: (String, String) -> Bool = Recipe.exchange) throws -> RecipeResult {
         let installedPath = paths.installedPath
         // The gap's own timeline: each step's offset from the moment the install began, so the next
         // estimate is measured rather than guessed. It travels in the result, so the helper's log
@@ -617,7 +620,7 @@ public enum Recipe {
                 // bundle went to the rollback path, the promote then failed, and nothing put the app
                 // back. An exchange is a rename: atomic, and space-neutral, so an update that fitted
                 // before still fits.
-                if Recipe.exchange(paths.staged.path, installedPath) {
+                if exchange(paths.staged.path, installedPath) {
                     journal.phase = "promoted"; try AtomicFile.writeJSON(journal, to: paths.journal)
                     // `staged` now holds the previous bundle; it becomes this Mac's fallback. A
                     // failure here costs the fallback copy, never the installed app, so it is kept
@@ -635,9 +638,12 @@ public enum Recipe {
                     }
                     journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
                     do { try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath)) }
-                    catch {
-                        _ = try? fm.moveItem(at: paths.rollback, to: URL(fileURLWithPath: installedPath))
-                        throw khuFail("the new bundle could not be put in place, so the previous one was put back; nothing changed")
+                    catch let promoteError {
+                        do { try fm.moveItem(at: paths.rollback, to: URL(fileURLWithPath: installedPath)) }
+                        catch {
+                            throw khuFail("NO APP IS INSTALLED at \(installedPath): the new bundle could not be put in place (\(promoteError)) and the previous one could not be put back (\(error)); the previous bundle is kept at \(paths.rollback.path)")
+                        }
+                        throw khuFail("the new bundle could not be put in place (\(promoteError)), so the previous app was put back; nothing changed")
                     }
                 }
             } else {

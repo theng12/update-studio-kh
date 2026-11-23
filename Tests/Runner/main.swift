@@ -195,11 +195,12 @@ struct RecipeRig {
     func run(_ app: FakeApp, expectedID: String? = nil, relaunchAfterInstall: Bool = true,
              version: String = "1.2.3", fileManager: FileManager = .default,
              clock: @escaping () -> TimeInterval = Mono.now,
-             appearCeiling: TimeInterval = Recipe.appearCeiling) -> Result<RecipeResult, Error> {
+             appearCeiling: TimeInterval = Recipe.appearCeiling,
+             exchange: @escaping (String, String) -> Bool = Recipe.exchange) -> Result<RecipeResult, Error> {
         Result { try Recipe.appDmg(shell: shell, installedPath: installed.path, artifactPath: "/tmp/x.dmg", feedVersion: version,
                                    expectedBundleID: expectedID, stateDir: state.path, app: "foo", control: app.control,
                                    relaunchAfterInstall: relaunchAfterInstall, appearCeiling: appearCeiling,
-                                   fileManager: fileManager, clock: clock) }
+                                   fileManager: fileManager, clock: clock, exchange: exchange) }
     }
     var rollback: URL { state.appendingPathComponent("rollback-foo/Foo.app") }
     var journal: URL { state.appendingPathComponent("install-foo.json") }
@@ -397,7 +398,7 @@ func recipeTests() {
         let failing = FailingMoves()
         failing.failWhen = { src, _ in src.hasSuffix(".Foo.app.khu-staging") }
         let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
-        let res = rig.run(app, fileManager: failing)
+        let res = rig.run(app, fileManager: failing, exchange: { _, _ in false })
         expect((try? res.get()) == nil, "R2 promotion failure is reported")
         expect(marker(rig.installed) == "1.0.0" && app.events.last == "launch" && app.running,
                "R2 after a throw past the stop, the previous app is back and running")
@@ -409,7 +410,7 @@ func recipeTests() {
         let failing = FailingMoves()
         failing.failWhen = { src, dst in src.hasSuffix(".Foo.app.khu-staging") || (src.contains("rollback-foo") && dst.hasSuffix("Applications/Foo.app")) }
         let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
-        let res = rig.run(app, fileManager: failing)
+        let res = rig.run(app, fileManager: failing, exchange: { _, _ in false })
         if case .failure(let error) = res {
             expect("\(error)".contains("NO APP IS INSTALLED") && !"\(error)".contains("was put back"), "R4 a failed restore is reported loudly")
         } else { expect(false, "R4 a failed restore is reported loudly") }
