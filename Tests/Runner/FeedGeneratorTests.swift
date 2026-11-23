@@ -125,6 +125,36 @@ func feedGeneratorTests() {
         expect(made.stale.isEmpty, "FG3 no stale note when the tag carries no metadata")
     } catch { expect(false, "FG3 fixture: \(error)") }
 
+    // FG3b. A category is required: the Launcher sorts by it, so a row without one is refused
+    // rather than published into the wrong place.
+    do {
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+        ])
+        let noType = RegistryEntry(name: "Hub", bundle_id: "com.t.hub", tagline: "One hub.",
+                                   description: "Everything in one place.")
+        do {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], registry: registry(["hub": noType]), gh: gh)
+            expect(false, "FG3b a registry entry without type must refuse")
+        } catch {
+            expect("\(error)".contains("type") && "\(error)".contains(hubRepo),
+                   "FG3b the refusal names the missing category and the repo (\(error))")
+        }
+        let tagless = metaJSON(["name": "Hub Studio KH", "bundle_id": "com.t.hub",
+                                "tagline": "One hub.", "description": "Everything in one place."])
+        let gh2 = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": tagless,
+        ])
+        do {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh2)
+            expect(false, "FG3b an app-meta.json without type must refuse")
+        } catch {
+            expect("\(error)".contains("type"),
+                   "FG3b the tag's file is held to the same list (\(error))")
+        }
+    }
+
     // FG4 a repo with no published release has no row, is named as unpublished, and does not fail
     // the run — that list is the only thing a publish may let disappear.
     do {
