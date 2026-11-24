@@ -3,7 +3,7 @@
 enum LauncherPage {
     static let html = #"""
 <!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https://github.com https://raw.githubusercontent.com; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <style>
 :root{--bg:#f5f6f5;--panel:#fff;--line:#e2e5e3;--line2:#eef0ef;--text:#16201c;--sub:#5b6762;--accent:#1d6b51;--accent-ink:#fff;--ok:#1a7448;--ok-bg:#e2f3e9;--warn:#875800;--warn-bg:#fcefd2;--bad:#b42318;--bad-bg:#fde8e6;--info:#1d5fa8;--info-bg:#e5eefb;--muted-bg:#eef0ef;--focus:#2e8b6a;--field:#9aa6a0;--shadow:0 14px 40px rgba(15,30,25,.18)}
 @media (prefers-color-scheme:dark){:root{--bg:#101513;--panel:#171e1b;--line:#29332f;--line2:#202926;--text:#e6ece9;--sub:#a9b5af;--accent:#3fa37f;--accent-ink:#06120d;--ok:#62d19a;--ok-bg:#15301f;--warn:#f0b450;--warn-bg:#33270f;--bad:#ff8a7e;--bad-bg:#3a1714;--info:#8ab8f2;--info-bg:#15263c;--muted-bg:#212a26;--focus:#62d19a;--field:#5f6e67;--shadow:0 16px 44px rgba(0,0,0,.55)}}
@@ -109,6 +109,8 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 .extIcon,.extShot{display:grid;place-items:center;overflow:hidden;background:var(--bg);border:1px solid var(--line);border-radius:8px;flex:none}
 .extIcon{width:40px;height:40px;font-size:15px;color:var(--sub)}
 .extShot{width:200px;height:112px;font-size:11px;color:var(--sub)}
+.extIcon .ph,.extShot .ph{display:grid;place-items:center;width:100%;height:100%;font-size:14px;color:var(--sub)}
+.extShot .ph{font-size:11px}
 .extIcon img,.extShot img{max-width:100%;max-height:100%;display:block}
 .extNote{margin:4px 0 0}
 .adopt .row{display:flex;gap:10px;align-items:center;padding:6px 0;flex-wrap:wrap}
@@ -385,9 +387,9 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
 // swaps in only if it arrives, at most 2048 pixels a side and within 5 seconds. A picture that is
 // skipped says why in the page's own words instead of leaving a broken frame or a spinner.
 const EXT_PIXELS=2048,EXT_WAIT=5000;
-function extPicture(x,src,cls,label,note){
+function extPicture(x,src,cls,label,note,alt){
  const box=el('div',{class:cls}),ph=el('span',{class:'ph'},label);
- const img=el('img',{alt:label+' for '+x.name,loading:'lazy',decoding:'async','data-src':src});
+ const img=el('img',{alt:(alt||label)+' for '+x.name,loading:'lazy',decoding:'async','data-src':src});
  box.append(ph);
  if(!src)return box;
  img.hidden=true;box.append(img);
@@ -401,9 +403,9 @@ function extPicture(x,src,cls,label,note){
  img.src=src;return box}
 function extTile(x){const note=el('p',{class:'sub extNote'});
  return el('div',{class:'extRow extTile'},
-  extPicture(x,x.icon,'extIcon','Icon',note),
+  extPicture(x,x.icon,'extIcon',(x.name.trim()[0]||'?').toUpperCase(),note,'Icon'),
   el('div',{class:'extBody'},el('strong',{},x.name),' · ',x.version,el('p',{},x.summary),note),
-  extPicture(x,x.screenshot,'extShot','Screenshot',note),
+  extPicture(x,x.screenshot,'extShot','Screenshot',note,'Screenshot'),
   x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
             :el('span',{class:'tag'},'No public download yet'))}
 function drawExtensions(kind){const state=S.extensions||{status:'idle'};
