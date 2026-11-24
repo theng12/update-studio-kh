@@ -1,0 +1,25 @@
+== contents ==
+
+/Applications
+/Studio Launcher KH.app
+/Studio Launcher KH.app/Contents
+== suspicious files ==
+== OWNER HITS — publish stops on any line here ==
+  (100.64.0.0/10 alone is the tailnet range literal — accepted, filtered)
+== vendor licence and credit addresses, expected (font OFL texts, bundled ffmpeg) ==
+== vendor contacts published in their own licence or credits, expected ==
+== documentation example, expected (app's own placeholder/try-me text) ==
+/Studio Launcher KH.app/Contents/MacOS/Studio Launcher KH:name.tail1234.ts.net
+/Studio Launcher KH.app/Contents/Resources/khu-agent/bin/khu:name.tail1234.ts.net
+== certificate-authority addresses, expected (vendor binaries) ==
+== brand identifiers, expected (bundle ids, copyright, author fields) ==
+/Studio Launcher KH.app/Contents/MacOS/Studio Launcher KH:macmini
+/Studio Launcher KH.app/Contents/MacOS/Studio Launcher KH:terranasH
+/Studio Launcher KH.app/Contents/Resources/khu-agent/bin/khu:macmini
+/Studio Launcher KH.app/Contents/Resources/khu-agent/bin/khu:terranasH
+== third-party binaries, expected (vendor frameworks, node_modules, locales) ==
+== UNKNOWN — none ==
+== cost: 13 files, largest 8 MB /Studio Launcher KH.app/Contents/MacOS/Studio Launcher KH, 2s wall ==
+== this pass covers: everything except the embedded runtime (/Contents/Helpers/, /Contents/Resources/python/) and the scoped vendor paths above — an address pasted there would not stop it ==
+scan-receipt {"sha256": "8a248033da099d5ebf5b390c86b4133b4b8292175dd3cb9c44029fb91e67251b", "exit": 0, "scanner_version": "scan-dmg/2026-11-20", "at": "2026-11-24T01:24:15Z", "files": 13, "excused": []}
+== done: build/Studio-Launcher-KH-0.1.81.dmg ==

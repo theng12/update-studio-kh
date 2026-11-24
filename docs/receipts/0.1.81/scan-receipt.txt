@@ -1,0 +1,2 @@
+scan: sha256=8a248033da099d5ebf5b390c86b4133b4b8292175dd3cb9c44029fb91e67251b clean
+scan-dmg: clean (scanner scan-dmg/2026-11-20, 13 files, largest 8 MB, 2s; OWNER HITS: only the tailnet range literal; UNKNOWN none)
