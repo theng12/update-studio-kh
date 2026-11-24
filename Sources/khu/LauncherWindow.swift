@@ -160,7 +160,9 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             row["bytes"] = app.bytes.map { NSNumber(value: $0) }
             row["tagline"] = app.words.tagline; row["description"] = app.words.description; row["accent"] = app.words.accent
             row["features"] = app.words.features?.map { ["title": $0.title, "text": $0.text ?? ""] }
-            row["notes"] = (app.notes ?? "").split(separator: "\n").map { $0.hasPrefix("- ") ? String($0.dropFirst(2)) : String($0) }.filter { !$0.isEmpty }
+            // Whole lines up to the cap, with one line naming what was left in the release: a 30 KB
+            // body is the feed's problem, and rendering all of it is this screen's (owner, 2026-11-24).
+            row["notes"] = NotesClamp.lines(app.notes)
             row["icon"] = icon(for: app)
             if busy == app.app {
                 row["progress"] = progress(app)
