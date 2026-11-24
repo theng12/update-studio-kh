@@ -51,6 +51,18 @@
       "description": "See every KH Studio app this Mac can run, install the ones you pick, and keep them current from one window.",
       "kind": "app-dmg"
     },
+    "library-studio": {
+      "_until": "delete when library's next release tag carries app-meta.json (0.7.37, file on main at 8ad30fe)",
+      "name": "Library Studio KH",
+      "bundle_id": "app.librarystudiokh.desktop",
+      "bundle_name": "Library Studio KH.app",
+      "type": "entertainment",
+      "tagline": "The media library behind your downloads, in one private window.",
+      "description": "Keeps qBittorrent, Sonarr, Radarr, Lidarr and Prowlarr in one interface, shows what has downloaded and what is still coming, and browses what you own by genre, year and type — the files stay where they live.",
+      "hold_url": "http://127.0.0.1:8643/api/maintenance/hold",
+      "hold_since": "0.7.21",
+      "kind": "app-dmg"
+    },
     "media-studio": {
       "name": "Business Studio KH",
       "bundle_id": "com.terranash.mediastudiokh",
