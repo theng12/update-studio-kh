@@ -368,8 +368,10 @@ struct KHUMain {
                 } else if let publishRepo {
                     // The guard that would have caught 2026-11-23: compare the feed about to be
                     // published with the one the world reads now, before a byte is written.
+                    // Built from the home directory at run time: a literal owner path in the source
+                    // lands in the shipped binary, and the pre-publish scan stops on it.
                     let checker = ProcessInfo.processInfo.environment["KH_PUBLISH_INTEGRITY_CHECK"]
-                        ?? "/Users/vengtheng/Developer/_orchestra/tools/publish-integrity-check.sh"
+                        ?? (NSHomeDirectory() + "/Developer/_orchestra/tools/publish-integrity-check.sh")
                     guard FileManager.default.isExecutableFile(atPath: checker) else {
                         fail("refused: the integrity check is missing at \(checker); nothing was published")
                     }
