@@ -4279,6 +4279,7 @@ struct RunnerMain {
         }
         if ProcessInfo.processInfo.environment["FG_ONLY"] == "1" {
             feedGeneratorTests()
+            publishLockTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
@@ -4415,6 +4416,7 @@ r41HealthMustHold()
         publisherRetentionTests()
         publisherCompletenessTests()
         feedGeneratorTests()
+            publishLockTests()
         connectionReloadTests()
         connectionWindowTests()
         automaticFreshMacTests()

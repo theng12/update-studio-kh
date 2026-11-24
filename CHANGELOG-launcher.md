@@ -6,6 +6,12 @@ lines. The **release body is not this file**: `packaging/release-push.sh --summa
 two-or-three-sentence summary, because the feed row is composed from the body and the Launcher card
 shows it.
 
+## 0.1.83 — 2026-11-25
+
+- The Launcher's own updates now pause it instead of interrupting it. Its feed row carries the hold it already serves on 8792, so an update asks it to stop taking new work, waits for the job in hand to slide into a gap, installs and relaunches, and the app carries on by itself. Queued work stays queued and nothing in flight is cancelled.
+- The background helper is deliberately left out of that: it opens no window, serves nothing over the network and replaces itself between runs, so there is nothing to pause.
+- The Launcher now carries its own update feed address and public key and serves an empty appcast channel from this repo's Pages site — the groundwork for updating itself without a Studio. An empty channel means "no update", so it changes nothing until the release after this one writes its first row.
+
 ## 0.1.82 — 2026-11-24
 
 - Every copy of an app is compared once, both ways, and the card says what it found in one plain sentence: "This Mac has 0.6.255; ATLAS carries 0.6.256, newer." A newer copy on a drive is offered as the update, an older one is named as older and never offered as one, and a copy whose version cannot be read is named unknown rather than left looking current.
@@ -91,10 +97,3 @@ shows it.
 - A switch turned on in Update Studio now takes effect on a Mac that has no Hub too. The check that ends an already-queued update when Automatic is off read this Mac's own switch and stopped there, so a page switch set later was ignored and the Mac said "set on this Mac" about a switch set in the page. It now follows the same rule the automatic sweep uses, and the sentence names the switch that actually decided.
 - An automatic pull held for its slot says so in one line: which minute of the window it is waiting for and that nothing else is waiting on it.
 
-## 0.1.72 — 2026-11-20
-
-- A refused update hold no longer locks a Mac out of that version for ever. When an app does not pause in time, the failure is remembered separately with its reason and time, retried after 15 minutes, and after three attempts tells you to quit or restart the app once — the update is already downloaded and installs as soon as the app closes, without waiting for another backoff.
-- A real artifact failure still stops after one automatic attempt and now expires after seven days instead of stranding a Mac permanently. An identical repeated failure does not refresh its own clock.
-- A Mac whose earlier build recorded a refused update hold as a bad artifact clears that memory automatically on its next run and tries the version again.
-- Connecting to the public GitHub feed works again. The setup file a public feed writes carries no token on purpose, and the installer refused it as unfilled, so every public-feed connect failed. A public https feed now needs no token; a publisher's feed still does.
-- Update installed apps on the SSD no longer asks to install the Command Line Tools first. It is now a plain shell script using the Mac's own tools, with the same checksum, private-copy, identity and signature checks as before, so it runs on a Mac that has never had any developer tools.

@@ -51,6 +51,8 @@
       "type": "system",
       "tagline": "Every KH Studio app, installed and kept up to date.",
       "description": "See every KH Studio app this Mac can run, install the ones you pick, and keep them current from one window.",
+      "hold_url": "http://127.0.0.1:8792/api/maintenance/hold",
+      "hold_since": "0.1.82",
       "kind": "app-dmg"
     },
     "media-studio": {

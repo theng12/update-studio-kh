@@ -23,24 +23,30 @@ universal() {
   codesign --force --sign "$IDENTITY" --timestamp=none "$out"
   codesign --verify --strict "$out"
 }
+# Sparkle 2, weak-linked (docs/SPARKLE-INTEGRATION.md): one build/khu binary serves the app, the
+# agent's base/versions/<v> copy and base/bin/khu, and only the bundled .app carries the framework.
+# A weak link keeps every standalone copy launching, so the shipped linkage is asserted in the gate.
+SPARKLE=(-F vendor/khsparkle -Xlinker -weak_framework -Xlinker Sparkle
+         -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+         -import-objc-header vendor/khsparkle/khsparkle.h vendor/khsparkle/libkhsparkle.a)
 case "${1:-build}" in
   build)
-    universal build/khu "${CORE[@]}" Sources/khu/*.swift
+    universal build/khu "${CORE[@]}" Sources/khu/*.swift "${SPARKLE[@]}"
     universal build/khu-stub Sources/KHUStub/*.swift Sources/khu-stub/*.swift
     echo "built build/khu build/khu-stub (universal: $(lipo -archs build/khu))"
     ;;
   test)
     python3 -B -I Tests/test_startup_refusal.py --output "build/startup-refusal-$(uuidgen)"
-    universal build/khu "${CORE[@]}" Sources/khu/*.swift
+    universal build/khu "${CORE[@]}" Sources/khu/*.swift "${SPARKLE[@]}"
     # ConnectionWindow.swift is compiled with the tests so the first-run window's states are
     # checked headlessly, without a desktop (its test-only surface is behind KHU_TESTS).
-    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-tests "${CORE[@]}" Sources/khu/ConnectionWindow.swift Tests/Runner/*.swift
+    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-tests "${CORE[@]}" Sources/khu/ConnectionWindow.swift Tests/Runner/*.swift "${SPARKLE[@]}"
     ./build/khu-tests
     ;;
   test-cli)
     # For the Python fixtures that enrol a Mac against a key they generate: only a test build can
     # name that key (`KHU_TEST_KEY`). Production `build.sh build` has no such switch.
-    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-test-cli "${CORE[@]}" Sources/khu/*.swift
+    swiftc -parse-as-library -O -target "$(uname -m)-${FLOOR}" -D KHU_TESTS -o build/khu-test-cli "${CORE[@]}" Sources/khu/*.swift "${SPARKLE[@]}"
     echo "built build/khu-test-cli (test build: KHU_TEST_KEY names the key its fixtures sign with)"
     ;;
   *)

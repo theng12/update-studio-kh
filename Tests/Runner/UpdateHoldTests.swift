@@ -1094,28 +1094,30 @@ func updateHoldTests() {
                "UH15 a rollback without an endpoint is refused while the app runs")
     }
 
-    // UH10 the updater's own Launcher updates while running: it has no work queue to hold.
+    // UH10 the Launcher is held like every other app (S001, 2026-11-25). It serves a hold on 8792
+    // and installs apps unattended, so an update must ask it; only the helper's engine is exempt.
     do {
-        let r = Rig("hold-self")
-        let installed = makeApp(r.root.appendingPathComponent("Launcher.app"), version: "1.0.0", id: "com.khupdater.launcher")
-        try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: "launcher", version: "2.0.0",
-                                   artifact: r.artifact("launcher.dmg", "launcher bytes"), kind: "app-dmg", allowSame: false, meta: { _ in AppMeta(name: "Studio Launcher KH", bundleID: "com.khupdater.launcher", bundleName: "Launcher.app", version: "2.0.0", iconPNG: Data()) }, url: "https://example.test/artifacts/")
-        let feed = try! FeedPublisher.loadVerifiedFeed(from: r.feed, publicKey: r.pair.privateKey.publicKey)!
-        let state = r.root.appendingPathComponent("state")
-        try! fm.createDirectory(at: state, withIntermediateDirectories: true)
-        let client = HoldClient(InProcessClient(server: r.server))
-        client.artifacts[feed.apps["launcher"]!.file] = Data("launcher bytes".utf8)
-        var cfg = agentConfig(r, token: "unused", apps: ["launcher": AppConfig(bundlePath: installed.path, recipe: "app-dmg", automatic: false)])
-        cfg.stateDir = state.path
-        let app = FakeApp(installed: installed, running: true, quits: [true], healthy: ["2.0.0"])
-        let mount = r.root.appendingPathComponent("mount")
-        makeApp(mount.appendingPathComponent("Launcher.app"), version: "2.0.0", id: "com.khupdater.launcher")
-        let result = try? Agent.install(app: "launcher", feed: feed, installed: "1.0.0", config: cfg,
-                                        serverBase: URL(string: "http://pub.test")!, stateDir: state,
-                                        http: client, shell: RecordingShell(mount: mount),
-                                        control: { _, _ in app.control })
-        expect(result?.status == "updated" && !client.calls.contains("hold"),
-               "UH10 the updater's own Launcher updates while running, with no hold (\(client.calls))")
+        let live = rig("hold-launcher", hold: holdURL, recipe: "app-dmg", holdSince: "1.0.0", id: "launcher")
+        live.client.replies = [unsafeReply(["install library-studio"]), unsafeReply(["install library-studio"])]
+        let unsafe = try? Agent.install(app: "launcher", feed: live.feed, installed: "1.0.0", config: live.cfg,
+                                        serverBase: URL(string: "http://pub.test")!, stateDir: live.state,
+                                        http: live.client, shell: RecordingShell(mount: live.mount),
+                                        control: { _, _ in live.app.control })
+        expect(unsafe?.status == Agent.waitingForClose && live.client.calls.contains("hold")
+               && !live.app.events.contains("quit"),
+               "UH10 a Launcher still installing an app is asked for its hold and waits, never swapped (\(live.client.calls))")
+
+        // A Launcher older than the feed's holdSince has no hold route yet: one normal install while
+        // it is closed, said plainly, rather than a hard refusal.
+        let old = rig("hold-launcher-old", hold: holdURL, recipe: "app-dmg", holdSince: "1.0.1", id: "launcher")
+        old.client.replies = [(status: 404, data: Data())]
+        let predates = try? Agent.install(app: "launcher", feed: old.feed, installed: "1.0.0", config: old.cfg,
+                                          serverBase: URL(string: "http://pub.test")!, stateDir: old.state,
+                                          http: old.client, shell: RecordingShell(mount: old.mount),
+                                          control: { _, _ in old.app.control })
+        expect(predates?.status == Agent.waitingForClose && predates?.predatesHold == true
+               && (predates?.reason ?? "").contains("predates its update hold"),
+               "UH10 a Launcher below its holdSince waits for close with predatesHold (\(predates?.reason ?? "nil"))")
     }
 
     // UH33 the signed feed keeps Gateway's exact admin drain and drops near-misses.

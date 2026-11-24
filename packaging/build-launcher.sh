@@ -52,9 +52,25 @@ files = {n: {"bytes": len((kit / n).read_bytes()), "sha256": hashlib.sha256((kit
     "format": "studiohub.khu-agent.v1", "stage": "bootstrap-only"}, indent=2) + "\n")
 ' "$KIT" "$VERSION"
 build/khu launcher-bundle --out "$APP" --version "$VERSION" --kit "$KIT" >/dev/null
+# Sparkle 2 ships beside the app executable, not inside the kit: build/khu weak-links it, so the
+# agent's own copies (base/versions/<v>, base/bin/khu) launch without it and only this bundle loads
+# it (docs/SPARKLE-INTEGRATION.md). Versions/Current, never an added Versions/A alias, which makes
+# codesign --verify --deep --strict fail with "unsealed contents present in the root directory".
+FW="$APP/Contents/Frameworks/Sparkle.framework"
+mkdir -p "$APP/Contents/Frameworks"
+ditto vendor/khsparkle/Sparkle.framework "$FW"
+# Nested first: Sparkle's own helpers cannot be signed after the framework that contains them.
+for inner in "$FW"/Versions/Current/XPCServices/*.xpc "$FW"/Versions/Current/Autoupdate "$FW"/Versions/Current/Updater.app; do
+  [ -e "$inner" ] || continue
+  codesign --force --sign "$IDENTITY" --timestamp=none "$inner"
+done
+codesign --force --sign "$IDENTITY" --timestamp=none "$FW"
 # The raw helpers were signed before their kit hashes; seal only the outer app here.
 codesign --force --sign "$IDENTITY" --timestamp=none "$APP"
 codesign --verify --strict "$APP"
+# A framework that is present but unsealed reads as shipped and fails on a Mac: prove the bundle.
+codesign --verify --deep --strict "$APP"
+[[ -d "$FW" ]] || { echo "Sparkle.framework is missing from $APP; a weak-linked app still launches, so nothing else would say so" >&2; exit 1; }
 /usr/bin/python3 -I -c '
 import hashlib, json, pathlib, sys
 kit = pathlib.Path(sys.argv[1]) / "Contents/Resources/khu-agent"

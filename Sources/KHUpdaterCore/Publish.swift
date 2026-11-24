@@ -330,10 +330,10 @@ public enum FeedPublisher {
             let catalogue = ["extension", "plugin"].contains(kindNow)
             if requireComplete && !catalogue {
                 // Registry first, so a first publish of a hold-serving app is refused for the
-                // missing field instead of passing because there was nothing to inherit. The
-                // Launcher and its helper are exempt by name, as they are in the agent's own hold
-                // path (Agent.swift:1743): neither serves a hold.
-                let holdExempt = ["updater", "launcher"].contains(app)
+                // missing field instead of passing because there was nothing to inherit. Only the
+                // helper is exempt, by kind: it serves no hold. The Launcher serves one (8792) and
+                // its row carries the pair, so a republish that dropped the fields is refused here.
+                let holdExempt = app == "updater"
                 let holdServing = !holdExempt && (Self.holdApps(in: feedDir).contains(app) || old?.holdURL != nil)
                 let missing = Self.missingAppFields(entry, holdServing: holdServing, holdSinceKnown: (knownSince ?? "").isEmpty == false)
                 guard missing.isEmpty else {

@@ -459,6 +459,55 @@ func feedGeneratorTests() {
         }
     } catch { expect(false, "FG22 fixture: \(error)") }
 
+    // FG23 --freeze holds one app's row exactly as the feed serves it, and never looks at its
+    // release: Relay 0.3.39 was gated, published and proven and sat unserved over an hour because a
+    // different app's row could not be built and the generator refuses to drop a row (M001, 2026-11-24).
+    do {
+        final class Counting: AssetVerifier, @unchecked Sendable {
+            var calls = 0
+            func prove(url: String, repo: String, tag: String, asset: String,
+                       expectedSha: String, expectedBytes: Int64) throws { calls += 1 }
+        }
+        var served = FeedApp(version: "0.6.257", file: "Hub-0.6.257.dmg", sha256: sha, bytes: 7, kind: "app-dmg")
+        served.url = "https://github.com/\(hubRepo)/releases/download/0.6.257/Hub.dmg"
+        served.name = "Hub Studio KH"
+        let before = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": served])
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.258", assets: [("Hub.dmg", sha, 9, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.258": hubMeta,
+        ])
+        let counting = Counting()
+        let held = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh,
+                                              verifier: counting, frozen: ["hub"])
+        expect(held.feed.apps["hub"] == served,
+               "FG23 a frozen row is the feed's own row, every field unchanged")
+        expect(counting.calls == 0,
+               "FG23 ... and its release is never hashed (prove calls=\(counting.calls))")
+        expect(held.frozen.count == 1 && held.frozen[0].hasPrefix("hub: frozen at 0.6.257"),
+               "FG23 ... and the run says so in one line, every run (\(held.frozen))")
+        // The other app is not held: freezing one row does not freeze the run.
+        let both = try FeedGenerator.generate(apps: ["hub": hubRepo, "story-studio": storyRepo],
+                                              previous: Feed(published_at: "2026-11-22T00:00:00Z",
+                                                             apps: ["hub": served, "story-studio": served]),
+                                              gh: FakeGitHub(paths: [
+                                                "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.258", assets: [("Hub.dmg", sha, 9, digest)]),
+                                                "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.258": hubMeta,
+                                                "repos/\(storyRepo)/releases/latest": releaseJSON(repo: storyRepo, tag: "1.4.420", assets: [("Story.dmg", sha, 42, digest)]),
+                                                "repos/\(storyRepo)/contents/app-meta.json?ref=1.4.420": storyMeta,
+                                              ]),
+                                              verifier: UnverifiedAsset(), frozen: ["hub"])
+        expect(both.feed.apps["hub"]?.version == "0.6.257" && both.feed.apps["story-studio"]?.version == "1.4.420",
+               "FG23 one frozen row does not hold another app's finished release")
+        expectThrows("FG23 naming an app this run does not generate is refused", contains: "nope") {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh,
+                                           verifier: UnverifiedAsset(), frozen: ["nope"])
+        }
+        expectThrows("FG23 freezing a row the feed does not serve is refused", contains: "no row for it to hold") {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo, "wire": "o/wire-kh"], previous: before, gh: gh,
+                                           verifier: UnverifiedAsset(), frozen: ["wire"])
+        }
+    } catch { expect(false, "FG23 fixture: \(error)") }
+
     // FG14 an asset that does not download anonymously is a finding, never a row. The check runs
     // before the row is built, so a draft or orphan release passes nothing through.
     do {

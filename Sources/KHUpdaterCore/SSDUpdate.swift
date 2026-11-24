@@ -110,8 +110,9 @@ public enum SSDUpdate {
                         let ctl = control?(app, path) ?? ((app.id == "gateway" || apps[app.id]?.recipe == "gateway")
                             ? LiveControl.gateway(path, shell: shell) : LiveControl.appDmg(path, shell: shell))
                         // No hardcoded list: any running app is refused, because this local action has no
-                        // hold endpoint for it. The updater's own engine and Launcher are the only ones
-                        // that hold no work queue (the Launcher is running this very action).
+                        // hold endpoint for it. Only the helper is exempt, and the Launcher is exempt
+                        // because it is the process running this very action — it cannot ask itself to
+                        // quit. It still serves a hold (LauncherHold, 8792) for the feed's own updates.
                         if !["updater", "launcher"].contains(app.id), ctl.isRunning() != false {
                             result = row("busy", "Quit this app when its work is finished, then run this SSD action again. No quiet point was proved.")
                         } else {

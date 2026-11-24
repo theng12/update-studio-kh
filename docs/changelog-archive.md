@@ -4,6 +4,14 @@ Retired from `CHANGELOG-launcher.md` on 2026-11-25, which keeps the ten most rec
 Newest first, the same order as the live file, so the top of this file continues from its
 bottom. Git history is the final record.
 
+## 0.1.72 — 2026-11-20
+
+- A refused update hold no longer locks a Mac out of that version for ever. When an app does not pause in time, the failure is remembered separately with its reason and time, retried after 15 minutes, and after three attempts tells you to quit or restart the app once — the update is already downloaded and installs as soon as the app closes, without waiting for another backoff.
+- A real artifact failure still stops after one automatic attempt and now expires after seven days instead of stranding a Mac permanently. An identical repeated failure does not refresh its own clock.
+- A Mac whose earlier build recorded a refused update hold as a bad artifact clears that memory automatically on its next run and tries the version again.
+- Connecting to the public GitHub feed works again. The setup file a public feed writes carries no token on purpose, and the installer refused it as unfilled, so every public-feed connect failed. A public https feed now needs no token; a publisher's feed still does.
+- Update installed apps on the SSD no longer asks to install the Command Line Tools first. It is now a plain shell script using the Mac's own tools, with the same checksum, private-copy, identity and signature checks as before, so it runs on a Mac that has never had any developer tools.
+
 ## 0.1.71 — 2026-11-20
 
 - An update that fails on this Mac no longer repeats itself every few seconds. A hold that cannot be taken, or a background service that will not stop, ends the attempt once and says why; the same version is not tried again by itself until a new version is published or Update is pressed on that Mac. This is the seven-second retry seen on a production Mac with storage-studio, and the library-studio loop on the publisher.

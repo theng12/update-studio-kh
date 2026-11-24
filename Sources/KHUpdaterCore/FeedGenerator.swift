@@ -118,10 +118,12 @@ public struct FeedGeneration: Sendable {
     public var wordChanges: [String]
     /// Stray releases skipped by name, and anything else the run decided instead of doing.
     public var notes: [String]
+    /// One line per app named on `--freeze`, so a held row is never silent.
+    public var frozen: [String]
     public init(feed: Feed, sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = [],
-                wordChanges: [String] = [], notes: [String] = []) {
+                wordChanges: [String] = [], notes: [String] = [], frozen: [String] = []) {
         self.feed = feed; self.sources = sources; self.unpublished = unpublished; self.stale = stale
-        self.wordChanges = wordChanges; self.notes = notes
+        self.wordChanges = wordChanges; self.notes = notes; self.frozen = frozen
     }
 }
 
@@ -500,7 +502,19 @@ public enum FeedGenerator {
     /// check then says so, which is the point.
     public static func generate(apps: [String: String], registry: FeedRegistry? = nil, previous: Feed? = nil,
                                 gh: GitHubReader, verifier: AssetVerifier = AnonymousAsset(),
-                                refreshNotes: Set<String> = [], now: Date = Date()) throws -> FeedGeneration {
+                                refreshNotes: Set<String> = [], frozen: Set<String> = [],
+                                now: Date = Date()) throws -> FeedGeneration {
+        // A held row is this run's own choice, per run: the row keeps every field the feed serves now
+        // and its release is never looked up or hashed. Relay 0.3.39 was gated, published and proven
+        // and then sat unserved for over an hour because one other app's row could not be built and
+        // the generator refuses to drop a row (M001, 2026-11-24). Named for an app this run does not
+        // generate, or one with nothing served to freeze, it is a typo and refuses.
+        if let unknown = frozen.subtracting(apps.keys).sorted().first {
+            throw khuFail("refused: --freeze names \(unknown), which this run does not generate; nothing was generated")
+        }
+        if let missing = frozen.filter({ previous?.apps[$0] == nil }).sorted().first {
+            throw khuFail("refused: --freeze names \(missing), and the feed the world reads has no row for it to hold; nothing was generated")
+        }
         // A named repair that names an app this run does not generate is a typo, not a no-op.
         if let unknown = refreshNotes.subtracting(apps.keys).sorted().first {
             throw khuFail("refused: --refresh-notes names \(unknown), which this run does not generate; nothing was generated")
@@ -509,7 +523,7 @@ public enum FeedGenerator {
         // a refusal that arrives after the hash pass reads from outside as a slow download, and
         // every watcher starts the whole run again. Same checks, same messages — just first. The
         // duplicate `releases/latest` read costs one cheap API call per app; the DMGs cost minutes.
-        for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
+        for (app, repo) in apps.sorted(by: { $0.key < $1.key }) where !frozen.contains(app) {
             let found = try Self.release(for: app, repo: repo, gh: gh)
             guard let foundRelease = found.release else { continue }
             _ = try Self.words(app: app, repo: repo, tag: foundRelease.tag, entry: registry?.apps[app],
@@ -519,7 +533,14 @@ public enum FeedGenerator {
         var feed = Feed(published_at: ISO.string(now))
         var sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = [], wordChanges: [String] = []
         var notes: [String] = []
+        var frozenLines: [String] = []
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
+            if frozen.contains(app), let held = previous?.apps[app] {
+                // Verbatim: a held row is what the world already reads, so nothing here can change it.
+                feed.apps[app] = held
+                frozenLines.append("\(app): frozen at \(held.version) — \(repo) is not read this run, so its release is not looked up or hashed")
+                continue
+            }
             let made = try row(app: app, repo: repo, registry: registry, served: previous?.apps[app], gh: gh,
                                verifier: verifier, refreshNotes: refreshNotes.contains(app))
             guard var row = made.row else {
@@ -583,7 +604,7 @@ public enum FeedGenerator {
         }
         return FeedGeneration(feed: try feed.validated(), sources: sources, unpublished: unpublished,
                               stale: stale, wordChanges: wordChanges.filter { !$0.hasPrefix("stray release ignored:") },
-                              notes: notes)
+                              notes: notes, frozen: frozenLines)
     }
 
     /// The feed alone, for callers that do not need the report.

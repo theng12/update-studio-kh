@@ -1826,7 +1826,7 @@ public enum Agent {
             // under its work. The same endpoint is renewed at the boundary and resumed afterwards.
             let ctl = control(app, cfg)
             var endpoint: URL?
-            let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
+            let exempt = cfg.recipe == "updater"
             if let http {
                 let hold = beginUpdateHold(app: app, holdURL: holdURL, http: http, control: ctl, exempt: exempt,
                                            installed: installed, holdSince: holdSince)
@@ -2153,9 +2153,10 @@ public enum Agent {
         }
         func acquireHold() -> RecipeResult? {
             guard holdEndpoint == nil, !legacyQuit else { return nil }
-            // The updater's own engine and menu-bar UI hold no work queue: the engine switches itself
-            // through installUpdater, and the Launcher updates itself from its own Update click.
-            let exempt = ["updater", "launcher"].contains(app) || cfg.recipe == "updater"
+            // Only the helper's engine is exempt: it serves no HTTP listener, so there is nothing to
+            // ask. The Launcher does serve one (LauncherHold, 8792) and installs apps unattended, so
+            // it is held like every other app rather than exempt by name (S001, 2026-11-25).
+            let exempt = cfg.recipe == "updater"
             DownloadControl.updateProgress("held")
             let hold = beginUpdateHold(app: app, holdURL: feed.apps[app]?.holdURL, http: http,
                                        control: appControl, exempt: exempt, installed: installed,

@@ -63,7 +63,7 @@ struct KHUMain {
               keygen <dir>
               page --out <file> [--state <demo-state.json>]   (this build's Launcher page, with a state applied)
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|extension|media|plugin|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--meta-only] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
-              feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>) [--refresh-notes <app>...]   (one row per app repo's latest published release, app=owner/repo per line; words from the tag's app-meta.json, else the registry; a row's asset comes from its registry entry, so one repo can publish two rows; --refresh-notes re-reads the release body of the named apps only, and only for a row whose notes are exactly the tool's placeholder)
+              feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>) [--refresh-notes <app>...] [--freeze <app>...]   (one row per app repo's latest published release, app=owner/repo per line; words from the tag's app-meta.json, else the registry; a row's asset comes from its registry entry, so one repo can publish two rows; --refresh-notes re-reads the release body of the named apps only, and only for a row whose notes are exactly the tool's placeholder; --freeze holds that app's row at the values the feed already serves, this run only)
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -287,6 +287,7 @@ struct KHUMain {
             var reposFile: String?, registryFile: String?, keyArg: String?, out: String?, publishRepo: String?, previousFile: String?
             var publishFlag = false
             var refreshNotes: Set<String> = []
+            var frozen: Set<String> = []
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -297,6 +298,7 @@ struct KHUMain {
                 case "--out": out = value("--out", &i)
                 case "--publish": publishFlag = true
                 case "--repo": publishRepo = value("--repo", &i)
+                case "--freeze": frozen.insert(value("--freeze", &i))
                 case "--refresh-notes":
                     var named: [String] = []
                     while i + 1 < args.count, !args[i + 1].hasPrefix("--") { named.append(args[i + 1]); i += 1 }
@@ -343,11 +345,14 @@ struct KHUMain {
                     } catch { fail("refused: cannot read the public feed to compare against (\(error)); nothing was published") }
                 }
                 let made = try FeedGenerator.generate(apps: apps, registry: registry, previous: previousPublic,
-                                                      gh: GhReader(), refreshNotes: refreshNotes)
+                                                      gh: GhReader(), refreshNotes: refreshNotes, frozen: frozen)
                 let feed = made.feed
                 for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
                     print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
                 }
+                // One line per frozen app, every run: a held row that says nothing is the same defect
+                // as a skipped app that says nothing.
+                for line in made.frozen { print(line) }
                 for note in made.stale { print("note: \(note)") }
                 for change in made.wordChanges { print("words: \(change)") }
                 for note in made.notes { print("note: \(note)") }
@@ -366,49 +371,54 @@ struct KHUMain {
                     try AtomicFile.write(envelope, to: URL(fileURLWithPath: out))
                     print("feed: \(feed.apps.count) app(s) written to \(out)")
                 } else if let publishRepo {
-                    // The guard that would have caught 2026-11-23: compare the feed about to be
-                    // published with the one the world reads now, before a byte is written.
-                    // Built from the home directory at run time: a literal owner path in the source
-                    // lands in the shipped binary, and the pre-publish scan stops on it.
-                    let checker = ProcessInfo.processInfo.environment["KH_PUBLISH_INTEGRITY_CHECK"]
-                        ?? (NSHomeDirectory() + "/Developer/_orchestra/tools/publish-integrity-check.sh")
-                    guard FileManager.default.isExecutableFile(atPath: checker) else {
-                        fail("refused: the integrity check is missing at \(checker); nothing was published")
+                    // One publisher at a time, enforced rather than agreed (issue 20261125-5): the lock
+                    // covers generation, the integrity check and the commit, so a second pass refuses
+                    // before it reads a repo or hashes an asset.
+                    try FeedPublishLock.withLock {
+                        // The guard that would have caught 2026-11-23: compare the feed about to be
+                        // published with the one the world reads now, before a byte is written.
+                        // Built from the home directory at run time: a literal owner path in the source
+                        // lands in the shipped binary, and the pre-publish scan stops on it.
+                        let checker = ProcessInfo.processInfo.environment["KH_PUBLISH_INTEGRITY_CHECK"]
+                            ?? (NSHomeDirectory() + "/Developer/_orchestra/tools/publish-integrity-check.sh")
+                        guard FileManager.default.isExecutableFile(atPath: checker) else {
+                            fail("refused: the integrity check is missing at \(checker); nothing was published")
+                        }
+                        guard let previous = previousPublic else { fail("refused: there is no public feed to compare against; nothing was published") }
+                        var published: [String] = []
+                        for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
+                            let before = (try? JSON.encode(previous.apps[app])) ?? Data()
+                            if before != (try? JSON.encode(row)) { published.append(app) }
+                        }
+                        let removed = previous.apps.keys.filter { feed.apps[$0] == nil }.sorted()
+                        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("khu-feed-check-\(UUID().uuidString)")
+                        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                        defer { _ = try? FileManager.default.removeItem(at: dir) }
+                        let beforeFile = dir.appendingPathComponent("before.json"), afterFile = dir.appendingPathComponent("after.json")
+                        try AtomicFile.writeJSON(previous, to: beforeFile)
+                        try AtomicFile.write(envelope, to: afterFile)
+                        var checkArgs = [checker, beforeFile.path, afterFile.path]
+                        // The generated feed carries no `previous` block; dropping the old one whole is a
+                        // reshape the checker permits only when it is named. Every other difference
+                        // still fails, so this is passed only when the block is really going.
+                        if previous.previous != nil, feed.previous == nil { checkArgs.append("--allow-previous-dropped") }
+                        for app in published { checkArgs += ["--published", app] }
+                        for app in removed { checkArgs += ["--allow-removed", app] }
+                        let run = Process()
+                        run.executableURL = URL(fileURLWithPath: "/bin/bash")
+                        run.arguments = checkArgs
+                        let pipe = Pipe()
+                        run.standardOutput = pipe; run.standardError = pipe
+                        try run.run()
+                        let said = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                        run.waitUntilExit()
+                        guard run.terminationStatus == 0 else {
+                            fail("refused: the feed changed something its own publish does not explain; nothing was published.\n\(said)")
+                        }
+                        print("integrity: \(published.count) row(s) changed, \(removed.count) removed by name; check passed")
+                        try FeedPages.publish(envelope, repo: publishRepo)
+                        print("feed: \(feed.apps.count) app(s) published, published_at \(feed.published_at)")
                     }
-                    guard let previous = previousPublic else { fail("refused: there is no public feed to compare against; nothing was published") }
-                    var published: [String] = []
-                    for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
-                        let before = (try? JSON.encode(previous.apps[app])) ?? Data()
-                        if before != (try? JSON.encode(row)) { published.append(app) }
-                    }
-                    let removed = previous.apps.keys.filter { feed.apps[$0] == nil }.sorted()
-                    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("khu-feed-check-\(UUID().uuidString)")
-                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                    defer { _ = try? FileManager.default.removeItem(at: dir) }
-                    let beforeFile = dir.appendingPathComponent("before.json"), afterFile = dir.appendingPathComponent("after.json")
-                    try AtomicFile.writeJSON(previous, to: beforeFile)
-                    try AtomicFile.write(envelope, to: afterFile)
-                    var checkArgs = [checker, beforeFile.path, afterFile.path]
-                    // The generated feed carries no `previous` block; dropping the old one whole is a
-                    // reshape the checker permits only when it is named. Every other difference
-                    // still fails, so this is passed only when the block is really going.
-                    if previous.previous != nil, feed.previous == nil { checkArgs.append("--allow-previous-dropped") }
-                    for app in published { checkArgs += ["--published", app] }
-                    for app in removed { checkArgs += ["--allow-removed", app] }
-                    let run = Process()
-                    run.executableURL = URL(fileURLWithPath: "/bin/bash")
-                    run.arguments = checkArgs
-                    let pipe = Pipe()
-                    run.standardOutput = pipe; run.standardError = pipe
-                    try run.run()
-                    let said = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                    run.waitUntilExit()
-                    guard run.terminationStatus == 0 else {
-                        fail("refused: the feed changed something its own publish does not explain; nothing was published.\n\(said)")
-                    }
-                    print("integrity: \(published.count) row(s) changed, \(removed.count) removed by name; check passed")
-                    try FeedPages.publish(envelope, repo: publishRepo)
-                    print("feed: \(feed.apps.count) app(s) published, published_at \(feed.published_at)")
                 }
             } catch { fail("\(error)") }
         case "unpublish", "retire":
@@ -710,6 +720,20 @@ struct KHUMain {
                     menu.holdServer = hold
                 } catch {
                     FileHandle.standardError.write(Data("launcher hold: \(error)\n".utf8))
+                }
+                // Sparkle 2 self-update, started only now that the hold is listening: the shim posts
+                // to it before any check. The framework is weak-linked (docs/SPARKLE-INTEGRATION.md),
+                // so a mispackaged app still launches — and without this guard the shim would take
+                // the hold, fail to build its updater, and leave the hold to expire. Absent is said,
+                // never silent: every other path still updates this app through the feed.
+                if NSClassFromString("SPUUpdater") != nil {
+                    let started = kh_sparkle_start()
+                    if started != 0 {
+                        let why = String(cString: kh_sparkle_last_error())
+                        FileHandle.standardError.write(Data("sparkle: self-update not started (\(why)); this app still updates through the feed\n".utf8))
+                    }
+                } else {
+                    FileHandle.standardError.write(Data("sparkle: Sparkle.framework is not in Contents/Frameworks; self-update is off, this app still updates through the feed\n".utf8))
                 }
                 // A launchd definition that is merely present is not proof: check the job itself and
                 // put it back from the kit the app ships when it is gone (measured 2026-11-23).

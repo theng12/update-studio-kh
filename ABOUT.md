@@ -12,7 +12,11 @@ never runs, routes or pauses production work.
 - Lets each Mac update by click, with Automatic on for a fresh Mac, a visible switch on
   the main screen, and a per-app switch in each app's own menu.
 - Publishes signed releases with `khu keygen`, `khu publish`, `khu enrol` and `khu
-  serve`; the 1301 host is the only feed writer and Macs pull from it.
+  feed`; the signed feed is written to the app's own public repo and served from
+  GitHub Pages, and every Mac pulls from there. One publish at a time: a second
+  `khu feed --publish` on the same Mac is refused, naming the pass already running.
+- Can hold one app's feed row for a single run (`khu feed --freeze <app>`), so a
+  row that cannot be rebuilt does not hold back another app's finished release.
 - Runs a headless `khu` agent with a one-run lock, outbox, re-send, ordered
   rollback and feed freshness checks.
 - Runs a `khu-stub` supervisor that keeps `current`/`previous` app versions with
@@ -20,7 +24,12 @@ never runs, routes or pauses production work.
 - Installs and rolls back app recipes (`app-dmg`, `gateway`), reports only for
   `story` and `hub`, and self-updates the updater.
 - Holds an app's queue before a byte moves, leaves queued work queued, and resumes
-  by itself after the gap; the hold is in-memory or expiring.
+  by itself after the gap; the hold is in-memory or expiring. The Launcher now serves
+  its own hold (loopback 8792) and is paused like any other app — only the background
+  helper, which has no listener, is exempt.
+- Carries Sparkle and its own update channel for the Launcher's self-update; the
+  channel is empty until a later release writes its first signed entry, which reads
+  as "no update".
 - Keeps the latest two DMGs and retires older ones recoverably;
   `packaging/release-push.sh` publishes and reads the served feed back.
 - Syncs an accepted release to the public page only when its SHA-256 matches the

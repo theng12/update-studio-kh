@@ -121,11 +121,11 @@ func publisherCompletenessTests() {
     }
 
     // PC8 the registry, not the row, decides who serves a hold, and the pair is demanded: a first
-    // publish is refused for the missing address, then for the missing since-version. `launcher` and
-    // `updater` are exempt by name, so this uses an id the registry marks hold-serving.
+    // publish is refused for the missing address, then for the missing since-version. Only the
+    // helper is exempt, by kind; the Launcher is not exempt by name any more (S001, 2026-11-25).
     do {
         let dir = feedDir("registry")
-        try! Data(#"["story"]"#.utf8).write(to: dir.appendingPathComponent("hold-apps.json"))
+        try! Data(#"["story","launcher"]"#.utf8).write(to: dir.appendingPathComponent("hold-apps.json"))
         func publishStory(_ version: String, holdURL: String? = nil, holdSince: String? = nil) throws {
             let src = root.appendingPathComponent("story-\(version).bin")
             try Data("story-\(version)".utf8).write(to: src)
@@ -153,6 +153,15 @@ func publisherCompletenessTests() {
         try! publishStory("1.0.1")
         expect(row(dir, "story")?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold"
                && row(dir, "story")?.holdSince == "0.9.0", "PC8 the pair is carried")
+        // The Launcher used to pass here on its name alone: a publish that names no hold pair is now
+        // refused for it too, so the fields cannot be dropped by a later publish unnoticed.
+        do {
+            try publish(dir, "1.0.0")
+            expect(false, "PC8 a hold-serving Launcher with no hold pair must be refused")
+        } catch {
+            expect("\(error)".contains("--hold-url"), "PC8 the Launcher's refusal names --hold-url (\(error))")
+            expect(row(dir, "launcher") == nil, "PC8 the Launcher's refusal left no row")
+        }
     }
 
     // PC7 a catalogue row is exempt: an extension has no type or tagline by design.
