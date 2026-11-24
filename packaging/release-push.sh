@@ -50,7 +50,8 @@ fi
 # The gate line travels with the body (RELEASE-POLICY, Main 2026-11-23): copied verbatim from the file
 # the gate wrote, never retyped here, because a retyped line is where the typo class lives. No line
 # given keeps today's changelog-only body; a line for another app is a refusal, not a warning.
-NOTES="$LOG"; NOTES_TMP=""
+NOTES=""; NOTES_TMP=$(mktemp "${TMPDIR:-/tmp}/kh-notes.XXXXXX")
+trap 'rm -f "$NOTES_TMP"' EXIT
 if [ -n "$GATE" ]; then
   [ -f "$GATE" ] || { echo "release-push: no such gate line file: $GATE — pass the file the gate wrote, not a line typed here" >&2; exit 2; }
   COUNT=$(grep -c '^GATE PASS ' "$GATE" || true)
@@ -61,11 +62,15 @@ if [ -n "$GATE" ]; then
     echo "release-push: $GATE is a gate line for $GL_APP, not $APP; another app's gate is not this release's evidence" >&2
     exit 2
   }
-  NOTES_TMP=$(mktemp "${TMPDIR:-/tmp}/kh-notes.XXXXXX")
-  trap 'rm -f "$NOTES_TMP"' EXIT
-  { printf '%s\n\n' "$GL"; cat "$LOG"; } > "$NOTES_TMP"
-  NOTES="$NOTES_TMP"
+  printf '%s\n\n' "$GL" > "$NOTES_TMP"
+else
+  : > "$NOTES_TMP"
 fi
+# The body is this version's entry, never the whole file: the feed row copies the body verbatim, and
+# 0.1.82 shipped 70,884 characters — every release back to 0.1.1 — onto the Launcher card (measured
+# 2026-11-25). A `## <version> — <date>` heading starts an entry; the second one ends it.
+awk '/^## /{n++} n==2{exit} {print}' "$LOG" >> "$NOTES_TMP"
+NOTES="$NOTES_TMP"
 # There is one place a release goes: the app's own repo. No repo named is a refusal, not a fallback.
 [ -n "${KHU_PUBLIC_REPO:-}" ] || {
   echo "release-push: no public repo named for $APP — set KHU_PUBLIC_REPO=<owner/repo>; there is no other release host (1301 runs apps, it does not publish them)." >&2

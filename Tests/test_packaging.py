@@ -726,6 +726,17 @@ else:
     check(push_gh_calls.exists() and "--notes-file" in push_gh_calls.read_text(),
           "the release body is the changelog, not a placeholder line the card would show")
 
+    # The body is this version's entry, never the whole file: 0.1.82 shipped 70,884 characters —
+    # every release back to 0.1.1 — onto the Launcher card (measured 2026-11-25), because the feed
+    # row copies the body verbatim.
+    changelog.write_text("# Title\n\n## 9.9.9 — 2026-11-25\n- this release\n\n"
+                         "## 9.9.8 — 2026-11-24\n- last release\n")
+    result = push_run()
+    notes = json.loads((gh_state / "releases.json").read_text())[0]["notes"]
+    check(result.returncode == 0 and "this release" in notes and "last release" not in notes,
+          "the body is this version's entry, not the whole changelog (%d chars)" % len(notes))
+    changelog.write_text("changes")  # the runs below are about the gate line, not the entry split
+
     result = push_run(KHU_PUBLIC_REPO=None)
     check(result.returncode == 2 and "no public repo named" in result.stderr and not push_gh_calls.exists(),
           "with no repo named it refuses instead of publishing anywhere (rc=%d)" % result.returncode)
