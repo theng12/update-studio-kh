@@ -22,9 +22,10 @@ func automaticFreshMacTests() {
     try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
     _ = makeApp(folder.appendingPathComponent("Demo.app"), version: "1.0", id: "com.example.demo")
     _ = makeApp(folder.appendingPathComponent("Own.app"), version: "1.0", id: "com.example.own")
+    // Keyed by bundle identifier: `discover` looks the installed bundle's own id up in this map.
     let known: [String: (id: String, updatesItself: Bool)] = [
-        "demo": ("com.example.demo", false),
-        "own": ("com.example.own", true),
+        "com.example.demo": ("demo", false),
+        "com.example.own": ("own", true),
     ]
     let empty = AgentConfig(feedURL: "https://example.test/release.json", publicKey: "k",
                             stateDir: stateDir.path, machine: "mac", token: "")

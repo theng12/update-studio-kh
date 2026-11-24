@@ -447,9 +447,9 @@ func connectionFlowTests() {
             expect(false, "CF20 the repair window could not be built over the photographed state")
             return
         }
-        expect(dead.testPrimaryTitle == "Use GitHub releases instead",
+        expect(dead.testPrimaryTitle == "Use the saved feed instead",
                "CF20 the photographed dead end now offers the one action that can end (\(dead.testPrimaryTitle))")
-        expect(dead.testIntro.contains("bare IP") && dead.testIntro.contains("GitHub releases"),
+        expect(dead.testIntro.contains("bare IP") && dead.testIntro.contains("saved feed"),
                "CF20 the window names the cause and the fix, not only a refusal")
 
         // The action, in the two steps it performs: verify the mirror against the pin, save it with
