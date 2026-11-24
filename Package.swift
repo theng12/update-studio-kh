@@ -16,6 +16,10 @@ let package = Package(
         .target(name: "KHUpdaterCore", dependencies: ["KHUStub"]),
         .executableTarget(name: "khu", dependencies: ["KHUpdaterCore"]),
         .executableTarget(name: "khu-stub", dependencies: ["KHUStub"]),
-        .testTarget(name: "KHUpdaterTests", dependencies: ["KHUpdaterCore", "KHUStub"]),
+        // No SwiftPM test target: the suite is ./build.sh test, a custom harness over Tests/Runner.
+        // The target that used to be declared here never ran — it had no path, so SwiftPM read the
+        // root Tests/ (Python, Objective-C, JS) and failed with "mixed language source files", and
+        // the package itself does not build under SwiftPM (`Sources/khu-stub` cannot see
+        // `KHUStub`'s types). Rows 20261123-123/-126. A target that cannot run is worse than none.
     ]
 )

@@ -93,3 +93,13 @@ The two packaging suites must stay inside temporary homes and a stand-in `launch
 `PATH`: never the real `~/Library/LaunchAgents`, never the real `gui` launchd domain, never a real
 key in the owner's home. Every change to an installer, the stub, the agent or the publisher needs a
 regression test that fails against the code before it.
+
+## SwiftPM note
+
+**The test suite is `./build.sh test`; there is no SwiftPM test target.** `swift test` does not run
+this project's tests and never has: the target that used to be declared had no `path:`, so SwiftPM
+read the root `Tests/` (Python, Objective-C and JS together) and died with "mixed language source
+files" before running anything — and the package does not build under SwiftPM at all
+(`Sources/khu-stub` cannot see `KHUStub`'s types). Rows 20261123-123 and 20261123-126. A target that
+cannot run is worse than no target; making SwiftPM build this package is a task of its own, not a
+prerequisite for a release.
