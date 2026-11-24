@@ -295,22 +295,47 @@ public enum TransferMeter {
 public enum AgentRecycle {
     public static let afterTransfers = 500
     public static let afterSeconds: TimeInterval = 24 * 3600
+    /// A run costs memory whether or not it transfers anything: an idle run still builds a report and
+    /// reads the feed. Measured 2026-11-24 at about 0.5 MB a run after the reading loops were fixed
+    /// (94 MB before), so a transfer count of zero is not a quiet process — 1300's 7.63 GB helper was
+    /// a few hundred quiet runs and a cap that never fired. 150 runs is the first bound to arrive (a
+    /// busy run is about three transfers, so the transfer cap lands near run 167) and holds the
+    /// per-run residue near 75 MB.
+    public static let afterRuns = 150
     /// A restart is only worth its own start-up when the run before it finished its job. On 1301 on
     /// 2026-11-22 every run failed at its first status POST, the cap fired anyway, and the helper
     /// restarted 1,605 times in a row — a failed run has nothing to preserve, so restarting it is
     /// pure churn. Two restarts with no successful run between them is the same churn one step on.
     public static func due(transfers: Int, age: TimeInterval,
                            successfulRun: Bool = true, recycledSinceSuccess: Bool = false,
+                           runs: Int = 0,
                            afterTransfers: Int = afterTransfers,
+                           afterRuns: Int = afterRuns,
                            afterSeconds: TimeInterval = afterSeconds) -> String? {
         guard successfulRun, !recycledSinceSuccess else { return nil }
         if transfers >= afterTransfers {
             return "it has made \(transfers) transfers, and the system's HTTP stack keeps a port for each"
         }
+        if runs >= afterRuns {
+            return "it has completed \(runs) runs since it started, and each run leaves memory the process does not give back"
+        }
         if age >= afterSeconds {
             return "it has been running \(Int(age / 3600)) h, and the system's HTTP stack keeps a port for each transfer"
         }
         return nil
+    }
+
+    /// Runs completed since this process started, kept on disk because the restart that ends a run of
+    /// them is an `exec`, which would reset an in-memory count to zero exactly when it matters.
+    public static func runsURL(stateDir: String) -> URL {
+        URL(fileURLWithPath: stateDir).appendingPathComponent("agent-runs.json")
+    }
+    public static func runs(stateDir: String) -> Int {
+        (try? AtomicFile.readJSON([String: Int].self, from: runsURL(stateDir: stateDir)))?["runs"] ?? 0
+    }
+    public static func recordRun(stateDir: String) {
+        let n = runs(stateDir: stateDir) + 1
+        try? Data(#"{"runs":\#(n)}"#.utf8).write(to: runsURL(stateDir: stateDir), options: .atomic)
     }
 
     /// Set when this process restarts itself and removed by the first run that reaches the publisher,
@@ -325,6 +350,8 @@ public enum AgentRecycle {
     public static func recordRecycle(stateDir: String, transfers: Int, at now: Date = Date()) {
         let body = #"{"at":"\#(ISO.string(now))","transfers":\#(transfers)}"#
         try? Data(body.utf8).write(to: markerURL(stateDir: stateDir), options: .atomic)
+        // The new process starts its own count; keeping the old one would recycle it on its first run.
+        try? FileManager.default.removeItem(at: runsURL(stateDir: stateDir))
     }
     public static func recordSuccess(stateDir: String) {
         try? FileManager.default.removeItem(at: markerURL(stateDir: stateDir))

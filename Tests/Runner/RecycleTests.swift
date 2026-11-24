@@ -43,6 +43,22 @@ func recycleTests() {
     expect(!AgentRecycle.recycledSinceSuccess(stateDir: state.path),
            "RC4c one successful run lifts the ban on the next restart")
 
+    // RC8, the counter a quiet fleet needs: a helper with nothing to install makes no transfers, so
+    // the transfer cap never fires while memory still grows a little per run. Measured 2026-11-24 at
+    // about 0.5 MB a run, and 1300's 7.63 GB helper was a few hundred quiet runs. The count lives on
+    // disk because the restart it triggers is an `exec`, which would reset it to zero.
+    expect(AgentRecycle.due(transfers: 0, age: 0, runs: AgentRecycle.afterRuns - 1) == nil,
+           "RC8 one run short of the cap keeps running")
+    let byRuns = AgentRecycle.due(transfers: 0, age: 0, runs: AgentRecycle.afterRuns) ?? ""
+    expect(byRuns.contains("runs") && !byRuns.contains("transfer"),
+           "RC8 a quiet helper at the run cap restarts and its reason names runs, not transfers (\(byRuns))")
+    expect(AgentRecycle.runs(stateDir: state.path) == 0, "RC8a a fresh state dir has no runs on record")
+    AgentRecycle.recordRun(stateDir: state.path)
+    AgentRecycle.recordRun(stateDir: state.path)
+    expect(AgentRecycle.runs(stateDir: state.path) == 2, "RC8b runs are counted on disk, so an exec does not reset them")
+    AgentRecycle.recordRecycle(stateDir: state.path, transfers: 0)
+    expect(AgentRecycle.runs(stateDir: state.path) == 0, "RC8c a restart starts its own count")
+
     // RC5: the 0.1.63 Dock icon stays. 0.1.79 bounds the loop that made it appear 1,605 times, and a
     // later change that quietly takes the owner's reopen route away has to break this test first.
     let spec = StubRunner.agentHelperSpec(version: "0.1.79", icon: nil)

@@ -767,17 +767,22 @@ struct KHUMain {
                     // it is also what lifts the ban on a second restart (AgentRecycle.due).
                     if ranOK { AgentRecycle.recordSuccess(stateDir: cfg.stateDir) }
                     if cfg.once { break }
+                    AgentRecycle.recordRun(stateDir: cfg.stateDir)
                     // Between runs, never inside one: nothing is downloading, installing or holding.
                     // A requested install is one-shot setup, so those runs never recycle.
                     let cap = ProcessInfo.processInfo.environment["KHU_RECYCLE_TRANSFERS"].flatMap(Int.init)
                         ?? AgentRecycle.afterTransfers
+                    let runCap = ProcessInfo.processInfo.environment["KHU_RECYCLE_RUNS"].flatMap(Int.init)
+                        ?? AgentRecycle.afterRuns
                     if initialRequests.isEmpty {
                         let restartPending = AgentRecycle.recycledSinceSuccess(stateDir: cfg.stateDir)
                         if let why = AgentRecycle.due(transfers: TransferMeter.completed,
                                                       age: Date().timeIntervalSince(startedAt),
                                                       successfulRun: ranOK,
                                                       recycledSinceSuccess: restartPending,
-                                                      afterTransfers: cap) {
+                                                      runs: AgentRecycle.runs(stateDir: cfg.stateDir),
+                                                      afterTransfers: cap,
+                                                      afterRuns: runCap) {
                             // Written straight to the pipe: a buffered `print` would be lost by the exec.
                             FileHandle.standardError.write(
                                 Data("note: starting this helper again in place because \(why). Same process and job; no work was interrupted.\n".utf8))
