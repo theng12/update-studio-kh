@@ -897,6 +897,25 @@ render(state(appRows.filter(a=>a.id!=='business'),{appTypes,feedCount:10}));
 run("tab='business';render()");
 assert.match(document.getElementById('main').textContent,/No Business apps on this feed yet\. 2 apps have no category yet; they are under All\./);
 render(state(appRows,{appTypes,feedCount:11}));
+// R22 a row that exists because the app is installed on this Mac is not a feed row: it keeps its
+// own heading and the version read from its bundle, and is never "No category yet" — that sentence
+// is for a feed row whose author forgot a label (owner, 2026-11-24).
+const adoptedRows=appRows.concat([row({id:'hub-apps',name:'I Hub',type:null,managed:true,installed:'0.6.39',
+  available:null,status:'Not in the feed',adopted:true,open:true})]);
+run("tab='all';view='grid'");
+render(state(adoptedRows,{appTypes,feedCount:11}));
+const main22=document.getElementById('main').textContent;
+assert.match(main22,/Installed on this Mac · 1/,'R22 an adopted app has its own heading');
+assert.match(main22,/I Hub/);
+assert.match(main22,/0\.6\.39/,'R22 the version read from the bundle is shown');
+assert.doesNotMatch(main22,/I HubUnlabelled/,'R22 an adopted app is not labelled Unlabelled');
+assert.match(main22,/No category yet · 2/,'R22 only feed rows without a label are counted');
+run("tab='media';render()");
+assert.doesNotMatch(document.getElementById('main').textContent,/Installed on this Mac/,'R22 no feed category to sit under, and none invented');
+run("tab='all'");
+render(state(adoptedRows.map(a=>a.id=='hub-apps'?{...a,adopted:false}:a),{appTypes,feedCount:11}));
+assert.match(document.getElementById('main').textContent,/No category yet · 3/,'R22 the same row without the flag reads as the feed row it claims to be');
+render(state(appRows,{appTypes,feedCount:11}));
 // The controls that only shape an app list are not offered on the two non-app tabs.
 run("tab='plugin';render()");
 assert.equal(document.getElementById('sort').hidden,true);

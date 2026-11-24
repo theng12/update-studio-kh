@@ -243,13 +243,17 @@ function buttons(a,big){const out=[],m=mainAction(a);
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
 const typeName=a=>(S.appTypes||[]).includes(a.type)?a.type[0].toUpperCase()+a.type.slice(1):'Unlabelled';
 function byType(a,b){const x=typeName(a),y=typeName(b);return Number(x==='Unlabelled')-Number(y==='Unlabelled')||x.localeCompare(y)}
-const typeLine=a=>el('div',{class:'tag'},typeName(a)+(a.unrecognised?' · Unrecognised':''));
+const typeLine=a=>adopted(a)?null:el('div',{class:'tag'},typeName(a)+(a.unrecognised?' · Unrecognised':''));
 // The eight sections the owner asked for, in his order: five of the feed's labels, then the two
 // things that are not apps at all. Plugin and Extension read the same published list, split by kind.
 const TABS=[['all','All'],['business','Business'],['media','Media'],['utility','Utilities'],['entertainment','Entertainment'],['system','System'],['plugin','Plugin'],['extension','Extension']];
 const CATEGORIES=new Set(['business','media','utility','entertainment','system']);
 const appsTab=()=>tab==='all'||CATEGORIES.has(tab);
-const unlabelled=a=>!(S.appTypes||[]).includes(a.type);
+// A row that exists because the app is installed on this Mac is not a feed row: it carries no feed
+// label, and "No category yet" would read as the feed's mistake and ours. Its heading says what it
+// is, and the version shown is the one read from its bundle (owner, 2026-11-24).
+const adopted=a=>a.adopted===true;
+const unlabelled=a=>!(S.appTypes||[]).includes(a.type)&&!adopted(a);
 function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);
  const c=el('article',{class:'card click'+(selected.has(a.id)?' selected':''),'aria-selected':String(selected.has(a.id)),style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget){openDetail(a.id);return}const cards=[...document.querySelectorAll('.card')],i=cards.indexOf(e.currentTarget),d=e.key=='ArrowRight'||e.key=='ArrowDown'?1:e.key=='ArrowLeft'||e.key=='ArrowUp'?-1:0;if(d){e.preventDefault();cards[(i+d+cards.length)%cards.length]?.focus()}}},
@@ -318,7 +322,10 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  const [list,hidden]=visible();
  // Under All the unlabelled rows get their own named group, so they are not counted twice here.
  const labelled=tab=='all'?list.filter(a=>!unlabelled(a)):list;
- const mine=labelled.filter(installed),others=labelled.filter(a=>!installed(a));
+ // Installed here, absent from the feed: its own group, so it is neither labelled by the feed nor
+ // pushed into a category the feed never gave it.
+ const here=labelled.filter(adopted);
+ const mine=labelled.filter(a=>installed(a)&&!adopted(a)),others=labelled.filter(a=>!installed(a)&&!adopted(a));
  const unlabelledRows=tab=='all'?list.filter(unlabelled):[];
  const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.available&&(a.status=='Update available'||a.status=='Failed'||a.status=='Downloaded')).length;
  $('all').hidden=n==0||!appTab;$('all').textContent='Update all ('+n+')';
@@ -338,7 +345,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
    const none=S.apps.filter(a=>!a.hidden&&unlabelled(a)).length;
    m.append(el('p',{class:'empty'},q?'No app matches “'+q+'”.':CATEGORIES.has(tab)?'No '+TABS.find(t=>t[0]==tab)[1]+' apps on this feed yet.'+(none?' '+none+' '+(none===1?'app has':'apps have')+' no category yet; they are under All.':''):'No app matches “'+q+'”.'));
   }
-  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
+  for(const [title,group] of [['Installed',mine],['Installed on this Mac',here],['Not installed',others]]){if(!group.length)continue;
    m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
   if(unlabelledRows.length)m.append(el('h2',{},'No category yet · '+unlabelledRows.length),view=='grid'?el('div',{class:'grid'},unlabelledRows.map(card)):tableOf(unlabelledRows));
  }else{
