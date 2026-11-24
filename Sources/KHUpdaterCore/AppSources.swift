@@ -47,7 +47,9 @@ public struct AppSources: Equatable, Sendable {
             .max(by: { VersionCompare.isNewer($1.version ?? "", than: $0.version ?? "") }) {
             return best.version
         }
-        if let installed { return installed }
+        // Only a comparison can say an installed copy is current: with nothing comparable, the
+        // offer stays nil and the row reads "not in the feed" rather than "up to date".
+        if let installed { return sources.contains { order($0) != .unknown } ? installed : nil }
         if let feed = sources.first(where: \.isFeed)?.version { return feed }
         // Nothing to compare against: the drive's own copy is what there is to install.
         return sources.compactMap(\.version).max { VersionCompare.isNewer($1, than: $0) }

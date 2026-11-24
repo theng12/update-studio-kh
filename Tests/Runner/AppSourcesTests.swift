@@ -47,7 +47,9 @@ func appSourcesTests() {
     expect(selfUpdating.offer == "0.6.257" && selfUpdating.text?.contains("its own updater carries 0.6.257, newer") == true,
            "AS8 the app's own updater is named (\(selfUpdating.text ?? "nil"))")
 
-    // AS9 installed, and no other copy known: said plainly rather than left to look current.
+    // AS9 installed, and no other copy known: said plainly rather than left to look current. With
+    // nothing to compare, nothing is offered either — the row says "not in the feed", not current.
     let lonely = AppSources(installed: "0.6.255", sources: [])
     expect(lonely.text == "This Mac has 0.6.255; no other copy is known.", "AS9 nothing else is named (\(lonely.text ?? "nil"))")
+    expect(lonely.offer == nil, "AS9 and no offer is invented (\(lonely.offer ?? "nil"))")
 }
