@@ -58,8 +58,14 @@ public enum Signing {
         var hasher = SHA256()
         var total: Int64 = 0
         while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
-            total += Int64(chunk.count)
+            // Each piece is a fresh bridged Data; without its own pool every one of them stays on the
+            // thread's pool until it drains, which on a long-lived worker queue is never. Measured
+            // 2026-11-24: 484 blocks of 1 MiB retained, ~100 MB a run, on a helper that had done no
+            // transfer at all.
+            autoreleasepool {
+                hasher.update(data: chunk)
+                total += Int64(chunk.count)
+            }
         }
         return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), total)
     }

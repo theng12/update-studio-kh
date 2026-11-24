@@ -87,9 +87,8 @@ func rollbackRetirementTests() {
         // Hub is offered by the feed (with its identity, as a real publish has) but is not
         // installed here: its rollback copy buys nothing.
         try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "0.6.246",
-                                   artifact: rig.artifact("hub.dmg", "hub"), kind: "app-dmg", allowSame: false, url: "https://example.test/fixture.dmg",
-                                   meta: { _ in AppMeta(name: "Hub Studio KH", bundleID: "com.example.hub",
-                                                        bundleName: "Hub Studio KH.app", version: "0.6.246") })
+                                   artifact: rig.artifact("hub.dmg", "hub"), kind: "app-dmg", allowSame: false, meta: { _ in AppMeta(name: "Hub Studio KH", bundleID: "com.example.hub",
+                                                        bundleName: "Hub Studio KH.app", version: "0.6.246") }, url: "https://example.test/fixture.dmg")
         let cfg = agentConfig(rig, token: token, apps: ["managed": AppConfig(bundlePath: managed.path, recipe: "fake-for-tests")])
         let run = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server))
         expect(run != nil && !fm.fileExists(atPath: keptHub.path) && fm.fileExists(atPath: keptMine.path),
