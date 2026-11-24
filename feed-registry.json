@@ -75,18 +75,6 @@
       "hold_since": "1.0.31",
       "kind": "app-dmg"
     },
-    "relay-studio": {
-      "name": "Relay Studio KH",
-      "bundle_id": "kh.relay.desktop",
-      "bundle_name": "Relay Studio KH.app",
-      "type": "media",
-      "tagline": "Keeps browser accounts signed in and paired with Gateway.",
-      "description": "Keeps the Chrome accounts behind your image and video generators signed in, rotates which one opens a browser, and connects their workers to Gateway.",
-      "hold_url": "http://127.0.0.1:8648/api/maintenance/hold",
-      "hold_since": "0.3.28",
-      "kind": "app-dmg",
-      "_until": "delete when relay's next tag carries app-meta.json (0.3.39 onward, repo commit c771462)"
-    },
     "storage-studio": {
       "name": "Storage Studio KH",
       "bundle_id": "app.storagestudiokh.desktop",
