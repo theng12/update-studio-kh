@@ -3739,10 +3739,10 @@ func enrolWindowTests() {
                "E17 a real connection reaches /enrol and is refused on a bind no Mac can use (\(refused.0))")
         let banned = overSocket(Data(repeating: 32, count: 2 << 20))
         // 400 is the refusal; 0 is the same refusal arriving as a closed connection, because the
-        // server refuses at the header stage and closes while the client is still uploading 2 MiB,
-        // so the close can beat the queued response. What is under test is the refusal and that
-        // nothing was enrolled, not which of the two the socket delivers. A -1 timeout still fails:
-        // that is a hang, not a refusal.
+        // server refuses at the header stage and closes without draining the body, while the client
+        // is still uploading 2 MiB, so the close can beat the queued response. What is under test is
+        // the refusal and that nothing was enrolled, not which of the two the socket delivers. A -1
+        // timeout still fails: that is a hang, not a refusal.
         let state = try? StateStore.load(from: r.rig.state)
         expect((banned.0 == 400 || banned.0 == 0) && state != nil && state!.machines.isEmpty,
                "E17 a body past the transport's 1 MiB cap is refused before it is read in (\(banned.0); state \(state == nil ? "unreadable" : "readable"))")
