@@ -2,8 +2,18 @@
 
 A light macOS tool that updates apps on each Mac and shows status. It never runs or
 routes production work, never pauses/resumes jobs, and never changes app settings.
-Updates default to click-to-update; an "automatic" switch per app per machine can be
-turned on.
+Updates install automatically on a fresh Mac, with one visible switch on the main
+screen and a per-app switch in each app’s own menu.
+
+## What it looks like
+
+![Studio Launcher KH on a demo Mac: the app list with categories, one app updating, and the automatic-updates switch in the footer](docs/screenshots/app-list-light.png)
+
+![Settings: one line saying where updates come from, Check now, and the update switches](docs/screenshots/settings-light.png)
+
+Dark: [app list](docs/screenshots/app-list-dark.png) · [Settings](docs/screenshots/settings-dark.png).
+
+Both are the released build with demo data in a throwaway folder, not anyone’s Mac.
 
 ## Roles
 
