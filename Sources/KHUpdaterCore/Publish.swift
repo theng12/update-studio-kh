@@ -172,6 +172,28 @@ public enum FeedPublisher {
         return Set(ids)
     }
 
+    /// A row is only publishable when a client can actually fetch the artifact: the repo must be
+    /// public and must publish a release carrying a downloadable asset for this version. Measured
+    /// 2026-11-23: a row with an empty `url` was published to the production feed host for an app
+    /// whose repo published nothing, and the receipt said "published" — no client could install it
+    /// and nothing said so. `khu feed` drops such a row honestly; publish must not write it first.
+    public static func verifyBacked(repo: String, app: String, version: String, gh: GitHubReader) throws {
+        do { _ = try gh.json("repos/\(repo)") } catch {
+            throw khuFail("refused: \(repo) is not a public repository (\(error)), so \(app) \(version) cannot be downloaded; nothing was published")
+        }
+        let data: Data
+        do { data = try gh.json("repos/\(repo)/releases?per_page=100") } catch {
+            throw khuFail("refused: \(repo)'s releases could not be read (\(error)), so \(app) \(version) cannot be backed; nothing was published")
+        }
+        let releases = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] ?? []
+        for release in releases {
+            guard let tag = release["tag_name"] as? String, tag == version || tag.hasSuffix("-\(version)") else { continue }
+            let assets = release["assets"] as? [[String: Any]] ?? []
+            if assets.contains(where: { ($0["browser_download_url"] as? String).map { !$0.isEmpty } == true }) { return }
+        }
+        throw khuFail("refused: \(repo) publishes no release with a downloadable asset for \(version); nothing was published")
+    }
+
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
                                meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
@@ -317,6 +339,13 @@ public enum FeedPublisher {
                 guard missing.isEmpty else {
                     throw khuFail("refused: \(app) would be published incomplete — \(missing.joined(separator: "; ")). Nothing was published.")
                 }
+            }
+            // A row with no address cannot be installed by anyone: measured 2026-11-23, `khu publish`
+            // wrote one to the production feed host and its receipt still said "published". The
+            // estate's only producer is `khu feed`, which takes the address from the app's own
+            // GitHub release; the words belong in the tag's app-meta.json.
+            guard let address = entry.url, !address.isEmpty else {
+                throw khuFail("refused: \(app) \(version)'s row would carry no address. The address comes from the app's own GitHub release via `khu feed`; the words belong in the tag's app-meta.json.")
             }
             feed.apps[app] = entry
             // Owner policy (RELEASE-POLICY §2c): a controller handoff is a one-shot pointer carrying

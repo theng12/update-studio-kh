@@ -165,7 +165,7 @@ func feedGeneratorTests() {
         ])
         let made = try FeedGenerator.generate(apps: ["story": storyRepo, "empty": "o/empty-kh"], gh: gh, verifier: UnverifiedAsset())
         expect(made.feed.apps.keys.sorted() == ["story"], "FG4 a repo with no published release contributes no row")
-        expect(made.unpublished == ["empty"], "FG4 it is named in the run's unpublished list (\(made.unpublished))")
+        expect(made.unpublished.count == 1 && made.unpublished[0].hasPrefix("empty — "), "FG4 it is named in the run's unpublished list with its reason (\(made.unpublished))")
     } catch { expect(false, "FG4 fixture: \(error)") }
 
     // FG6 the encoder is stable: the same inputs at the same moment produce the same feed bytes, so
@@ -285,7 +285,7 @@ func feedGeneratorTests() {
                "FG11 `wire-0.5.0` is read as version 0.5.0 for the wire app")
         // Another app's tag in this repo is a stray: no row for hub, printed by name, no refusal.
         let stray = try FeedGenerator.generate(apps: ["hub": repo], gh: gh, verifier: UnverifiedAsset())
-        expect(stray.feed.apps.isEmpty && stray.unpublished == ["hub"],
+        expect(stray.feed.apps.isEmpty && stray.unpublished.count == 1 && stray.unpublished[0].hasPrefix("hub — "),
                "FG11 a repo holding only another app's release gives that app no row")
         expect(stray.notes.contains { $0.contains("stray release ignored") && $0.contains("wire-0.5.0") },
                "FG11 the stray release is printed by name (\(stray.notes))")
@@ -572,6 +572,40 @@ func feedGeneratorTests() {
         expect(hub?.url?.hasSuffix("Hub.Studio.KH-0.6.257.dmg") == true,
                "FG20 the url keeps GitHub's stored name (\(hub?.url ?? "nil"))")
     } catch { expect(false, "FG20 fixture: \(error)") }
+    // FG18 a publish only writes a row a client can back: the repo is public and publishes a
+    // release with a downloadable asset for that version. Measured 2026-11-23, a row with no
+    // address was published and its receipt still said "published".
+    do {
+        let backed = FakeGitHub(paths: [
+            "repos/o/backed": Data("{\"full_name\":\"o/backed\",\"private\":false}".utf8),
+            "repos/o/backed/releases?per_page=100": Data("[{\"tag_name\":\"backed-1.0.0\",\"assets\":[{\"browser_download_url\":\"https://example.test/B.dmg\"}]}]".utf8),
+        ])
+        do {
+            try FeedPublisher.verifyBacked(repo: "o/backed", app: "backed", version: "1.0.0", gh: backed)
+            expect(true, "FG18 a public repo with a downloadable release backs the row")
+        } catch { expect(false, "FG18 a backed row must pass (\(error))") }
+
+        let missing = FakeGitHub(paths: [:])
+        do {
+            try FeedPublisher.verifyBacked(repo: "o/gone", app: "gone", version: "1.0.0", gh: missing)
+            expect(false, "FG18 a repo that cannot be read must refuse")
+        } catch {
+            expect("\(error)".contains("not a public repository"),
+                   "FG18 the refusal names the repo and why (\(error))")
+        }
+
+        let noAsset = FakeGitHub(paths: [
+            "repos/o/quiet": Data("{\"full_name\":\"o/quiet\",\"private\":false}".utf8),
+            "repos/o/quiet/releases?per_page=100": Data("[{\"tag_name\":\"quiet-1.0.0\",\"assets\":[]}]".utf8),
+        ])
+        do {
+            try FeedPublisher.verifyBacked(repo: "o/quiet", app: "quiet", version: "1.0.0", gh: noAsset)
+            expect(false, "FG18 a release with no downloadable asset must refuse")
+        } catch {
+            expect("\(error)".contains("no release with a downloadable asset"),
+                   "FG18 the refusal says the asset is missing (\(error))")
+        }
+    }
 }
 
 /// Drops the first N requests, then serves `body` — the flaky connection a publish actually met.

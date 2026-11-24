@@ -169,7 +169,7 @@ struct KHUMain {
             var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, type: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
             var keep: Int?
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil, security = false
-            var newApp = false, metaOnly = false
+            var newApp = false, metaOnly = false, reposFile: String? = nil
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -177,6 +177,7 @@ struct KHUMain {
                 case "--key": key = value("--key", &i)
                 case "--app": app = value("--app", &i)
                 case "--new-app": newApp = true
+                case "--repos": reposFile = value("--repos", &i)
                 case "--version": version = value("--version", &i)
                 case "--artifact": artifact = value("--artifact", &i)
                 case "--kind": kind = value("--kind", &i)
@@ -249,6 +250,21 @@ struct KHUMain {
                 // The keep count is a setting beside the feed: a --keep given now is saved for the
                 // publishes that follow, exactly like a setting saved by hand.
                 if let keep { try FeedPublisher.KeepCount.set(keep, in: feedDir) }
+                // A published row must be one a client can back: the repo public, and a release with
+                // a downloadable asset for this version. Measured 2026-11-23, a row with no address
+                // reached the production host and its receipt still said "published".
+                if let reposFile {
+                    var map: [String: String] = [:]
+                    for raw in try String(contentsOf: URL(fileURLWithPath: reposFile), encoding: .utf8).split(separator: "\n") {
+                        let line = raw.prefix { $0 != "#" }.trimmingCharacters(in: .whitespaces)
+                        let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                        if parts.count == 2, !parts[0].isEmpty { map[parts[0]] = parts[1] }
+                    }
+                    guard let repo = map[a] else {
+                        fail("refused: \(a) has no repo in \(reposFile), so its row cannot be backed by a downloadable release; nothing was published")
+                    }
+                    try FeedPublisher.verifyBacked(repo: repo, app: a, version: v, gh: GhReader())
+                }
                 try FeedPublisher.publish(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
@@ -334,6 +350,9 @@ struct KHUMain {
                 if !made.unpublished.isEmpty {
                     print("no row (repo has no published release): \(made.unpublished.joined(separator: ", "))")
                 }
+                // One line per dropped row, naming the app and why. A single summary line hid the
+                // apps inside it, and a silent withdrawal is the defect this replaces.
+                for drop in made.unpublished { print("no row: \(drop)") }
                 let envelope = try FeedGenerator.signed(feed, keyFile: URL(fileURLWithPath: keyArg))
                 if let out {
                     try AtomicFile.write(envelope, to: URL(fileURLWithPath: out))
