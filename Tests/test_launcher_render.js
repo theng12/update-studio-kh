@@ -928,6 +928,21 @@ assert.doesNotMatch(main22,/I HubUnlabelled/,'R22 an adopted app is not labelled
 assert.match(main22,/No category yet · 2/,'R22 only feed rows without a label are counted');
 run("tab='media';render()");
 assert.doesNotMatch(document.getElementById('main').textContent,/Installed on this Mac/,'R22 no feed category to sit under, and none invented');
+// R23 the mixed case: an app the feed carries sits under Installed with its update, and an app the
+// feed genuinely lacks sits under its own heading on the same screen. Hub is on the feed since
+// 2026-11-24, so the adoption case is carried by an app the feed does not list.
+run("tab='all'");
+render(state([
+  row({id:'hub',name:'A Hub',type:'media',installed:'0.6.255',available:'0.6.258',status:'Update available'}),
+  row({id:'capture',name:'B Capture',type:null,managed:true,installed:'0.4.1',available:'0.4.1',
+      status:'Not in the feed',adopted:true,open:true}),
+],{appTypes,feedCount:1}));
+const mixed=document.getElementById('main').textContent;
+assert.match(mixed,/Installed · 1/,'R23 the feed\'s app is Installed');
+assert.match(mixed,/Installed on this Mac · 1/,'R23 and the app the feed lacks has its own heading');
+assert.match(mixed,/A Hub.*0\.6\.255 → 0\.6\.258/,'R23 the feed app shows its update');
+assert.doesNotMatch(mixed,/No category yet/,'R23 and neither is "No category yet"');
+assert.doesNotMatch(mixed,/B CaptureUnlabelled/,'R23 the adopted app is never labelled Unlabelled');
 run("tab='all'");
 render(state(adoptedRows.map(a=>a.id=='hub-apps'?{...a,adopted:false}:a),{appTypes,feedCount:11}));
 assert.match(document.getElementById('main').textContent,/No category yet · 3/,'R22 the same row without the flag reads as the feed row it claims to be');
@@ -961,7 +976,7 @@ extRows.push({id:'efficient-orchestration',name:'Efficient Orchestration',versio
 render(state(appRows,{extensions:{status:'available',entries:extRows}}));
 const extPanel = document.getElementById('extPanel');
 assert.equal(extPanel.querySelectorAll('.extRow').length,1,'the Plugin tab lists the plugin entry only');
-assert.match(extPanel.textContent,/IconEfficient Orchestration · 0\.3\.204Coordinates work across Studio apps\.ScreenshotNo public download yet/);
+assert.match(extPanel.textContent,/EEfficient Orchestration · 0\.3\.204Coordinates work across Studio apps\.ScreenshotNo public download yet/);
 assert.equal(extPanel.querySelectorAll('button').length,0,'a plugin without a download offers no dead button');
 run("tab='extension';render()");
 assert.equal(document.getElementById('extPanel').querySelectorAll('.extRow').length,3,'the Extension tab lists the extension entries only');
@@ -975,6 +990,12 @@ assert.equal(posts.length,1);
 assert.equal(posts[0].action,'downloadExtension');
 assert.equal(posts[0].app,'test-extension-1');
 assert.equal(posts[0].url,undefined,'browser opening uses only the verified native catalog');
+// The page's own policy must let a picture from the two hosts the catalogue may name reach the
+// tile, and nothing else: measured in a real browser on 2026-11-24, `img-src data:` alone meant
+// every tile kept its placeholder and said the picture could not be loaded.
+assert(source.includes("img-src data: https://github.com https://raw.githubusercontent.com;"),'EXT0 the policy admits the catalogue\'s two picture hosts');
+const pictureHosts=(source.match(/img-src[^;]*/)||[''])[0].split(/\s+/).filter(x=>x.startsWith('https:'));
+assert.deepEqual(pictureHosts,['https://github.com','https://raw.githubusercontent.com'],'EXT0 and no other host');
 // A published picture is drawn on the tile; a row without one keeps the placeholder; and nothing
 // waits for a picture — all three tiles are in the page before a single image arrives.
 const pictured=extRows.map((x,i)=>({...x,
@@ -998,12 +1019,12 @@ tiles[1].querySelector('.extIcon img').naturalWidth=3000;
 tiles[1].querySelector('.extIcon img').naturalHeight=900;
 tiles[1].querySelector('.extIcon img').onload();
 assert(!tiles[1].querySelector('.extIcon img'),'EXT3 an oversized picture is dropped');
-assert.match(tiles[1].querySelector('.extIcon').textContent,/Icon/,'EXT3 the placeholder stays');
+assert.match(tiles[1].querySelector('.extIcon').textContent,/I/,'EXT3 the placeholder stays');
 assert.match(tiles[1].querySelector('.extNote').textContent,/3000×900, over the 2048-pixel limit/, 'EXT3 and the page says why, in its own words');
 render(state(appRows,{extensions:{status:'available',entries:extRows}}));
 const bare=document.getElementById('extPanel').querySelectorAll('.extRow');
 assert(!bare[0].querySelector('.extIcon img')&&!bare[0].querySelector('.extShot img'),'EXT4 a row without pictures has no image to break');
-assert.match(bare[0].querySelector('.extIcon').textContent,/Icon/,'EXT4 it keeps the placeholder');
+assert.match(bare[0].querySelector('.extIcon').textContent,/V/,'EXT4 it keeps the placeholder, the app\'s own initial');
 assert.equal(bare[0].querySelector('.extNote').textContent,'','EXT4 and invents no complaint');
 // The tab row is keyboard-navigable: Right/Left move and activate, Home and End jump.
 run("tab='all';render()");
