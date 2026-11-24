@@ -537,7 +537,7 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  // joined a Studio has those controls at all. Everything else is one line and one button.
  const customAddress=!!c.destination&&!!c.defaultFeed&&c.destination!==c.defaultFeed;
  const studio=!!c.studio;
- const pubAddr=el('input',{id:'pubaddr',type:'text',value:joinAddr===null?((c.destination&&!c.publicFeed)?c.destination:''):joinAddr,placeholder:'http://name.tail1234.ts.net:8790/release.json','aria-label':'Studio address for joining',oninput:e=>{joinAddr=e.target.value}});
+ const pubAddr=el('input',{id:'pubaddr',type:'text',value:joinAddr===null?((c.destination&&!c.publicFeed)?c.destination:''):joinAddr,placeholder:'http://publisher-host:8790/release.json','aria-label':'Studio address for joining',oninput:e=>{joinAddr=e.target.value}});
  const pubCode=el('input',{id:'pubcode',type:'text',value:joinCode===null?'':joinCode,placeholder:'123-456','aria-label':'Pairing code',oninput:e=>{joinCode=e.target.value}});
  // The Studio's own controls — the address, pairing, joining, leaving and the fleet — live behind
  // Advanced, which exists only where an address other than the saved feed is in use and only on a

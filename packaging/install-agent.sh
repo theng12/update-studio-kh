@@ -47,7 +47,7 @@ case "$(printf '%s' "$FEED" | /usr/bin/tr 'A-Z' 'a-z')" in
 esac
 case "$FEED" in
     http://[0-9]*.[0-9]*.[0-9]*.[0-9]*/*)
-        fail "This kit's feed address is a bare IP ($FEED). macOS refuses plain http to an IP address, so this Mac would never update. Rebuild the kit on the publisher so it carries the Tailscale name (ending in .ts.net), or use the HTTPS feed address." ;;
+        fail "This kit's feed address is a bare IP ($FEED). macOS refuses plain http to an IP address, so this Mac would never update. Rebuild the kit on the publisher so it carries the publisher's private-network host name, or use the HTTPS feed address." ;;
 esac
 K="$DEST_HOME/Library/KHUpdater"
 PLIST="$DEST_HOME/Library/LaunchAgents/com.khupdater.agent.plist"

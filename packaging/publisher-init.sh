@@ -98,7 +98,7 @@ FEED_HOST="${TAILNET_HOST:-$TAILSCALE_IP}"
 # refused inside every app (App Transport Security), so a kit naming one is born dead: fail the
 # build here rather than hand it to a Mac that can only fail every check, for ever.
 if [[ "$FEED_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  fail "no MagicDNS name for this Mac, so the kit's address would be the numeric IP $FEED_HOST — macOS refuses plain http to an IP address, and every Mac installed from this kit would fail every check. Name the publisher's Tailscale name with --tailnet-host <name>.ts.net, or join Tailscale on this Mac until 'tailscale status' shows one." 2
+  fail "no MagicDNS name for this Mac, so the kit's address would be the numeric IP $FEED_HOST — macOS refuses plain http to an IP address, and every Mac installed from this kit would fail every check. Name the publisher's private-network host name with --tailnet-host <host name>, or join Tailscale on this Mac until 'tailscale status' shows one." 2
 fi
 FEED_URL="http://${FEED_HOST}:8790/release.json"
 ENROL_URL="http://${FEED_HOST}:8790/enrol"

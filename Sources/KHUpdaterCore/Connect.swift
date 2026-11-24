@@ -503,8 +503,8 @@ public enum Connect {
     }
 
     /// The address typed in Settings, normalised to this tool's one feed address: the publisher's
-    /// Tailscale DNS name (ending in `.ts.net`), an optional port, http only. A numeric IP is
-    /// refused with the ATS reason: the app cannot reach it with plain http.
+    /// private-network host name (the one Tailscale shows for that Mac), an optional port, http
+    /// only. A numeric IP is refused with the ATS reason: the app cannot reach it with plain http.
     /// No DNS, no autodiscovery, nothing guessed — a bind outside that range is refused rather
     /// than adopted (`## Server`: the Hub's publisher_config accepts exactly this range).
     public static func destination(_ typed: String) throws -> String {
@@ -546,10 +546,10 @@ public enum Connect {
             !octet.isEmpty && octet.allSatisfy { $0.isNumber }
         }
         if numeric {
-            throw khuFail("type the publisher's Tailscale name, not the numeric IP \(host): macOS blocks plain http to an IP address (App Transport Security). The name ends in .ts.net and is shown on the publisher's Update Studio window, or use GitHub releases instead.")
+            throw khuFail("type the publisher's private-network host name, not the numeric IP \(host): macOS blocks plain http to an IP address (App Transport Security). The name is shown on the publisher's Update Studio window, or use GitHub releases instead.")
         }
         guard host.lowercased().hasSuffix(".ts.net") else {
-            throw khuFail("type the publisher's Tailscale name ending in .ts.net: macOS only allows plain http to that name (App Transport Security), not to \(host).")
+            throw khuFail("type the publisher's private-network host name: macOS only allows plain http to that name (App Transport Security), not to \(host).")
         }
         return "http://\(host)\(port)/release.json"
     }
