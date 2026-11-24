@@ -262,7 +262,7 @@ func feedNetworkTests() {
         let artifact = publisher.appendingPathComponent("helper.bin")
         try bytes.write(to: artifact)
         try FeedPublisher.publish(feedDir: publisher, keyFile: keyFile, app: "updater", version: "1.0.0", artifact: artifact,
-                                  kind: "updater", allowSame: false, meta: nil, now: now, url: "http://example.test/artifacts/")
+                                  kind: "updater", allowSame: false, meta: nil, now: now, url: "https://example.test/artifacts/")
         let next = try FeedPublisher.loadVerifiedFeed(from: publisher, publicKey: key.publicKey)
         expect(next?.network == network, "FN later app publication keeps signed host and fallback settings")
         let before = try Data(contentsOf: FeedPublisher.releaseFile(in: publisher))

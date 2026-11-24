@@ -8,7 +8,7 @@ func repairedPathTests() {
         let installed = makeApp(rig.root.appendingPathComponent("Renamed.app"), version: "1.0.0", id: "com.example.renamed")
         try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "renamed", version: "1.0.0",
                                   artifact: rig.artifact("renamed.dmg", "bytes"), kind: "app-dmg", allowSame: false, meta: { _ in AppMeta(name: "Renamed", bundleID: "com.example.renamed",
-                                                       bundleName: "Renamed.app", version: "1.0.0", iconPNG: nil) }, url: "http://example.test/artifacts/")
+                                                       bundleName: "Renamed.app", version: "1.0.0", iconPNG: nil) }, url: "https://example.test/artifacts/")
         let token = try Enrolment.enrol(stateDir: rig.state, machine: "mac1")
         let configFile = rig.root.appendingPathComponent("config.json")
         let stateDir = rig.root.appendingPathComponent("agent").path

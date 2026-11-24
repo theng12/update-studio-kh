@@ -22,7 +22,7 @@ func publisherCompletenessTests() {
         try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: version,
                                   artifact: src, kind: "fake-for-tests", allowSame: allowSame,
                                   words: words, holdURL: holdURL, type: type,
-                                  requireComplete: complete, url: "http://example.test/artifacts/")
+                                  requireComplete: complete, url: "https://example.test/artifacts/")
     }
     func feed(_ dir: URL) -> Feed? {
         (try? FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)) ?? nil
@@ -101,7 +101,7 @@ func publisherCompletenessTests() {
         try! Data("bytes-2.0.0".utf8).write(to: src)
         try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "2.0.0",
                                    artifact: src, kind: "fake-for-tests", allowSame: false, words: AppWords(tagline: "t", description: "d"), holdURL: nil,
-                                   type: "system", requireComplete: true, url: "http://example.test/artifacts/")
+                                   type: "system", requireComplete: true, url: "https://example.test/artifacts/")
         expect(row(dir)?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold",
                "PC5 a hold is never silently dropped — nil carries it")
     }
@@ -115,7 +115,7 @@ func publisherCompletenessTests() {
         try! bytes.write(to: src)
         try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "1.0.0",
                                    artifact: src, kind: "fake-for-tests", allowSame: false, words: AppWords(tagline: "t", description: "d"), type: "system",
-                                   requireComplete: true, url: "http://example.test/artifacts/")
+                                   requireComplete: true, url: "https://example.test/artifacts/")
         expect(row(dir)?.file == "\(sha.prefix(12))-payload.bin",
                "PC6 the stored name is the basename it was given (\(row(dir)?.file ?? "none"))")
     }
@@ -132,7 +132,7 @@ func publisherCompletenessTests() {
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "story", version: version,
                                       artifact: src, kind: "fake-for-tests", allowSame: true, words: AppWords(tagline: "t", description: "d"),
                                       holdURL: holdURL, holdSince: holdSince, type: "system",
-                                      requireComplete: true, url: "http://example.test/artifacts/")
+                                      requireComplete: true, url: "https://example.test/artifacts/")
         }
         do {
             try publishStory("1.0.0")
@@ -162,7 +162,7 @@ func publisherCompletenessTests() {
         try! Data("extension-bytes".utf8).write(to: src)
         do {
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "ext-one", version: "1.0.0",
-                                      artifact: src, kind: "extension", allowSame: false, requireComplete: true, url: "http://example.test/artifacts/")
+                                      artifact: src, kind: "extension", allowSame: false, requireComplete: true, url: "https://example.test/artifacts/")
             expect(row(dir, "ext-one")?.version == "1.0.0" && row(dir, "ext-one")?.type == nil,
                    "PC7 an extension row publishes without the app-only fields")
         } catch {
@@ -226,7 +226,7 @@ func publisherCompletenessTests() {
         // DMG identity read has its own guard and its own tests.
         try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "story", version: "1.0.1",
                                    artifact: art, kind: "app-dmg", allowSame: false, meta: nil,
-                                   requireComplete: false, url: "http://example.test/artifacts/")
+                                   requireComplete: false, url: "https://example.test/artifacts/")
         let after = feed(dir)
         expect(after?.network?.feedURLs == ["https://example.invalid/release.json"] && after?.network?.controller == nil,
                "PC11 a publish keeps feedURLs and never writes a controller handoff")
@@ -255,7 +255,7 @@ func publisherCompletenessTests() {
         do {
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "1.0.0",
                                       artifact: other, kind: "fake-for-tests", allowSame: true, words: AppWords(tagline: "t", description: "d"),
-                                      type: "system", requireComplete: true, url: "http://example.test/artifacts/")
+                                      type: "system", requireComplete: true, url: "https://example.test/artifacts/")
             expect(false, "PC10 different bytes under a published version must be refused")
         } catch {
             expect("\(error)".contains("--allow-same"), "PC10 the refusal names --allow-same (\(error))")
