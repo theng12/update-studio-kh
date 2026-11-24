@@ -36,8 +36,8 @@ public enum UpdateHold {
         return url
     }
 
-    /// The Launcher's own hold credential, 0600, created on first use. Apps that gate their hold
-    /// route read this same file; the Launcher never reads an app's own credential files.
+    /// The Launcher's own hold credential, 0600, created on first use. Apps read their own copy;
+    /// the Launcher never reads an app's credential files.
     public static var tokenFile: URL {
         if let override = ProcessInfo.processInfo.environment["KHU_HOLD_TOKEN_FILE"] {
             return URL(fileURLWithPath: override)
