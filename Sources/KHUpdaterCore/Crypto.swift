@@ -57,14 +57,18 @@ public enum Signing {
         defer { try? handle.close() }
         var hasher = SHA256()
         var total: Int64 = 0
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            // Each piece is a fresh bridged Data; without its own pool every one of them stays on the
-            // thread's pool until it drains, which on a long-lived worker queue is never. Measured
-            // 2026-11-24: 484 blocks of 1 MiB retained, ~100 MB a run, on a helper that had done no
-            // transfer at all.
-            autoreleasepool {
-                hasher.update(data: chunk)
-                total += Int64(chunk.count)
+        // One buffer, read into again and again. A fresh 1 MiB Data per piece left the zone holding
+        // freed holes it never returns: measured 2026-11-24, a served 400 MB file left 600 MB of
+        // fragmentation with 213 KB live, and the same shape is the 2026-11-17 4 GB after 1.5 GB.
+        let fd = handle.fileDescriptor
+        var buffer = [UInt8](repeating: 0, count: 1 << 20)
+        buffer.withUnsafeMutableBytes { raw in
+            while true {
+                let n = read(fd, raw.baseAddress, raw.count)
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { break }
+                hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: raw[0..<n]))
+                total += Int64(n)
             }
         }
         return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), total)

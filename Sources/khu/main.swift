@@ -173,7 +173,7 @@ struct KHUMain {
                 print(executable.path)
             } catch { fail("\(error)") }
         case "publish":
-            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, type: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false
+            var feed: String?, key: String?, app: String?, version: String?, artifact: String?, kind: String?, type: String?, changelog: String?, extra: String?, shown: String?, hold: String?, holdSince: String?, allowSame = false, rowURL: String?
             var keep: Int?
             var words = AppWords(), wordsGiven = false, mainOnly: Bool? = nil, security = false
             var newApp = false, metaOnly = false, reposFile: String? = nil
@@ -193,6 +193,7 @@ struct KHUMain {
                 case "--note": extra = value("--note", &i)
                 case "--notes": fail("--notes is gone: the notes come from --changelog, plus one optional --note line")
                 case "--allow-same": allowSame = true
+                case "--url": rowURL = value("--url", &i)
                 case "--meta-only": metaOnly = true
                 case "--name": shown = value("--name", &i)
                 case "--main-mac-only": mainOnly = true
@@ -276,7 +277,7 @@ struct KHUMain {
                                           version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
                                           notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
                                           holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep,
-                                          requireComplete: true)
+                                          requireComplete: true, url: rowURL)
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "feed":

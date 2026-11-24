@@ -108,6 +108,18 @@ public enum HTTP {
 
     /// Write every byte; false when the peer stops reading (SO_SNDTIMEO) or goes away.
     @discardableResult
+    /// Write bytes already in memory, without wrapping them in a `Data` per piece.
+    public static func writeAll(_ fd: Int32, _ base: UnsafeRawPointer, _ count: Int) -> Bool {
+        var sent = 0
+        while sent < count {
+            let n = write(fd, base + sent, count - sent)
+            if n < 0 && errno == EINTR { continue }
+            if n <= 0 { return false }
+            sent += n
+        }
+        return true
+    }
+
     public static func writeAll(_ fd: Int32, _ data: Data) -> Bool {
         data.withUnsafeBytes { raw -> Bool in
             guard let base = raw.baseAddress else { return true }
@@ -156,10 +168,22 @@ public enum HTTP {
             }
             guard writeAll(fd, head(response, length: size)) else { return }
             var sent: Int64 = 0
-            while sent < size, let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-                guard writeAll(fd, chunk) else { return }
-                sent += Int64(chunk.count)
+            // One buffer for the whole file, and the same bytes written straight from it: a fresh
+            // 1 MiB Data per piece left the zone 100% fragmented and holding 600 MB after serving
+            // 400 MB (measured 2026-11-24).
+            let fdh = handle.fileDescriptor
+            var buffer = [UInt8](repeating: 0, count: 1 << 20)
+            var failed = false
+            buffer.withUnsafeMutableBytes { raw in
+                while sent < size {
+                    let got = read(fdh, raw.baseAddress, raw.count)
+                    if got < 0 && errno == EINTR { continue }
+                    guard got > 0 else { failed = true; return }
+                    guard Self.writeAll(fd, raw.baseAddress!, got) else { failed = true; return }
+                    sent += Int64(got)
+                }
             }
+            if failed { return }
         }
     }
 }
