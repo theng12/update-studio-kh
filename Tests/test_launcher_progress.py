@@ -27,8 +27,13 @@ enum DownloadControl {
         self.phase = phase; received = 0
     }
 }
+final class Pacing {
+    var wakes = 0
+    func wakeByPerson() { wakes += 1 }
+}
 final class HelperMenu {
     let lock = NSLock()
+    let pacing = Pacing()
     var requested = Set<String>()
     var installingApp: String?
     let wake = DispatchSemaphore(value: 0)
@@ -41,13 +46,13 @@ helper.request("app-b")
 verify(helper.requested == ["app-b"], "the second app must be queued")
 verify(helper.installingApp == "app-a", "a queued click stole another app's progress")
 verify(DownloadControl.phase == "downloading" && DownloadControl.received == 200)
-verify(helper.wake.wait(timeout: .now()) == .success)
+verify(helper.pacing.wakes == 1, "a queued click wakes the run loop")
 helper.installingApp = nil
 helper.request("app-c")
 verify(helper.requested == ["app-b", "app-c"])
 verify(helper.installingApp == nil, "a queued click claimed a pre-install mirror transfer")
 verify(DownloadControl.received == 200, "a click reset unrelated transfer counters")
-verify(helper.wake.wait(timeout: .now()) == .success)
+verify(helper.pacing.wakes == 2, "each queued click wakes the run loop without starting work")
 print("PASS: queued requests preserve active ownership and do not claim preparatory transfers")
 '''.replace("METHOD", method)
         work = Path(tempfile.mkdtemp(prefix="khu-request-progress-"))
