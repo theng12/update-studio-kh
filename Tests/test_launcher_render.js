@@ -255,29 +255,45 @@ assert.equal(document.activeElement, document.getElementById('q'), 'R7 the searc
 
 // Source choice is explicit, with honest unknowns and no claim that full fallback saves bytes.
 run('settingsOpen=false;detail=null;closeLayers()');
-// SSD-offer order (owner, 2026-11-24): an older drive copy is named with both versions and offered
-// only as a deliberate choice; the feed's newer copy is the update. Fixture A.
+// Source order (owner, 2026-11-24): one comparison, both directions, always visible. A drive's
+// older copy is named as older and offered only as a deliberate choice; a newer one is named as
+// newer and is the offer; an installed app is compared with every source too. The sentence comes
+// from the agent's own comparison, so the page cannot answer the question a second way.
+// A: first install, the feed newer than the drive's copy.
 render(state([row({ id:'new-app', managed:false, installed:null, status:'Not installed', available:'0.1.81',
-                    serverVersion:'0.1.81', ssdVersion:'0.1.75', initialSSD:'ATLAS · 0.1.75', initialSSDNewer:false })]));
+                    serverVersion:'0.1.81', ssdVersion:'0.1.75', initialSSD:'ATLAS · 0.1.75', initialSSDNewer:false,
+                    sourcesText:'This Mac has no copy yet; ATLAS carries 0.1.75, older; the saved feed has 0.1.81.' })]));
+assert.match(document.querySelector('.card .src').textContent,/ATLAS carries 0\.1\.75, older/,'A: the card names both versions in one sentence');
+assert.match(document.querySelector('.card .src').textContent,/the saved feed has 0\.1\.81/);
 run("openDetail('new-app')");
 assert.match(document.querySelector('.facts').textContent,/Server0\.1\.81SSD0\.1\.75/,'A: both versions are shown side by side');
-assert.match(document.querySelector('.sheet').textContent,/The drive carries 0\.1\.75; the feed has 0\.1\.81\./,'A: the sheet names both, in plain words');
-assert.doesNotMatch(document.querySelector('.sheet').textContent,/Update offers the newer server version/,'A: an older drive copy is never described as the update');
+assert.match(document.querySelector('.sheet').textContent,/ATLAS carries 0\.1\.75, older/,'A: the sheet carries the same sentence');
 run("openMenu(S.apps[0],document.querySelector('.card'))");
-assert.match(document.querySelector('.menu').textContent,/The drive carries 0\.1\.75; the feed has 0\.1\.81\./,'A: the menu names both versions too');
 const older=document.querySelectorAll('.menu button').find(b=>b.textContent=='Copy 0.1.75 from ATLAS anyway');
 assert(older,'A: the older copy is still offered, as a choice, never hidden');
 assert(!document.querySelectorAll('.menu button').some(b=>b.textContent.startsWith('Install from ATLAS')),'A: and never as the install');
 posts.length=0; older.fire('click');
 assert.equal(posts[0].action,'installSSD'); assert.equal(posts[0].app,'new-app');
-// Fixture B: a drive newer than the feed — an offline Mac with a stale feed — is the better copy.
-render(state([row({ id:'offline-app', managed:false, installed:null, status:'Not installed', available:'1.0',
-                    serverVersion:'1.0', ssdVersion:'1.2', initialSSD:'NOVA · 1.2', initialSSDNewer:true })]));
+// B: first install, the drive newer than a stale feed — the drive is the better copy.
+render(state([row({ id:'offline-app', managed:false, installed:null, status:'Not installed', available:'1.2',
+                    serverVersion:'1.0', ssdVersion:'1.2', initialSSD:'NOVA · 1.2', initialSSDNewer:true,
+                    sourcesText:'This Mac has no copy yet; NOVA carries 1.2, newer; the saved feed has 1.0.' })]));
 run("openMenu(S.apps[0],document.querySelector('.card'))");
 assert(document.querySelectorAll('.menu button').some(b=>b.textContent=='Install from NOVA · 1.2 first'),'B: a newer drive copy is offered as the install');
-assert(!document.querySelector('.menu .why'),'B: with no version note, because nothing older needs explaining');
-run("openDetail('offline-app')");
-assert.match(document.querySelector('.sheet').textContent,/The drive has a newer copy than the feed/,'B: the sheet says why the drive is offered');
+// C: installed from the drive, and the same drive carries a newer copy — it must be offered.
+render(state([row({ id:'hub', managed:true, installed:'0.6.255', available:'0.6.256', status:'Update available',
+                    sourcesText:'This Mac has 0.6.255; ATLAS carries 0.6.256, newer.' })]));
+assert.match(document.querySelector('.card .src').textContent,/This Mac has 0\.6\.255; ATLAS carries 0\.6\.256, newer/,'C: the newer copy is named');
+assert(document.querySelectorAll('.card button').some(b=>b.textContent=='Update'),'C: and it is offered as the update');
+// D: installed newer than the drive's copy — the drive copy is older, never an upgrade.
+render(state([row({ id:'hub', managed:true, installed:'0.6.256', available:'0.6.256', status:'Up to date',
+                    sourcesText:'This Mac has 0.6.256; ATLAS carries 0.6.255, older.' })]));
+assert.match(document.querySelector('.card .src').textContent,/ATLAS carries 0\.6\.255, older/,'D: the drive copy is named as older');
+assert(!document.querySelectorAll('.card button').some(b=>b.textContent=='Update'),'D: and it is not offered as an upgrade');
+// E: a source that cannot be compared is named unknown, never treated as current.
+render(state([row({ id:'hub', managed:true, installed:'0.6.255', available:'0.6.255', status:'Up to date',
+                    sourcesText:'This Mac has 0.6.255; ATLAS carries a copy that cannot be compared.' })]));
+assert.match(document.querySelector('.card .src').textContent,/cannot be compared/,'E: an unreadable copy is unknown, not current');
 render(state([row({ status:'Updating…', progress:{phase:'delta-downloading',done:100000,total:200000} })]));
 assert.equal(line(),'Downloading changed data 100 KB of 200 KB · 50%','delta uses transferred bytes, not full artifact size');
 render(state([row({ status:'Updating…', progress:{phase:'full-fallback',done:100000,total:1000000} })]));

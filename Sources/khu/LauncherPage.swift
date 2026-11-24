@@ -54,6 +54,7 @@ h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-c
 .chip{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--muted-bg);color:var(--sub);white-space:nowrap}
 .chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--info-bg);color:var(--info)}
 .reason{color:var(--bad);font-size:12px;display:block;overflow-wrap:anywhere}
+.src{color:var(--sub);font-size:12px;margin-top:6px;overflow-wrap:anywhere}
 .when{font-size:12px;color:var(--sub)}
 .foot{margin-top:auto;display:flex;gap:8px;align-items:center}.foot .main{flex:1}
 .prog{flex:1;display:flex;flex-direction:column;gap:6px}.prog .line{font-size:12px}.bar{height:4px;border-radius:4px;background:var(--line2);overflow:hidden}
@@ -260,6 +261,9 @@ function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),typeLine(a),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
   a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
+  // What this Mac has and what each other copy carries, in one sentence the comparison produced:
+  // an older drive copy is named as older, a newer one as newer, never silently treated as current.
+  a.sourcesText?el('div',{class:'src'},a.sourcesText):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Installed'),el('th',{},'Latest'),el('th',{},'Released'),el('th',{},'State'),el('th',{},''))),
@@ -426,9 +430,7 @@ function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remo
  if(a.initialSSD&&!a.installed&&(!a.statusOnly||a.manuallyInstallable)){
   const parts=a.initialSSD.split(' · '),volume=parts[0],driveVersion=parts[1]||'';
   if(a.initialSSDNewer)add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
-  else{
-   items.push(el('p',{class:'why'},'The drive carries '+(driveVersion||'an older copy')+(a.available?'; the feed has '+a.available:'')+'.'));
-   add('Copy '+(driveVersion||'that copy')+' from '+volume+' anyway',()=>post({action:'installSSD',app:a.id}))}}
+  else add('Copy '+(driveVersion||'that copy')+' from '+volume+' anyway',()=>post({action:'installSSD',app:a.id}))}
  if(a.notes&&a.notes.length)add('Release notes',()=>openDetail(a.id,true));
  if(a.open&&!a.helper){add('Open',()=>post({action:'open',app:a.id}));add('Show in Finder',()=>post({action:'finder',app:a.id}))}
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
@@ -473,9 +475,7 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     a.fromSSD?el('p',{class:'sub'},'The version on offer is the copy on '+a.fromSSD+', read from that drive.'):
      a.source=='Feed'?el('p',{class:'sub'},'The version on offer comes from the signed feed, so its installer is downloaded.'):null,
     a.ssdNote&&!a.fromSSD?el('p',{class:'sub'},a.ssdNote):null,
-    a.initialSSD?el('p',{class:'sub'},a.initialSSDNewer
-      ?'The drive has a newer copy than the feed: '+a.initialSSD+'. Install it from the More menu; your Automatic setting is kept.'
-      :'The drive carries '+((a.initialSSD.split(' · ')[1])||'an older copy')+(a.available?'; the feed has '+a.available:'')+'. Install from the feed above, or copy the drive’s copy from the More menu.'):null,
+    a.sourcesText?el('p',{class:'sub'},a.sourcesText+(a.initialSSD&&!a.initialSSDNewer?' Install from the feed above, or copy the drive’s copy from the More menu.':'')):null,
     el('h4',{id:'changes'},'What’s changed'),notes.length?el('ul',{class:'changes'},notes.slice(0,limit).map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.'),
     notes.length>5?el('button',{class:'more',onclick:()=>{showAll[a.id]=!showAll[a.id];drawDetail()}},showAll[a.id]?'Show fewer':'Show '+(notes.length-5)+' more'):null)));
  const scrim=el('div',{class:'scrim d',onclick:()=>{detail=null;closeLayers()}},sheet);document.body.append(scrim);

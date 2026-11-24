@@ -122,19 +122,6 @@ public struct AutomaticChange: Codable, Sendable, Equatable {
     public init(at: String, byMac: Bool) { self.at = at; self.byMac = byMac }
 }
 
-/// Whether a drive's first copy is worth offering, and which side is newer. Owner, 2026-11-24: the
-/// Launcher offered the drive's 0.1.75 as the thing to install on a Mac whose feed served 0.1.81.
-/// Newer than the feed (or the only copy there is) is the better copy; older is a deliberate choice
-/// the page names with both versions; equal is nothing to offer.
-public enum SSDOffer {
-    public static func driveIsNewer(_ drive: String, served: String?) -> Bool? {
-        guard let served, !served.isEmpty else { return true }
-        if VersionCompare.isNewer(drive, than: served) { return true }
-        if VersionCompare.isNewer(served, than: drive) { return false }
-        return nil
-    }
-}
-
 /// One app as the menu-bar icon shows it after a run.
 public struct HelperApp: Sendable, Equatable {
     public var app: String
@@ -172,6 +159,9 @@ public struct HelperApp: Sendable, Equatable {
     /// offers that copy first; an older one is offered only as a deliberate choice, never as the
     /// update (owner, 2026-11-24: "it shouldn't just offer to downgrade").
     public var initialSSDNewer = false
+    /// Every source compared once with what this Mac has, in the words the page shows. Nil when the
+    /// feed is the only source and says nothing the version line does not already say.
+    public var sourcesText: String?
     public var canRollBack = false
     /// The bundle's own `CFBundleVersion`: nil when it carries none, so a row can never claim an
     /// exact build its bundle does not state (a marketing version is shown beside it, not as it).
