@@ -2,6 +2,18 @@
 
 The newest version is first. `khu publish` reads the top entry: `## <version> — <date>` and its "- " lines.
 
+## 0.1.82 — 2026-11-24
+
+- Every copy of an app is compared once, both ways, and the card says what it found in one plain sentence: "This Mac has 0.6.255; ATLAS carries 0.6.256, newer." A newer copy on a drive is offered as the update, an older one is named as older and never offered as one, and a copy whose version cannot be read is named unknown rather than left looking current.
+- An app installed from a drive is no longer left behind: after installing it, the Launcher compares the drive and the feed with what is installed and offers the newer copy by name.
+- An app installed on this Mac by hand and absent from the feed is listed under its own heading, "Installed on this Mac", with the version read from the app itself. It is never "No category yet" — that sentence is for a feed entry whose author forgot a label.
+- Published extensions and plugins show their own icon and a screenshot of them working; a picture that cannot be read, or is larger than 2,048 pixels a side, keeps the placeholder and says why in one line.
+- A long release's notes no longer fill the card: they stop at 4,000 characters on whole lines, and the last line says how many more lines are in the release.
+- The folder and Disk Image carry a "Read Me First.txt": the exact command to run once, in Terminal, for a browser download that macOS quarantined.
+- The helper runs at most once per interval whatever woke it, so a settings change can no longer make it check in a tight loop.
+- The Launcher's helper is not a feed app: the app list carries one Launcher row, and a helper left behind reports the version it actually runs.
+- A first install is launched and health-checked before it is called done, and a rollback swaps the bundles rather than moving one out first.
+
 ## 0.1.81 — 2026-11-24
 
 - Setting up a Mac is one press. The copy already knows where its updates come from, so there is no source to choose, no address to type and no pairing code before the first try; a copy shared from a Studio uses that Studio, and every other copy uses the signed public feed.
