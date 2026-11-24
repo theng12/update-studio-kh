@@ -50,16 +50,26 @@ Automatic updates have a visible switch that is on for a fresh Mac.
 
 See `CHANGELOG-launcher.md`.
 
-## Not yet done, and why
-- **Publish and feed readback:** tag `0.1.81` is placed at `a6e74c1` and verified through
-  `git/ref/tags/0.1.81`. The GitHub release was not created from this session: the tool layer
-  refused it because the publish consent is in S001's relay rather than the user's own words here.
-  The two assets are staged and named for the upload —
-  `8a248033da09-Studio.Launcher.KH-0.1.81.dmg` and `41d08ecb9df7-khu` (the sealed helper, not a
-  rebuild).
-- **Screenshots:** done at `d283296` — four 1440×900 PNGs taken from the 0.1.81 DMG's own `khu page`
-  with `packaging/screenshot-demo.json`, rendered headless, each under 150 KB with no metadata chunk,
-  each opened and read before the commit; `README.md` embeds two with alt text.
-- **Retention:** `dist/` holds 0.1.79, 0.1.80 and 0.1.81. 0.1.79 is retired to
-  `~/Desktop/_trash/update-studio-kh/` only after 0.1.81 is served and verified.
-- **Installed-build check:** the shipped-app click is the owner's walk; nothing here installs.
+## Feed readback (2026-11-24)
+`feed-verify.sh launcher --expect-version 0.1.81 --expect-sha 8a248033…7251b` — **PASS**:
+
+- version `0.1.81`, kind `app-dmg`, sha256 `8a248033da099d5ebf5b390c86b4133b4b8292175dd3cb9c44029fb91e67251b`,
+  7,656,260 bytes, file `8a248033da09-Studio.Launcher.KH-0.1.81.dmg`
+- tagline present; published **2026-11-24T01:35:57.198Z**
+- the helper the release carries is the copy sealed inside the DMG (`41d08ecb9df7…`), matched to the
+  kit's `MANIFEST.json`; the two assets are `8a248033da09-Studio.Launcher.KH-0.1.81.dmg` and `41d08ecb9df7-khu`
+
+## Retention
+`dist/` now holds 0.1.80 and 0.1.81. 0.1.79 moved to
+`~/Desktop/_trash/update-studio-kh/2026-11-24 dist-0.1.79/` with a manifest, after checking it is
+not served and sits in no `base/versions`.
+
+## Proven, and not
+- **Proven:** gate PASS at `a6e74c1`; the artifact's bytes and sha; the scan bound to that sha and
+  clean; preflight PASS; the served feed row read back with the same sha and bytes; four repository
+  screenshots from the DMG's own page.
+- **Not observed:** the 0.1.80 → 0.1.81 self-update on a running Mac. This Mac has no
+  `/Applications/Studio Launcher KH.app` (removed by the bundle-swap defect and not reinstalled since)
+  and no Launcher or helper process, so the next-cycle check needs a Mac that runs it. Detection can
+  be shown headlessly (an agent run against the served feed), but that is not the update cycle and is
+  not written here as if it were.
