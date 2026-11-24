@@ -71,7 +71,7 @@ func feedLosslessTests() {
         try Data("story bytes".utf8).write(to: artifact)
         try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "story", version: "1.4.418",
                                   artifact: artifact, kind: "fake-for-tests", allowSame: false,
-                                  url: "https://example.test/fixture.dmg")
+                                  url: "https://example.test/\(artifact.lastPathComponent)")
         let after = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey)
         expect(after?.extras == seed.extras && after?.schema == seed.schema && after?.network == seed.network,
                "FL4 a signed publish keeps top-level metadata")
@@ -81,7 +81,7 @@ func feedLosslessTests() {
 
         try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "media-studio", version: "0.1.123",
                                   artifact: artifact, kind: "fake-for-tests", allowSame: false,
-                                  url: "https://example.test/fixture.dmg")
+                                  url: "https://example.test/\(artifact.lastPathComponent)")
         let updated = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey)
         expect(updated?.apps["media-studio"]?.version == "0.1.123"
                && updated?.apps["media-studio"]?.extras == seed.apps["media-studio"]?.extras

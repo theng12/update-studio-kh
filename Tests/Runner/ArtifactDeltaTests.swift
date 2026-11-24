@@ -59,9 +59,9 @@ func artifactDeltaTests() {
         try target.write(to: targetURL)
 
         try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "fixture", version: "1.0.0",
-                                  artifact: baseURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/fixture.dmg")
+                                  artifact: baseURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/\(baseURL.lastPathComponent)")
         try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "fixture", version: "1.0.1",
-                                  artifact: targetURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/fixture.dmg")
+                                  artifact: targetURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/\(targetURL.lastPathComponent)")
         let feed = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: pair.privateKey.publicKey)!
         let current = feed.apps["fixture"]!
         let older = feed.previous?["fixture"]
@@ -296,9 +296,9 @@ func artifactDeltaTests() {
         try noiseA.write(to: noiseAURL)
         try noiseB.write(to: noiseBURL)
         try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "noise", version: "1.0.0",
-                                  artifact: noiseAURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/fixture.dmg")
+                                  artifact: noiseAURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/\(noiseAURL.lastPathComponent)")
         try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "noise", version: "1.0.1",
-                                  artifact: noiseBURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/fixture.dmg")
+                                  artifact: noiseBURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/\(noiseBURL.lastPathComponent)")
         let withNoise = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: pair.privateKey.publicKey)!
         expect(withNoise.apps["noise"]?.delta == nil, "AD11 a patch that saves nothing is not published")
 
