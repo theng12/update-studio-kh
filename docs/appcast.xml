@@ -1,0 +1,17 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Studio Launcher KH — Sparkle 2 appcast. Served by Pages from main:/docs.
+     Empty on purpose until the first signed release writes a row: a channel with no items
+     means "no update", which is the truth, and the shim releases the hold and carries on.
+     Each item is added by the release step that already has the DMG, newest first, with:
+     title, pubDate, sparkle:version, sparkle:shortVersionString, sparkle:minimumSystemVersion
+     (13.0), and an enclosure carrying url, length, type application/octet-stream,
+     sparkle:version, sparkle:shortVersionString and sparkle:edSignature.
+     The signature is over the DMG bytes, not this file. See docs/SPARKLE-INTEGRATION.md. -->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+  <channel>
+    <title>Studio Launcher KH</title>
+    <link>https://theng12.github.io/update-studio-kh/appcast.xml</link>
+    <description>Studio Launcher KH releases</description>
+    <language>en</language>
+  </channel>
+</rss>

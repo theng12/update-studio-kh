@@ -45,6 +45,11 @@ enum LauncherBundle {
     static let shownNotification = Notification.Name("com.khupdater.launcher.shown")
     static let bundleID = "com.khupdater.launcher"
     static let name = "Studio Launcher KH.app"
+    /// Where this app's Sparkle appcast is served from (Pages on this repo, `main:/docs`).
+    static let feedURL = "https://theng12.github.io/update-studio-kh/appcast.xml"
+    /// The public half of `~/.kh-sparkle/com.khupdater.launcher/private.key`. It is a public key:
+    /// it belongs in the bundle, and the private half never leaves the signing Mac.
+    static let publicEDKey = "lfFdRiQY8IP/2fn1/9Km8CDtw0qHptedltyemW1tUxI="
 
     static func ensure(version: String?) {
         guard ProcessInfo.processInfo.environment["KHU_NO_BUNDLE"] == nil,
@@ -69,6 +74,12 @@ enum LauncherBundle {
             // The Launcher's own update hold (CONTRACT.md table, port 8792). Sparkle's shim reads it,
             // takes the hold, and only then lets a check start.
             "KHHoldURL": LauncherHold.url,
+            // Sparkle 2 self-update (shim pair 2026-11-24). Three keys complete the contract the shim
+            // refuses without: a feed, the Launcher's own EdDSA public half, and the shim's token file.
+            // KHHoldURL above is the fourth. The token is LauncherHold's own 0600 file, not the agent's.
+            "SUFeedURL": LauncherBundle.feedURL,
+            "SUPublicEDKey": LauncherBundle.publicEDKey,
+            "KHHoldTokenFile": "~/Library/KHUpdater/state/" + LauncherHold.tokenName,
             "NSHighResolutionCapable": true,
             // macOS 14+ applies ATS to numeric IPs; only the private tailnet may use HTTP. The
             // Tailscale MagicDNS name is how a Mac keeps reaching the publisher when its address
