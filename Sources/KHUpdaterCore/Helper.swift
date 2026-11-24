@@ -122,6 +122,35 @@ public struct AutomaticChange: Codable, Sendable, Equatable {
     public init(at: String, byMac: Bool) { self.at = at; self.byMac = byMac }
 }
 
+/// What a row's notes carry, and the cap the Launcher applies to them. Owner, 2026-11-24: Story's
+/// 1.4.419 body is 29,955 characters and the feed went 21 KB to 54 KB. The feed carrying the whole
+/// body is the app line's problem; rendering all of it is this screen's, so a row keeps whole lines
+/// up to `limit` and says, in one line, how much it left in the release.
+public enum NotesClamp {
+    public static let limit = 4_000
+    /// Whole lines, trimmed, bullets stripped — and when anything was left out, one last line that
+    /// says so. A single line longer than the cap is cut to the cap rather than dropped.
+    public static func lines(_ text: String?, limit: Int = NotesClamp.limit) -> [String] {
+        guard limit > 0 else { return [] }
+        let all = (text ?? "").split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.hasPrefix("- ") ? String($0.dropFirst(2)) : String($0) }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var kept: [String] = [], used = 0
+        for line in all {
+            let cost = line.count + (kept.isEmpty ? 0 : 1)
+            if used + cost > limit {
+                if kept.isEmpty { kept.append(String(line.prefix(limit))); used = limit }
+                break
+            }
+            kept.append(line); used += cost
+        }
+        let left = all.count - kept.count
+        if left > 0 { kept.append("…and \(left) more line\(left == 1 ? "" : "s") in the release notes.") }
+        return kept
+    }
+}
+
 /// One app as the menu-bar icon shows it after a run.
 public struct HelperApp: Sendable, Equatable {
     public var app: String
