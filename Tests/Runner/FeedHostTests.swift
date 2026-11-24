@@ -15,11 +15,11 @@ func feedHostTests() {
     let artifact = root.appendingPathComponent("fixture.bin")
     try! Data("installer bytes".utf8).write(to: artifact)
     try! FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "fixture", version: "1.0.0",
-                               artifact: artifact, kind: "fake-for-tests", allowSame: false, meta: nil)
+                               artifact: artifact, kind: "fake-for-tests", allowSame: false, url: "https://example.test/fixture.dmg", meta: nil)
     let secondArtifact = root.appendingPathComponent("second.bin")
     try! Data("second installer bytes".utf8).write(to: secondArtifact)
     try! FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "second", version: "2.1.0",
-                               artifact: secondArtifact, kind: "fake-for-tests", allowSame: false, meta: nil)
+                               artifact: secondArtifact, kind: "fake-for-tests", allowSame: false, url: "https://example.test/fixture.dmg", meta: nil)
 
     // What the publisher serves today, read off its own socket.
     let publisher = FeedServer(feedDir: feedDir, stateDir: root.appendingPathComponent("publisher-state"),

@@ -100,7 +100,7 @@ func publisherCompletenessTests() {
         let src = root.appendingPathComponent("artifact-2.0.0.bin")
         try! Data("bytes-2.0.0".utf8).write(to: src)
         try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "2.0.0",
-                                   artifact: src, kind: "fake-for-tests", allowSame: false,
+                                   artifact: src, kind: "fake-for-tests", allowSame: false, url: "https://example.test/fixture.dmg",
                                    words: AppWords(tagline: "t", description: "d"), holdURL: nil,
                                    type: "system", requireComplete: true)
         expect(row(dir)?.holdURL == "http://127.0.0.1:8790/api/maintenance/hold",
@@ -115,7 +115,7 @@ func publisherCompletenessTests() {
         let src = root.appendingPathComponent("\(sha.prefix(12))-payload.bin")
         try! bytes.write(to: src)
         try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "1.0.0",
-                                   artifact: src, kind: "fake-for-tests", allowSame: false,
+                                   artifact: src, kind: "fake-for-tests", allowSame: false, url: "https://example.test/fixture.dmg",
                                    words: AppWords(tagline: "t", description: "d"), type: "system",
                                    requireComplete: true)
         expect(row(dir)?.file == "\(sha.prefix(12))-payload.bin",
@@ -132,7 +132,7 @@ func publisherCompletenessTests() {
             let src = root.appendingPathComponent("story-\(version).bin")
             try Data("story-\(version)".utf8).write(to: src)
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "story", version: version,
-                                      artifact: src, kind: "fake-for-tests", allowSame: true,
+                                      artifact: src, kind: "fake-for-tests", allowSame: true, url: "https://example.test/fixture.dmg",
                                       words: AppWords(tagline: "t", description: "d"),
                                       holdURL: holdURL, holdSince: holdSince, type: "system",
                                       requireComplete: true)
@@ -165,7 +165,7 @@ func publisherCompletenessTests() {
         try! Data("extension-bytes".utf8).write(to: src)
         do {
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "ext-one", version: "1.0.0",
-                                      artifact: src, kind: "extension", allowSame: false,
+                                      artifact: src, kind: "extension", allowSame: false, url: "https://example.test/fixture.dmg",
                                       requireComplete: true)
             expect(row(dir, "ext-one")?.version == "1.0.0" && row(dir, "ext-one")?.type == nil,
                    "PC7 an extension row publishes without the app-only fields")
@@ -229,7 +229,7 @@ func publisherCompletenessTests() {
         // `meta: nil` because this fixture is not a DMG: PC11 is about the network block, and the
         // DMG identity read has its own guard and its own tests.
         try! FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "story", version: "1.0.1",
-                                   artifact: art, kind: "app-dmg", allowSame: false, meta: nil,
+                                   artifact: art, kind: "app-dmg", allowSame: false, url: "https://example.test/fixture.dmg", meta: nil,
                                    requireComplete: false)
         let after = feed(dir)
         expect(after?.network?.feedURLs == ["https://example.invalid/release.json"] && after?.network?.controller == nil,
@@ -258,7 +258,7 @@ func publisherCompletenessTests() {
         try! Data("different bytes".utf8).write(to: other)
         do {
             try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: "1.0.0",
-                                      artifact: other, kind: "fake-for-tests", allowSame: true,
+                                      artifact: other, kind: "fake-for-tests", allowSame: true, url: "https://example.test/fixture.dmg",
                                       words: AppWords(tagline: "t", description: "d"),
                                       type: "system", requireComplete: true)
             expect(false, "PC10 different bytes under a published version must be refused")

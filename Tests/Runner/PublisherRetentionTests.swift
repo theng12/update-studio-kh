@@ -28,7 +28,7 @@ func publisherRetentionTests() {
         let src = root.appendingPathComponent("src-" + source)
         try Data(bytes.utf8).write(to: src)
         try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: app, version: version, artifact: src,
-                                  kind: kind, allowSame: false, meta: meta, keep: keep, retireArtifact: retire)
+                                  kind: kind, allowSame: false, url: "https://example.test/fixture.dmg", meta: meta, keep: keep, retireArtifact: retire)
     }
     func meta(_ version: String, icon: Data) -> ((String) throws -> AppMeta) {
         { _ in AppMeta(name: "Media Studio KH", bundleID: "com.t.media", bundleName: "Media Studio KH.app",

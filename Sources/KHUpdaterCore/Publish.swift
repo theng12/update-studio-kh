@@ -346,10 +346,7 @@ public enum FeedPublisher {
             // GitHub release; the words belong in the tag's app-meta.json. A caller that states the
             // address itself (`url:`) is the deliberate exception, never a guess.
             if let url, !url.isEmpty { entry.url = url }
-            // The strict path is the one that writes the published feed (`khu publish` sets it); a
-            // fixture that builds a feed of its own is not the production host, and 44 of them would
-            // otherwise have to invent addresses they never serve.
-            guard !requireComplete || (entry.url?.isEmpty == false) else {
+            guard entry.url?.isEmpty == false else {
                 throw khuFail("refused: \(app) \(version)'s row would carry no address. The address comes from the app's own GitHub release via `khu feed`; the words belong in the tag's app-meta.json.")
             }
             feed.apps[app] = entry

@@ -142,7 +142,7 @@ func updateHoldTests() {
         let installed = makeApp(r.root.appendingPathComponent("Demo.app"), version: "1.0.0", id: "com.example.demo")
         try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: id, version: "2.0.0",
                                    artifact: r.artifact("demo.dmg", "dmg bytes"), kind: recipe == "fake-for-tests" ? "fake-for-tests" : "app-dmg",
-                                   allowSame: false, meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.0", iconPNG: Data()) },
+                                   allowSame: false, url: "https://example.test/fixture.dmg", meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.0", iconPNG: Data()) },
                                    holdURL: hold, holdSince: hold == nil ? nil : holdSince)
         let feed = try! FeedPublisher.loadVerifiedFeed(from: r.feed, publicKey: r.pair.privateKey.publicKey)!
         let state = r.root.appendingPathComponent("state")
@@ -457,11 +457,11 @@ func updateHoldTests() {
     do {
         let f = rig("hold-since", hold: holdURL, holdSince: nil)
         try! FeedPublisher.publish(feedDir: f.rig.feed, keyFile: f.rig.key, app: "demo", version: "2.0.1",
-                                   artifact: f.rig.artifact("demo2.dmg", "dmg bytes 2"), kind: "fake-for-tests", allowSame: false,
+                                   artifact: f.rig.artifact("demo2.dmg", "dmg bytes 2"), kind: "fake-for-tests", allowSame: false, url: "https://example.test/fixture.dmg",
                                    meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.1", iconPNG: Data()) })
         let carried = try! FeedPublisher.loadVerifiedFeed(from: f.rig.feed, publicKey: f.rig.pair.privateKey.publicKey)!.apps["demo"]
         try! FeedPublisher.publish(feedDir: f.rig.feed, keyFile: f.rig.key, app: "demo", version: "2.0.2",
-                                   artifact: f.rig.artifact("demo3.dmg", "dmg bytes 3"), kind: "fake-for-tests", allowSame: false,
+                                   artifact: f.rig.artifact("demo3.dmg", "dmg bytes 3"), kind: "fake-for-tests", allowSame: false, url: "https://example.test/fixture.dmg",
                                    meta: { _ in AppMeta(name: "Demo", bundleID: "com.example.demo", bundleName: "Demo.app", version: "2.0.2", iconPNG: Data()) },
                                    holdSince: "1.5.0")
         let named = try! FeedPublisher.loadVerifiedFeed(from: f.rig.feed, publicKey: f.rig.pair.privateKey.publicKey)!.apps["demo"]
@@ -1101,7 +1101,7 @@ func updateHoldTests() {
         let r = Rig("hold-self")
         let installed = makeApp(r.root.appendingPathComponent("Launcher.app"), version: "1.0.0", id: "com.khupdater.launcher")
         try! FeedPublisher.publish(feedDir: r.feed, keyFile: r.key, app: "launcher", version: "2.0.0",
-                                   artifact: r.artifact("launcher.dmg", "launcher bytes"), kind: "app-dmg", allowSame: false,
+                                   artifact: r.artifact("launcher.dmg", "launcher bytes"), kind: "app-dmg", allowSame: false, url: "https://example.test/fixture.dmg",
                                    meta: { _ in AppMeta(name: "Studio Launcher KH", bundleID: "com.khupdater.launcher", bundleName: "Launcher.app", version: "2.0.0", iconPNG: Data()) })
         let feed = try! FeedPublisher.loadVerifiedFeed(from: r.feed, publicKey: r.pair.privateKey.publicKey)!
         let state = r.root.appendingPathComponent("state")

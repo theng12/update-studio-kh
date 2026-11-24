@@ -195,7 +195,7 @@ func standaloneLauncherTests() {
     }
     do {
         let (rig, cfg, folder, _, shell, http) = setup("batch-registration")
-        try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "bad", version: "1.0", artifact: rig.artifact("bad.dmg", "legacy metadata missing"), kind: "app-dmg", allowSame: false, meta: nil)
+        try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "bad", version: "1.0", artifact: rig.artifact("bad.dmg", "legacy metadata missing"), kind: "app-dmg", allowSame: false, url: "https://example.test/fixture.dmg", meta: nil)
         let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: ["bad", id], appFolders: [folder])
         expect(result?.commandsRun == 2 && result?.apps.first(where: { $0.app == id })?.installed == "2.0" && http.downloads == 1,
                "SL7 one refused first install does not stop the next app")
@@ -266,7 +266,7 @@ func standaloneLauncherTests() {
             _ = makeApp(mount.appendingPathComponent(name), version: version, id: bundle)
             let artifact = rig.artifact("\(label).dmg", bytes)
             try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: app, version: version, artifact: artifact,
-                                       kind: kind, allowSame: false, meta: { _ in
+                                       kind: kind, allowSame: false, url: "https://example.test/fixture.dmg", meta: { _ in
                 AppMeta(name: label, bundleID: bundle, bundleName: name, version: version, iconPNG: nil)
             })
             let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
@@ -301,7 +301,7 @@ func standaloneLauncherTests() {
             // Automatic is on for everything else, and still leaves this app alone.
             try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: appID, version: "3.0",
                                        artifact: rig.artifact("Story 3.dmg", "story three bytes"), kind: "status",
-                                       allowSame: false, meta: { _ in
+                                       allowSame: false, url: "https://example.test/fixture.dmg", meta: { _ in
                 AppMeta(name: "Story Studio KH", bundleID: storyBundle, bundleName: storyName, version: "3.0", iconPNG: nil)
             })
             let automatic = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, appFolders: [folder])
