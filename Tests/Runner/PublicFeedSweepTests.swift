@@ -41,6 +41,8 @@ func publicFeedSweepTests() {
         expect(run != nil && !shell.calls.isEmpty,
                "SW1 a Mac on the public feed updates an installed app automatically (calls \(shell.calls.count))")
         expect(f.client.posts.isEmpty, "SW1 a public-feed run posts nothing anywhere (\(f.client.posts))")
+        expect(run?.publicFeed == true && run?.statusPosted == false,
+               "SW1 a public-feed run says so instead of calling itself unreachable")
         expect(run?.feedAppIDs == ["demo"], "SW1 the Launcher receives the verified feed’s app IDs")
         expect(run?.feedPublishedAt.flatMap(ISO.date) != nil, "SW1 coverage has the signed published_at")
         expect(run?.checkedFeedSource == "GitHub (theng12.github.io)", "SW1 coverage names the feed that answered")

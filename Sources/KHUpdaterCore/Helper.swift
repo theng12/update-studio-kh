@@ -209,7 +209,7 @@ public struct HelperApp: Sendable, Equatable {
     public static let upToDate = "Up to date", updateAvailable = "Update available", updating = "Updating…",
                       receiving = "Receiving update…", failed = "Failed", needsAttention = "Needs attention",
                       downloaded = "Downloaded", updatesItself = "Updates itself", notInstalled = "Not installed",
-                      notInFeed = "Not in the feed"
+                      notInFeed = "Not in the feed", shipsWithLauncher = "Ships with the Launcher"
 
     /// Default retry ceiling for a row before it stops offering Update all / primary Update.
     public static let failureCeiling = 3

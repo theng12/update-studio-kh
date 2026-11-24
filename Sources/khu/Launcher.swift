@@ -4,7 +4,7 @@ extension HelperMenu {
     func showWindow() {
         // A Mac opened the window: re-inventory now, so the installed versions drawn are the
         // bundles on disk rather than the last periodic report.
-        wake.signal()
+        pacing.wakeByState()
         rescanSSDs()
         if window == nil { window = LauncherWindow(helper: self) }
         window?.reload()
@@ -34,7 +34,7 @@ extension HelperMenu {
         let found = SSDSource.scan()
         lock.lock(); ssd = found; lastDriveScan = Date(); lock.unlock()
         window?.reload()
-        wake.signal()
+        pacing.wakeByState()
     }
 }
 
@@ -66,6 +66,9 @@ enum LauncherBundle {
             "CFBundleIdentifier": bundleID, "CFBundleName": "Studio Launcher KH", "CFBundleDisplayName": "Studio Launcher KH",
             "CFBundleExecutable": "Studio Launcher KH", "CFBundlePackageType": "APPL", "CFBundleShortVersionString": version,
             "CFBundleVersion": version, "CFBundleIconFile": "AppIcon", "LSUIElement": true, "LSMinimumSystemVersion": "13.0",
+            // The Launcher's own update hold (CONTRACT.md table, port 8792). Sparkle's shim reads it,
+            // takes the hold, and only then lets a check start.
+            "KHHoldURL": LauncherHold.url,
             "NSHighResolutionCapable": true,
             // macOS 14+ applies ATS to numeric IPs; only the private tailnet may use HTTP. The
             // Tailscale MagicDNS name is how a Mac keeps reaching the publisher when its address

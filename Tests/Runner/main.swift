@@ -195,11 +195,12 @@ struct RecipeRig {
     func run(_ app: FakeApp, expectedID: String? = nil, relaunchAfterInstall: Bool = true,
              version: String = "1.2.3", fileManager: FileManager = .default,
              clock: @escaping () -> TimeInterval = Mono.now,
-             appearCeiling: TimeInterval = Recipe.appearCeiling) -> Result<RecipeResult, Error> {
+             appearCeiling: TimeInterval = Recipe.appearCeiling,
+             exchange: @escaping (String, String) -> Bool = Recipe.exchange) -> Result<RecipeResult, Error> {
         Result { try Recipe.appDmg(shell: shell, installedPath: installed.path, artifactPath: "/tmp/x.dmg", feedVersion: version,
                                    expectedBundleID: expectedID, stateDir: state.path, app: "foo", control: app.control,
                                    relaunchAfterInstall: relaunchAfterInstall, appearCeiling: appearCeiling,
-                                   fileManager: fileManager, clock: clock) }
+                                   fileManager: fileManager, clock: clock, exchange: exchange) }
     }
     var rollback: URL { state.appendingPathComponent("rollback-foo/Foo.app") }
     var journal: URL { state.appendingPathComponent("install-foo.json") }
@@ -397,7 +398,7 @@ func recipeTests() {
         let failing = FailingMoves()
         failing.failWhen = { src, _ in src.hasSuffix(".Foo.app.khu-staging") }
         let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
-        let res = rig.run(app, fileManager: failing)
+        let res = rig.run(app, fileManager: failing, exchange: { _, _ in false })
         expect((try? res.get()) == nil, "R2 promotion failure is reported")
         expect(marker(rig.installed) == "1.0.0" && app.events.last == "launch" && app.running,
                "R2 after a throw past the stop, the previous app is back and running")
@@ -409,7 +410,7 @@ func recipeTests() {
         let failing = FailingMoves()
         failing.failWhen = { src, dst in src.hasSuffix(".Foo.app.khu-staging") || (src.contains("rollback-foo") && dst.hasSuffix("Applications/Foo.app")) }
         let app = FakeApp(installed: rig.installed, healthy: ["1.2.3"])
-        let res = rig.run(app, fileManager: failing)
+        let res = rig.run(app, fileManager: failing, exchange: { _, _ in false })
         if case .failure(let error) = res {
             expect("\(error)".contains("NO APP IS INSTALLED") && !"\(error)".contains("was put back"), "R4 a failed restore is reported loudly")
         } else { expect(false, "R4 a failed restore is reported loudly") }
@@ -440,6 +441,17 @@ func recipeTests() {
         let res = try? rig.run(app).get()
         expect(res?.status == "updated" && !app.events.contains("launch") && !app.running,
                "R30 an app that was stopped stays stopped (events \(app.events))")
+    }
+    // R31: a first install is launched and health-checked even when nothing was running. It has no
+    // earlier version to fall back to, so "the bundle is in place" is not "the app works" — the
+    // earlier shape of this test encoded the opposite and R2-5 caught it.
+    do {
+        let rig = RecipeRig("first-install", installedVersion: nil)
+        let app = FakeApp(installed: rig.installed, running: false, healthy: ["1.2.3"])
+        let res = try? rig.run(app).get()
+        expect(res?.status == "updated" && app.events.contains("launch") && app.control.healthy("1.2.3"),
+               "R31 a first install is launched and health-checked (events \(app.events))")
+        expect(marker(rig.installed) == "1.2.3", "R31 the first install promoted the new version")
     }
     // R29: with nothing installed, an existing rollback bundle is kept as the fallback.
     do {
@@ -3005,6 +3017,48 @@ func helperTests() {
         expect(downStub?.status == "refused" && (downStub?.reason ?? "").contains("no downgrade"),
                "H5d installUpdater refuses a direct downgrade (\(downStub?.reason ?? "nil"))")
     }
+    // UB1. A served updater version lands as versions/<v>, current moves to it, and an install that
+    // keeps bin/khu gets a fresh copy of the new binary there — never a link to the old one.
+    do {
+        let rig = Rig("updater-base")
+        let artifact = rig.artifact("helper.bin", "new helper bytes")
+        try! rig.publish("updater", "0.1.60", artifact)
+        let feedU = try! FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey)!
+        let entry = feedU.apps["updater"]!
+        let baseU = rig.root.appendingPathComponent("updater-base")
+        let layoutU = StubLayout(base: baseU)
+        let oldBin = try! layoutU.binary(for: "0.1.59")
+        try! fm.createDirectory(at: oldBin.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! "#!/bin/sh\nexit 0\n".write(to: oldBin, atomically: true, encoding: .utf8)
+        chmod(oldBin.path, 0o755)
+        try! StubSwitcher(layout: layoutU).install(version: "0.1.59")
+        let binDir = baseU.appendingPathComponent("bin")
+        try! fm.createDirectory(at: binDir, withIntermediateDirectories: true)
+        let cli = binDir.appendingPathComponent("khu")
+        try! Data("old copy".utf8).write(to: cli)
+        var cfgU = agentConfig(rig, token: "unused", apps: [:])
+        cfgU.stubBase = baseU.path
+        let result = try? Agent.installUpdater(entry, artifact: artifact, config: cfgU)
+        let installedPath = try! layoutU.binary(for: "0.1.60").path
+        expect(result?.status == "switched", "UB1 a served updater version is switched to (\(result?.reason ?? "nil"))")
+        expect((try? Signing.sha256Hex(fileAt: URL(fileURLWithPath: installedPath)).hex) == entry.sha256,
+               "UB1 versions/0.1.60/khu holds the served bytes")
+        expect(layoutU.currentBinary().map(StubLayout.version) == "0.1.60", "UB1 base/current moves to the new version")
+        let cliSha = try? Signing.sha256Hex(fileAt: cli).hex
+        let cliLinks = (try? fm.attributesOfItem(atPath: cli.path))?[.referenceCount] as? Int
+        expect(cliSha == entry.sha256 && cliLinks == 1,
+               "UB1 bin/khu is a fresh copy of the new version, not a link (\(cliSha ?? "none"), links \(cliLinks ?? -1))")
+        // A version already current still refreshes a copy left stale.
+        try! Data("stale".utf8).write(to: cli)
+        let again = try? Agent.installUpdater(entry, artifact: artifact, config: cfgU)
+        expect(again?.status == "current" && (try? Signing.sha256Hex(fileAt: cli).hex) == entry.sha256,
+               "UB1 a current version still refreshes a stale bin/khu")
+        // An install that never kept one does not grow one.
+        try! fm.removeItem(at: cli)
+        let absent = try? Agent.installUpdater(entry, artifact: artifact, config: cfgU)
+        expect(absent?.status == "current" && !fm.fileExists(atPath: cli.path),
+               "UB1 installUpdater does not invent a bin/khu an install does not keep")
+    }
     // H6. A report with too many switches is refused and changes nothing.
     do {
         let (rig, cfg, _) = setup("h6")
@@ -4091,6 +4145,28 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["PACING_ONLY"] == "1" {
+            runPacingTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["AGENT_JOB_ONLY"] == "1" {
+            agentJobTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["HOLD_ENDPOINT_ONLY"] == "1" {
+            launcherHoldTests()
+        agentJobTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
+        if ProcessInfo.processInfo.environment["UPDATER_ROW_ONLY"] == "1" {
+            updaterRowTests()
+        launcherHoldTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["STANDALONE_ONLY"] == "1" {
             standaloneLauncherTests()
             catalogSelectionTests()
@@ -4330,6 +4406,7 @@ r41HealthMustHold()
         recycleTests()
         transferLeakTests()
         artifactDeltaTests()
+        atomicPromoteTests()
         installedIdentityTests()
         publisherRetentionTests()
         publisherCompletenessTests()
@@ -4341,6 +4418,8 @@ r41HealthMustHold()
         appSourcesTests()
         publicFeedSweepTests()
         firstRunWalkTests()
+        runPacingTests()
+        updaterRowTests()
         extensionCatalogTests()
         toolbarTests()
         inventoryTests()

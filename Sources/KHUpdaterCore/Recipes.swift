@@ -210,11 +210,12 @@ public enum Recipe {
                               fileManager fm: FileManager = .default,
                               verifyStaged: ((String) throws -> Void)? = nil,
                               clock: @escaping () -> TimeInterval = Mono.now,
-                              beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
+                              beforeStop: (() throws -> Void)? = nil,
+                              exchange: (String, String) -> Bool = Recipe.exchange) throws -> RecipeResult {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         guard !fm.fileExists(atPath: paths.journal.path) else {
-            throw khuFail("the earlier install is unresolved; journal kept at \(paths.journal.path)")
+            throw khuFail("the earlier install is unresolved; journal kept at \(paths.journal.path) — clear it only while the helper is stopped")
         }
 
         // 2. Verify and stage while the old app keeps running.
@@ -274,7 +275,8 @@ public enum Recipe {
                                     order: nil, control: control, fileManager: fm, notes: [recovered, detachNote],
                                     refuseIfRunning: refuseIfRunning, relaunchAfterInstall: relaunchAfterInstall,
                                     relaunchIfClosed: relaunchIfClosed,
-                                    clock: clock, appearCeiling: appearCeiling, beforeStop: beforeStop)
+                                    clock: clock, appearCeiling: appearCeiling, beforeStop: beforeStop,
+                                    exchange: exchange)
     }
 
     /// The owner's order to put this app's kept previous version back. It is the same swap as an
@@ -489,13 +491,27 @@ public enum Recipe {
         }
     }
 
+    /// Atomic exchange of two existing paths on the same volume: `renamex_np(RENAME_SWAP)` is a
+    /// rename, so it needs no extra space and leaves both entries where they were when it fails.
+    /// False means the platform or the volume refused, and the caller falls back to two moves.
+    public static func exchange(_ a: String, _ b: String) -> Bool {
+        // Test seam: a child process can die exactly here, which is the window an interrupted
+        // install occupies. Nothing in the app sets these variables.
+        let kill = ProcessInfo.processInfo.environment["KHU_TEST_EXCHANGE_KILL"]
+        if kill == "before" { raise(SIGKILL) }
+        let swapped = renamex_np(a, b, UInt32(RENAME_SWAP)) == 0
+        if kill == "after" { raise(SIGKILL) }
+        return swapped
+    }
+
     static func promoteAndSettle(paths: Paths, targetVersion: String, installedInfo: BundleInfo?,
                                  order: String?, control: AppControl, fileManager fm: FileManager,
                                  notes: [String], refuseIfRunning: Bool = false,
                                  relaunchAfterInstall: Bool = true, relaunchIfClosed: Bool = false,
                                  clock: @escaping () -> TimeInterval = Mono.now,
                                  appearCeiling: TimeInterval = Recipe.appearCeiling,
-                                 beforeStop: (() throws -> Void)? = nil) throws -> RecipeResult {
+                                 beforeStop: (() throws -> Void)? = nil,
+                                 exchange: (String, String) -> Bool = Recipe.exchange) throws -> RecipeResult {
         let installedPath = paths.installedPath
         // The gap's own timeline: each step's offset from the moment the install began, so the next
         // estimate is measured rather than guessed. It travels in the result, so the helper's log
@@ -599,15 +615,42 @@ public enum Recipe {
                     }
                 }
                 journal.phase = "moving"; try AtomicFile.writeJSON(journal, to: paths.journal)
-                do { try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path) }
-                catch {
-                    // One sentence the row can show: what was in the way, and that the app is untouched.
-                    throw khuFail("the previous rollback copy was in the way and the app could not be kept as the fallback; the app was left where it was")
+                // The replacement exists before the thing it replaces is removed. Measured
+                // 2026-11-23: the two-move order left this Mac with no Launcher at all — the old
+                // bundle went to the rollback path, the promote then failed, and nothing put the app
+                // back. An exchange is a rename: atomic, and space-neutral, so an update that fitted
+                // before still fits.
+                if exchange(paths.staged.path, installedPath) {
+                    journal.phase = "promoted"; try AtomicFile.writeJSON(journal, to: paths.journal)
+                    // `staged` now holds the previous bundle; it becomes this Mac's fallback. A
+                    // failure here costs the fallback copy, never the installed app, so it is kept
+                    // where it is and reported rather than thrown.
+                    do { try fm.moveItem(at: paths.staged, to: paths.rollback) }
+                    catch {
+                        FileHandle.standardError.write(Data("note: the previous version stayed at \(paths.staged.path) instead of the rollback copy (\(error)); it is still on disk and nothing was deleted\n".utf8))
+                    }
+                } else {
+                    // Different volume, or the platform refused the exchange: the old order, but
+                    // every step restores before it reports, so the app is never in neither place.
+                    do { try fm.moveItem(atPath: installedPath, toPath: paths.rollback.path) }
+                    catch {
+                        throw khuFail("the previous rollback copy was in the way and the app could not be kept as the fallback; the app was left where it was")
+                    }
+                    journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
+                    do { try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath)) }
+                    catch let promoteError {
+                        do { try fm.moveItem(at: paths.rollback, to: URL(fileURLWithPath: installedPath)) }
+                        catch {
+                            throw khuFail("NO APP IS INSTALLED at \(installedPath): the new bundle could not be put in place (\(promoteError)) and the previous one could not be put back (\(error)); the previous bundle is kept at \(paths.rollback.path)")
+                        }
+                        throw khuFail("the new bundle could not be put in place (\(promoteError)), so the previous app was put back; nothing changed")
+                    }
                 }
+            } else {
+                // With nothing installed, an existing rollback bundle is kept: it is the only fallback.
+                journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
+                try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath))
             }
-            // With nothing installed, an existing rollback bundle is kept: it is the only fallback.
-            journal.phase = "promoting"; try AtomicFile.writeJSON(journal, to: paths.journal)
-            try fm.moveItem(at: paths.staged, to: URL(fileURLWithPath: installedPath))
             journal.phase = "promoted"; try AtomicFile.writeJSON(journal, to: paths.journal)
             // One bundle per bundle id: a leftover copy can start its own services and fight over
             // ports, so an install retires any other copy to the feed's Trash.
@@ -684,6 +727,10 @@ public enum Recipe {
         // A waiting update installs on the tick after its app is closed, and reopens it: the person
         // was told it would install by itself, so it comes back rather than arriving silently closed.
         let reopens = wasRunning || relaunchIfClosed
+        // A first install is launched and health-checked even when nothing was running: it has no
+        // earlier version to fall back to, so "the bundle is in place" is not the same as "the app
+        // works", and calling it done would leave an unhealthy install recorded as current (R2-5).
+        // The retry storm this once seemed to explain was the missing interval floor, not this.
         guard reopens || journal.previousVersion == nil else {
             return finish(settled(RecipeResult(status: "updated", reason: "it was not running, so it was left stopped")))
         }

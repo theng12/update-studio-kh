@@ -1,12 +1,16 @@
 import Foundation
 import SystemConfiguration
 import CryptoKit
+import Darwin
 
 public struct AgentRunResult: Sendable, Equatable {
     public var statusPosted: Bool
     public var commandsRun: Int
     public var updates: Int
     public var restartRequested = false
+    /// This run read a public feed, so nothing could be reported to a publisher: "unreachable" would
+    /// be false, and the honest kind is `public-feed`.
+    public var publicFeed = false
     public var notes: [String] = []
     /// No fresh verified server feed was available; SSD offers do not claim server currency.
     public var feedError: String?
@@ -633,10 +637,12 @@ public enum Agent {
         return data
     }
 
-    /// The version of the `khu` running now: `<v>` when it runs from `<stubBase>/versions/<v>/khu`.
+    /// The version of the `khu` running now: `<v>` when it runs from `<stubBase>/versions/<v>/khu`,
+    /// else the running helper's own bundle, else the saved value.
     public static func selfVersion(config: AgentConfig, executable: String? = Bundle.main.executablePath) -> String? {
-        if let base = config.stubBase, let executable {
-            let real = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
+        guard let executable else { return config.updaterVersion }
+        let real = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
+        if let base = config.stubBase {
             let versions = URL(fileURLWithPath: base).appendingPathComponent("versions").resolvingSymlinksInPath().path + "/"
             if real.path.hasPrefix(versions) {
                 // Runs from versions/<v>/khu or the named helper bundle inside that folder.
@@ -644,7 +650,24 @@ public enum Agent {
                 if VersionCompare.isValid(version) { return version }
             }
         }
+        // Not under versions/: the Launcher installs the helper from inside itself, and the running
+        // binary's own bundle names its version. That beats a saved value written once and never
+        // moved — measured 2026-11-23, Macs whose helper had been replaced still reported the old
+        // version because the saved fallback outlived the binary it described.
+        if let version = helperBundleVersion(of: real), VersionCompare.isValid(version) { return version }
         return config.updaterVersion
+    }
+
+    /// `CFBundleShortVersionString` of the `.app` holding this executable, when one does.
+    static func helperBundleVersion(of executable: URL) -> String? {
+        var dir = executable.deletingLastPathComponent()
+        while dir.path != "/" {
+            if dir.pathExtension == "app" {
+                return Bundle(path: dir.path)?.infoDictionary?["CFBundleShortVersionString"] as? String
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        return nil
     }
 
     static func validate(_ config: AgentConfig) throws {
@@ -886,7 +909,14 @@ public enum Agent {
             }
             if Recipe.isUnresolved(stateDir: stateDir.path, app: app) { health[app] = "unresolved install" }
         }
-        if let mine = selfVersion(config: config, executable: executable) { installed["updater"] = mine; health["updater"] = "running" }
+        if let mine = selfVersion(config: config, executable: executable) {
+            installed["updater"] = mine; health["updater"] = "running"
+            // A saved version that disagrees with the running binary is corrected in the report,
+            // never repeated: the fleet's record follows what this Mac really runs.
+            if let saved = config.updaterVersion, saved != mine {
+                result.notes.append("updater: the saved version \(saved) did not match the running helper \(mine); the report uses \(mine)")
+            }
+        }
         let hostStatusFile = stateDir.appendingPathComponent("feed-host-status.json")
         if FileManager.default.fileExists(atPath: hostStatusFile.path) {
             var host = (try? AtomicFile.readJSON([String: String].self, from: hostStatusFile)) ?? [:]
@@ -968,6 +998,7 @@ public enum Agent {
             // A public feed has no publisher to report to, and none is contacted: the run installs
             // only what the signed feed offers, from the addresses that feed names.
             statusCode = nil; statusReply = nil
+            result.publicFeed = true
             result.notes.append("reading a public feed: nothing is reported to it; only this feed's own apps are offered")
         }
         if let statusCode {
@@ -1067,11 +1098,16 @@ public enum Agent {
         if let base = config.stubBase,
            let stub = try AtomicFile.readJSON(StubState.self, from: StubLayout(base: URL(fileURLWithPath: base)).stateFile),
            stub.rollbacks != memory.observedStubRollbacks {
-            if let version = stub.rolledBack,
-               let sha = memory.updaterArtifacts?[version]
-                ?? feed.apps["updater"].flatMap({ $0.version == version ? $0.sha256 : nil }) {
-                markRejected(app: "updater", sha: sha, at: now, memory: &memory)
-                result.notes.append("the stub rolled updater \(version) back; those bytes are rejected")
+            // The sha is what this Mac recorded when it installed that version — the helper is not a
+            // feed app, so the feed can never name these bytes. Unknown is said, never thrown or
+            // printed blank.
+            if let version = stub.rolledBack {
+                if let sha = memory.updaterArtifacts?[version] {
+                    markRejected(app: "updater", sha: sha, at: now, memory: &memory)
+                    result.notes.append("the stub rolled updater \(version) back; those bytes are rejected")
+                } else {
+                    result.notes.append("the stub rolled updater \(version) back; what it downloaded was not recorded here, so the sha is unknown and no version is marked rejected")
+                }
             }
             memory.observedStubRollbacks = stub.rollbacks
             try remember()
@@ -1548,6 +1584,12 @@ public enum Agent {
             let manual = only && hasOffer && entry?.bundleID != nil && entry?.bundleName != nil
             var (status, reason) = HelperApp.status(installed: installed, available: available, statusOnly: only, manual: manual,
                                                     last: last, consecutiveFailures: consecutiveFailures)
+            // The helper is not a feed app any more: its row says where it comes from instead of
+            // "Not in the feed", which reads as a fault, and never a blank.
+            if cfg?.recipe == "updater", feed.apps[app] == nil {
+                status = HelperApp.shipsWithLauncher
+                reason = "Ships inside the Launcher — it updates when a new Launcher is installed here."
+            }
             // A finished download with its app still open is ready, not behind and not failed: the
             // row says the one thing it waits for. Why the hold was refused stays in the log and on
             // the fleet page's sub-line, where there is room for it.
@@ -2039,7 +2081,7 @@ public enum Agent {
         // not be answered "current" while a rollback is still owed. The next run picks it up.
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
             return RecipeResult(status: "unresolved", reason: "an earlier install of \(app) could not be finished or undone; "
-                               + "\(Recipe.journalURL(stateDir: stateDir.path, app: app).path) is kept and the next run tries it again")
+                               + "\(Recipe.journalURL(stateDir: stateDir.path, app: app).path) is kept and the next run tries it again — clear it only while the helper is stopped")
         }
         // The update gap (CONTRACT.md): a running app's queue is held before a byte moves. An app
         // with no trusted hold endpoint is refused rather than interrupted silently.
@@ -2167,6 +2209,13 @@ public enum Agent {
             return try refusedQuit { withHoldNote(try installLocal(local, app: app, installed: installed, cfg: cfg, stateDir: stateDir, shell: shell, control: { a, c in traced(control(a, c)) },
                                                  force: force, manual: manual || legacyQuit, catalogEntry: catalogEntry, beforeStop: beforeStop)) }
         }
+        // The helper ships inside the Launcher (owner ruling 2026-11-23): it is not a feed app, so an
+        // order to install it has nothing to install. That is stated, never a silent skip, so a
+        // helper lagging its Launcher is visible in the run result.
+        if cfg.recipe == "updater", feed.apps[app] == nil {
+            return RecipeResult(status: "not_offered",
+                                reason: "the helper ships inside the Launcher; it updates when a new Launcher is installed here")
+        }
         guard let entry = feed.apps[app] else { throw khuFail("the feed has no \(app)") }
         // The report can lag the disk: a stale one re-downloaded and reinstalled media-studio 0.1.109
         // over itself at 01:21. Judge the installed bundle now, before any download; fall back to
@@ -2244,7 +2293,7 @@ public enum Agent {
         let appControl = control(app, cfg)
         let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
-            return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept.")
+            return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept; clear its journal only while the helper is stopped.")
         }
         // The same live check as a downloaded install: a stale report must not reinstall an equal
         // version from the SSD either.
@@ -2520,8 +2569,41 @@ public enum Agent {
             try fm.moveItem(at: staging, to: binary)
         }
         let moved = try FileLock.withExclusive(layout.switchLock) { try StubSwitcher(layout: layout).install(version: entry.version) }
-        guard moved else { return RecipeResult(status: "current", reason: "\(entry.version) is already running") }
-        return RecipeResult(status: "switched", reason: "the stub starts \(entry.version) next and rolls back if it misbehaves")
+        // The CLI copy an install already keeps (`bin/khu`) is refreshed in the same switch: it is
+        // what the publisher host's release path and `GET /status` report, and it used to stay on
+        // the version the tree had just left. A plain copy, never a link, so the old file stays whole.
+        // A failed copy is said in the result but never hides a switch that already happened.
+        let refreshNote: String
+        do { refreshNote = try refreshCLICopy(binary, layout: layout) ? "; bin/khu was refreshed to it" : "" }
+        catch { refreshNote = "; bin/khu could not be refreshed: \(error)" }
+        guard moved else {
+            return RecipeResult(status: "current", reason: "\(entry.version) is already running" + refreshNote)
+        }
+        return RecipeResult(status: "switched", reason: "the stub starts \(entry.version) next and rolls back if it misbehaves"
+                            + refreshNote)
+    }
+
+    /// Replace `base/bin/khu` with a copy of `binary` when an install keeps one there already.
+    /// Returns whether it was replaced. Atomic: the new file is written beside it and renamed over,
+    /// so a reader sees the old copy or the new one, never half of each.
+    @discardableResult
+    private static func refreshCLICopy(_ binary: URL, layout: StubLayout) throws -> Bool {
+        let dest = layout.base.appendingPathComponent("bin/khu")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dest.path) else { return false }
+        let wanted = try Signing.sha256Hex(fileAt: binary)
+        if let held = try? Signing.sha256Hex(fileAt: dest), held.hex == wanted.hex, held.bytes == wanted.bytes {
+            return false
+        }
+        let staging = dest.deletingLastPathComponent().appendingPathComponent(".khu.khu-tmp-\(UUID().uuidString)")
+        defer { _ = try? fm.removeItem(at: staging) }
+        try fm.copyItem(at: binary, to: staging)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: staging.path)
+        guard rename(staging.path, dest.path) == 0 else {
+            throw khuFail("cannot refresh \(dest.path) (errno \(errno)); the version was switched, the copy was not")
+        }
+        AtomicFile.syncDirectory(dest.deletingLastPathComponent())
+        return true
     }
 }
 

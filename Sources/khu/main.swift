@@ -49,6 +49,13 @@ struct KHUMain {
             limit.rlim_cur = min(4096, limit.rlim_max)
             _ = setrlimit(RLIMIT_NOFILE, &limit)
         }
+        // Test seam: one exchange and exit, so a test can kill a child exactly inside the swap
+        // window. Nothing in the app sets this variable.
+        if let spec = ProcessInfo.processInfo.environment["KHU_EXCHANGE_FIXTURE"] {
+            let parts = spec.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { exit(64) }
+            exit(Recipe.exchange(parts[0], parts[1]) ? 0 : 3)
+        }
         let args = Array(CommandLine.arguments.dropFirst())
         func usage() -> Never {
             FileHandle.standardError.write(Data("""
@@ -687,6 +694,38 @@ struct KHUMain {
             // on 1301 each of 1,605 restarts logged the same count and nothing said why.
             agentLog.record("agent start: transfers=\(TransferMeter.completed) restarted-without-success=\(AgentRecycle.recycledSinceSuccess(stateDir: cfg.stateDir))")
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
+            // The Launcher's own update hold: fixed loopback port, its own 0600 token. A taken port
+            // is said and never stops the app.
+            if let menu {
+                do {
+                    let hold = LauncherHold(token: try LauncherHold.token(in: URL(fileURLWithPath: cfg.stateDir))) { [weak menu] in
+                        guard let menu else { return [] }
+                        menu.lock.lock(); defer { menu.lock.unlock() }
+                        return (menu.installingApp.map { [$0] } ?? []) + menu.active.sorted()
+                    }
+                    try hold.start()
+                    menu.holdServer = hold
+                } catch {
+                    FileHandle.standardError.write(Data("launcher hold: \(error)\n".utf8))
+                }
+                // A launchd definition that is merely present is not proof: check the job itself and
+                // put it back from the kit the app ships when it is gone (measured 2026-11-23).
+                // One line when this process is asked to stop, beside the agent's start line: a Mac
+                // that stops taking updates is then visible in its own record (20261123-60).
+                signal(SIGTERM, SIG_IGN)
+                let stop = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+                stop.setEventHandler {
+                    agentLog.record("agent stop: asked to stop")
+                    exit(0)
+                }
+                stop.resume()
+                menu.stopSource = stop
+                if let kit = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/khu-agent") as URL?,
+                   FileManager.default.fileExists(atPath: kit.path),
+                   let line = AgentJob.ensure(kit: kit, shell: SystemShell()) {
+                    FileHandle.standardError.write(Data("\(line)\n".utf8))
+                }
+            }
             let initialRequests = installs
             let startedAt = Date()
             func loop() {
@@ -698,7 +737,12 @@ struct KHUMain {
                         let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))
                         let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
                         ranOK = r.statusPosted
-                        agentLog.record("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)", at: .quiet)
+                        // A run that could not report says why on its own line: `updates=0` alone is
+                        // what made a fifteen-runs-a-minute loop invisible until the process count
+                        // showed it (measured 2026-11-23).
+                        let whyNotPosted = r.statusPosted ? ""
+                            : " — not reported: \(r.publicFeed ? "a public feed is never reported to, by design" : (r.feedError ?? "no report reached the publisher"))"
+                        agentLog.record("agent run: posted=\(r.statusPosted) commands=\(r.commandsRun) updates=\(r.updates)\(whyNotPosted)", at: .quiet)
                         for note in r.notes { agentLog.record("note: \(note)") }
                         if agentLog.verbosity == .verbose {
                             for app in r.apps { agentLog.record("app \(app.app): \(app.installed ?? "not installed") → \(app.available ?? "—") \(app.status)", at: .verbose) }
@@ -706,8 +750,8 @@ struct KHUMain {
                         menu?.finished(r, error: nil)
                         // What this check actually did, beside the memory: "running" and "reaching
                         // the publisher" are different facts, and only the second one counts.
-                        AgentReport.record(kind: r.statusPosted ? "ok" : "unreachable",
-                                           reason: r.statusPosted ? nil : (r.feedError ?? "no report reached the publisher"),
+                        AgentReport.record(kind: r.publicFeed ? "public-feed" : (r.statusPosted ? "ok" : "unreachable"),
+                                           reason: r.publicFeed ? nil : (r.statusPosted ? nil : (r.feedError ?? "no report reached the publisher")),
                                            stateDir: URL(fileURLWithPath: cfg.stateDir), now: Date())
                         if r.restartRequested { print("updater switched to a new version; exiting so the stub starts it"); exit(0) }
                     } catch {
