@@ -559,6 +559,48 @@ try:
           "every packaged DMG is written into dist/ by the build itself, not by remembering")
     check(not (packaging / "build-app.sh").exists() and not (ROOT / "App/main.swift").exists(),
           "Update Studio KH.app stays retired into Studio Launcher KH: one GUI app, one DMG")
+    # A copy is a build step, not the accepted-release step: two builds of one version both copy, and
+    # a copy evicts nothing. It called rotate until 0.1.82, so the second build of a version refused
+    # with "was placed with different bytes" — twice, one gate each time (row 20261125-12).
+    rec = work / "dist-repo"
+    (rec / "packaging").mkdir(parents=True)
+    shutil.copyfile(packaging / "record-dist.sh", rec / "packaging/record-dist.sh")
+    shutil.copyfile(packaging / "retain-release.sh", rec / "packaging/retain-release.sh")
+    for script in ("record-dist.sh", "retain-release.sh"):
+        (rec / "packaging" / script).chmod(0o755)
+    (rec / "dist").mkdir()
+    ledger = rec / "dist/.release-dist.json"
+    ledger.write_text('{"schema": 1, "apps": {}}')
+    (rec / "dist/Studio Launcher KH-0.1.79.dmg").write_text("older-79")
+    (rec / "dist/Studio Launcher KH-0.1.81.dmg").write_text("older-81")
+    env = {**os.environ, "KHU_TRASH": str(work / "dist-trash")}
+    def rec_run(*args):
+        return subprocess.run(["bash", str(rec / "packaging/record-dist.sh"), *args],
+                              capture_output=True, text=True, env=env)
+    def rec_copy(body):
+        (work / "b.dmg").write_text(body)
+        return rec_run("copy", "Studio Launcher KH", "0.1.82", str(work / "b.dmg"))
+    seeded = rec_run("rotate", "Studio Launcher KH", "0.1.81")
+    ledger_before_copy = ledger.read_text()
+    first = rec_copy("first build")
+    second = rec_copy("second build")
+    check(seeded.returncode == 0 and first.returncode == 0 and second.returncode == 0
+          and (rec / "dist/Studio Launcher KH-0.1.82.dmg").read_text() == "second build"
+          and (rec / "dist/Studio Launcher KH-0.1.79.dmg").exists()
+          and ledger.read_text() == ledger_before_copy,
+          "two builds of one version both copy, evict nothing and never rotate (rc=%d/%d/%d %s)"
+          % (seeded.returncode, first.returncode, second.returncode,
+             (seeded.stderr + first.stderr + second.stderr).strip()[:90]))
+    accepted = rec_run("rotate", "Studio Launcher KH", "0.1.82")
+    ledger_after_rotate = ledger.read_text()
+    third = rec_copy("third build after rotate")
+    check(accepted.returncode == 0 and third.returncode == 0
+          and not (rec / "dist/Studio Launcher KH-0.1.79.dmg").exists()
+          and (rec / "dist/Studio Launcher KH-0.1.81.dmg").exists()
+          and (rec / "dist/Studio Launcher KH-0.1.82.dmg").read_text() == "third build after rotate"
+          and ledger.read_text() == ledger_after_rotate,
+          "rotate keeps the latest two and a later copy with new bytes still succeeds (rc=%d/%d %s)"
+          % (accepted.returncode, third.returncode, (accepted.stderr + third.stderr).strip()[:90]))
     rotation = work / "rotation"
     rotation.mkdir()
     for name in ["Studio-Launcher-KH-0.1.18.dmg", "Studio-Launcher-KH-0.1.39.dmg", "Studio-Launcher-KH-0.1.40.dmg",

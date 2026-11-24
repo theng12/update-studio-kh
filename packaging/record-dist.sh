@@ -23,10 +23,10 @@ case "$MODE" in
       cp "$DMG" "$DEST.tmp" && mv "$DEST.tmp" "$DEST"
       echo "copied $(basename "$DMG") to dist/$APP-$VERSION.dmg"
     fi
-    # Rotate straight away: keeping the latest two is never a hand step. Anything older goes to the
-    # repo's _trash, and the shared tool never moves a file its ledger or a pin still names.
-    # A first build in a fresh checkout has no ledger yet; that is not a failed copy.
-    if [ -f "$DIST/.release-dist.json" ]; then "$0" rotate "$APP" "$VERSION"; fi
+    # `copy` stops here on purpose: rotating is the accepted-release step, and a build that has not
+    # passed its gate must not evict the installer people rely on (this file's own first paragraph).
+    # It called rotate here until 0.1.82, so a second build of the same version refused with "was
+    # placed with different bytes" — twice, one gate each time (row 20261125-12).
     ;;
   rotate)
     DRY=""
