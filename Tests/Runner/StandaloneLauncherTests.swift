@@ -83,7 +83,9 @@ func standaloneLauncherTests() {
         _ = makeApp(mount.appendingPathComponent("New KH.app"), version: "2.0", id: bundleID)
         let artifact = rig.artifact("New KH.dmg", "signed installer target bytes")
         try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: id, version: "2.0", artifact: artifact,
-                                   kind: "app-dmg", allowSame: false, meta: { _ in
+                                   kind: "app-dmg", allowSame: false,
+                                   url: "https://github.com/theng12/new-kh/releases/download/2.0/New.KH-2.0.dmg",
+                                   meta: { _ in
             AppMeta(name: "New KH", bundleID: bundleID, bundleName: "New KH.app", version: "2.0", iconPNG: nil)
         })
         let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")

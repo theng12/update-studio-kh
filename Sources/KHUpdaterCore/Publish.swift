@@ -199,7 +199,7 @@ public enum FeedPublisher {
                                meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
                                security: Bool = false, type: String? = nil,
                                keep: Int? = nil, now: Date = Date(),
-                               requireComplete: Bool = false,
+                               requireComplete: Bool = false, url: String? = nil,
                                retireArtifact: ((URL) throws -> Void)? = nil) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
@@ -343,8 +343,13 @@ public enum FeedPublisher {
             // A row with no address cannot be installed by anyone: measured 2026-11-23, `khu publish`
             // wrote one to the production feed host and its receipt still said "published". The
             // estate's only producer is `khu feed`, which takes the address from the app's own
-            // GitHub release; the words belong in the tag's app-meta.json.
-            guard let address = entry.url, !address.isEmpty else {
+            // GitHub release; the words belong in the tag's app-meta.json. A caller that states the
+            // address itself (`url:`) is the deliberate exception, never a guess.
+            if let url, !url.isEmpty { entry.url = url }
+            // The strict path is the one that writes the published feed (`khu publish` sets it); a
+            // fixture that builds a feed of its own is not the production host, and 44 of them would
+            // otherwise have to invent addresses they never serve.
+            guard !requireComplete || (entry.url?.isEmpty == false) else {
                 throw khuFail("refused: \(app) \(version)'s row would carry no address. The address comes from the app's own GitHub release via `khu feed`; the words belong in the tag's app-meta.json.")
             }
             feed.apps[app] = entry
