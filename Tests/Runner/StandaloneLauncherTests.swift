@@ -86,7 +86,7 @@ func standaloneLauncherTests() {
                                    kind: "app-dmg", allowSame: false,
                                    meta: { _ in
             AppMeta(name: "New KH", bundleID: bundleID, bundleName: "New KH.app", version: "2.0", iconPNG: nil)
-        }, url: "https://github.com/theng12/new-kh/releases/download/2.0/New.KH-2.0.dmg")
+        }, url: "https://example.test/artifacts/")
         let token = try! Enrolment.enrol(stateDir: rig.state, machine: "mac1")
         let cfg = agentConfig(rig, token: token, apps: [:])
         var settings = HelperSettings(); settings.autoInstall = false

@@ -2811,7 +2811,7 @@ func launcherTests() {
         let khu = URL(fileURLWithPath: "build/khu").standardizedFileURL.path
         let art = rig.artifact("w.zip", "w").path
         func publish(_ more: [String]) -> ShellResult? {
-            try? SystemShell().run(khu, arguments: ["publish", "--feed", rig.feed.path, "--key", rig.key.path, "--app", "w", "--version", "1.2.0", "--artifact", art, "--kind", "fake-for-tests", "--new-app"] + more, timeout: 10)
+            try? SystemShell().run(khu, arguments: ["publish", "--feed", rig.feed.path, "--key", rig.key.path, "--app", "w", "--version", "1.2.0", "--artifact", art, "--kind", "fake-for-tests", "--new-app", "--url", "https://example.test/artifacts/"] + more, timeout: 10)
         }
         let quiet = publish([]), typed = publish(["--notes", "- typed"]), wrong = publish(["--changelog", changelog("old.md", "## 1.1.0 — 2026-10-01\n- Older\n").path])
         expect(quiet?.exitCode != 0 && quiet?.stderr.contains("needs --changelog") == true, "W5 publish with no changelog is refused")

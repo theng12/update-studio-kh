@@ -111,7 +111,10 @@ func artifactDeltaTests() {
             client.requests.removeAll()
             client.phases.removeAll()
             client.requestURLs.removeAll()
-            let url = try Agent.download(entry, app: "fixture", serverBase: first, stateDir: state, http: client, fallbacks: fallbacks)
+            // A row served from mirrors names no address of its own, which is the case this whole
+            // block is about: the sources decide where the bytes come from.
+            var mirrored = entry; mirrored.url = nil
+            let url = try Agent.download(mirrored, app: "fixture", serverBase: first, stateDir: state, http: client, fallbacks: fallbacks)
             return (url, client.servedBytes - before, client.requestURLs)
         }
 
