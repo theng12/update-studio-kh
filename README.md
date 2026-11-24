@@ -37,11 +37,8 @@ Mac pulls from it. A publish run on this Mac reaches nobody.
    `<app>-<version>` release with `packaging/github-asset.sh`, proves GitHub stored those exact
    bytes, fetches the asset back anonymously and hashes it — the download a client would make — and
    gives the publish that address; the served row is read back to prove the address survived.
-4. Macs pull from `https://theng12.github.io/kh-releases/release.json` — GitHub Pages is the only feed.
-
-Page sync is retired (owner ruling 2026-11-22: one signed feed, GitHub-only downloads). It synced
-a second copy of each release onto the public page; the feed is now served from Pages itself, so
-nothing rebuilds or compares a mirror beside it.
+4. Macs pull from `https://theng12.github.io/kh-releases/release.json` — GitHub Pages is the only
+   feed, and a second copy of a release is never published onto the page.
 
 Test installs on this Mac are expected and harmless: they prove download and update, they are not
 the release source.
