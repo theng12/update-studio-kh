@@ -1528,7 +1528,7 @@ public enum Agent {
             let driveCopy = entry?.ssd ?? entry?.initialSSD
             let driveSource = driveCopy.map { AppSources.Source(name: $0.volume, version: $0.version) }
             let sources = AppSources(installed: installed, sources: [
-                feed.apps[app]?.version.map { AppSources.Source(name: "the saved feed", version: $0, isFeed: true) },
+                feed.apps[app].map { AppSources.Source(name: "the saved feed", version: $0.version, isFeed: true) },
                 driveSource,
                 entry?.selfVersion.map { AppSources.Source(name: "its own updater", version: $0) },
             ].compactMap { $0 })
