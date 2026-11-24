@@ -3134,8 +3134,11 @@ func helperTests() {
                "H8 Hub Studio KH is listed with the version its Mac has, and updates itself")
         expect(html.contains("Story Studio KH</td><td class=num>—") && html.contains("No connected Mac reports it"), "H8 Story Studio KH is listed even when no Mac reports it, and says so")
     }
-    // H7. The helper's What's New comes from this changelog.
-    expect(!WhatsNew.lines(for: "0.1.2").isEmpty && WhatsNew.lines(for: "9.9.9").isEmpty, "H7 the helper's What's New is its changelog entry")
+    // H7. The helper's What's New comes from this changelog (which keeps the ten most recent
+    // entries; older ones live in docs/changelog-archive.md, so check the latest live entry).
+    let latestVersion = WhatsNew.launcher.first?.version ?? ""
+    expect(!latestVersion.isEmpty && !WhatsNew.lines(for: latestVersion).isEmpty && WhatsNew.lines(for: "9.9.9").isEmpty,
+           "H7 the helper's What's New is its changelog entry")
 }
 
 func pairingTests() {

@@ -29,6 +29,14 @@ class SigningTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, target)
             target.chmod(0o755)
+        # Minimal Sparkle.framework fixture so build-launcher.sh exercises nested inside-out signing
+        # without copying the real vendored framework on every test run.
+        fw_ver = self.repo / "vendor/khsparkle/Sparkle.framework/Versions/B"
+        for sub in ("XPCServices/Downloader.xpc", "XPCServices/Installer.xpc", "Updater.app"):
+            (fw_ver / sub).mkdir(parents=True, exist_ok=True)
+        (fw_ver / "Autoupdate").write_text("fixture autoupdate")
+        (fw_ver / "Autoupdate").chmod(0o755)
+        (self.repo / "vendor/khsparkle/Sparkle.framework/Versions/Current").symlink_to("B")
         # The dist copy step is stubbed here: this fixture stubs hdiutil, so no DMG is written,
         # and signing is what this file is about. Packaging's own suite covers the real script.
         stub = self.repo / "packaging/record-dist.sh"
@@ -42,7 +50,7 @@ class SigningTests(unittest.TestCase):
         scripts = {
             "swiftc": 'while [[ $# -gt 0 ]]; do if [[ "$1" == -o ]]; then shift; touch "$1"; fi; shift; done',
             "lipo": 'if [[ "$1" == -archs ]]; then printf "arm64 x86_64\\n"; else while [[ $# -gt 0 ]]; do if [[ "$1" == -output ]]; then shift; touch "$1"; fi; shift; done; fi',
-            "codesign": 'printf "%s\\t" "$@" >> "$SIGN_CALLS"; printf "\\n" >> "$SIGN_CALLS"; if [[ "$1" == --force && -f "${!#}" ]]; then printf signed >> "${!#}"; fi; if [[ "$1" == --force && -n "${TAMPER_KIT:-}" && -d "${!#}" ]]; then printf changed >> "${!#}/Contents/Resources/khu-agent/bin/khu"; fi',
+            "codesign": 'printf "%s\\t" "$@" >> "$SIGN_CALLS"; printf "\\n" >> "$SIGN_CALLS"; if [[ "$1" == --force && -f "${!#}" ]]; then printf signed >> "${!#}"; fi; if [[ "$1" == --force && -n "${TAMPER_KIT:-}" && -f "${!#}/Contents/Resources/khu-agent/bin/khu" ]]; then printf changed >> "${!#}/Contents/Resources/khu-agent/bin/khu"; fi',
             "hdiutil": 'printf "hdiutil\\n" >> "$SIGN_CALLS"',
         }
         for name, body in scripts.items():
@@ -102,9 +110,14 @@ cp "$0" "$out/Contents/MacOS/StudioLauncher"
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls.read_text().splitlines()
         signing = [c for c in calls if c.startswith("--force")]
-        self.assertEqual(len(signing), 1)
-        self.assertIn("Fixture Identity", signing[0])
-        self.assertTrue(all("--deep" not in call for call in calls))
+        # Inside-out: nested Sparkle helpers first, then Sparkle.framework, then the outer app.
+        # Signing itself never uses --deep; only the post-sign verification passes --deep --strict.
+        self.assertEqual(len(signing), 6)
+        self.assertTrue(all("Fixture Identity" in c for c in signing))
+        self.assertTrue(all("--deep" not in c for c in signing))
+        self.assertTrue(signing[-2].rstrip("\t").endswith("Sparkle.framework"))
+        self.assertTrue(signing[-1].rstrip("\t").endswith("Studio Launcher KH.app"))
+        self.assertTrue(any(c.startswith("--verify\t--deep\t--strict") for c in calls))
         self.assertEqual(calls[-1], "hdiutil")
         kit = self.repo / "build/Studio Launcher KH.app/Contents/Resources/khu-agent"
         self.assertEqual((kit / "bin/khu-stub").read_text(), "signed fixture stub")

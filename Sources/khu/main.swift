@@ -325,56 +325,53 @@ struct KHUMain {
             } catch { fail("cannot read \(reposFile): \(error)") }
             guard !apps.isEmpty else { fail("\(reposFile) names no app") }
             do {
-                let registry = try registryFile.map { try FeedRegistry.load(from: URL(fileURLWithPath: $0)) }
-                // The feed the world reads now: a publish may change its own row, never lose a field,
-                // and the row of an unchanged version keeps what the publisher host added to it.
-                var previousPublic: Feed?
-                if let previousFile {
-                    let data = try Data(contentsOf: URL(fileURLWithPath: previousFile))
-                    let release = try JSON.decode(Release.self, from: data)
-                    guard let feedData = release.feedData else { fail("\(previousFile) carries no feed bytes") }
-                    previousPublic = try JSON.decode(Feed.self, from: feedData)
-                } else if let publishRepo {
-                    let pages = URL(string: "https://\(publishRepo.split(separator: "/").first ?? "").github.io/\(publishRepo.split(separator: "/").last ?? "")/release.json")!
-                    do {
-                        let (data, code) = try URLSessionHTTPClient().get(pages, headers: [:])
-                        guard code == 200 else { fail("refused: the public feed \(pages.absoluteString) answered \(code); nothing was published") }
+                let runFeed: () throws -> Void = {
+                    let registry = try registryFile.map { try FeedRegistry.load(from: URL(fileURLWithPath: $0)) }
+                    // The feed the world reads now: a publish may change its own row, never lose a field,
+                    // and the row of an unchanged version keeps what the publisher host added to it.
+                    var previousPublic: Feed?
+                    if let previousFile {
+                        let data = try Data(contentsOf: URL(fileURLWithPath: previousFile))
                         let release = try JSON.decode(Release.self, from: data)
-                        guard let feedData = release.feedData else { fail("refused: \(pages.absoluteString) carries no feed bytes; nothing was published") }
+                        guard let feedData = release.feedData else { fail("\(previousFile) carries no feed bytes") }
                         previousPublic = try JSON.decode(Feed.self, from: feedData)
-                    } catch { fail("refused: cannot read the public feed to compare against (\(error)); nothing was published") }
-                }
-                let made = try FeedGenerator.generate(apps: apps, registry: registry, previous: previousPublic,
-                                                      gh: GhReader(), refreshNotes: refreshNotes, frozen: frozen)
-                let feed = made.feed
-                for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
-                    print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
-                }
-                // One line per frozen app, every run: a held row that says nothing is the same defect
-                // as a skipped app that says nothing.
-                for line in made.frozen { print(line) }
-                for note in made.stale { print("note: \(note)") }
-                for change in made.wordChanges { print("words: \(change)") }
-                for note in made.notes { print("note: \(note)") }
-                if !refreshNotes.isEmpty {
-                    let done = made.notes.filter { $0.hasPrefix("notes refreshed:") }.count
-                    print("notes: \(done) of \(refreshNotes.count) named row(s) refreshed")
-                }
-                if !made.unpublished.isEmpty {
-                    print("no row (repo has no published release): \(made.unpublished.joined(separator: ", "))")
-                }
-                // One line per dropped row, naming the app and why. A single summary line hid the
-                // apps inside it, and a silent withdrawal is the defect this replaces.
-                for drop in made.unpublished { print("no row: \(drop)") }
-                let envelope = try FeedGenerator.signed(feed, keyFile: URL(fileURLWithPath: keyArg))
-                if let out {
-                    try AtomicFile.write(envelope, to: URL(fileURLWithPath: out))
-                    print("feed: \(feed.apps.count) app(s) written to \(out)")
-                } else if let publishRepo {
-                    // One publisher at a time, enforced rather than agreed (issue 20261125-5): the lock
-                    // covers generation, the integrity check and the commit, so a second pass refuses
-                    // before it reads a repo or hashes an asset.
-                    try FeedPublishLock.withLock {
+                    } else if let publishRepo {
+                        let pages = URL(string: "https://\(publishRepo.split(separator: "/").first ?? "").github.io/\(publishRepo.split(separator: "/").last ?? "")/release.json")!
+                        do {
+                            let (data, code) = try URLSessionHTTPClient().get(pages, headers: [:])
+                            guard code == 200 else { fail("refused: the public feed \(pages.absoluteString) answered \(code); nothing was published") }
+                            let release = try JSON.decode(Release.self, from: data)
+                            guard let feedData = release.feedData else { fail("refused: \(pages.absoluteString) carries no feed bytes; nothing was published") }
+                            previousPublic = try JSON.decode(Feed.self, from: feedData)
+                        } catch { fail("refused: cannot read the public feed to compare against (\(error)); nothing was published") }
+                    }
+                    let made = try FeedGenerator.generate(apps: apps, registry: registry, previous: previousPublic,
+                                                          gh: GhReader(), refreshNotes: refreshNotes, frozen: frozen)
+                    let feed = made.feed
+                    for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
+                        print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
+                    }
+                    // One line per frozen app, every run: a held row that says nothing is the same defect
+                    // as a skipped app that says nothing.
+                    for line in made.frozen { print(line) }
+                    for note in made.stale { print("note: \(note)") }
+                    for change in made.wordChanges { print("words: \(change)") }
+                    for note in made.notes { print("note: \(note)") }
+                    if !refreshNotes.isEmpty {
+                        let done = made.notes.filter { $0.hasPrefix("notes refreshed:") }.count
+                        print("notes: \(done) of \(refreshNotes.count) named row(s) refreshed")
+                    }
+                    if !made.unpublished.isEmpty {
+                        print("no row (repo has no published release): \(made.unpublished.joined(separator: ", "))")
+                    }
+                    // One line per dropped row, naming the app and why. A single summary line hid the
+                    // apps inside it, and a silent withdrawal is the defect this replaces.
+                    for drop in made.unpublished { print("no row: \(drop)") }
+                    let envelope = try FeedGenerator.signed(feed, keyFile: URL(fileURLWithPath: keyArg))
+                    if let out {
+                        try AtomicFile.write(envelope, to: URL(fileURLWithPath: out))
+                        print("feed: \(feed.apps.count) app(s) written to \(out)")
+                    } else if let publishRepo {
                         // The guard that would have caught 2026-11-23: compare the feed about to be
                         // published with the one the world reads now, before a byte is written.
                         // Built from the home directory at run time: a literal owner path in the source
@@ -419,6 +416,22 @@ struct KHUMain {
                         try FeedPages.publish(envelope, repo: publishRepo)
                         print("feed: \(feed.apps.count) app(s) published, published_at \(feed.published_at)")
                     }
+                }
+                if publishRepo != nil {
+                    // Two guards on the publish path, with distinguishable refusal sentences:
+                    // 1) One publisher at a time (issue 20261125-5) — names the other pid and start time,
+                    //    and wraps generation, the integrity check and the commit so a second pass refuses
+                    //    before it reads a repo or hashes an asset.
+                    // 2) Clean registry — names the uncommitted registry keys so a working-tree edit staged
+                    //    for the next release cannot leak into this publish.
+                    try FeedPublishLock.withLock {
+                        if let registryFile {
+                            try FeedRegistryGuard.requireCommitted(at: URL(fileURLWithPath: registryFile))
+                        }
+                        try runFeed()
+                    }
+                } else {
+                    try runFeed()
                 }
             } catch { fail("\(error)") }
         case "unpublish", "retire":
