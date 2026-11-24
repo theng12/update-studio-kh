@@ -125,7 +125,7 @@ func publisherCompletenessTests() {
     // helper is exempt, by kind; the Launcher is not exempt by name any more (S001, 2026-11-25).
     do {
         let dir = feedDir("registry")
-        try! Data(#"["story","launcher"]"#.utf8).write(to: dir.appendingPathComponent("hold-apps.json"))
+        try! Data(#"["story","launcher","helper-renamed","updater"]"#.utf8).write(to: dir.appendingPathComponent("hold-apps.json"))
         func publishStory(_ version: String, holdURL: String? = nil, holdSince: String? = nil) throws {
             let src = root.appendingPathComponent("story-\(version).bin")
             try Data("story-\(version)".utf8).write(to: src)
@@ -161,6 +161,33 @@ func publisherCompletenessTests() {
         } catch {
             expect("\(error)".contains("--hold-url"), "PC8 the Launcher's refusal names --hold-url (\(error))")
             expect(row(dir, "launcher") == nil, "PC8 the Launcher's refusal left no row")
+        }
+        // Exemption is strictly by kind ("updater"), never by app id: a row of kind "updater" passes
+        // under another app id even when listed in hold-apps.json, while an app named "updater" with
+        // a non-updater kind is still refused for missing hold fields.
+        let helperBin = root.appendingPathComponent("helper-renamed.bin")
+        try! Data("helper-renamed".utf8).write(to: helperBin)
+        do {
+            try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "helper-renamed", version: "1.0.0",
+                                      artifact: helperBin, kind: "updater", allowSame: false,
+                                      words: AppWords(tagline: "t", description: "d"), type: "system",
+                                      requireComplete: true, url: "https://example.test/artifacts/")
+            expect(row(dir, "helper-renamed")?.kind == "updater" && row(dir, "helper-renamed")?.holdURL == nil,
+                   "PC8 a row with kind updater is exempt from hold fields even under another app id")
+        } catch {
+            expect(false, "PC8 a row with kind updater must not demand hold fields (\(error))")
+        }
+        let nonHelper = root.appendingPathComponent("updater-not-helper.bin")
+        try! Data("updater-not-helper".utf8).write(to: nonHelper)
+        do {
+            try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "updater", version: "1.0.0",
+                                      artifact: nonHelper, kind: "fake-for-tests", allowSame: false,
+                                      words: AppWords(tagline: "t", description: "d"), type: "system",
+                                      requireComplete: true, url: "https://example.test/artifacts/")
+            expect(false, "PC8 an app id named updater with a non-updater kind must still be refused")
+        } catch {
+            expect("\(error)".contains("--hold-url"), "PC8 non-updater kind under app id updater names --hold-url (\(error))")
+            expect(row(dir, "updater") == nil, "PC8 non-updater kind under app id updater left no row")
         }
     }
 

@@ -333,7 +333,7 @@ public enum FeedPublisher {
                 // missing field instead of passing because there was nothing to inherit. Only the
                 // helper is exempt, by kind: it serves no hold. The Launcher serves one (8792) and
                 // its row carries the pair, so a republish that dropped the fields is refused here.
-                let holdExempt = app == "updater"
+                let holdExempt = kindNow == "updater"
                 let holdServing = !holdExempt && (Self.holdApps(in: feedDir).contains(app) || old?.holdURL != nil)
                 let missing = Self.missingAppFields(entry, holdServing: holdServing, holdSinceKnown: (knownSince ?? "").isEmpty == false)
                 guard missing.isEmpty else {
