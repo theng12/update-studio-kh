@@ -22,7 +22,7 @@ func publisherCompletenessTests() {
         try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "launcher", version: version,
                                   artifact: src, kind: "fake-for-tests", allowSame: allowSame,
                                   words: words, holdURL: holdURL, type: type,
-                                  requireComplete: complete)
+                                  requireComplete: complete, url: "https://example.test/fixture.dmg")
     }
     func feed(_ dir: URL) -> Feed? {
         (try? FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)) ?? nil

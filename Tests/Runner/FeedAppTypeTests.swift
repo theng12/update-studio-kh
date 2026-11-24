@@ -28,7 +28,8 @@ func feedAppTypeTests() {
                  allowSame: Bool = false, shown: String? = nil) throws {
         try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "media", version: version,
                                   artifact: artifact(dir.lastPathComponent, bytes), kind: "app-dmg",
-                                  allowSame: allowSame, displayName: shown, meta: nil, type: type)
+                                  allowSame: allowSame, displayName: shown, meta: nil, type: type,
+                                  url: "https://example.test/fixture.dmg")
     }
     func loaded(_ dir: URL) -> Feed? {
         try? FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)
