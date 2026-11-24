@@ -206,6 +206,34 @@ func extensionCatalogTests() {
         _ = try load(catalog((0..<65).map { entry(id: "extension-\($0)") }))
     }
 
+    // Pictures are plain public addresses on the project's own two paths, or refused by name. A row
+    // without them is ordinary: the index may carry them before a build reads them (owner, 2026-11-24).
+    var withPictures = one
+    withPictures["icon"] = "https://raw.githubusercontent.com/theng12/kh-extensions/main/notes/icon.png"
+    withPictures["screenshot"] = "https://github.com/theng12/kh-extensions/releases/download/notes-1.2.3/notes.png"
+    let pictured = (try? load(catalog([withPictures])))?.first
+    expect(pictured?.iconURL?.absoluteString == withPictures["icon"] as? String
+           && pictured?.screenshotURL?.absoluteString == withPictures["screenshot"] as? String,
+           "EC24 a tile's icon and screenshot decode as public addresses")
+    let plain = (try? load(catalog([one])))?.first
+    expect(plain?.iconURL == nil && plain?.screenshotURL == nil, "EC25 no picture keys is no picture, not a failure")
+    for (index, url) in ["http://github.com/theng12/kh-extensions/x.png",
+                         "https://raw.githubusercontent.com/other/repo/icon.png",
+                         "https://example.com/icon.png",
+                         "https://user:pw@github.com/theng12/kh-extensions/x.png",
+                         "https://127.0.0.1/theng12/kh-extensions/x.png"].enumerated() {
+        var bad = one; bad["icon"] = url
+        expectThrows("EC26.\(index) a picture at \(url) is refused by name",
+                     contains: "icon address is not a public HTTPS URL") {
+            _ = try load(catalog([bad]))
+        }
+    }
+    var longPicture = one
+    longPicture["screenshot"] = "https://github.com/theng12/kh-extensions/" + String(repeating: "a", count: 2_048)
+    expectThrows("EC27 an overlong picture address is refused", contains: "screenshot address is not a public HTTPS URL") {
+        _ = try load(catalog([longPicture]))
+    }
+
     // The file is kept only when it is exactly what the index published.
     let payload = Data("extension zip bytes".utf8)
     let hash = Signing.sha256Hex(payload)

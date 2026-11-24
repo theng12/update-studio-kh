@@ -103,6 +103,14 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
 .wn{width:min(460px,100%)}.wn .body{padding:16px 24px 4px}.wn .body .sub{margin:0}
 .notice{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 24px 0;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
 .adopt{margin:14px 24px 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.extRow{margin:10px 24px;display:flex;gap:12px;align-items:flex-start}
+.extTile{padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);flex-wrap:wrap}
+.extBody{flex:1;min-width:180px}
+.extIcon,.extShot{display:grid;place-items:center;overflow:hidden;background:var(--bg);border:1px solid var(--line);border-radius:8px;flex:none}
+.extIcon{width:40px;height:40px;font-size:15px;color:var(--sub)}
+.extShot{width:200px;height:112px;font-size:11px;color:var(--sub)}
+.extIcon img,.extShot img{max-width:100%;max-height:100%;display:block}
+.extNote{margin:4px 0 0}
 .adopt .row{display:flex;gap:10px;align-items:center;padding:6px 0;flex-wrap:wrap}
 .adopt code{font-size:12px;color:var(--sub);word-break:break-all}
 @media (max-width:820px){input[type=search]{width:130px}.cols{grid-template-columns:1fr}.brand p{display:none}#hiddenNote{display:none}footer{flex-wrap:wrap;min-width:0}}
@@ -373,6 +381,31 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  if(fk&&$(fk)){$(fk).focus();if(selection[0]!=null)$(fk).setSelectionRange?.(...selection)}}
 // Plugin and Extension are rows, not app cards: neither has an installer of its own, so neither
 // gets an Install button, a version chip of an installed build, or a place in the app list.
+// A picture is never a reason to wait: the tile paints its placeholder at once and the picture
+// swaps in only if it arrives, at most 2048 pixels a side and within 5 seconds. A picture that is
+// skipped says why in the page's own words instead of leaving a broken frame or a spinner.
+const EXT_PIXELS=2048,EXT_WAIT=5000;
+function extPicture(x,src,cls,label,note){
+ const box=el('div',{class:cls}),ph=el('span',{class:'ph'},label);
+ const img=el('img',{alt:label+' for '+x.name,loading:'lazy',decoding:'async','data-src':src});
+ box.append(ph);
+ if(!src)return box;
+ img.hidden=true;box.append(img);
+ const skip=why=>{img.remove();note.textContent=why};
+ const later=fn=>{try{return setTimeout(fn,EXT_WAIT)}catch(e){return null}},timer=later(()=>skip('The '+label.toLowerCase()+' did not arrive within 5 seconds, so the tile keeps its placeholder.'));
+ img.onload=()=>{try{clearTimeout(timer)}catch(e){}
+  if(img.naturalWidth>EXT_PIXELS||img.naturalHeight>EXT_PIXELS){
+   skip('The '+label.toLowerCase()+' is '+img.naturalWidth+'×'+img.naturalHeight+', over the '+EXT_PIXELS+'-pixel limit, so it is not shown.');return}
+  ph.remove();img.hidden=false};
+ img.onerror=()=>{try{clearTimeout(timer)}catch(e){}skip('The '+label.toLowerCase()+' could not be loaded, so the tile keeps its placeholder.')};
+ img.src=src;return box}
+function extTile(x){const note=el('p',{class:'sub extNote'});
+ return el('div',{class:'extRow extTile'},
+  extPicture(x,x.icon,'extIcon','Icon',note),
+  el('div',{class:'extBody'},el('strong',{},x.name),' · ',x.version,el('p',{},x.summary),note),
+  extPicture(x,x.screenshot,'extShot','Screenshot',note),
+  x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
+            :el('span',{class:'tag'},'No public download yet'))}
 function drawExtensions(kind){const state=S.extensions||{status:'idle'};
  const box=$('extPanel');if(!box)return;
  const check=()=>post({action:'checkExtensions'});
@@ -385,9 +418,7 @@ function drawExtensions(kind){const state=S.extensions||{status:'idle'};
   ?'Published plugins. A plugin has no installer of its own; it arrives with the app that carries it.'
   :'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'));
  if(!rows.length)box.append(el('p',{},kind==='plugin'?'No published plugin yet.':'No published extension yet.'));
- for(const x of rows)box.append(el('div',{class:'extRow'},el('div',{},el('strong',{},x.name),' · ',x.version,el('p',{},x.summary)),
-  x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
-            :el('span',{class:'tag'},'No public download yet')));
+ for(const x of rows)box.append(extTile(x));
  if(state.note)box.append(el('p',{role:'status'},state.note));}
 /// One quiet notice per new version: no badge, no count, and a dismissal is remembered by version.
 function drawNotices(){const n=S.notices||[],box=$('notices');box.hidden=!n.length;
