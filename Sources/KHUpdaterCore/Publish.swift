@@ -346,6 +346,10 @@ public enum FeedPublisher {
             // GitHub release; the words belong in the tag's app-meta.json. A caller that states the
             // address itself (`url:`) is the deliberate exception, never a guess.
             if let url, !url.isEmpty { entry.url = url }
+            // An address given as a folder means this row's own file: the artifact is stored as
+            // `<sha12>-<name>`, so a caller that names only the folder cannot end up with an
+            // address whose file name is not the one that was published.
+            if let url = entry.url, url.hasSuffix("/") { entry.url = url + entry.file }
             guard entry.url?.isEmpty == false else {
                 throw khuFail("refused: \(app) \(version)'s row would carry no address. The address comes from the app's own GitHub release via `khu feed`; the words belong in the tag's app-meta.json.")
             }

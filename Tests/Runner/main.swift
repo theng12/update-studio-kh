@@ -868,7 +868,7 @@ struct Rig {
         let url = dir.appendingPathComponent(name); try! text.write(to: url, atomically: true, encoding: .utf8); return url
     }
     func publish(_ app: String, _ version: String, _ artifact: URL, kind: String = "fake-for-tests", hold: String? = nil) throws {
-        try FeedPublisher.publish(feedDir: feed, keyFile: key, app: app, version: version, artifact: artifact, kind: kind, allowSame: false, meta: nil, holdURL: hold, url: "https://example.test/\(artifact.lastPathComponent)")
+        try FeedPublisher.publish(feedDir: feed, keyFile: key, app: app, version: version, artifact: artifact, kind: kind, allowSame: false, meta: nil, holdURL: hold, url: "http://100.64.0.7/artifacts/")
     }
     var server: FeedServer { FeedServer(feedDir: feed, stateDir: state, bind: "127.0.0.1", port: 8790, commandKey: pair.privateKey) }
 }
@@ -918,15 +918,15 @@ func publisherTests() {
                                bundleName: "Studio Launcher KH.app", version: "0.1.29", iconPNG: Data("png".utf8))
         // Simulate a feed written by the old flow: the helper entry inherited the Launcher's identity.
         try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "updater", version: "0.1.29",
-                                  artifact: rig.artifact("khu-29", "helper 29"), kind: "app-dmg", allowSame: false, meta: { _ in launcher }, url: "https://example.test/khu-29")
+                                  artifact: rig.artifact("khu-29", "helper 29"), kind: "app-dmg", allowSame: false, meta: { _ in launcher }, url: "http://100.64.0.7/artifacts/")
         try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "updater", version: "0.1.30",
-                                  artifact: rig.artifact("khu-30", "helper 30"), kind: "updater", allowSame: false, meta: nil, url: "https://example.test/khu-30")
+                                  artifact: rig.artifact("khu-30", "helper 30"), kind: "updater", allowSame: false, meta: nil, url: "http://100.64.0.7/artifacts/")
         try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "launcher", version: "0.1.30",
                                   artifact: rig.artifact("Studio Launcher KH-0.1.30.dmg", "launcher bytes"), kind: "app-dmg",
                                   allowSame: false, meta: { _ in
             AppMeta(name: "Studio Launcher KH", bundleID: "com.khupdater.launcher",
                     bundleName: "Studio Launcher KH.app", version: "0.1.30", iconPNG: Data("png".utf8))
-        }, url: "https://example.test/Studio Launcher KH-0.1.30.dmg")
+        }, url: "http://100.64.0.7/artifacts/")
         let feed = try FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey)
         expect(feed?.apps["updater"]?.bundleID == nil && feed?.apps["updater"]?.bundleName == nil
                && feed?.apps["updater"]?.icon == nil && feed?.apps["updater"]?.kind == "updater",
@@ -1287,7 +1287,7 @@ func agentAndServerTests() {
         expect(s.statusHTML().contains("data-confirm=\"Roll back demo on mac2 to ") && s.statusHTML().contains("No Macs match this filter.")
                && !s.statusHTML().contains("Macs removed (0)"), "P8 Roll back asks first, an empty filter says so, and an empty removed list is hidden")
         try? FeedPublisher.publish(feedDir: rigO.feed, keyFile: rigO.key, app: "noted", version: "1.0.0", artifact: rigO.artifact("n.zip", "n"),
-                                   kind: "fake-for-tests", allowSame: false, notes: "- Copy error report button\n- Not tested on printer hardware", url: "https://example.test/n.zip")
+                                   kind: "fake-for-tests", allowSame: false, notes: "- Copy error report button\n- Not tested on printer hardware", url: "http://100.64.0.7/artifacts/")
         expect(FeedPublisher.loadFeed(from: rigO.feed)?.apps["noted"]?.notes?.contains("printer hardware") == true
                && s.statusHTML().contains("<li>Not tested on printer hardware</li>"), "P5 notes are signed into the feed and shown as What's new")
         try! StateStore.update(in: rigO.state) { $0.machines["mac2"]?.lastSeen = ISO.string(Date().addingTimeInterval(-3600)) }
@@ -2671,23 +2671,23 @@ func launcherTests() {
     do {
         let rig = Rig("publish-meta")
         let meta: (String) throws -> AppMeta = { _ in AppMeta(name: "Media Studio KH", bundleID: "com.t.media", bundleName: "Media Studio KH.app", version: "1.0.0", iconPNG: Data("png".utf8)) }
-        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.0", artifact: rig.artifact("m.dmg", "m"), kind: "app-dmg", allowSame: false, meta: meta, url: "https://example.test/m.dmg")
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.0", artifact: rig.artifact("m.dmg", "m"), kind: "app-dmg", allowSame: false, meta: meta, url: "http://100.64.0.7/artifacts/")
         let e = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
         let iconFile = e?.icon.map { rig.feed.appendingPathComponent("artifacts").appendingPathComponent($0) }
         expect(e?.name == "Media Studio KH" && e?.bundleID == "com.t.media" && e?.bundleName == "Media Studio KH.app"
                && iconFile.flatMap { try? Signing.sha256Hex(fileAt: $0).hex } == e?.iconSha256 && e?.iconSha256 != nil,
                "L5 the feed carries the app's name, bundle ID, bundle name and a checked icon")
         expectThrows("L5 a DMG that holds another version is refused", contains: "holds version 1.0.0") {
-            try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.1", artifact: rig.artifact("m2.dmg", "m2"), kind: "app-dmg", allowSame: false, meta: meta, url: "https://example.test/m2.dmg")
+            try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.1", artifact: rig.artifact("m2.dmg", "m2"), kind: "app-dmg", allowSame: false, meta: meta, url: "http://100.64.0.7/artifacts/")
         }
         expectThrows("W1 a DMG that cannot be read is refused", contains: "cannot be read") {
-            try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m6.dmg", "m6"), kind: "app-dmg", allowSame: false, meta: { _ in throw khuFail("unreadable") }, url: "https://example.test/m6.dmg")
+            try FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m6.dmg", "m6"), kind: "app-dmg", allowSame: false, meta: { _ in throw khuFail("unreadable") }, url: "http://100.64.0.7/artifacts/")
         }
-        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m3.dmg", "m3"), kind: "app-dmg", allowSame: false, meta: nil, url: "https://example.test/m3.dmg")
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.2", artifact: rig.artifact("m3.dmg", "m3"), kind: "app-dmg", allowSame: false, meta: nil, url: "http://100.64.0.7/artifacts/")
         let kept = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
         let words = AppWords(tagline: "Photos and labels", description: "D", features: [AppFeature(title: "One library", text: "t")], accent: "#2a7")
-        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.3", artifact: rig.artifact("m4.dmg", "m4"), kind: "app-dmg", allowSame: false, words: words, meta: nil, url: "https://example.test/m4.dmg")
-        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.4", artifact: rig.artifact("m5.dmg", "m5"), kind: "app-dmg", allowSame: false, meta: nil, url: "https://example.test/m5.dmg")
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.3", artifact: rig.artifact("m4.dmg", "m4"), kind: "app-dmg", allowSame: false, words: words, meta: nil, url: "http://100.64.0.7/artifacts/")
+        try? FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "media", version: "1.0.4", artifact: rig.artifact("m5.dmg", "m5"), kind: "app-dmg", allowSame: false, meta: nil, url: "http://100.64.0.7/artifacts/")
         let worded = (try? FeedPublisher.loadVerifiedFeed(from: rig.feed, publicKey: rig.pair.privateKey.publicKey))??.apps["media"]
         expect(worded?.tagline == "Photos and labels" && worded?.features?.first?.title == "One library" && worded?.accent == "#2a7" && worded?.released != nil,
                "L5 a release's tagline, description, features and accent are stored, and carried to the next release that names none")
