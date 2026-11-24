@@ -13,7 +13,7 @@ wire=theng12/wire-studio-kh
 # Fleet apps whose repos do not publish yet. Listed on purpose: a publish then names each one it
 # cannot carry, instead of the gap living only in the Launcher's "Unlabelled" rows.
 # Hub published 0.6.258 on 2026-11-24 and its row is generated now; it moved to the block above.
-library=theng12/library-studio-kh   # was held out while the repo was private; public since, asset answers 200 anonymously (2026-11-24)
+library-studio=theng12/library-studio-kh   # was held out while the repo was private; public since, asset answers 200 anonymously (2026-11-24)
 music-studio=theng12/music-studio-kh
 relay-studio=theng12/relay-studio-kh
 story-studio=theng12/story-studio-kh
