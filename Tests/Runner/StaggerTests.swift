@@ -154,11 +154,11 @@ func staggerTests() {
         let rig = Rig("stagger-publish")
         try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "2.0.0",
                                    artifact: rig.artifact("hub.dmg", "AAAA"), kind: "app-dmg",
-                                   allowSame: false, meta: nil, security: true, url: "http://100.64.0.7/artifacts/")
+                                   allowSame: false, meta: nil, security: true, url: "http://example.test/artifacts/")
         let marked = FeedPublisher.loadFeed(from: rig.feed)?.apps["hub"]?.security
         try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "2.1.0",
                                    artifact: rig.artifact("hub-2.1.dmg", "BBBB"), kind: "app-dmg",
-                                   allowSame: false, meta: nil, url: "http://100.64.0.7/artifacts/")
+                                   allowSame: false, meta: nil, url: "http://example.test/artifacts/")
         let kept = FeedPublisher.loadFeed(from: rig.feed)?.apps["hub"]?.security
         let plain = Rig("stagger-publish-plain")
         try! plain.publish("hub", "2.0.0", plain.artifact("hub.dmg", "CCCC"), kind: "app-dmg")

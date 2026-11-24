@@ -189,18 +189,18 @@ func feedMirrorTests() {
         let nextArtifact = publisher.appendingPathComponent("next.dmg")
         try http.files["fixture-8.dmg"]!.write(to: nextArtifact)
         try FeedPublisher.publish(feedDir: publisher, keyFile: fixtureKey, app: "fixture", version: "1.0.8", artifact: nextArtifact,
-                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(8), url: "http://100.64.0.7/artifacts/")
+                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(8), url: "http://example.test/artifacts/")
         let published = try FeedPublisher.loadVerifiedFeed(from: publisher, publicKey: key.publicKey)!
         expect(published.previous?["fixture"] == current.apps["fixture"], "FM every publish automatically replaces just that app's fallback")
         try FeedPublisher.publish(feedDir: publisher, keyFile: fixtureKey, app: "other", version: "1.0.1", artifact: nextArtifact,
-                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(9), url: "http://100.64.0.7/artifacts/")
+                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(9), url: "http://example.test/artifacts/")
         let unrelated = try FeedPublisher.loadVerifiedFeed(from: publisher, publicKey: key.publicKey)!
         expect(unrelated.previous?["fixture"] == current.apps["fixture"], "FM another app's publish preserves the older installer pin")
         try fm.createDirectory(at: noLedger.appendingPathComponent("artifacts"), withIntermediateDirectories: true)
         try http.files["fixture-6.dmg"]!.write(to: noLedger.appendingPathComponent("artifacts/fixture-6.dmg"))
         try FeedPublisher.saveFeed(current, to: noLedger, key: key)
         try FeedPublisher.publish(feedDir: noLedger, keyFile: fixtureKey, app: "fixture", version: "1.0.8", artifact: nextArtifact,
-                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(8), url: "http://100.64.0.7/artifacts/")
+                                  kind: "app-dmg", allowSame: false, meta: nil, now: now.addingTimeInterval(8), url: "http://example.test/artifacts/")
         let withoutLedger = try FeedPublisher.loadVerifiedFeed(from: noLedger, publicKey: key.publicKey)!
         expect(withoutLedger.previous?["fixture"] == current.apps["fixture"],
                "FM publishing without a ledger still pins the displaced current version")

@@ -29,7 +29,7 @@ func feedAppTypeTests() {
         try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "media", version: version,
                                   artifact: artifact(dir.lastPathComponent, bytes), kind: "app-dmg",
                                   allowSame: allowSame, displayName: shown, meta: nil, type: type,
-                                  url: "http://100.64.0.7/artifacts/")
+                                  url: "http://example.test/artifacts/")
     }
     func loaded(_ dir: URL) -> Feed? {
         try? FeedPublisher.loadVerifiedFeed(from: dir, publicKey: key.publicKey)
