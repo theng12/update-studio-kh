@@ -1,9 +1,9 @@
-# KH Updater
+# Studio Launcher KH and its updater
 
-A light macOS tool that updates apps on each Mac and shows status. It never runs or
-routes production work, never pauses/resumes jobs, and never changes app settings.
-Updates install automatically on a fresh Mac, with one visible switch on the main
-screen and a per-app switch in each app’s own menu.
+The update system for the studio's apps. Studio Launcher KH is the window; its updater installs and
+updates every app on a Mac from the signed feed. It never runs or routes production work, never
+pauses or resumes jobs, and never changes app settings. Updates install automatically on a fresh Mac,
+with one visible switch on the main screen.
 
 ## What it looks like
 
