@@ -153,9 +153,13 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             ]
             row["installed"] = app.installed; row["available"] = app.available; row["reason"] = app.reason
             row["type"] = serverKnown ? app.feedType : nil
+            // The row is here because the app is installed on this Mac, not because the feed lists
+            // it: only a feed we actually read can say an app is absent from it (owner, 2026-11-24).
+            row["adopted"] = serverKnown && app.managed && app.app != "updater" && app.serverVersion == nil
             row["unrecognised"] = !Self.roster.isEmpty && feedAppIDs?.contains(app.app) == true && Self.roster[app.app] == nil
             row["source"] = app.source; row["fromSSD"] = app.fromSSD; row["released"] = app.released; row["installedAt"] = app.installedAt
-            row["ssdNote"] = app.ssdNote; row["automaticOrigin"] = app.automaticOrigin
+            row["ssdNote"] = app.ssdNote; row["automaticOrigin"] = app.automaticOrigin; row["initialSSDNewer"] = app.initialSSDNewer
+            row["sourcesText"] = app.sourcesText
             row["serverVersion"] = serverKnown ? app.serverVersion : nil; row["ssdVersion"] = app.ssdVersion; row["initialSSD"] = app.initialSSD
             row["bytes"] = app.bytes.map { NSNumber(value: $0) }
             row["tagline"] = app.words.tagline; row["description"] = app.words.description; row["accent"] = app.words.accent

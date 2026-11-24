@@ -255,16 +255,45 @@ assert.equal(document.activeElement, document.getElementById('q'), 'R7 the searc
 
 // Source choice is explicit, with honest unknowns and no claim that full fallback saves bytes.
 run('settingsOpen=false;detail=null;closeLayers()');
-render(state([row({ id:'new-app', managed:false, installed:null, status:'Not installed', available:'2.0', serverVersion:'2.0', ssdVersion:'1.0', initialSSD:'Test SSD · 1.0' })]));
+// Source order (owner, 2026-11-24): one comparison, both directions, always visible. A drive's
+// older copy is named as older and offered only as a deliberate choice; a newer one is named as
+// newer and is the offer; an installed app is compared with every source too. The sentence comes
+// from the agent's own comparison, so the page cannot answer the question a second way.
+// A: first install, the feed newer than the drive's copy.
+render(state([row({ id:'new-app', managed:false, installed:null, status:'Not installed', available:'0.1.81',
+                    serverVersion:'0.1.81', ssdVersion:'0.1.75', initialSSD:'ATLAS · 0.1.75', initialSSDNewer:false,
+                    sourcesText:'This Mac has no copy yet; ATLAS carries 0.1.75, older; the saved feed has 0.1.81.' })]));
+assert.match(document.querySelector('.card .src').textContent,/ATLAS carries 0\.1\.75, older/,'A: the card names both versions in one sentence');
+assert.match(document.querySelector('.card .src').textContent,/the saved feed has 0\.1\.81/);
 run("openDetail('new-app')");
-assert.match(document.querySelector('.facts').textContent, /Server2.0SSD1.0/, 'source comparison shows each version separately');
-assert.match(document.querySelector('.sheet').textContent, /Then Update offers the newer server version/, 'older SSD first install explains the next step');
+assert.match(document.querySelector('.facts').textContent,/Server0\.1\.81SSD0\.1\.75/,'A: both versions are shown side by side');
+assert.match(document.querySelector('.sheet').textContent,/ATLAS carries 0\.1\.75, older/,'A: the sheet carries the same sentence');
 run("openMenu(S.apps[0],document.querySelector('.card'))");
-const older = document.querySelectorAll('.menu button').find(b=>b.textContent.startsWith('Install from Test SSD'));
-assert(older, 'older SSD first install remains available');
+const older=document.querySelectorAll('.menu button').find(b=>b.textContent=='Copy 0.1.75 from ATLAS anyway');
+assert(older,'A: the older copy is still offered, as a choice, never hidden');
+assert(!document.querySelectorAll('.menu button').some(b=>b.textContent.startsWith('Install from ATLAS')),'A: and never as the install');
 posts.length=0; older.fire('click');
-assert.equal(posts[0].action,'installSSD');
-assert.equal(posts[0].app,'new-app');
+assert.equal(posts[0].action,'installSSD'); assert.equal(posts[0].app,'new-app');
+// B: first install, the drive newer than a stale feed — the drive is the better copy.
+render(state([row({ id:'offline-app', managed:false, installed:null, status:'Not installed', available:'1.2',
+                    serverVersion:'1.0', ssdVersion:'1.2', initialSSD:'NOVA · 1.2', initialSSDNewer:true,
+                    sourcesText:'This Mac has no copy yet; NOVA carries 1.2, newer; the saved feed has 1.0.' })]));
+run("openMenu(S.apps[0],document.querySelector('.card'))");
+assert(document.querySelectorAll('.menu button').some(b=>b.textContent=='Install from NOVA · 1.2 first'),'B: a newer drive copy is offered as the install');
+// C: installed from the drive, and the same drive carries a newer copy — it must be offered.
+render(state([row({ id:'hub', managed:true, installed:'0.6.255', available:'0.6.256', status:'Update available',
+                    sourcesText:'This Mac has 0.6.255; ATLAS carries 0.6.256, newer.' })]));
+assert.match(document.querySelector('.card .src').textContent,/This Mac has 0\.6\.255; ATLAS carries 0\.6\.256, newer/,'C: the newer copy is named');
+assert(document.querySelectorAll('.card button').some(b=>b.textContent=='Update'),'C: and it is offered as the update');
+// D: installed newer than the drive's copy — the drive copy is older, never an upgrade.
+render(state([row({ id:'hub', managed:true, installed:'0.6.256', available:'0.6.256', status:'Up to date',
+                    sourcesText:'This Mac has 0.6.256; ATLAS carries 0.6.255, older.' })]));
+assert.match(document.querySelector('.card .src').textContent,/ATLAS carries 0\.6\.255, older/,'D: the drive copy is named as older');
+assert(!document.querySelectorAll('.card button').some(b=>b.textContent=='Update'),'D: and it is not offered as an upgrade');
+// E: a source that cannot be compared is named unknown, never treated as current.
+render(state([row({ id:'hub', managed:true, installed:'0.6.255', available:'0.6.255', status:'Up to date',
+                    sourcesText:'This Mac has 0.6.255; ATLAS carries a copy that cannot be compared.' })]));
+assert.match(document.querySelector('.card .src').textContent,/cannot be compared/,'E: an unreadable copy is unknown, not current');
 render(state([row({ status:'Updating…', progress:{phase:'delta-downloading',done:100000,total:200000} })]));
 assert.equal(line(),'Downloading changed data 100 KB of 200 KB · 50%','delta uses transferred bytes, not full artifact size');
 render(state([row({ status:'Updating…', progress:{phase:'full-fallback',done:100000,total:1000000} })]));
@@ -883,6 +912,25 @@ assert.match(document.getElementById('main').textContent,/H Business/);
 render(state(appRows.filter(a=>a.id!=='business'),{appTypes,feedCount:10}));
 run("tab='business';render()");
 assert.match(document.getElementById('main').textContent,/No Business apps on this feed yet\. 2 apps have no category yet; they are under All\./);
+render(state(appRows,{appTypes,feedCount:11}));
+// R22 a row that exists because the app is installed on this Mac is not a feed row: it keeps its
+// own heading and the version read from its bundle, and is never "No category yet" — that sentence
+// is for a feed row whose author forgot a label (owner, 2026-11-24).
+const adoptedRows=appRows.concat([row({id:'hub-apps',name:'I Hub',type:null,managed:true,installed:'0.6.39',
+  available:null,status:'Not in the feed',adopted:true,open:true})]);
+run("tab='all';view='grid'");
+render(state(adoptedRows,{appTypes,feedCount:11}));
+const main22=document.getElementById('main').textContent;
+assert.match(main22,/Installed on this Mac · 1/,'R22 an adopted app has its own heading');
+assert.match(main22,/I Hub/);
+assert.match(main22,/0\.6\.39/,'R22 the version read from the bundle is shown');
+assert.doesNotMatch(main22,/I HubUnlabelled/,'R22 an adopted app is not labelled Unlabelled');
+assert.match(main22,/No category yet · 2/,'R22 only feed rows without a label are counted');
+run("tab='media';render()");
+assert.doesNotMatch(document.getElementById('main').textContent,/Installed on this Mac/,'R22 no feed category to sit under, and none invented');
+run("tab='all'");
+render(state(adoptedRows.map(a=>a.id=='hub-apps'?{...a,adopted:false}:a),{appTypes,feedCount:11}));
+assert.match(document.getElementById('main').textContent,/No category yet · 3/,'R22 the same row without the flag reads as the feed row it claims to be');
 render(state(appRows,{appTypes,feedCount:11}));
 // The controls that only shape an app list are not offered on the two non-app tabs.
 run("tab='plugin';render()");

@@ -184,6 +184,13 @@ public struct HelperApp: Sendable, Equatable {
     public var serverVersion: String?
     public var ssdVersion: String?
     public var initialSSD: String?
+    /// True when the drive's copy is newer than the feed's (or the feed carries none). The page
+    /// offers that copy first; an older one is offered only as a deliberate choice, never as the
+    /// update (owner, 2026-11-24: "it shouldn't just offer to downgrade").
+    public var initialSSDNewer = false
+    /// Every source compared once with what this Mac has, in the words the page shows. Nil when the
+    /// feed is the only source and says nothing the version line does not already say.
+    public var sourcesText: String?
     public var canRollBack = false
     /// The bundle's own `CFBundleVersion`: nil when it carries none, so a row can never claim an
     /// exact build its bundle does not state (a marketing version is shown beside it, not as it).

@@ -1521,7 +1521,18 @@ public enum Agent {
             let last = appDone.first.map { ($0.status, $0.reason) }
             // An app its SSD marks as updating itself is shown that way, whatever this Mac's recipe.
             let only = updatesItself(app: app, recipe: cfg?.recipe, entry: entry)
-            let available = cfg?.recipe == "updater" ? feed.apps[app]?.version : (entry?.available ?? feed.apps[app]?.version)
+            // One comparison answers both directions: what this Mac has, what each other copy
+            // carries, and which copy — if any — is newer (owner, 2026-11-24, via S001). The row's
+            // offer, its sentence and the drive's own choice all come from it; nothing else here
+            // compares versions to decide what to offer.
+            let driveCopy = entry?.ssd ?? entry?.initialSSD
+            let driveSource = driveCopy.map { AppSources.Source(name: $0.volume, version: $0.version) }
+            let sources = AppSources(installed: installed, sources: [
+                feed.apps[app].map { AppSources.Source(name: "the saved feed", version: $0.version, isFeed: true) },
+                driveSource,
+                entry?.selfVersion.map { AppSources.Source(name: "its own updater", version: $0) },
+            ].compactMap { $0 })
+            let available = cfg?.recipe == "updater" ? feed.apps[app]?.version : sources.offer
             // Count consecutive failures for the currently offered version; a newer offered version
             // or a non-failure result clears the ceiling so a real fix can still be tried.
             var consecutiveFailures = 0
@@ -1580,10 +1591,16 @@ public enum Agent {
             row.serverVersion = feed.apps[app]?.version
             row.feedType = feed.apps[app]?.type
             row.ssdVersion = entry?.ssd?.version ?? entry?.initialSSD?.version
-            if installed == nil, let local = entry?.initialSSD, let server = feed.apps[app],
-               VersionCompare.isNewer(server.version, than: local.version), !only || manual {
-                row.initialSSD = "\(local.volume) · \(local.version)"
+            // The drive's own first copy, through the same comparison: newer than everything else it
+            // is the copy to install first; older it is a deliberate choice, never the update.
+            if installed == nil, let local = driveCopy, let driveSource, !only || manual {
+                let o = sources.order(driveSource)
+                if o != .same {
+                    row.initialSSD = "\(local.volume) · \(local.version)"
+                    row.initialSSDNewer = o != .older
+                }
             }
+            row.sourcesText = sources.text
             if let cfg, installed != nil, cfg.recipe != "updater" {
                 row.installedAt = ((try? FileManager.default.attributesOfItem(atPath: cfg.bundlePath))?[.modificationDate] as? Date).map(ISO.string)
                 // An app that updates itself is never rolled back by KH Updater, so it offers no

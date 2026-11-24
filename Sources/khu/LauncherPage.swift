@@ -54,6 +54,7 @@ h2{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--sub)}h2:first-c
 .chip{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--muted-bg);color:var(--sub);white-space:nowrap}
 .chip.ok{background:var(--ok-bg);color:var(--ok)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}.chip.info{background:var(--info-bg);color:var(--info)}
 .reason{color:var(--bad);font-size:12px;display:block;overflow-wrap:anywhere}
+.src{color:var(--sub);font-size:12px;margin-top:6px;overflow-wrap:anywhere}
 .when{font-size:12px;color:var(--sub)}
 .foot{margin-top:auto;display:flex;gap:8px;align-items:center}.foot .main{flex:1}
 .prog{flex:1;display:flex;flex-direction:column;gap:6px}.prog .line{font-size:12px}.bar{height:4px;border-radius:4px;background:var(--line2);overflow:hidden}
@@ -243,19 +244,26 @@ function buttons(a,big){const out=[],m=mainAction(a);
  out.push(el('button',{class:'btn icon',title:'More','aria-label':'More for '+a.name,'aria-haspopup':'menu',onclick:e=>{e.stopPropagation();openMenu(a,e.currentTarget)}},svg('M3.5 8h.01M8 8h.01M12.5 8h.01')));return out}
 const typeName=a=>(S.appTypes||[]).includes(a.type)?a.type[0].toUpperCase()+a.type.slice(1):'Unlabelled';
 function byType(a,b){const x=typeName(a),y=typeName(b);return Number(x==='Unlabelled')-Number(y==='Unlabelled')||x.localeCompare(y)}
-const typeLine=a=>el('div',{class:'tag'},typeName(a)+(a.unrecognised?' · Unrecognised':''));
+const typeLine=a=>adopted(a)?null:el('div',{class:'tag'},typeName(a)+(a.unrecognised?' · Unrecognised':''));
 // The eight sections the owner asked for, in his order: five of the feed's labels, then the two
 // things that are not apps at all. Plugin and Extension read the same published list, split by kind.
 const TABS=[['all','All'],['business','Business'],['media','Media'],['utility','Utilities'],['entertainment','Entertainment'],['system','System'],['plugin','Plugin'],['extension','Extension']];
 const CATEGORIES=new Set(['business','media','utility','entertainment','system']);
 const appsTab=()=>tab==='all'||CATEGORIES.has(tab);
-const unlabelled=a=>!(S.appTypes||[]).includes(a.type);
+// A row that exists because the app is installed on this Mac is not a feed row: it carries no feed
+// label, and "No category yet" would read as the feed's mistake and ours. Its heading says what it
+// is, and the version shown is the one read from its bundle (owner, 2026-11-24).
+const adopted=a=>a.adopted===true;
+const unlabelled=a=>!(S.appTypes||[]).includes(a.type)&&!adopted(a);
 function card(a){const tag=a.tagline||a.description||(a.source=='Official vendor'?'Installed from its official vendor installer.':(a.statusOnly?'Updates itself from its own installer.':null));
  const when=installed(a)?day(a.installedAt):day(a.released);
  const c=el('article',{class:'card click'+(selected.has(a.id)?' selected':''),'aria-selected':String(selected.has(a.id)),style:a.accent?'--app:'+a.accent:null,onclick:()=>openDetail(a.id),tabindex:0,onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget){openDetail(a.id);return}const cards=[...document.querySelectorAll('.card')],i=cards.indexOf(e.currentTarget),d=e.key=='ArrowRight'||e.key=='ArrowDown'?1:e.key=='ArrowLeft'||e.key=='ArrowUp'?-1:0;if(d){e.preventDefault();cards[(i+d+cards.length)%cards.length]?.focus()}}},
   el('div',{class:'head'},icon(a),el('div',{class:'t'},el('div',{class:'name'},a.name),typeLine(a),tag?el('div',{class:'tag'},tag):null)),
   el('div',{class:'meta'},chip(a),versionLine(a)),
   a.reason?el('div',{class:'reason'},(a.retrying?'Last attempt: ':'')+plain(a.reason)):null,
+  // What this Mac has and what each other copy carries, in one sentence the comparison produced:
+  // an older drive copy is named as older, a newer one as newer, never silently treated as current.
+  a.sourcesText?el('div',{class:'src'},a.sourcesText):null,
   when?el('div',{class:'when'},(installed(a)?'Last updated ':'Released ')+when):null,
   el('div',{class:'foot'},...buttons(a)));return c}
 function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('thead',{},el('tr',{},el('th',{},'App'),el('th',{},'Installed'),el('th',{},'Latest'),el('th',{},'Released'),el('th',{},'State'),el('th',{},''))),
@@ -318,7 +326,10 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  const [list,hidden]=visible();
  // Under All the unlabelled rows get their own named group, so they are not counted twice here.
  const labelled=tab=='all'?list.filter(a=>!unlabelled(a)):list;
- const mine=labelled.filter(installed),others=labelled.filter(a=>!installed(a));
+ // Installed here, absent from the feed: its own group, so it is neither labelled by the feed nor
+ // pushed into a category the feed never gave it.
+ const here=labelled.filter(adopted);
+ const mine=labelled.filter(a=>installed(a)&&!adopted(a)),others=labelled.filter(a=>!installed(a)&&!adopted(a));
  const unlabelledRows=tab=='all'?list.filter(unlabelled):[];
  const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.available&&(a.status=='Update available'||a.status=='Failed'||a.status=='Downloaded')).length;
  $('all').hidden=n==0||!appTab;$('all').textContent='Update all ('+n+')';
@@ -338,7 +349,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
    const none=S.apps.filter(a=>!a.hidden&&unlabelled(a)).length;
    m.append(el('p',{class:'empty'},q?'No app matches “'+q+'”.':CATEGORIES.has(tab)?'No '+TABS.find(t=>t[0]==tab)[1]+' apps on this feed yet.'+(none?' '+none+' '+(none===1?'app has':'apps have')+' no category yet; they are under All.':''):'No app matches “'+q+'”.'));
   }
-  for(const [title,group] of [['Installed',mine],['Not installed',others]]){if(!group.length)continue;
+  for(const [title,group] of [['Installed',mine],['Installed on this Mac',here],['Not installed',others]]){if(!group.length)continue;
    m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
   if(unlabelledRows.length)m.append(el('h2',{},'No category yet · '+unlabelledRows.length),view=='grid'?el('div',{class:'grid'},unlabelledRows.map(card)):tableOf(unlabelledRows));
  }else{
@@ -413,7 +424,13 @@ function paintAuto(){const a=$('auto'),manual=!!S.settings.checkManually,on=auto
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
- if(a.initialSSD&&!a.installed&&(!a.statusOnly||a.manuallyInstallable))add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
+ // The drive's own first copy. Newer than the feed, it is the update and comes first; older, it is
+ // a deliberate choice that names both versions and never reads as the update. It is never hidden:
+ // it is this Mac's offline fallback (owner, 2026-11-24).
+ if(a.initialSSD&&!a.installed&&(!a.statusOnly||a.manuallyInstallable)){
+  const parts=a.initialSSD.split(' · '),volume=parts[0],driveVersion=parts[1]||'';
+  if(a.initialSSDNewer)add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
+  else add('Copy '+(driveVersion||'that copy')+' from '+volume+' anyway',()=>post({action:'installSSD',app:a.id}))}
  if(a.notes&&a.notes.length)add('Release notes',()=>openDetail(a.id,true));
  if(a.open&&!a.helper){add('Open',()=>post({action:'open',app:a.id}));add('Show in Finder',()=>post({action:'finder',app:a.id}))}
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
@@ -458,7 +475,7 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     a.fromSSD?el('p',{class:'sub'},'The version on offer is the copy on '+a.fromSSD+', read from that drive.'):
      a.source=='Feed'?el('p',{class:'sub'},'The version on offer comes from the signed feed, so its installer is downloaded.'):null,
     a.ssdNote&&!a.fromSSD?el('p',{class:'sub'},a.ssdNote):null,
-    a.initialSSD?el('p',{class:'sub'},'The SSD can install '+a.initialSSD+' first from the More menu. Then Update offers the newer server version. Your Automatic setting is kept.'):null,
+    a.sourcesText?el('p',{class:'sub'},a.sourcesText+(a.initialSSD&&!a.initialSSDNewer?' Install from the feed above, or copy the drive’s copy from the More menu.':'')):null,
     el('h4',{id:'changes'},'What’s changed'),notes.length?el('ul',{class:'changes'},notes.slice(0,limit).map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.'),
     notes.length>5?el('button',{class:'more',onclick:()=>{showAll[a.id]=!showAll[a.id];drawDetail()}},showAll[a.id]?'Show fewer':'Show '+(notes.length-5)+' more'):null)));
  const scrim=el('div',{class:'scrim d',onclick:()=>{detail=null;closeLayers()}},sheet);document.body.append(scrim);
