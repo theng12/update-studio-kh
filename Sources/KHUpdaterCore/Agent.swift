@@ -1580,9 +1580,13 @@ public enum Agent {
             row.serverVersion = feed.apps[app]?.version
             row.feedType = feed.apps[app]?.type
             row.ssdVersion = entry?.ssd?.version ?? entry?.initialSSD?.version
-            if installed == nil, let local = entry?.initialSSD, let server = feed.apps[app],
-               VersionCompare.isNewer(server.version, than: local.version), !only || manual {
+            // The drive's own first copy, offered with the comparison the page needs: newer than the
+            // feed is the better copy (an offline Mac with a stale feed), older is a deliberate
+            // choice the page names with both versions — never presented as the update.
+            if installed == nil, let local = entry?.initialSSD, !only || manual,
+               let driveIsNewer = SSDOffer.driveIsNewer(local.version, served: feed.apps[app]?.version) {
                 row.initialSSD = "\(local.volume) · \(local.version)"
+                row.initialSSDNewer = driveIsNewer
             }
             if let cfg, installed != nil, cfg.recipe != "updater" {
                 row.installedAt = ((try? FileManager.default.attributesOfItem(atPath: cfg.bundlePath))?[.modificationDate] as? Date).map(ISO.string)

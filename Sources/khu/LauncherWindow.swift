@@ -155,7 +155,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             row["type"] = serverKnown ? app.feedType : nil
             row["unrecognised"] = !Self.roster.isEmpty && feedAppIDs?.contains(app.app) == true && Self.roster[app.app] == nil
             row["source"] = app.source; row["fromSSD"] = app.fromSSD; row["released"] = app.released; row["installedAt"] = app.installedAt
-            row["ssdNote"] = app.ssdNote; row["automaticOrigin"] = app.automaticOrigin
+            row["ssdNote"] = app.ssdNote; row["automaticOrigin"] = app.automaticOrigin; row["initialSSDNewer"] = app.initialSSDNewer
             row["serverVersion"] = serverKnown ? app.serverVersion : nil; row["ssdVersion"] = app.ssdVersion; row["initialSSD"] = app.initialSSD
             row["bytes"] = app.bytes.map { NSNumber(value: $0) }
             row["tagline"] = app.words.tagline; row["description"] = app.words.description; row["accent"] = app.words.accent

@@ -255,16 +255,29 @@ assert.equal(document.activeElement, document.getElementById('q'), 'R7 the searc
 
 // Source choice is explicit, with honest unknowns and no claim that full fallback saves bytes.
 run('settingsOpen=false;detail=null;closeLayers()');
-render(state([row({ id:'new-app', managed:false, installed:null, status:'Not installed', available:'2.0', serverVersion:'2.0', ssdVersion:'1.0', initialSSD:'Test SSD · 1.0' })]));
+// SSD-offer order (owner, 2026-11-24): an older drive copy is named with both versions and offered
+// only as a deliberate choice; the feed's newer copy is the update. Fixture A.
+render(state([row({ id:'new-app', managed:false, installed:null, status:'Not installed', available:'0.1.81',
+                    serverVersion:'0.1.81', ssdVersion:'0.1.75', initialSSD:'ATLAS · 0.1.75', initialSSDNewer:false })]));
 run("openDetail('new-app')");
-assert.match(document.querySelector('.facts').textContent, /Server2.0SSD1.0/, 'source comparison shows each version separately');
-assert.match(document.querySelector('.sheet').textContent, /Then Update offers the newer server version/, 'older SSD first install explains the next step');
+assert.match(document.querySelector('.facts').textContent,/Server0\.1\.81SSD0\.1\.75/,'A: both versions are shown side by side');
+assert.match(document.querySelector('.sheet').textContent,/The drive carries 0\.1\.75; the feed has 0\.1\.81\./,'A: the sheet names both, in plain words');
+assert.doesNotMatch(document.querySelector('.sheet').textContent,/Update offers the newer server version/,'A: an older drive copy is never described as the update');
 run("openMenu(S.apps[0],document.querySelector('.card'))");
-const older = document.querySelectorAll('.menu button').find(b=>b.textContent.startsWith('Install from Test SSD'));
-assert(older, 'older SSD first install remains available');
+assert.match(document.querySelector('.menu').textContent,/The drive carries 0\.1\.75; the feed has 0\.1\.81\./,'A: the menu names both versions too');
+const older=document.querySelectorAll('.menu button').find(b=>b.textContent=='Copy 0.1.75 from ATLAS anyway');
+assert(older,'A: the older copy is still offered, as a choice, never hidden');
+assert(!document.querySelectorAll('.menu button').some(b=>b.textContent.startsWith('Install from ATLAS')),'A: and never as the install');
 posts.length=0; older.fire('click');
-assert.equal(posts[0].action,'installSSD');
-assert.equal(posts[0].app,'new-app');
+assert.equal(posts[0].action,'installSSD'); assert.equal(posts[0].app,'new-app');
+// Fixture B: a drive newer than the feed — an offline Mac with a stale feed — is the better copy.
+render(state([row({ id:'offline-app', managed:false, installed:null, status:'Not installed', available:'1.0',
+                    serverVersion:'1.0', ssdVersion:'1.2', initialSSD:'NOVA · 1.2', initialSSDNewer:true })]));
+run("openMenu(S.apps[0],document.querySelector('.card'))");
+assert(document.querySelectorAll('.menu button').some(b=>b.textContent=='Install from NOVA · 1.2 first'),'B: a newer drive copy is offered as the install');
+assert(!document.querySelector('.menu .why'),'B: with no version note, because nothing older needs explaining');
+run("openDetail('offline-app')");
+assert.match(document.querySelector('.sheet').textContent,/The drive has a newer copy than the feed/,'B: the sheet says why the drive is offered');
 render(state([row({ status:'Updating…', progress:{phase:'delta-downloading',done:100000,total:200000} })]));
 assert.equal(line(),'Downloading changed data 100 KB of 200 KB · 50%','delta uses transferred bytes, not full artifact size');
 render(state([row({ status:'Updating…', progress:{phase:'full-fallback',done:100000,total:1000000} })]));

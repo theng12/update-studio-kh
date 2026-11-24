@@ -413,7 +413,15 @@ function paintAuto(){const a=$('auto'),manual=!!S.settings.checkManually,on=auto
 function closeLayers(){document.querySelectorAll('.scrim,.menu').forEach(x=>x.remove())}
 function openMenu(a,anchor){document.querySelectorAll('.menu').forEach(x=>x.remove());const items=[];
  const add=(label,action,cls)=>items.push(el('button',{class:cls||'',role:'menuitem',onclick:()=>{m.remove();action()}},label));
- if(a.initialSSD&&!a.installed&&(!a.statusOnly||a.manuallyInstallable))add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
+ // The drive's own first copy. Newer than the feed, it is the update and comes first; older, it is
+ // a deliberate choice that names both versions and never reads as the update. It is never hidden:
+ // it is this Mac's offline fallback (owner, 2026-11-24).
+ if(a.initialSSD&&!a.installed&&(!a.statusOnly||a.manuallyInstallable)){
+  const parts=a.initialSSD.split(' · '),volume=parts[0],driveVersion=parts[1]||'';
+  if(a.initialSSDNewer)add('Install from '+a.initialSSD+' first',()=>post({action:'installSSD',app:a.id}));
+  else{
+   items.push(el('p',{class:'why'},'The drive carries '+(driveVersion||'an older copy')+(a.available?'; the feed has '+a.available:'')+'.'));
+   add('Copy '+(driveVersion||'that copy')+' from '+volume+' anyway',()=>post({action:'installSSD',app:a.id}))}}
  if(a.notes&&a.notes.length)add('Release notes',()=>openDetail(a.id,true));
  if(a.open&&!a.helper){add('Open',()=>post({action:'open',app:a.id}));add('Show in Finder',()=>post({action:'finder',app:a.id}))}
  if(a.managed&&a.installed&&a.available&&!a.statusOnly&&!a.helper)add('Reinstall',()=>post({action:'reinstall',app:a.id}));
@@ -458,7 +466,9 @@ function drawDetail(){const list=visible()[0],i=list.findIndex(a=>a.id==detail.i
     a.fromSSD?el('p',{class:'sub'},'The version on offer is the copy on '+a.fromSSD+', read from that drive.'):
      a.source=='Feed'?el('p',{class:'sub'},'The version on offer comes from the signed feed, so its installer is downloaded.'):null,
     a.ssdNote&&!a.fromSSD?el('p',{class:'sub'},a.ssdNote):null,
-    a.initialSSD?el('p',{class:'sub'},'The SSD can install '+a.initialSSD+' first from the More menu. Then Update offers the newer server version. Your Automatic setting is kept.'):null,
+    a.initialSSD?el('p',{class:'sub'},a.initialSSDNewer
+      ?'The drive has a newer copy than the feed: '+a.initialSSD+'. Install it from the More menu; your Automatic setting is kept.'
+      :'The drive carries '+((a.initialSSD.split(' · ')[1])||'an older copy')+(a.available?'; the feed has '+a.available:'')+'. Install from the feed above, or copy the drive’s copy from the More menu.'):null,
     el('h4',{id:'changes'},'What’s changed'),notes.length?el('ul',{class:'changes'},notes.slice(0,limit).map(n=>el('li',{},n))):el('p',{class:'sub'},'No notes for this version.'),
     notes.length>5?el('button',{class:'more',onclick:()=>{showAll[a.id]=!showAll[a.id];drawDetail()}},showAll[a.id]?'Show fewer':'Show '+(notes.length-5)+' more'):null)));
  const scrim=el('div',{class:'scrim d',onclick:()=>{detail=null;closeLayers()}},sheet);document.body.append(scrim);
