@@ -92,15 +92,21 @@ public enum FeedPages {
     }
 
     private static func put(_ envelope: Data, repo: String, blobSHA: String?) throws {
+        // The address a feed commit carries comes from the machine that publishes, never from the
+        // source: a personal address written into the code ships inside every copy of the app, and
+        // the pre-publish scan stops on exactly that (measured 2026-11-25, Launcher 0.1.82).
+        guard let email = ProcessInfo.processInfo.environment["KH_FEED_COMMIT_EMAIL"], !email.isEmpty else {
+            throw khuFail("set KH_FEED_COMMIT_EMAIL to the address a feed commit carries; it is not compiled in")
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         var arguments = ["gh", "api", "-X", "PUT", "repos/\(repo)/contents/release.json",
                          "-f", "message=release.json: generated from the app repos",
                          "-f", "content=\(envelope.base64EncodedString())", "-f", "branch=main",
                          "-f", "committer[name]=KH Studio",
-                         "-f", "committer[email]=112568204+theng12@users.noreply.github.com",
+                         "-f", "committer[email]=\(email)",
                          "-f", "author[name]=KH Studio",
-                         "-f", "author[email]=112568204+theng12@users.noreply.github.com"]
+                         "-f", "author[email]=\(email)"]
         if let blobSHA { arguments += ["-f", "sha=\(blobSHA)"] }
         process.arguments = arguments
         let err = Pipe()
