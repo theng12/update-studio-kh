@@ -433,6 +433,32 @@ func feedGeneratorTests() {
         }
     } catch { expect(false, "FG21 fixture: \(error)") }
 
+    // FG22 a missing word is refused before the hash pass: the run names the app in its first
+    // seconds instead of after every asset has downloaded, which from outside looks like a slow
+    // network and makes every watcher start the run again (row 20261124-48).
+    do {
+        final class Counting: AssetVerifier, @unchecked Sendable {
+            var calls = 0
+            func prove(url: String, repo: String, tag: String, asset: String,
+                       expectedSha: String, expectedBytes: Int64) throws { calls += 1 }
+        }
+        let partial = metaJSON(["name": "Hub Studio KH"])   // no bundle_id, type, tagline, description
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": partial,
+        ])
+        let counting = Counting()
+        do {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: counting)
+            expect(false, "FG22 an app with no words must refuse")
+        } catch {
+            expect("\(error)".contains("no bundle_id") && "\(error)".contains(hubRepo),
+                   "FG22 the words refusal is the same one and it names the repo (\(error))")
+            expect(counting.calls == 0,
+                   "FG22 nothing was hashed before the refusal (prove calls=\(counting.calls))")
+        }
+    } catch { expect(false, "FG22 fixture: \(error)") }
+
     // FG14 an asset that does not download anonymously is a finding, never a row. The check runs
     // before the row is built, so a draft or orphan release passes nothing through.
     do {

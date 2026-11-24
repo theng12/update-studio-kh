@@ -505,6 +505,17 @@ public enum FeedGenerator {
         if let unknown = refreshNotes.subtracting(apps.keys).sorted().first {
             throw khuFail("refused: --refresh-notes names \(unknown), which this run does not generate; nothing was generated")
         }
+        // Name what a row cannot be built from before a single byte is hashed (row 20261124-48):
+        // a refusal that arrives after the hash pass reads from outside as a slow download, and
+        // every watcher starts the whole run again. Same checks, same messages — just first. The
+        // duplicate `releases/latest` read costs one cheap API call per app; the DMGs cost minutes.
+        for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
+            let found = try Self.release(for: app, repo: repo, gh: gh)
+            guard let foundRelease = found.release else { continue }
+            _ = try Self.words(app: app, repo: repo, tag: foundRelease.tag, entry: registry?.apps[app],
+                               served: previous?.apps[app], gh: gh)
+            _ = try Self.asset(entry: registry?.apps[app], release: foundRelease, repo: repo)
+        }
         var feed = Feed(published_at: ISO.string(now))
         var sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = [], wordChanges: [String] = []
         var notes: [String] = []
