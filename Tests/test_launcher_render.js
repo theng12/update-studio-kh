@@ -961,7 +961,7 @@ extRows.push({id:'efficient-orchestration',name:'Efficient Orchestration',versio
 render(state(appRows,{extensions:{status:'available',entries:extRows}}));
 const extPanel = document.getElementById('extPanel');
 assert.equal(extPanel.querySelectorAll('.extRow').length,1,'the Plugin tab lists the plugin entry only');
-assert.match(extPanel.textContent,/Efficient Orchestration · 0\.3\.204Coordinates work across Studio apps\.No public download yet/);
+assert.match(extPanel.textContent,/IconEfficient Orchestration · 0\.3\.204Coordinates work across Studio apps\.ScreenshotNo public download yet/);
 assert.equal(extPanel.querySelectorAll('button').length,0,'a plugin without a download offers no dead button');
 run("tab='extension';render()");
 assert.equal(document.getElementById('extPanel').querySelectorAll('.extRow').length,3,'the Extension tab lists the extension entries only');
@@ -975,6 +975,36 @@ assert.equal(posts.length,1);
 assert.equal(posts[0].action,'downloadExtension');
 assert.equal(posts[0].app,'test-extension-1');
 assert.equal(posts[0].url,undefined,'browser opening uses only the verified native catalog');
+// A published picture is drawn on the tile; a row without one keeps the placeholder; and nothing
+// waits for a picture — all three tiles are in the page before a single image arrives.
+const pictured=extRows.map((x,i)=>({...x,
+  icon:'https://raw.githubusercontent.com/theng12/kh-extensions/main/'+x.id+'/icon.png',
+  screenshot:'https://github.com/theng12/kh-extensions/releases/download/'+x.id+'/shot.png'}));
+run("tab='extension';render()");
+render(state(appRows,{extensions:{status:'available',entries:pictured}}));
+const tiles=document.getElementById('extPanel').querySelectorAll('.extRow');
+assert.equal(tiles.length,3,'EXT1 all three tiles are drawn at once, before any picture arrives');
+const icon=tiles[0].querySelector('.extIcon img'), shot=tiles[0].querySelector('.extShot img');
+assert(icon&&shot,'EXT1 each tile carries an icon and a screenshot node');
+assert.equal(icon.getAttribute('data-src'),'https://raw.githubusercontent.com/theng12/kh-extensions/main/test-extension-0/icon.png');
+assert.equal(shot.getAttribute('data-src'),'https://github.com/theng12/kh-extensions/releases/download/test-extension-0/shot.png');
+assert(icon.hidden===true&&shot.hidden===true,'EXT1 the placeholder shows until a picture has really arrived');
+icon.naturalWidth=512;icon.naturalHeight=512;icon.onload();
+assert.equal(icon.hidden,false,'EXT2 a loaded icon replaces the placeholder');
+shot.naturalWidth=1024;shot.naturalHeight=640;shot.onload();
+assert.equal(shot.hidden,false,'EXT2 a loaded screenshot replaces the placeholder');
+icon.naturalWidth=3000;icon.naturalHeight=900;
+tiles[1].querySelector('.extIcon img').naturalWidth=3000;
+tiles[1].querySelector('.extIcon img').naturalHeight=900;
+tiles[1].querySelector('.extIcon img').onload();
+assert(!tiles[1].querySelector('.extIcon img'),'EXT3 an oversized picture is dropped');
+assert.match(tiles[1].querySelector('.extIcon').textContent,/Icon/,'EXT3 the placeholder stays');
+assert.match(tiles[1].querySelector('.extNote').textContent,/3000×900, over the 2048-pixel limit/, 'EXT3 and the page says why, in its own words');
+render(state(appRows,{extensions:{status:'available',entries:extRows}}));
+const bare=document.getElementById('extPanel').querySelectorAll('.extRow');
+assert(!bare[0].querySelector('.extIcon img')&&!bare[0].querySelector('.extShot img'),'EXT4 a row without pictures has no image to break');
+assert.match(bare[0].querySelector('.extIcon').textContent,/Icon/,'EXT4 it keeps the placeholder');
+assert.equal(bare[0].querySelector('.extNote').textContent,'','EXT4 and invents no complaint');
 // The tab row is keyboard-navigable: Right/Left move and activate, Home and End jump.
 run("tab='all';render()");
 const allTab=document.getElementById('tab-all');allTab.focus();

@@ -44,7 +44,10 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             case let .available(entries, note):
                 return ["status": "available", "note": note as Any, "entries": entries.map {
                     ["id": $0.id, "name": $0.name, "version": $0.version, "summary": $0.summary,
-                     "kind": $0.kind, "download": $0.downloadURL != nil]
+                     "kind": $0.kind, "download": $0.downloadURL != nil,
+                     // Pictures are plain public addresses the page loads itself; nil is drawn as
+                     // the tile's placeholder, never as a broken image.
+                     "icon": $0.iconURL?.absoluteString as Any, "screenshot": $0.screenshotURL?.absoluteString as Any]
                 }]
             }
         }

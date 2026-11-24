@@ -18,11 +18,17 @@ public enum ExtensionCatalog {
         public var sha256: String?
         /// The published size, used as the download ceiling before anything is kept.
         public var bytes: Int64?
+        /// The tile's own picture and a picture of the extension working. Both are plain public
+        /// addresses the page loads directly: nothing is fetched, kept or unpacked here.
+        public var iconURL: URL?
+        public var screenshotURL: URL?
 
         public init(id: String, name: String, version: String, summary: String, kind: String = "extension",
-                    downloadURL: URL? = nil, sha256: String? = nil, bytes: Int64? = nil) {
+                    downloadURL: URL? = nil, sha256: String? = nil, bytes: Int64? = nil,
+                    iconURL: URL? = nil, screenshotURL: URL? = nil) {
             self.id = id; self.name = name; self.version = version; self.summary = summary
             self.kind = kind; self.downloadURL = downloadURL; self.sha256 = sha256; self.bytes = bytes
+            self.iconURL = iconURL; self.screenshotURL = screenshotURL
         }
     }
 
@@ -49,6 +55,8 @@ public enum ExtensionCatalog {
         var download: String?
         var sha256: String?
         var bytes: Int64?
+        var icon: String?
+        var screenshot: String?
     }
 
     /// Nil means no catalogue is published (404/410); an empty array is a signed empty catalogue.
@@ -158,8 +166,12 @@ public enum ExtensionCatalog {
         if kind == "extension", let size = raw.bytes, size <= 0 {
             throw khuFail("extension \(id) declares an impossible size")
         }
+        // A picture is a picture: it never blocks an entry, but an address that is not on the
+        // project's own paths is refused by name rather than dropped silently.
+        let icon = try picture(raw.icon, kind: kind, id: id, what: "icon")
+        let screenshot = try picture(raw.screenshot, kind: kind, id: id, what: "screenshot")
         return Entry(id: id, name: name, version: raw.version, summary: summary, kind: kind,
-                     downloadURL: url, sha256: hash, bytes: raw.bytes)
+                     downloadURL: url, sha256: hash, bytes: raw.bytes, iconURL: icon, screenshotURL: screenshot)
     }
 
     private static func text(_ raw: String, limit: Int, what: String) throws -> String {
@@ -169,6 +181,36 @@ public enum ExtensionCatalog {
             throw khuFail("refused \(what): \(raw)")
         }
         return trimmed
+    }
+
+    private static func picture(_ raw: String?, kind: String, id: String, what: String) throws -> URL? {
+        guard let raw else { return nil }
+        guard let parsed = publicAssetURL(raw) else {
+            throw khuFail("\(kind) \(id) \(what) address is not a public HTTPS URL on the project's own paths: \(raw)")
+        }
+        return parsed
+    }
+
+    /// Pictures come from the same project, from either of the two paths its files really live on:
+    /// release assets on github.com, and repo files on raw.githubusercontent.com. Every rule the
+    /// download address follows applies here too, so a picture can never point anywhere else.
+    static func publicAssetURL(_ raw: String) -> URL? {
+        guard raw.utf8.count <= maxURLBytes, let url = URL(string: raw),
+              url.scheme?.lowercased() == "https", url.user == nil, url.password == nil,
+              url.port.map({ $0 == 443 }) ?? true, let host = url.host else { return nil }
+        let lower = host.lowercased()
+        let allowed: Bool
+        switch lower {
+        case "github.com": allowed = url.path.hasPrefix(downloadPath)
+        case "raw.githubusercontent.com": allowed = url.path.hasPrefix("/theng12/kh-extensions/")
+        default: allowed = false
+        }
+        guard allowed, FeedNetwork.isPublicHostName(host) else { return nil }
+        let labels = lower.split(separator: ".")
+        guard !labels.allSatisfy({ $0.allSatisfy(\.isNumber) }) else { return nil }
+        let privateSuffixes = [".local", ".internal", ".localhost", ".test", ".invalid", ".arpa", ".ts.net"]
+        guard !privateSuffixes.contains(where: { lower.hasSuffix($0) }) else { return nil }
+        return url
     }
 
     /// Downloads must come from the project's own release path, so the index cannot point the app at
