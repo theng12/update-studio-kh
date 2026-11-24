@@ -36,15 +36,12 @@ Mac pulls from it. A publish run on this Mac reaches nobody.
    (the app's own repo, per RELEASE-POLICY §2b) it first uploads the artifact to that repo's
    `<app>-<version>` release with `packaging/github-asset.sh`, proves GitHub stored those exact
    bytes, fetches the asset back anonymously and hashes it — the download a client would make — and
-   gives the publish that address; the served row is read back to prove the address survived. An app whose repo is private or not yet migrated sets nothing and keeps a
-   base-relative row that 1301 serves, so no client is stranded.
-4. `packaging/page-sync.sh --app <feed-app-id> --accepted <sha256> --repo <owner/name> --feed-url <url>`
-   carries an accepted release onto the public page: it reads the 1301 feed, refuses unless the
-   accepted sha256 is the feed's, uploads the artifact and its icon to the page's release tag, reads
-   the stored name and digest back, retires the row it replaced, rebuilds the signed mirror on 1301
-   with the feed re-read either side, and commits the exact `release.json` it then reads back from
-   both public addresses. `--all --accepted-file` does every listed app, `--dry-run` performs nothing.
-5. Macs pull from `http://100.82.91.102:8790/release.json`.
+   gives the publish that address; the served row is read back to prove the address survived.
+4. Macs pull from `https://theng12.github.io/kh-releases/release.json` — GitHub Pages is the only feed.
+
+Page sync is retired (owner ruling 2026-11-22: one signed feed, GitHub-only downloads). It synced
+a second copy of each release onto the public page; the feed is now served from Pages itself, so
+nothing rebuilds or compares a mirror beside it.
 
 Test installs on this Mac are expected and harmless: they prove download and update, they are not
 the release source.
