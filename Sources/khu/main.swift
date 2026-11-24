@@ -56,6 +56,7 @@ struct KHUMain {
               keygen <dir>
               page --out <file> [--state <demo-state.json>]   (this build's Launcher page, with a state applied)
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|extension|media|plugin|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--meta-only] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
+              feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>) [--refresh-notes <app>...]   (one row per app repo's latest published release, app=owner/repo per line; words from the tag's app-meta.json, else the registry; a row's asset comes from its registry entry, so one repo can publish two rows; --refresh-notes re-reads the release body of the named apps only, and only for a row whose notes are exactly the tool's placeholder)
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -254,6 +255,132 @@ struct KHUMain {
                                           holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep,
                                           requireComplete: true)
                 print("published \(a) \(v)")
+            } catch { fail("\(error)") }
+        case "feed":
+            // The feed is generated from the app repos on every publish — no stored feed, no
+            // mirror, no compatibility row. `app=owner/repo` per line; `#` starts a comment. Words
+            // come from the release tag's own app-meta.json, else the Launcher repo's registry.
+            var reposFile: String?, registryFile: String?, keyArg: String?, out: String?, publishRepo: String?, previousFile: String?
+            var publishFlag = false
+            var refreshNotes: Set<String> = []
+            var i = 1
+            while i < args.count {
+                switch args[i] {
+                case "--repos": reposFile = value("--repos", &i)
+                case "--registry": registryFile = value("--registry", &i)
+                case "--previous": previousFile = value("--previous", &i)
+                case "--key": keyArg = value("--key", &i)
+                case "--out": out = value("--out", &i)
+                case "--publish": publishFlag = true
+                case "--repo": publishRepo = value("--repo", &i)
+                case "--refresh-notes":
+                    var named: [String] = []
+                    while i + 1 < args.count, !args[i + 1].hasPrefix("--") { named.append(args[i + 1]); i += 1 }
+                    guard !named.isEmpty else { fail("--refresh-notes needs at least one app id") }
+                    refreshNotes = Set(named)
+                default: usage()
+                }
+                i += 1
+            }
+            guard let reposFile, let keyArg else { usage() }
+            if publishFlag != (publishRepo != nil) { fail("--publish needs --repo <owner/name>; neither means --out") }
+            if publishFlag == (out != nil) { fail("name exactly one of --out <file> and --publish --repo <owner/name>") }
+            var apps: [String: String] = [:]
+            do {
+                for raw in try String(contentsOf: URL(fileURLWithPath: reposFile), encoding: .utf8).split(separator: "\n") {
+                    let line = raw.prefix { $0 != "#" }.trimmingCharacters(in: .whitespaces)
+                    if line.isEmpty { continue }
+                    let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                    guard parts.count == 2, !parts[0].isEmpty, parts[1].split(separator: "/").count == 2 else {
+                        fail("\(reposFile): each line is app=owner/repo, not \(line)")
+                    }
+                    apps[parts[0]] = parts[1]
+                }
+            } catch { fail("cannot read \(reposFile): \(error)") }
+            guard !apps.isEmpty else { fail("\(reposFile) names no app") }
+            do {
+                let registry = try registryFile.map { try FeedRegistry.load(from: URL(fileURLWithPath: $0)) }
+                // The feed the world reads now: a publish may change its own row, never lose a field,
+                // and the row of an unchanged version keeps what the publisher host added to it.
+                var previousPublic: Feed?
+                if let previousFile {
+                    let data = try Data(contentsOf: URL(fileURLWithPath: previousFile))
+                    let release = try JSON.decode(Release.self, from: data)
+                    guard let feedData = release.feedData else { fail("\(previousFile) carries no feed bytes") }
+                    previousPublic = try JSON.decode(Feed.self, from: feedData)
+                } else if let publishRepo {
+                    let pages = URL(string: "https://\(publishRepo.split(separator: "/").first ?? "").github.io/\(publishRepo.split(separator: "/").last ?? "")/release.json")!
+                    do {
+                        let (data, code) = try URLSessionHTTPClient().get(pages, headers: [:])
+                        guard code == 200 else { fail("refused: the public feed \(pages.absoluteString) answered \(code); nothing was published") }
+                        let release = try JSON.decode(Release.self, from: data)
+                        guard let feedData = release.feedData else { fail("refused: \(pages.absoluteString) carries no feed bytes; nothing was published") }
+                        previousPublic = try JSON.decode(Feed.self, from: feedData)
+                    } catch { fail("refused: cannot read the public feed to compare against (\(error)); nothing was published") }
+                }
+                let made = try FeedGenerator.generate(apps: apps, registry: registry, previous: previousPublic,
+                                                      gh: GhReader(), refreshNotes: refreshNotes)
+                let feed = made.feed
+                for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
+                    print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
+                }
+                for note in made.stale { print("note: \(note)") }
+                for change in made.wordChanges { print("words: \(change)") }
+                for note in made.notes { print("note: \(note)") }
+                if !refreshNotes.isEmpty {
+                    let done = made.notes.filter { $0.hasPrefix("notes refreshed:") }.count
+                    print("notes: \(done) of \(refreshNotes.count) named row(s) refreshed")
+                }
+                if !made.unpublished.isEmpty {
+                    print("no row (repo has no published release): \(made.unpublished.joined(separator: ", "))")
+                }
+                let envelope = try FeedGenerator.signed(feed, keyFile: URL(fileURLWithPath: keyArg))
+                if let out {
+                    try AtomicFile.write(envelope, to: URL(fileURLWithPath: out))
+                    print("feed: \(feed.apps.count) app(s) written to \(out)")
+                } else if let publishRepo {
+                    // The guard that would have caught 2026-11-23: compare the feed about to be
+                    // published with the one the world reads now, before a byte is written.
+                    let checker = ProcessInfo.processInfo.environment["KH_PUBLISH_INTEGRITY_CHECK"]
+                        ?? "/Users/vengtheng/Developer/_orchestra/tools/publish-integrity-check.sh"
+                    guard FileManager.default.isExecutableFile(atPath: checker) else {
+                        fail("refused: the integrity check is missing at \(checker); nothing was published")
+                    }
+                    guard let previous = previousPublic else { fail("refused: there is no public feed to compare against; nothing was published") }
+                    var published: [String] = []
+                    for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
+                        let before = (try? JSON.encode(previous.apps[app])) ?? Data()
+                        if before != (try? JSON.encode(row)) { published.append(app) }
+                    }
+                    let removed = previous.apps.keys.filter { feed.apps[$0] == nil }.sorted()
+                    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("khu-feed-check-\(UUID().uuidString)")
+                    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    defer { _ = try? FileManager.default.removeItem(at: dir) }
+                    let beforeFile = dir.appendingPathComponent("before.json"), afterFile = dir.appendingPathComponent("after.json")
+                    try AtomicFile.writeJSON(previous, to: beforeFile)
+                    try AtomicFile.write(envelope, to: afterFile)
+                    var checkArgs = [checker, beforeFile.path, afterFile.path]
+                    // The generated feed carries no `previous` block; dropping the old one whole is a
+                    // reshape the checker permits only when it is named. Every other difference
+                    // still fails, so this is passed only when the block is really going.
+                    if previous.previous != nil, feed.previous == nil { checkArgs.append("--allow-previous-dropped") }
+                    for app in published { checkArgs += ["--published", app] }
+                    for app in removed { checkArgs += ["--allow-removed", app] }
+                    let run = Process()
+                    run.executableURL = URL(fileURLWithPath: "/bin/bash")
+                    run.arguments = checkArgs
+                    let pipe = Pipe()
+                    run.standardOutput = pipe; run.standardError = pipe
+                    try run.run()
+                    let said = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    run.waitUntilExit()
+                    guard run.terminationStatus == 0 else {
+                        fail("refused: the feed changed something its own publish does not explain; nothing was published.\n\(said)")
+                    }
+                    print("integrity: \(published.count) row(s) changed, \(removed.count) removed by name; check passed")
+                    try FeedPages.publish(envelope, repo: publishRepo)
+                    print("feed: \(feed.apps.count) app(s) published, published_at \(feed.published_at)")
+                }
             } catch { fail("\(error)") }
         case "unpublish", "retire":
             // Retire is the same removal under the name its purpose has: the entry leaves the

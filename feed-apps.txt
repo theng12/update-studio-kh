@@ -1,0 +1,19 @@
+# app=owner/repo, one per line. `khu feed --repos feed-apps.txt --registry feed-registry.json`.
+# An app whose repo has no published release gets no row and is named in the run's output.
+displays-studio=theng12/displays-studio-kh
+file-studio=theng12/file-studio-kh
+gateway=theng12/gateway-studio-kh
+hub=theng12/hub-studio-kh
+launcher=theng12/update-studio-kh
+media-studio=theng12/business-studio-kh
+printer-studio=theng12/printer-studio-kh
+storage-studio=theng12/storage-studio-kh
+updater=theng12/update-studio-kh
+wire=theng12/wire-studio-kh
+# Fleet apps whose repos do not publish yet. Listed on purpose: a publish then names each one it
+# cannot carry, instead of the gap living only in the Launcher's "Unlabelled" rows.
+# Hub published 0.6.258 on 2026-11-24 and its row is generated now; it moved to the block above.
+library-studio=theng12/library-studio-kh   # was held out while the repo was private; public since, asset answers 200 anonymously (2026-11-24)
+music-studio=theng12/music-studio-kh
+relay-studio=theng12/relay-studio-kh
+story-studio=theng12/story-studio-kh

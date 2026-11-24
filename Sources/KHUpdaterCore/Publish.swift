@@ -319,6 +319,9 @@ public enum FeedPublisher {
                 }
             }
             feed.apps[app] = entry
+            // Owner policy (RELEASE-POLICY §2c): a controller handoff is a one-shot pointer carrying
+            // private addresses, and the signed feed is read by every Mac; publishing never writes one.
+            feed.network?.controller = nil
             // Strictly later than the last release, so an agent's high-water mark always moves forward.
             let previous = feed.publishedAt ?? .distantPast
             feed.published_at = ISO.string(max(now, previous.addingTimeInterval(0.001)))
@@ -388,6 +391,8 @@ public enum FeedPublisher {
             }
             if let type { entry.type = type }
             feed.apps[app] = entry
+            // Same policy as a publish: a metadata edit never carries a controller handoff forward.
+            feed.network?.controller = nil
             let previous = feed.publishedAt ?? .distantPast
             feed.published_at = ISO.string(max(now, previous.addingTimeInterval(0.001)))
             try saveFeed(try feed.validated(), to: feedDir, key: key)

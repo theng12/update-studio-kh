@@ -1,0 +1,148 @@
+{
+  "_about": "Words registry for generated feeds (RELEASE-POLICY 2c): a DATEED STOPGAP. The app's own app-meta.json at its release tag wins; when a repo gains one, its entry here is deleted in the same change. `khu feed --registry feed-registry.json` reads this file; a stale entry is reported, never silently used.",
+  "apps": {
+    "displays-studio": {
+      "name": "Displays Studio KH",
+      "bundle_id": "app.displaysstudiokh.desktop",
+      "bundle_name": "Displays Studio KH.app",
+      "type": "utility",
+      "tagline": "Set the brightness of external monitors from the menu bar.",
+      "description": "Set the brightness, contrast and volume of your external monitors from the menu bar, with the Mac's own brightness keys, one slider that moves every display, and controls that appear only when a monitor reports them.",
+      "hold_url": "http://127.0.0.1:8650/api/maintenance/hold",
+      "hold_since": "0.1.3",
+      "kind": "app-dmg"
+    },
+    "file-studio": {
+      "name": "File Studio KH",
+      "bundle_id": "kh.filestudio.app",
+      "bundle_name": "File Studio KH.app",
+      "type": "utility",
+      "tagline": "Tidy a messy folder without touching a file until you confirm.",
+      "description": "Scan a folder of photos, PDFs, videos and documents, preview a bulk action as a dry run, and apply only the rows you confirm. Moves, renames, sequential numbering and duplicate cleanup, with soft _trash and undo.",
+      "hold_url": "http://127.0.0.1:8651/api/maintenance/hold",
+      "hold_since": "0.6.0",
+      "kind": "app-dmg"
+    },
+    "gateway": {
+      "name": "Gateway Studio KH",
+      "bundle_id": "kh.gateway.menubar",
+      "bundle_name": "gateway-kh.app",
+      "type": "media",
+      "tagline": "One address in front of your Macs and cloud models.",
+      "description": "Puts one address in front of your Macs and cloud model providers, so Story Studio asks a single API for every model, price and job.",
+      "hold_url": "http://127.0.0.1:8787/admin/api/maintenance/drain",
+      "hold_since": "0.2.262",
+      "kind": "app-dmg"
+    },
+    "hub": {
+      "name": "Hub Studio KH",
+      "bundle_id": "local.studiohub.standalone",
+      "bundle_name": "Hub Studio KH.app",
+      "type": "media",
+      "tagline": "Runs AI models on this Mac for your other apps.",
+      "description": "Runs image, voice and subtitle models on this Mac and serves their results to your other apps over your network, from the window or the menu bar.",
+      "hold_url": "http://127.0.0.1:47873/api/maintenance/hold",
+      "hold_since": "0.6.238"
+    },
+    "launcher": {
+      "name": "Studio Launcher KH",
+      "bundle_id": "com.khupdater.launcher",
+      "bundle_name": "Studio Launcher KH.app",
+      "type": "system",
+      "tagline": "Every KH Studio app, installed and kept up to date.",
+      "description": "See every KH Studio app this Mac can run, install the ones you pick, and keep them current from one window.",
+      "kind": "app-dmg"
+    },
+    "library-studio": {
+      "_until": "delete when library's next release tag carries app-meta.json (0.7.37, file on main at 8ad30fe)",
+      "name": "Library Studio KH",
+      "bundle_id": "app.librarystudiokh.desktop",
+      "bundle_name": "Library Studio KH.app",
+      "type": "entertainment",
+      "tagline": "The media library behind your downloads, in one private window.",
+      "description": "Keeps qBittorrent, Sonarr, Radarr, Lidarr and Prowlarr in one interface, shows what has downloaded and what is still coming, and browses what you own by genre, year and type — the files stay where they live.",
+      "hold_url": "http://127.0.0.1:8643/api/maintenance/hold",
+      "hold_since": "0.7.21",
+      "kind": "app-dmg"
+    },
+    "media-studio": {
+      "name": "Business Studio KH",
+      "bundle_id": "com.terranash.mediastudiokh",
+      "bundle_name": "Business Studio KH.app",
+      "type": "business",
+      "tagline": "Product photos, labels and catalogs, from one product library",
+      "description": "Runs the day-to-day of the businesses: product photos, labels, catalogs, purchasing, fuel, fixed assets and people. Product details are entered once and drive everything else. It works on one Mac or on several Macs sharing one catalog, with a browser view for phones.",
+      "hold_url": "http://127.0.0.1:13181/api/maintenance/hold",
+      "hold_since": "0.1.110",
+      "kind": "app-dmg"
+    },
+    "printer-studio": {
+      "name": "Printer Studio KH",
+      "bundle_id": "com.theng12.printerstudio",
+      "bundle_name": "Printer Studio KH.app",
+      "type": "utility",
+      "tagline": "Print from any device to a USB-only printer",
+      "description": "Makes a USB printer such as the HP LaserJet reachable from every device on your network, with per-device tokens, a test page and saved sticker sizes, and nothing to install on the printer.",
+      "hold_url": "http://127.0.0.1:8642/api/maintenance/hold",
+      "hold_since": "1.0.31",
+      "kind": "app-dmg"
+    },
+    "relay-studio": {
+      "name": "Relay Studio KH",
+      "bundle_id": "kh.relay.desktop",
+      "bundle_name": "Relay Studio KH.app",
+      "type": "media",
+      "tagline": "Keeps browser accounts signed in and paired with Gateway.",
+      "description": "Keeps the Chrome accounts behind your image and video generators signed in, rotates which one opens a browser, and connects their workers to Gateway.",
+      "hold_url": "http://127.0.0.1:8648/api/maintenance/hold",
+      "hold_since": "0.3.28",
+      "kind": "app-dmg",
+      "_until": "delete when relay's next tag carries app-meta.json (0.3.39 onward, repo commit c771462)"
+    },
+    "storage-studio": {
+      "name": "Storage Studio KH",
+      "bundle_id": "app.storagestudiokh.desktop",
+      "bundle_name": "Storage Studio KH.app",
+      "type": "utility",
+      "tagline": "Keep your drives, NAS shares and archives mounted and tidy.",
+      "description": "Keep your drives and NAS shares mounted and organised: reconnects them at login, retries when the NAS comes back, archives what you are finished with, and never loses your settings while a share is unreachable.",
+      "hold_url": "http://127.0.0.1:8646/api/maintenance/hold",
+      "hold_since": "0.1.11",
+      "kind": "app-dmg"
+    },
+    "story-studio": {
+      "name": "Story Studio KH",
+      "bundle_id": "com.storystudio.kh",
+      "bundle_name": "Story Studio KH.app",
+      "type": "entertainment",
+      "tagline": "Turns an idea into a finished, upload-ready YouTube episode.",
+      "description": "Produces long-form YouTube episodes end to end: scripts, generated images, narration, subtitles, video assembly, thumbnails and upload. Also installs signed Content Packs from the GenStudio Content Store.",
+      "_descriptionStatus": "new copy, awaiting the owner's read (M001, 2026-11-24)",
+      "hold_url": "http://127.0.0.1:8647/api/maintenance/hold",
+      "hold_since": "1.4.403",
+      "kind": "app-dmg",
+      "_until": "delete when story's next tag carries app-meta.json"
+    },
+    "updater": {
+      "asset": "khu",
+      "name": "Studio Launcher KH Helper",
+      "bundle_id": "com.khupdater.agent",
+      "type": "system",
+      "tagline": "Keeps this Mac's KH apps up to date in the background.",
+      "description": "Check for new versions on a schedule, install them with no window open, and pause an app for a moment instead of interrupting its work.",
+      "kind": "updater"
+    },
+    "wire": {
+      "name": "Wire Studio KH",
+      "bundle_id": "com.terranash.wirestudiokh",
+      "bundle_name": "Wire Studio KH.app",
+      "type": "media",
+      "tagline": "Posts one caption to your social accounts.",
+      "description": "Composes one caption and sends it to your social accounts, each named by you rather than a technical key, with a Gateway connection you can check at any time.",
+      "hold_url": "http://127.0.0.1:8649/api/maintenance/hold",
+      "hold_since": "0.1.0",
+      "kind": "app-dmg",
+      "file": "Wire Studio KH_0.5.0_aarch64.dmg"
+    }
+  }
+}

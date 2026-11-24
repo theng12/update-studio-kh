@@ -847,6 +847,28 @@ else:
     # Closing the listener matters: a socket left listening with nobody accepting hangs a client.
     server.shutdown()
     server.server_close()
+    # The DMG's Read Me First.txt (owner, 2026-11-23): one plain-text file at the image root whose
+    # first line is the exact command, the same line the release notes and download page use.
+    staging = work / "read-me-staging"
+    result = subprocess.run([str(ROOT / "packaging/read-me-first.sh"), "Studio Launcher KH.app", str(staging)],
+                            capture_output=True, text=True)
+    read_me = staging / "Read Me First.txt"
+    check(result.returncode == 0 and read_me.is_file(), "read-me-first.sh writes the file into the staging folder")
+    lines = read_me.read_text().splitlines() if read_me.is_file() else []
+    check(lines and lines[0] == 'xattr -dr com.apple.quarantine "/Applications/Studio Launcher KH.app"',
+          "the first line is the verbatim command with the /Applications path (%r)" % (lines[0] if lines else None))
+    check(len(lines) == 2 and "browser" in lines[1] and "Terminal" in lines[1],
+          "one sentence follows: drag to Applications, run it in Terminal, only for a browser download")
+    check(not (read_me.stat().st_mode & 0o111), "the file is not executable")
+    check(not list(staging.glob("*.command")), "no double-clickable .command is shipped")
+    builder = (ROOT / "packaging/build-launcher.sh").read_text()
+    check(builder.index("read-me-first.sh") < builder.index("hdiutil create"),
+          "the launcher's build writes it before the image is made, so every release carries it")
+    result = subprocess.run([str(ROOT / "packaging/read-me-first.sh"), "NotAnApp", str(work / "x")],
+                            capture_output=True, text=True)
+    check(result.returncode != 0 and "ending in .app" in result.stderr,
+          "a name that is not an app is refused rather than written")
+
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

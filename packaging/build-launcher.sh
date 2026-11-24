@@ -65,6 +65,9 @@ for name, pin in manifest["files"].items():
         raise SystemExit("Signing changed a pinned kit file: " + name)
 ' "$APP"
 TMP="$(mktemp -d)"; mkdir "$TMP/dmg"; ditto "$APP" "$TMP/dmg/Studio Launcher KH.app"; ln -s /Applications "$TMP/dmg/Applications"
+# The quarantine line travels with the image as plain text (owner, 2026-11-23). Generated here, in
+# the folder the image is built from, so every later release has it without being remembered.
+packaging/read-me-first.sh "Studio Launcher KH.app" "$TMP/dmg"
 # Loud on purpose: a failed DMG step once exited 1 with its output discarded, so the build
 # looked like it had produced nothing for no stated reason (2026-11-17).
 if ! out=$(hdiutil create -volname "Studio Launcher KH" -srcfolder "$TMP/dmg" -ov -format UDZO "$DMG" 2>&1); then
