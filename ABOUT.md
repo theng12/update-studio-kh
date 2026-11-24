@@ -33,8 +33,10 @@ never runs, routes or pauses production work.
   not carry, and marks unfamiliar apps. The kit’s roster is updated at release.
 - Checks the saved feed and scans installer drives, in those plain words; no screen
   names the service behind the feed. Apps can be sorted by the publisher’s type label.
-- Shows verified extension and plugin downloads in their own section when published: each row
-  names its category. Chrome downloads install by hand; a plugin without a download is listed only.
+- Shows verified extension and plugin downloads in their own section when published: each tile
+  carries the published icon and a screenshot, and one that cannot be read or is over 2,048 pixels
+  a side keeps a placeholder and says why. Chrome downloads install by hand; a plugin without a
+  download is listed only.
 
 ## How it is built
 
@@ -61,7 +63,7 @@ updated needs its own updater for the feed path.
 ## Current version
 
 0.1.78, from the top entry of `CHANGELOG-launcher.md`, served by the signed feed on
-1301 and mirrored to GitHub Pages since 2026-11-21T19:03:05Z (launcher DMG sha256
-`2f08f87e…`, helper `d6654d25…`). No manifest in this repository holds a version:
+GitHub Pages (read back 2026-11-21T19:03:05Z; 1301 is retired as a feed host). No
+manifest in this repository holds a version:
 the number is passed to `packaging/build-launcher.sh` when the Launcher DMG is
 built.

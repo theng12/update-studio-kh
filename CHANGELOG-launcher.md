@@ -11,6 +11,7 @@ The newest version is first. `khu publish` reads the top entry: `## <version> �
 - A long release's notes no longer fill the card: they stop at 4,000 characters on whole lines, and the last line says how many more lines are in the release.
 - The folder and Disk Image carry a "Read Me First.txt": the exact command to run once, in Terminal, for a browser download that macOS quarantined.
 - The helper no longer holds on to memory it is done with: serving a 400 MB installer used to leave 600 MB in the process (measured 2026-11-24, three serves took the footprint from 2.7 MB to 600 MB, with only 224 bytes actually leaked) and a run used to leave about 94 MB behind. Both loops now read into one buffer, and the numbers after are 2.7 MB → 5.0 MB for the same serving, and 20.4 MB → 22.4 MB across four runs.
+- The helper now restarts itself after 150 checks as well as after 500 transfers. A Mac with nothing to install makes no transfers, so the transfer limit never fired while each check still cost a little memory; the log line says which limit restarted it. Five checks in one process measured 2026-11-24: 20.7 → 21.6 → 21.4 → 21.9 → 22.4 MB.
 - The helper runs at most once per interval whatever woke it, so a settings change can no longer make it check in a tight loop.
 - The Launcher's helper is not a feed app: the app list carries one Launcher row, and a helper left behind reports the version it actually runs.
 - A first install is launched and health-checked before it is called done, and a rollback swaps the bundles rather than moving one out first.
