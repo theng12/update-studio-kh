@@ -211,11 +211,11 @@ func extensionCatalogTests() {
     var withPictures = one
     withPictures["icon"] = "https://raw.githubusercontent.com/theng12/kh-extensions/main/notes/icon.png"
     withPictures["screenshot"] = "https://github.com/theng12/kh-extensions/releases/download/notes-1.2.3/notes.png"
-    let pictured = try? load(catalog([withPictures])).first
+    let pictured = (try? load(catalog([withPictures])))?.first
     expect(pictured?.iconURL?.absoluteString == withPictures["icon"] as? String
            && pictured?.screenshotURL?.absoluteString == withPictures["screenshot"] as? String,
            "EC24 a tile's icon and screenshot decode as public addresses")
-    let plain = try? load(catalog([one])).first
+    let plain = (try? load(catalog([one])))?.first
     expect(plain?.iconURL == nil && plain?.screenshotURL == nil, "EC25 no picture keys is no picture, not a failure")
     for (index, url) in ["http://github.com/theng12/kh-extensions/x.png",
                          "https://raw.githubusercontent.com/other/repo/icon.png",
