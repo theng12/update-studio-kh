@@ -1,7 +1,7 @@
 #!/bin/bash
 # The release path: this Mac builds, the app's own GitHub repo holds the artifact.
 #
-#   packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file> [--gate-line <file>]
+#   packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file> [--summary <file>] [--gate-line <file>]
 #
 # 1301 is an operational Mac, not a release host (owner, 2026-11-23: "no one should publish to
 # 1301"). This wrapper used to scp the artifact there and run `khu publish`; that half is deleted
@@ -10,15 +10,17 @@
 # anonymously, and the feed is generated from that release.
 set -euo pipefail
 SELF=$(cd -- "$(dirname -- "$0")" && pwd)
-[ $# -ge 4 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file> [--gate-line <file>]" >&2; exit 2; }
+[ $# -ge 4 ] || { echo "usage: $0 <feed-app-id> <version> <dmg> <changelog> [kind] --scan-receipt <file> [--summary <file>] [--gate-line <file>]" >&2; exit 2; }
 APP="$1"; VERSION="$2"; DMG="$3"; LOG="$4"; shift 4
-KIND=""; RECEIPT=""; GATE=""
+KIND=""; RECEIPT=""; GATE=""; SUMMARY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --scan-receipt) [ $# -ge 2 ] && [ -n "$2" ] || { echo "release-push: --scan-receipt needs a file" >&2; exit 2; }
                     RECEIPT="$2"; shift 2 ;;
     --gate-line) [ $# -ge 2 ] && [ -n "$2" ] || { echo "release-push: --gate-line needs a file" >&2; exit 2; }
                  GATE="$2"; shift 2 ;;
+    --summary)  [ $# -ge 2 ] && [ -n "$2" ] || { echo "release-push: --summary needs a file" >&2; exit 2; }
+                SUMMARY="$2"; shift 2 ;;
     -*) echo "release-push: unknown option $1" >&2; exit 2 ;;
     *) [ -z "$KIND" ] || { echo "release-push: unexpected argument $1" >&2; exit 2; }
        KIND="$1"; shift ;;
@@ -66,10 +68,17 @@ if [ -n "$GATE" ]; then
 else
   : > "$NOTES_TMP"
 fi
-# The body is this version's entry, never the whole file: the feed row copies the body verbatim, and
-# 0.1.82 shipped 70,884 characters — every release back to 0.1.1 — onto the Launcher card (measured
-# 2026-11-25). A `## <version> — <date>` heading starts an entry; the second one ends it.
-awk '/^## /{n++} n==2{exit} {print}' "$LOG" >> "$NOTES_TMP"
+# The body is a two-to-three-sentence summary of the top entry, never the entry and never the file
+# (RELEASE-POLICY; owner 2026-11-24). The feed row is composed from this body, so whatever is here is
+# what the Launcher card carries: 0.1.82 shipped the whole changelog and put 70,801 characters on it
+# (measured 2026-11-25). The summary is written by the releaser, because a bullet list is not prose.
+[ -n "$SUMMARY" ] || {
+  echo "release-push: no summary given — pass --summary <file> holding two or three sentences about this version; the body and the feed row are that summary, never a copy of the changelog" >&2
+  exit 2
+}
+[ -f "$SUMMARY" ] || { echo "release-push: no such summary: $SUMMARY" >&2; exit 2; }
+cat "$SUMMARY" >> "$NOTES_TMP"
+printf '\n' >> "$NOTES_TMP"
 NOTES="$NOTES_TMP"
 # There is one place a release goes: the app's own repo. No repo named is a refusal, not a fallback.
 [ -n "${KHU_PUBLIC_REPO:-}" ] || {

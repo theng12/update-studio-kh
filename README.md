@@ -30,8 +30,11 @@ Mac pulls from it. A publish run on this Mac reaches nobody.
    It writes its DMG into `dist/` — no separate copy step.
 2. Once the release is accepted, `packaging/record-dist.sh rotate <app> <version>` keeps the
    latest two installers and retires the rest to `_trash`.
-3. `packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog>` copies the DMG and its
-   changelog to the host's staging folder, publishes there with the host's own key, and reads the
+3. `packaging/release-push.sh <feed-app-id> <version> <dmg> <changelog> --summary <file>` copies the
+   DMG and publishes it; the release body is the **summary** file — two or three sentences about this
+   version, never a copy of the changelog, because the feed row is composed from it and lands on the
+   Launcher card (RELEASE-POLICY; 0.1.82 shipped the whole changelog and put 70,801 characters there).
+   It then reads the
    served feed back to prove the version it now offers. With `KHU_PUBLIC_REPO=<owner/name>` set
    (the app's own repo, per RELEASE-POLICY §2b) it first uploads the artifact to that repo's
    `<app>-<version>` release with `packaging/github-asset.sh`, proves GitHub stored those exact

@@ -615,6 +615,11 @@ try:
     dmg, changelog = work / "push.dmg", work / "push.md"
     dmg.write_text("dmg")
     changelog.write_text("changes")
+    # The body is a two-or-three-sentence summary the releaser writes, not the changelog
+    # (RELEASE-POLICY; owner 2026-11-24). 0.1.82 shipped the whole file and put 70,801
+    # characters on the Launcher card (measured 2026-11-25).
+    summary = work / "push-SUMMARY.txt"
+    summary.write_text("This version stops the queue remembering finished rows.\n")
     gh_state = work / "push-gh-state"
     gh_state.mkdir()
     push_gh_calls, push_order = work / "push-gh-calls", work / "push-order"
@@ -715,7 +720,7 @@ else:
         env = {**push_env, **extra}
         env = {k: v for k, v in env.items() if v is not None}
         return run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", receipt,
-                   *extra_args, env=env)
+                   "--summary", summary, *extra_args, env=env)
 
     result = push_run()
     check(result.returncode == 0 and asset_url in result.stdout,
@@ -724,18 +729,21 @@ else:
           "the release is created, and nothing else is written (%r)"
           % (push_order.read_text().split() if push_order.exists() else []))
     check(push_gh_calls.exists() and "--notes-file" in push_gh_calls.read_text(),
-          "the release body is the changelog, not a placeholder line the card would show")
+          "the release body comes from a file, not a placeholder line the card would show")
 
-    # The body is this version's entry, never the whole file: 0.1.82 shipped 70,884 characters —
-    # every release back to 0.1.1 — onto the Launcher card (measured 2026-11-25), because the feed
-    # row copies the body verbatim.
-    changelog.write_text("# Title\n\n## 9.9.9 — 2026-11-25\n- this release\n\n"
-                         "## 9.9.8 — 2026-11-24\n- last release\n")
+    # The body is the summary, never the changelog: the feed row is composed from it, so a copy of
+    # the file lands on the owner's card.
+    changelog.write_text("# Title\n\n## 9.9.9 — 2026-11-25\n- this release\n- another row\n")
     result = push_run()
     notes = json.loads((gh_state / "releases.json").read_text())[0]["notes"]
-    check(result.returncode == 0 and "this release" in notes and "last release" not in notes,
-          "the body is this version's entry, not the whole changelog (%d chars)" % len(notes))
-    changelog.write_text("changes")  # the runs below are about the gate line, not the entry split
+    check(result.returncode == 0 and "another row" not in notes
+          and notes.strip() == summary.read_text().strip(),
+          "the body is the summary, not the changelog entry (%d chars)" % len(notes))
+    changelog.write_text("changes")  # the runs below are about the gate line, not the body source
+
+    result = push_run(("--summary", str(work / "no-summary-given")))
+    check(result.returncode == 2 and "no such summary" in result.stderr,
+          "a summary path that names no file is refused (rc=%d)" % result.returncode)
 
     result = push_run(KHU_PUBLIC_REPO=None)
     check(result.returncode == 2 and "no public repo named" in result.stderr and not push_gh_calls.exists(),
@@ -751,7 +759,8 @@ else:
           "a receipt that exists only in a message is refused and named (rc=%d)" % result.returncode)
     stranger = work / "stranger-SCAN.txt"
     stranger.write_text("%s\nclean\n" % ("a" * 64))
-    result = run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", stranger, env=push_env)
+    result = run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", stranger,
+                 "--summary", summary, env=push_env)
     check(result.returncode == 2 and "different artifact" in result.stderr and not push_gh_calls.exists(),
           "a receipt scanned for another artifact is refused (rc=%d)" % result.returncode)
     receipt.write_text("%s\nSCAN_EXIT=0\n" % sha)
@@ -772,14 +781,15 @@ else:
     body = (recorded[0].get("notes") or "") if recorded else ""
     check(result.returncode == 0
           and body.startswith("GATE PASS gateway f95fff15f1200f42622c751457e3104501296f21 2026-11-23T12:45:04Z\n\n")
-          and body.strip().endswith("changes"),
-          "the gate line is copied verbatim above the changelog (%r)" % body[:70])
+          and body.strip().endswith(summary.read_text().strip()),
+          "the gate line is copied verbatim above the summary (%r)" % body[:70])
 
     result = push_run()
     recorded = json.loads((gh_state / "releases.json").read_text() or "[]")
     body = (recorded[0].get("notes") or "") if recorded else ""
-    check(result.returncode == 0 and "GATE PASS" not in body and body.strip() == "changes",
-          "with no gate line named the body is the changelog alone (%r)" % body[:70])
+    check(result.returncode == 0 and "GATE PASS" not in body
+          and body.strip() == summary.read_text().strip(),
+          "with no gate line named the body is the summary alone (%r)" % body[:70])
 
     wrong = work / "wrong-app-GATE-PASS.txt"
     wrong.write_text("GATE PASS storage deadbeef 2026-11-23T12:45:04Z\n")
