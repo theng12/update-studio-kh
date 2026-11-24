@@ -928,6 +928,21 @@ assert.doesNotMatch(main22,/I HubUnlabelled/,'R22 an adopted app is not labelled
 assert.match(main22,/No category yet · 2/,'R22 only feed rows without a label are counted');
 run("tab='media';render()");
 assert.doesNotMatch(document.getElementById('main').textContent,/Installed on this Mac/,'R22 no feed category to sit under, and none invented');
+// R23 the mixed case: an app the feed carries sits under Installed with its update, and an app the
+// feed genuinely lacks sits under its own heading on the same screen. Hub is on the feed since
+// 2026-11-24, so the adoption case is carried by an app the feed does not list.
+run("tab='all'");
+render(state([
+  row({id:'hub',name:'A Hub',type:'media',installed:'0.6.255',available:'0.6.258',status:'Update available'}),
+  row({id:'capture',name:'B Capture',type:null,managed:true,installed:'0.4.1',available:'0.4.1',
+      status:'Not in the feed',adopted:true,open:true}),
+],{appTypes,feedCount:1}));
+const mixed=document.getElementById('main').textContent;
+assert.match(mixed,/Installed · 1/,'R23 the feed\'s app is Installed');
+assert.match(mixed,/Installed on this Mac · 1/,'R23 and the app the feed lacks has its own heading');
+assert.match(mixed,/A Hub.*0\.6\.255 → 0\.6\.258/,'R23 the feed app shows its update');
+assert.doesNotMatch(mixed,/No category yet/,'R23 and neither is "No category yet"');
+assert.doesNotMatch(mixed,/B CaptureUnlabelled/,'R23 the adopted app is never labelled Unlabelled');
 run("tab='all'");
 render(state(adoptedRows.map(a=>a.id=='hub-apps'?{...a,adopted:false}:a),{appTypes,feedCount:11}));
 assert.match(document.getElementById('main').textContent,/No category yet · 3/,'R22 the same row without the flag reads as the feed row it claims to be');
