@@ -6,6 +6,12 @@ lines. The **release body is not this file**: `packaging/release-push.sh --summa
 two-or-three-sentence summary, because the feed row is composed from the body and the Launcher card
 shows it.
 
+## 0.1.85 — 2026-11-25
+
+- Studio Launcher KH can install its own updates again. Opening the app hands its window to the background helper and the app closes straight away, and the updater read that as "the new version did not start" — so every install of the Launcher failed, was put back and retried on every check. The updater now judges the installed Launcher by what is on disk: its version, its executable and its signature.
+- An install that could not finish says one plain sentence — "An earlier install of Studio Launcher KH did not finish. It will be tried again on the next check." — and the card's Update button tries again, instead of printing a file path and instructions meant for whoever maintains the Mac.
+- Displays Studio KH and Relay Studio KH are named correctly again. Both were shown as "Unrecognised" or listed as not on the feed, because the Launcher's built-in list of app names still used the apps' former ids.
+
 ## 0.1.84 — 2026-11-25
 
 - Studio Launcher KH can now update itself directly through its signed Sparkle 2 appcast channel without interrupting an install. The helper keeps its own bundle free of Sparkle and schedules headless checks on the verified packaged `Studio Launcher KH.app`, pausing new agent work while Sparkle holds port 8792 and deferring whenever another app is installing.
