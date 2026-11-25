@@ -1576,12 +1576,37 @@ public enum Agent {
         return result
     }
 
+    /// Fold a local config still keyed by an older id onto the feed row that publishes the same
+    /// bundle, so one installed app is drawn once. Identity is the bundle id (studio-gate rule 3):
+    /// before this, `relay` sat under "Installed on this Mac" while `relay-studio` sat under "Not
+    /// installed" — the same app twice, both lines false (owner, 2026-11-25).
+    static func foldRenamed(_ configs: [String: AppConfig], feed: Feed,
+                            bundleID: (AppConfig) -> String?) -> [String: AppConfig] {
+        var feedIDByBundle: [String: String] = [:]
+        for (id, row) in feed.apps where row.bundleID != nil && feedIDByBundle[row.bundleID!] == nil {
+            feedIDByBundle[row.bundleID!] = id
+        }
+        var folded = configs
+        for (id, cfg) in configs where feed.apps[id] == nil {
+            guard let bundle = bundleID(cfg), let target = feedIDByBundle[bundle], folded[target] == nil else { continue }
+            folded[target] = cfg
+            folded.removeValue(forKey: id)
+        }
+        return folded
+    }
+
     /// Each app as it stands on disk now, for the menu-bar icon.
     static func snapshot(config: AgentConfig, feed: Feed, catalog: [CatalogEntry], orders: CommandsReply, helper: HelperSettings,
                          memory: AgentMemory, executable: String?, http: HTTPClient, serverBase: URL, stateDir: URL) -> [HelperApp] {
-        let ids = Set(config.apps.keys).union(catalog.map(\.id))
+        // Identity is the bundle id, never a display name and never the id a kit happens to use
+        // (studio-gate rule 3). A config still keyed by an older id — `relay`, published as
+        // `relay-studio` — is folded onto the feed row that publishes that bundle, so one installed
+        // app is drawn once: before this, Relay appeared as an unknown `relay` under "Installed on
+        // this Mac" *and* as "Relay Studio KH · Not installed", both lines false (owner, 2026-11-25).
+        let configByID = foldRenamed(config.apps, feed: feed) { (try? BundleInfo.read($0.bundlePath))?.identifier }
+        let ids = Set(configByID.keys).union(catalog.map(\.id))
         return ids.map { app -> HelperApp in
-            let cfg = config.apps[app]
+            let cfg = configByID[app]
             let entry = catalog.first { $0.id == app }
             let info = cfg?.recipe == "updater" ? nil : cfg.flatMap { try? BundleInfo.read($0.bundlePath) }
             let installed = cfg?.recipe == "updater" ? selfVersion(config: config, executable: executable) : info?.version

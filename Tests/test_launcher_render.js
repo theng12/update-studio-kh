@@ -931,13 +931,13 @@ const adoptedRows=appRows.concat([row({id:'hub-apps',name:'I Hub',type:null,mana
 run("tab='all';view='grid'");
 render(state(adoptedRows,{appTypes,feedCount:11}));
 const main22=document.getElementById('main').textContent;
-assert.match(main22,/Installed on this Mac · 1/,'R22 an adopted app has its own heading');
+assert.match(main22,/Not in the feed · 1/,'R22 an adopted app has its own heading');
 assert.match(main22,/I Hub/);
 assert.match(main22,/0\.6\.39/,'R22 the version read from the bundle is shown');
 assert.doesNotMatch(main22,/I HubUnlabelled/,'R22 an adopted app is not labelled Unlabelled');
 assert.match(main22,/No category yet · 2/,'R22 only feed rows without a label are counted');
 run("tab='media';render()");
-assert.doesNotMatch(document.getElementById('main').textContent,/Installed on this Mac/,'R22 no feed category to sit under, and none invented');
+assert.doesNotMatch(document.getElementById('main').textContent,/Not in the feed/,'R22 no feed category to sit under, and none invented');
 // R23 the mixed case: an app the feed carries sits under Installed with its update, and an app the
 // feed genuinely lacks sits under its own heading on the same screen. Hub is on the feed since
 // 2026-11-24, so the adoption case is carried by an app the feed does not list.
@@ -949,7 +949,7 @@ render(state([
 ],{appTypes,feedCount:1}));
 const mixed=document.getElementById('main').textContent;
 assert.match(mixed,/Installed · 1/,'R23 the feed\'s app is Installed');
-assert.match(mixed,/Installed on this Mac · 1/,'R23 and the app the feed lacks has its own heading');
+assert.match(mixed,/Not in the feed · 1/,'R23 and the app the feed lacks has its own heading');
 assert.match(mixed,/A Hub.*0\.6\.255 → 0\.6\.258/,'R23 the feed app shows its update');
 assert.doesNotMatch(mixed,/No category yet/,'R23 and neither is "No category yet"');
 assert.doesNotMatch(mixed,/B CaptureUnlabelled/,'R23 the adopted app is never labelled Unlabelled');
@@ -1089,13 +1089,13 @@ const three = state([
 ]);
 const groupHeads = () => document.querySelectorAll('#main h2').map(h => h.textContent);
 run("tab='all';inst='all';render()"); render(three);
-assert.deepEqual(groupHeads(), ['Installed · 1', 'Installed on this Mac · 1', 'Not installed · 1'],
+assert.deepEqual(groupHeads(), ['Installed · 1', 'Not in the feed · 1', 'Not installed · 1'],
   'F1 All still groups the three kinds apart');
 assert.deepEqual(names().slice().sort(), ['Hub KH', 'Mine KH', 'Story KH'], 'F1 …and shows every one of them');
 show('Installed').fire('click');
 assert.deepEqual(names().slice().sort(), ['Mine KH', 'Story KH'],
   'F1 Installed keeps what this Mac has, including an adopted app the feed never carried');
-assert.deepEqual(groupHeads(), ['Installed · 1', 'Installed on this Mac · 1'], 'F1 …and drops the group it emptied');
+assert.deepEqual(groupHeads(), ['Installed · 1', 'Not in the feed · 1'], 'F1 …and drops the group it emptied');
 assert.equal(document.querySelector('#instseg button[data-inst=installed]').getAttribute('aria-pressed'), 'true',
   'F1 the chosen filter is the one marked selected');
 show('Not installed').fire('click');

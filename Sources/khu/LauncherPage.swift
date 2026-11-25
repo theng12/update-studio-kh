@@ -369,7 +369,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
     :inst=='missing'?'Every app on this feed is already installed here. Choose Installed to see them.':null;
    m.append(el('p',{class:'empty'},q?'No app matches “'+q+'”.':filterNote?filterNote:CATEGORIES.has(tab)?'No '+TABS.find(t=>t[0]==tab)[1]+' apps on this feed yet.'+(none?' '+none+' '+(none===1?'app has':'apps have')+' no category yet; they are under All.':''):'No app matches “'+q+'”.'));
   }
-  for(const [title,group] of [['Installed',mine],['Installed on this Mac',here],['Not installed',others]]){if(!group.length)continue;
+  for(const [title,group] of [['Installed',mine],['Not in the feed',here],['Not installed',others]]){if(!group.length)continue;
    m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
   if(unlabelledRows.length)m.append(el('h2',{},'No category yet · '+unlabelledRows.length),view=='grid'?el('div',{class:'grid'},unlabelledRows.map(card)):tableOf(unlabelledRows));
  }else{
