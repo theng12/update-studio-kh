@@ -13,6 +13,11 @@ func launcherHealthTests() {
     func makeSignedLauncher(_ url: URL, version: String, id: String = "com.khupdater.launcher",
                             executable: Bool = true) -> URL {
         _ = makeApp(url, version: version, id: id, executable: executable)
+        // makeApp drops a `marker` file in the bundle root for the other fixtures; codesign refuses a
+        // bundle with unsealed contents there ("unsealed contents present in the bundle root"), so
+        // this fixture keeps its marker beside the bundle instead.
+        let marker = url.appendingPathComponent("marker")
+        if fm.fileExists(atPath: marker.path) { _ = try? fm.moveItem(at: marker, to: url.deletingLastPathComponent().appendingPathComponent("marker-" + url.lastPathComponent)) }
         if executable {
             // Ad-hoc sign the bundle so `codesign --verify --strict` succeeds just like a real install.
             let res = (try? SystemShell().run("/usr/bin/codesign", arguments: ["--force", "--deep", "-s", "-", url.path], timeout: 15))
