@@ -5,13 +5,18 @@ import Foundation
 /// launching a visible window or requiring a resident process inside the bundle, un-wedges a
 /// `promoted` journal with `previousVersion == nil`, and still refuses a genuinely broken bundle.
 func launcherHealthTests() {
+    /// `try!` in a test turns one thrown error into a SIGTRAP that kills the rest of the suite.
+    /// Each call reports its own failure instead.
+    func attempt<T>(_ name: String, _ body: () throws -> T) -> T? {
+        do { return try body() } catch { expect(false, "\(name) threw: \(error)"); return nil }
+    }
     func makeSignedLauncher(_ url: URL, version: String, id: String = "com.khupdater.launcher",
                             executable: Bool = true) -> URL {
         _ = makeApp(url, version: version, id: id, executable: executable)
         if executable {
             // Ad-hoc sign the bundle so `codesign --verify --strict` succeeds just like a real install.
-            let res = try! SystemShell().run("/usr/bin/codesign", arguments: ["--force", "--deep", "-s", "-", url.path], timeout: 15)
-            precondition(res.exitCode == 0, "ad-hoc signing failed: \(res.stderr)")
+            let res = (try? SystemShell().run("/usr/bin/codesign", arguments: ["--force", "--deep", "-s", "-", url.path], timeout: 15))
+            expect(res?.exitCode == 0, "the fixture bundle was ad-hoc signed (\(res?.stderr ?? "no answer"))")
         }
         return url
     }
@@ -43,7 +48,7 @@ func launcherHealthTests() {
                "LH2 version mismatch names disk version (\(ctl.healthRequirement("0.1.84") ?? "nil"))")
 
         // Tamper a sealed file inside the signed bundle -> codesign must reject it.
-        try! "tampered".write(to: app.appendingPathComponent("Contents/MacOS/Foo"), atomically: true, encoding: .utf8)
+        _ = try? "tampered".write(to: app.appendingPathComponent("Contents/MacOS/Foo"), atomically: true, encoding: .utf8)
         expect(ctl.healthy("0.1.83") == false, "LH2 tampered bundle fails signature check")
         expect(ctl.healthRequirement("0.1.83")?.contains("signature") == true,
                "LH2 tampered bundle names signature failure (\(ctl.healthRequirement("0.1.83") ?? "nil"))")
@@ -61,7 +66,7 @@ func launcherHealthTests() {
     do {
         let dir = tmpDir("lh3")
         let stateDir = dir.appendingPathComponent("state")
-        try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        _ = try? fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let app = makeSignedLauncher(dir.appendingPathComponent("Studio Launcher KH.app"), version: "0.1.83")
         let journal = InstallJournal(phase: "promoted", installed: app.path,
                                      staged: dir.appendingPathComponent(".Studio Launcher KH.app.khu-staging").path,
@@ -69,11 +74,11 @@ func launcherHealthTests() {
                                      previousVersion: nil, wasRunning: false, testInstance: false,
                                      relaunchAfterwards: true, version: "0.1.83")
         let journalURL = Recipe.journalURL(stateDir: stateDir.path, app: "launcher")
-        try! AtomicFile.writeJSON(journal, to: journalURL)
+        expect((try? AtomicFile.writeJSON(journal, to: journalURL)) != nil, "LH3 the journal fixture was written")
 
         let shell = RecordingShell(mount: dir)
         let ctl = LiveControl.launcher(app.path, shell: shell, agentsDirectory: dir.appendingPathComponent("agents"))
-        let note = try! Recipe.recover(installedPath: app.path, stateDir: stateDir.path, app: "launcher", control: ctl)
+        guard let note = attempt("LH3 recovery", { try Recipe.recover(installedPath: app.path, stateDir: stateDir.path, app: "launcher", control: ctl) }) else { return }
         expect(!Recipe.isUnresolved(stateDir: stateDir.path, app: "launcher"),
                "LH3 recovery clears the wedged promoted journal (note=\(note))")
         expect(note.contains("healthy") && !note.contains("not healthy"),
@@ -86,21 +91,21 @@ func launcherHealthTests() {
     do {
         let dir = tmpDir("lh4")
         let stateDir = dir.appendingPathComponent("state")
-        try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        _ = try? fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let app = makeSignedLauncher(dir.appendingPathComponent("Studio Launcher KH.app"), version: "0.1.83")
-        try! "corrupt".write(to: app.appendingPathComponent("Contents/MacOS/Foo"), atomically: true, encoding: .utf8)
+        _ = try? "corrupt".write(to: app.appendingPathComponent("Contents/MacOS/Foo"), atomically: true, encoding: .utf8)
         let journal = InstallJournal(phase: "promoted", installed: app.path,
                                      staged: dir.appendingPathComponent(".Studio Launcher KH.app.khu-staging").path,
                                      rollback: stateDir.appendingPathComponent("rollback-launcher/Studio Launcher KH.app").path,
                                      previousVersion: nil, wasRunning: false, testInstance: false,
                                      relaunchAfterwards: true, version: "0.1.83")
-        try! AtomicFile.writeJSON(journal, to: Recipe.journalURL(stateDir: stateDir.path, app: "launcher"))
+        expect((try? AtomicFile.writeJSON(journal, to: Recipe.journalURL(stateDir: stateDir.path, app: "launcher"))) != nil, "LH4 the journal fixture was written")
 
         let shell = RecordingShell(mount: dir)
         var ctl = LiveControl.launcher(app.path, shell: shell, agentsDirectory: dir.appendingPathComponent("agents"))
         ctl.healthTimeout = 0.2
         ctl.pollInterval = 0.05
-        let note = try! Recipe.recover(installedPath: app.path, stateDir: stateDir.path, app: "launcher", control: ctl)
+        guard let note = attempt("LH3 recovery", { try Recipe.recover(installedPath: app.path, stateDir: stateDir.path, app: "launcher", control: ctl) }) else { return }
         expect(Recipe.isUnresolved(stateDir: stateDir.path, app: "launcher"),
                "LH4 broken Launcher bundle keeps the journal instead of falsely clearing it")
         expect(note.contains("not healthy"), "LH4 note reports unhealthy (\(note))")
@@ -133,16 +138,20 @@ func launcherHealthTests() {
     do {
         let dir = tmpDir("lh6")
         let stateDir = dir.appendingPathComponent("state")
-        try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        _ = try? fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        // A fixture bundle id, never com.khupdater.launcher: promoteAndSettle retires duplicate
+        // bundles by id across /Applications, and a test must never move the owner's app.
         let installed = dir.appendingPathComponent("Studio Launcher KH.app")
         let paths = Recipe.Paths(installedPath: installed.path, stateDir: stateDir.path, app: "launcher")
-        _ = makeSignedLauncher(paths.staged, version: "0.1.84")
+        _ = makeSignedLauncher(paths.staged, version: "0.1.84", id: "com.example.launcher-fixture")
 
         let shell = RecordingShell(mount: dir)
         let ctl = LiveControl.launcher(installed.path, shell: shell, agentsDirectory: dir.appendingPathComponent("agents"))
-        let res = try! Recipe.promoteAndSettle(paths: paths, targetVersion: "0.1.84", installedInfo: nil,
-                                               order: nil, control: ctl, fileManager: fm, notes: [],
-                                               relaunchAfterInstall: true, relaunchIfClosed: true)
+        guard let res = attempt("LH6 promoteAndSettle", {
+            try Recipe.promoteAndSettle(paths: paths, targetVersion: "0.1.84", installedInfo: nil,
+                                        order: nil, control: ctl, fileManager: fm, notes: [],
+                                        relaunchAfterInstall: true, relaunchIfClosed: true)
+        }) else { return }
         expect(res.status == "updated", "LH6 first install of Launcher settles as updated (got \(res.status): \(res.reason ?? ""))")
         expect(!Recipe.isUnresolved(stateDir: stateDir.path, app: "launcher"),
                "LH6 journal is cleared after Launcher promoteAndSettle")
