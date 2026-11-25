@@ -26,7 +26,13 @@ private func releaseJSON(repo: String, tag: String, body: String? = nil,
 
 private func metaJSON(_ fields: [String: String]) -> Data {
     let encoded = (try! JSONSerialization.data(withJSONObject: fields)).base64EncodedString()
-    return try! JSONSerialization.data(withJSONObject: ["content": encoded])
+    // GitHub's contents response is mixed: `size` is a number and `_links` an object. A fixture with
+    // only `content` hides the tag-metadata cast that silently falls back to the registry on a real API.
+    return try! JSONSerialization.data(withJSONObject: [
+        "name": "app-meta.json", "path": "app-meta.json", "size": encoded.utf8.count,
+        "encoding": "base64", "content": encoded,
+        "_links": ["self": ["href": "https://api.github.com/repos/o/r/contents/app-meta.json"]]
+    ])
 }
 
 private func registry(_ entries: [String: RegistryEntry]) -> FeedRegistry { FeedRegistry(apps: entries) }
@@ -250,6 +256,8 @@ func feedGeneratorTests() {
                                              registry: registry(["hub": registryWords(name: "Old Name", bundle: "com.t.hub")]), gh: gh, verifier: UnverifiedAsset())
         expect(made.feed.apps["hub"]?.name == "Hub Studio KH" && made.sources["hub"] == "tag:0.6.257",
                "FG8 the tag's app-meta.json wins over the registry")
+        expect(made.wordSources.contains { $0.hasPrefix("source: hub: ") && $0.contains("name tag") && $0.contains("type tag") },
+               "FG8 every field's word source is printed, so a silent fallback to the registry cannot hide (\(made.wordSources))")
         expect(made.stale.count == 1 && made.stale[0].contains("registry entry is stale")
                && made.stale[0].contains("0.6.257"),
                "FG8 the ignored registry entry is reported by name and tag (\(made.stale))")

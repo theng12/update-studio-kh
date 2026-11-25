@@ -116,14 +116,18 @@ public struct FeedGeneration: Sendable {
     /// One line per word this run changed, by app and field with the source that supplied it:
     /// `file-studio: type utility (tag)`. A publish that changes nothing prints nothing.
     public var wordChanges: [String]
+    /// One line per app, every run, naming each field's word source: `file-studio: name tag, type tag,
+    /// tagline served`. `wordChanges` only speaks for a field whose value moved, so without this a row
+    /// that never changes keeps its chain (tag → registry → served) invisible.
+    public var wordSources: [String]
     /// Stray releases skipped by name, and anything else the run decided instead of doing.
     public var notes: [String]
     /// One line per app named on `--freeze`, so a held row is never silent.
     public var frozen: [String]
     public init(feed: Feed, sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = [],
-                wordChanges: [String] = [], notes: [String] = [], frozen: [String] = []) {
+                wordChanges: [String] = [], wordSources: [String] = [], notes: [String] = [], frozen: [String] = []) {
         self.feed = feed; self.sources = sources; self.unpublished = unpublished; self.stale = stale
-        self.wordChanges = wordChanges; self.notes = notes; self.frozen = frozen
+        self.wordChanges = wordChanges; self.wordSources = wordSources; self.notes = notes; self.frozen = frozen
     }
 }
 
@@ -335,8 +339,8 @@ public enum FeedGenerator {
                                                    changes: [String], stale: String?) {
         var fromTag: RepoAppMeta?
         if let data = try? gh.json("repos/\(repo)/contents/app-meta.json?ref=\(tag)"),
-           let encoded = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-           let content = encoded["content"], let decoded = Data(base64Encoded: content.filter { !$0.isWhitespace }),
+           let encoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let content = encoded["content"] as? String, let decoded = Data(base64Encoded: content.filter { !$0.isWhitespace }),
            let meta = try? JSON.decode(RepoAppMeta.self, from: decoded),
            // One repo can publish two rows (the Launcher and the helper inside it). The tag's file
            // describes the app whose bundle id it names; another app's row keeps its own words.
@@ -375,6 +379,10 @@ public enum FeedGenerator {
         // The app's own local artifact name is a statement by the release, never a fallback: a tag
         // that does not name one keeps today's behaviour, so nothing rewrites itself meanwhile.
         meta.localFile = fromTag?.localFile
+        // Every field's source, every run: the change lines below only carry a field whose value moved,
+        // and a chain nobody can see is how the `[String: String]` cast above went unnoticed for a release.
+        changes.append("source: \(app): " + sources.sorted { $0.key < $1.key }
+            .map { "\($0.key) \($0.value)" }.joined(separator: ", "))
         let missing = requiredMetaFields.filter { clean($0.1(meta)) == nil }.map(\.0)
         guard missing.isEmpty else {
             throw khuFail("refused: \(repo) \(tag) has no \(missing.joined(separator: ", ")) in its app-meta.json, the registry, or the served feed. Nothing was generated.")
@@ -532,6 +540,7 @@ public enum FeedGenerator {
         }
         var feed = Feed(published_at: ISO.string(now))
         var sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = [], wordChanges: [String] = []
+        var wordSources: [String] = []
         var notes: [String] = []
         var frozenLines: [String] = []
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
@@ -582,7 +591,10 @@ public enum FeedGenerator {
             feed.apps[app] = row
             if let source = made.source { sources[app] = source }
             if let note = made.stale { stale.append(note) }
-            wordChanges += made.changes.filter { !$0.hasPrefix("notes refreshed:") }
+            wordSources += made.changes.filter { $0.hasPrefix("source: ") }
+            wordChanges += made.changes.filter {
+                !$0.hasPrefix("notes refreshed:") && !$0.hasPrefix("source: ")
+            }
             notes += made.changes.filter { $0.hasPrefix("stray release ignored:") || $0.hasPrefix("notes refreshed:") }
         }
         if let previous {
@@ -604,7 +616,7 @@ public enum FeedGenerator {
         }
         return FeedGeneration(feed: try feed.validated(), sources: sources, unpublished: unpublished,
                               stale: stale, wordChanges: wordChanges.filter { !$0.hasPrefix("stray release ignored:") },
-                              notes: notes, frozen: frozenLines)
+                              wordSources: wordSources, notes: notes, frozen: frozenLines)
     }
 
     /// The feed alone, for callers that do not need the report.

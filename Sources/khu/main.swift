@@ -351,6 +351,10 @@ struct KHUMain {
                     for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
                         print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
                     }
+                    // Field by field, every run: a row whose words did not change prints nothing under
+                    // `words:` below, so this is the only line that shows the tag → registry → served
+                    // chain working — or silently falling back, which is how the cast bug survived.
+                    for line in made.wordSources { print(line) }
                     // One line per frozen app, every run: a held row that says nothing is the same defect
                     // as a skipped app that says nothing.
                     for line in made.frozen { print(line) }
