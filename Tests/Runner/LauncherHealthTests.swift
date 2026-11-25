@@ -22,6 +22,12 @@ func launcherHealthTests() {
             // Ad-hoc sign the bundle so `codesign --verify --strict` succeeds just like a real install.
             let res = (try? SystemShell().run("/usr/bin/codesign", arguments: ["--force", "--deep", "-s", "-", url.path], timeout: 15))
             expect(res?.exitCode == 0, "the fixture bundle was ad-hoc signed (\(res?.stderr ?? "no answer"))")
+            // The fixture proves its own seal. Without this, a helper writing a stray file into the
+            // bundle root shows up later as a product health defect and costs an hour to re-find
+            // (2026-11-25: makeApp's `marker` did exactly that to 11 checks).
+            let verified = (try? SystemShell().run("/usr/bin/codesign", arguments: ["--verify", "--strict", url.path], timeout: 15))
+            expect(verified?.exitCode == 0,
+                   "the fixture bundle is sealed before any health check runs (\(verified?.stderr ?? "no answer"))")
         }
         return url
     }
