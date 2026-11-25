@@ -89,4 +89,72 @@ func launcherHoldTests() {
         expect(LauncherHold.url == "http://127.0.0.1:8792/api/maintenance/hold",
                "HH6 the fixed URL matches the contract's port table")
     }
+
+    // HH7 pause/resume primitives: waitUntilBound, POST pauses and waitForResume blocks until
+    // DELETE wakes it promptly, release() clears a pause, and the pause expires past pauseSeconds.
+    do {
+        final class LogBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var lines: [String] = []
+            func append(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+            func all() -> [String] { lock.lock(); defer { lock.unlock() }; return lines }
+        }
+        let log = LogBox()
+        let gated = LauncherHold(token: "fixture-token", busy: { [] }, log: { log.append($0) })
+        do { try gated.start(port: nil) } catch { expect(false, "HH7 fixture: \(error)"); return }
+        defer { gated.stop() }
+        let bound = gated.waitUntilBound(timeout: 3)
+        expect(bound && gated.boundPort != nil, "HH7 waitUntilBound observes the bound port")
+        guard let gport = gated.boundPort else { return }
+
+        expect(!gated.paused(), "HH7 unpaused before POST")
+        _ = call(gport, "POST", token: "fixture-token")
+        expect(gated.paused(), "HH7 POST puts the hold in paused state")
+        expect(!gated.paused(at: Date().addingTimeInterval(Double(LauncherHold.pauseSeconds + 1))),
+               "HH7 pause expires past pauseSeconds without a latch")
+
+        let resumedInTime = DispatchSemaphore(value: 0)
+        final class WaitResult: @unchecked Sendable { var stillPaused = true; var elapsed = 99.0 }
+        let waited = WaitResult()
+        let started = Date()
+        DispatchQueue.global().async {
+            waited.stillPaused = gated.waitForResume(limit: 5)
+            waited.elapsed = Date().timeIntervalSince(started)
+            resumedInTime.signal()
+        }
+        Thread.sleep(forTimeInterval: 0.15)
+        _ = call(gport, "DELETE", token: "fixture-token")
+        let signaled = resumedInTime.wait(timeout: .now() + 3) == .success
+        expect(signaled && !waited.stillPaused && waited.elapsed < 2.0,
+               "HH7 DELETE wakes waitForResume promptly (signaled=\(signaled), paused=\(waited.stillPaused), elapsed=\(waited.elapsed))")
+
+        _ = call(gport, "POST", token: "fixture-token")
+        expect(gated.paused(), "HH7 second POST pauses again")
+        gated.release()
+        expect(!gated.paused(), "HH7 release() clears pause immediately")
+        let lines = log.all()
+        expect(lines.contains(where: { $0.contains("held; new work paused") }) && lines.last == "resumed",
+               "HH7 log records held and resumed (\(lines))")
+    }
+
+    // HH8 cross-app Sparkle install-in-progress marker contract (khsparkle.m:65-85).
+    do {
+        let fakeHome = tmpDir("sparkle-install-marker")
+        let defaultURL = SparkleInstallMarker.fileURL(home: fakeHome, environment: [:])
+        expect(defaultURL.path == fakeHome.appendingPathComponent("Library/Application Support/kh-sparkle/install-in-progress").path,
+               "HH8 default marker path matches khsparkle.m (\(defaultURL.path))")
+
+        let overridePath = fakeHome.appendingPathComponent("custom/marker").path
+        let overrideURL = SparkleInstallMarker.fileURL(home: fakeHome, environment: ["KH_SPARKLE_INSTALL_MARKER": overridePath])
+        expect(overrideURL.path == overridePath, "HH8 KH_SPARKLE_INSTALL_MARKER overrides default path")
+
+        SparkleInstallMarker.set("story", home: fakeHome, environment: [:])
+        let content = try? String(contentsOf: defaultURL, encoding: .utf8)
+        let mode = (try? fm.attributesOfItem(atPath: defaultURL.path))?[.posixPermissions] as? NSNumber
+        expect(content == "story\n" && mode?.intValue == 0o600,
+               "HH8 set(app) writes mode 0600 marker naming the app (\(content ?? "nil"), \(mode?.intValue ?? -1))")
+
+        SparkleInstallMarker.set(nil, home: fakeHome, environment: [:])
+        expect(!fm.fileExists(atPath: defaultURL.path), "HH8 set(nil) removes the marker cleanly")
+    }
 }

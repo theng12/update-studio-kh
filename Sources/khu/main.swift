@@ -30,6 +30,36 @@ private func rotateAgentLog() {
         .appendingPathComponent("Library/Logs/khupdater-agent.log"))
 }
 
+/// The shim's own state: 0 idle, 1 updating, 2 relaunching (vendor/khsparkle/khsparkle.h). Kept in
+/// this process so the agent loop never installs the Launcher while Sparkle is replacing it.
+private final class SparkleProgress: @unchecked Sendable {
+    static let shared = SparkleProgress()
+    private let lock = NSLock()
+    private let resumed = NSCondition()
+    private var state: Int32 = 0
+    private var log: (@Sendable (String) -> Void)?
+    func observe(_ log: @escaping @Sendable (String) -> Void) {
+        lock.lock(); self.log = log; lock.unlock()
+    }
+    var busy: Bool { lock.lock(); defer { lock.unlock() }; return state != 0 }
+    func changed(_ state: Int32) {
+        lock.lock(); self.state = state; let log = self.log; lock.unlock()
+        resumed.broadcast()
+        log?(state == 1 ? "sparkle: updating" : state == 2 ? "sparkle: relaunching" : "sparkle: resumed")
+    }
+    func waitForIdle(limit: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(max(0, limit))
+        resumed.lock(); defer { resumed.unlock() }
+        while true {
+            let held = state != 0
+            if !held || Date() >= deadline { return held }
+            resumed.wait(until: deadline)
+        }
+    }
+}
+
+private func sparkleStateChanged(_ state: Int32) { SparkleProgress.shared.changed(state) }
+
 @main
 struct KHUMain {
     static func main() {
@@ -728,11 +758,13 @@ struct KHUMain {
             // is said and never stops the app.
             if let menu {
                 do {
-                    let hold = LauncherHold(token: try LauncherHold.token(in: URL(fileURLWithPath: cfg.stateDir))) { [weak menu] in
-                        guard let menu else { return [] }
-                        menu.lock.lock(); defer { menu.lock.unlock() }
-                        return (menu.installingApp.map { [$0] } ?? []) + menu.active.sorted()
-                    }
+                    let hold = LauncherHold(token: try LauncherHold.token(in: URL(fileURLWithPath: cfg.stateDir)),
+                                            busy: { [weak menu] in
+                                                guard let menu else { return [] }
+                                                menu.lock.lock(); defer { menu.lock.unlock() }
+                                                return (menu.installingApp.map { [$0] } ?? []) + menu.active.sorted()
+                                            },
+                                            log: { line in agentLog.record(line) })
                     try hold.start()
                     menu.holdServer = hold
                 } catch {
@@ -743,14 +775,19 @@ struct KHUMain {
                 // so a mispackaged app still launches — and without this guard the shim would take
                 // the hold, fail to build its updater, and leave the hold to expire. Absent is said,
                 // never silent: every other path still updates this app through the feed.
-                if NSClassFromString("SPUUpdater") != nil {
+                if NSClassFromString("SPUUpdater") == nil {
+                    FileHandle.standardError.write(Data("sparkle: Sparkle.framework is not in Contents/Frameworks; self-update is off, this app still updates through the feed\n".utf8))
+                } else if let hold = menu.holdServer, hold.waitUntilBound() {
+                    SparkleProgress.shared.observe { line in agentLog.record(line) }
+                    kh_sparkle_set_state_callback(sparkleStateChanged)
                     let started = kh_sparkle_start()
                     if started != 0 {
+                        hold.release()
                         let why = String(cString: kh_sparkle_last_error())
                         FileHandle.standardError.write(Data("sparkle: self-update not started (\(why)); this app still updates through the feed\n".utf8))
                     }
                 } else {
-                    FileHandle.standardError.write(Data("sparkle: Sparkle.framework is not in Contents/Frameworks; self-update is off, this app still updates through the feed\n".utf8))
+                    FileHandle.standardError.write(Data("sparkle: the Launcher's update hold did not bind; no update check was started, this app still updates through the feed\n".utf8))
                 }
                 // A launchd definition that is merely present is not proof: check the job itself and
                 // put it back from the kit the app ships when it is gone (measured 2026-11-23).
@@ -759,6 +796,7 @@ struct KHUMain {
                 signal(SIGTERM, SIG_IGN)
                 let stop = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
                 stop.setEventHandler {
+                    SparkleInstallMarker.set(nil)
                     agentLog.record("agent stop: asked to stop")
                     exit(0)
                 }
@@ -776,10 +814,20 @@ struct KHUMain {
                 var requested = initialRequests
                 var refusedAgain = false
                 repeat {
+                    // Sparkle and the feed are both installers of this same app. The shim takes the
+                    // hold before its first action; no agent work starts until it resumes, so queued
+                    // work waits rather than being quit or cancelled.
+                    if SparkleProgress.shared.busy || (menu?.holdServer?.paused() ?? false) {
+                        if let hold = menu?.holdServer { _ = hold.waitForResume(limit: 30) }
+                        if SparkleProgress.shared.busy { _ = SparkleProgress.shared.waitForIdle(limit: 30) }
+                        continue
+                    }
                     var ranOK = false
                     do {
                         let current = try cfg.reloadingConnection(from: URL(fileURLWithPath: c))
-                        let r = try Agent.runOnce(config: current, requested: requested, installing: { menu?.installing($0) }, ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
+                        let r = try Agent.runOnce(config: current, requested: requested,
+                                                  installing: { app in SparkleInstallMarker.set(app); menu?.installing(app) },
+                                                  ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
                         ranOK = r.statusPosted
                         // A run that could not report says why on its own line: `updates=0` alone is
                         // what made a fifteen-runs-a-minute loop invisible until the process count

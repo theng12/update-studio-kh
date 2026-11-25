@@ -15,6 +15,8 @@ enum SSDCommand {
                 throw khuFail("This Mac uses a different helper layout. Its apps and saved settings were left unchanged.")
             }
             let source = SSDSource(volume: root.lastPathComponent, root: root, index: index)
+            SparkleInstallMarker.set("ssd")
+            defer { SparkleInstallMarker.set(nil) }
             let rows = try SSDUpdate.run(source: source, stateDir: state, apps: config?.apps ?? [:], progress: { row in
                 report("\(row.name): \(row.status.replacingOccurrences(of: "_", with: " "))" + (row.reason.map { " — " + $0 } ?? ""))
             })

@@ -12,20 +12,25 @@ public final class LauncherHold: @unchecked Sendable {
     public static let port: UInt16 = 8792
     public static let path = "/api/maintenance/hold"
     public static let tokenName = "launcher-hold-token"
+    public static let pauseSeconds = 120
     /// The URL the shim and the contract name. `KHHoldURL` in Info.plist carries it.
     public static var url: String { "http://127.0.0.1:\(port)\(path)" }
 
     private let lock = NSLock()
+    private let resumed = NSCondition()
     private let queue = DispatchQueue(label: "kh.launcher.hold")
     private var listener: NWListener?
     private var pausedUntil: Date?
     private let token: String
     private let busy: @Sendable () -> [String]
+    private let log: @Sendable (String) -> Void
     public private(set) var boundPort: UInt16?
 
-    public init(token: String, busy: @escaping @Sendable () -> [String]) {
+    public init(token: String, busy: @escaping @Sendable () -> [String],
+                log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.token = token
         self.busy = busy
+        self.log = log
     }
 
     /// The token: the 0600 file when it exists, else a fresh 32-byte hex value written 0600.
@@ -68,6 +73,43 @@ public final class LauncherHold: @unchecked Sendable {
     }
 
     public func stop() { listener?.cancel(); listener = nil }
+
+    /// The shim posts before any update action; wait for the listener to be bound before calling it,
+    /// so a slow bind is not read as a refused hold (20261125-31).
+    public func waitUntilBound(timeout: TimeInterval = 5) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            lock.lock(); let bound = boundPort != nil; lock.unlock()
+            if bound { return true }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return false
+    }
+
+    /// True from a POST until a DELETE or the in-memory pause expires. The agent reads this before
+    /// it starts work, so a Sparkle hold cannot race a feed install.
+    public func paused(at now: Date = Date()) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return (pausedUntil ?? .distantPast) > now
+    }
+
+    /// Waits for that pause to end, bounded by the caller's own ceiling; DELETE wakes it at once.
+    public func waitForResume(limit: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(max(0, limit))
+        resumed.lock(); defer { resumed.unlock() }
+        while true {
+            let held = paused()
+            if !held || Date() >= deadline { return held }
+            resumed.wait(until: deadline)
+        }
+    }
+
+    /// A refused shim start never leaves this process holding itself paused.
+    public func release() {
+        lock.lock(); pausedUntil = nil; lock.unlock()
+        resumed.broadcast()
+        log("resumed")
+    }
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: queue)
@@ -120,11 +162,52 @@ public final class LauncherHold: @unchecked Sendable {
         }
         lock.lock()
         let installing = busy()
-        if method == "POST" { pausedUntil = Date().addingTimeInterval(120) } else { pausedUntil = nil }
+        let held: String
+        if method == "POST" {
+            pausedUntil = Date().addingTimeInterval(Double(Self.pauseSeconds))
+            held = installing.isEmpty ? "held; new work paused \(Self.pauseSeconds) s"
+                                      : "held with \(installing.joined(separator: ", ")) in flight; new work paused \(Self.pauseSeconds) s"
+        } else {
+            pausedUntil = nil
+            held = "resumed"
+        }
         lock.unlock()
+        resumed.broadcast()
+        log(held)
         // The Launcher's work is one install at a time; anything in it is what a restart would
         // strand, and it is named so the shim's refusal can say which app.
-        send("200 OK", ["safe": installing.isEmpty, "unsettled": installing, "dispatch_paused_s": 120,
+        send("200 OK", ["safe": installing.isEmpty, "unsettled": installing, "dispatch_paused_s": Self.pauseSeconds,
                         "in_flight": installing.count, "waiting": 0])
+    }
+}
+
+/// The cross-app Sparkle contention marker (`khsparkle.m:65-85`): while the Launcher is installing
+/// any app, this file exists with a fresh mtime so Sparkle in this app and every other KH app
+/// defers its own check/download until the install finishes. A marker older than 15 minutes is
+/// ignored by the shim as a crashed installer.
+public enum SparkleInstallMarker {
+    public static let relativePath = "Library/Application Support/kh-sparkle/install-in-progress"
+    public static let environmentVariable = "KH_SPARKLE_INSTALL_MARKER"
+
+    public static func fileURL(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                               environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let override = environment[environmentVariable], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return home.appendingPathComponent(relativePath)
+    }
+
+    /// Write or refresh the marker while `app` is installing; remove it on `nil`.
+    public static func set(_ app: String?,
+                           home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                           environment: [String: String] = ProcessInfo.processInfo.environment) {
+        let url = fileURL(home: home, environment: environment)
+        let fm = FileManager.default
+        if let app, !app.isEmpty {
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            _ = try? AtomicFile.write(Data("\(app)\n".utf8), to: url, permissions: 0o600)
+        } else {
+            try? fm.removeItem(at: url)
+        }
     }
 }
