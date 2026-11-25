@@ -220,7 +220,9 @@ public enum Recipe {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         guard !fm.fileExists(atPath: paths.journal.path) else {
-            throw khuFail("the earlier install is unresolved; journal kept at \(paths.journal.path) — clear it only while the helper is stopped")
+            // The path is for the log; the sentence a screen shows stays plain (owner, 2026-11-25).
+            print("note: \(app) still has an unresolved install; journal kept at \(paths.journal.path)")
+            throw khuFail("An earlier install of \(app) did not finish. It will be tried again on the next check.")
         }
 
         // 2. Verify and stage while the old app keeps running.
@@ -1659,13 +1661,18 @@ public enum LiveControl {
                                 quitWait: TimeInterval = 60) -> AppControl {
         var control = appDmg(installedPath, shell: shell, agentsDirectory: agentsDirectory, quitWait: quitWait)
         let resumeServices = control.resumeServices
+        // The system's own verdict on the bytes: this block is compiled on its own by the packaging
+        // fixtures, so it asks codesign directly rather than reaching into the install recipe.
+        func signatureVerifies() -> Bool {
+            (try? shell.run("/usr/bin/codesign", arguments: ["--verify", "--strict", installedPath], timeout: 60))?.exitCode == 0
+        }
         control.staysRunning = false
         control.launch = { _ = resumeServices() }
         control.healthy = { expected in
             guard let info = try? BundleInfo.read(installedPath),
                   info.version == expected,
                   info.executableIsRunnable(in: installedPath) else { return false }
-            return Recipe.signatureVerifies(installedPath, shell: shell)
+            return signatureVerifies()
         }
         control.healthRequirement = { expected in
             guard let info = try? BundleInfo.read(installedPath) else {
@@ -1673,7 +1680,7 @@ public enum LiveControl {
             }
             if info.version != expected { return "version \(info.version) on disk, expected \(expected)" }
             if !info.executableIsRunnable(in: installedPath) { return "executable is missing or not runnable" }
-            if !Recipe.signatureVerifies(installedPath, shell: shell) { return "code signature did not verify" }
+            if !signatureVerifies() { return "code signature did not verify" }
             return nil
         }
         control.healthTimeout = 5

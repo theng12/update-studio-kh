@@ -105,13 +105,19 @@ public enum FeedPages {
         return "\(app) (\(reason))"
     }
 
+    /// The address a feed commit carries. Neutral by default, so no pass ever attributes public
+    /// feed history to a personal account by forgetting to export a variable; the environment
+    /// stays as an override for a pass that must say something else (S001, 2026-11-25).
+    static func commitEmail(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        let given = (environment["KH_FEED_COMMIT_EMAIL"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return given.isEmpty ? "kh-studio@invalid" : given
+    }
+
     private static func put(_ envelope: Data, repo: String, blobSHA: String?) throws {
-        // The address a feed commit carries comes from the machine that publishes, never from the
-        // source: a personal address written into the code ships inside every copy of the app, and
-        // the pre-publish scan stops on exactly that (measured 2026-11-25, Launcher 0.1.82).
-        guard let email = ProcessInfo.processInfo.environment["KH_FEED_COMMIT_EMAIL"], !email.isEmpty else {
-            throw khuFail("set KH_FEED_COMMIT_EMAIL to the address a feed commit carries; it is not compiled in")
-        }
+        // The address is supplied by the machine that publishes, never compiled into the app: a
+        // personal address written into the source ships inside every copy (measured 2026-11-25,
+        // Launcher 0.1.82). It is neutral unless the pass names one.
+        let email = commitEmail()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         var arguments = ["gh", "api", "-X", "PUT", "repos/\(repo)/contents/release.json",

@@ -112,19 +112,19 @@ func launcherHealthTests() {
         let shell = RecordingShell(mount: dir)
         let byApp = Agent.liveControl(app: "launcher",
                                       AppConfig(bundlePath: dir.appendingPathComponent("Studio Launcher KH.app").path,
-                                                bundleID: nil, recipe: "app-dmg", automatic: true),
+                                                recipe: "app-dmg", automatic: true, bundleID: nil),
                                       shell: shell)
         expect(byApp.staysRunning == false, "LH5 app=='launcher' selects LiveControl.launcher")
 
         let byBundleID = Agent.liveControl(app: "other",
                                            AppConfig(bundlePath: dir.appendingPathComponent("Studio Launcher KH.app").path,
-                                                     bundleID: "com.khupdater.launcher", recipe: "app-dmg", automatic: true),
+                                                     recipe: "app-dmg", automatic: true, bundleID: "com.khupdater.launcher"),
                                            shell: shell)
         expect(byBundleID.staysRunning == false, "LH5 bundleID=='com.khupdater.launcher' selects LiveControl.launcher")
 
         let regular = Agent.liveControl(app: "hub",
                                         AppConfig(bundlePath: dir.appendingPathComponent("Hub Studio KH.app").path,
-                                                  bundleID: "local.studiohub.standalone", recipe: "app-dmg", automatic: true),
+                                                  recipe: "app-dmg", automatic: true, bundleID: "local.studiohub.standalone"),
                                         shell: shell)
         expect(regular.staysRunning == true, "LH5 regular app-dmg keeps staysRunning==true")
     }

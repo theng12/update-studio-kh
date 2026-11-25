@@ -932,6 +932,19 @@ else:
     check(result.returncode != 0 and "ending in .app" in result.stderr,
           "a name that is not an app is refused rather than written")
 
+    # The roster names the apps this fleet runs; the feed's own list is what it must match. It drifted
+    # once (relay/story kept their pre-rename ids, displays-studio was absent), and the Launcher then
+    # read a correct feed row as "Unrecognised" and listed an installed app as "Not on it"
+    # (owner's screenshot, 2026-11-25).
+    import json as _json
+    roster = _json.loads((ROOT / "packaging/fleet-roster.json").read_text())
+    feed_ids = {line.split("=", 1)[0].strip() for line in (ROOT / "feed-apps.txt").read_text().splitlines()
+                if line.strip() and not line.lstrip().startswith("#")}
+    check(feed_ids == set(roster), "fleet-roster.json names exactly the feed's app ids "
+          f"(missing {sorted(feed_ids - set(roster))}, extra {sorted(set(roster) - feed_ids)})")
+    check(all(isinstance(v, str) and v.strip() for v in roster.values()),
+          "every roster entry carries a display name")
+
     print(f"PACKAGING: {checks} passed, 0 failed")
 finally:
     print(f"Temporary fixtures preserved at {work}")

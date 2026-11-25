@@ -40,6 +40,14 @@ func feedProbeRetryTests() {
     expect(reason == "displays-studio (did not answer)", "PP2 a persistent failure reports the app and the reason, never a pass")
     expect(dead.asked == 3, "PP2 it stops after the declared attempts")
 
+    // PP4. A feed commit never carries a personal address by default, and an override still wins.
+    expect(FeedPages.commitEmail([:]) == "kh-studio@invalid",
+           "PP4 an unset variable gives the neutral feed address")
+    expect(FeedPages.commitEmail(["KH_FEED_COMMIT_EMAIL": "   "]) == "kh-studio@invalid",
+           "PP4 a blank variable gives the neutral feed address")
+    expect(FeedPages.commitEmail(["KH_FEED_COMMIT_EMAIL": "someone@example.invalid"]) == "someone@example.invalid",
+           "PP4 an explicit address is kept as the override")
+
     // PP3. Wrong bytes are a mismatch, not a silent pass.
     let wrong = ProbeHTTP([200], body: Data("something-else".utf8))
     let mismatch = FeedPages.verifyOneAsset(envelope: envelope, http: wrong, attempts: 2) { _ in }
