@@ -39,6 +39,7 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     var window: LauncherWindow?
     var fleetWindow: FleetWindow?
     var ssdSources: [SSDSource] { lock.lock(); defer { lock.unlock() }; return ssd }
+    var hasPendingWork: Bool { lock.lock(); defer { lock.unlock() }; return installingApp != nil || !active.isEmpty || !requested.isEmpty }
     var ssd: [SSDSource] = []
 
     init(config: AgentConfig, version: String?) {

@@ -36,8 +36,28 @@ class SparkleRuntimeTests(unittest.TestCase):
 
     def test_plist_keeps_all_four_shim_keys(self):
         bundle = source("Sources/khu/Launcher.swift")
-        for key in ("KHHoldURL", "SUFeedURL", "SUPublicEDKey", "KHHoldTokenFile"):
+        for key in ("KHHoldURL", "SUFeedURL", "SUPublicEDKey", "SUEnableAutomaticChecks", "KHHoldTokenFile"):
             self.assertIn(f'"{key}"', bundle)
+
+    def test_helper_bundle_never_hosts_sparkle(self):
+        helper = source("Sources/KHUStub/HelperBundle.swift")
+        for forbidden in ("SUFeedURL", "SUPublicEDKey", "Sparkle.framework", "KHHoldURL"):
+            self.assertNotIn(forbidden, helper)
+
+    def test_sparkle_check_and_silent_relaunch_wired(self):
+        main = source("Sources/khu/main.swift")
+        launcher = source("Sources/khu/Launcher.swift")
+        check = source("Sources/khu/SparkleCheck.swift")
+        self.assertIn('case "sparkle-check":', main)
+        self.assertIn("SparkleCheckScheduler", main)
+        self.assertLess(main.index("sparkleScheduler?.running"), main.index("Agent.runOnce(config: current"))
+        self.assertIn("sparkleScheduler.triggerIfDue(", main)
+        self.assertLess(launcher.index("SparkleCheck.handleSilentRelaunchIfPending()"),
+                        launcher.index("askHelper(seconds: 2)"))
+        self.assertIn("setActivationPolicy(.prohibited)", check)
+        self.assertIn("SparkleRelaunchMarker.write(", check)
+        self.assertIn("SparkleRelaunchMarker.consumeIfFresh(", check)
+        self.assertIn("SparkleRelaunchMarker.releaseHold(", check)
 
     def test_framework_stays_weak_and_signs_inside_out(self):
         build = source("build.sh")

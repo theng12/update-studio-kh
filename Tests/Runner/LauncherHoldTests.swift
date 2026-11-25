@@ -156,5 +156,120 @@ func launcherHoldTests() {
 
         SparkleInstallMarker.set(nil, home: fakeHome, environment: [:])
         expect(!fm.fileExists(atPath: defaultURL.path), "HH8 set(nil) removes the marker cleanly")
+        expect(!SparkleInstallMarker.isActive(home: fakeHome, environment: [:]), "HH8 isActive is false after clear")
+        SparkleInstallMarker.set("story", home: fakeHome, environment: [:])
+        expect(SparkleInstallMarker.isActive(home: fakeHome, environment: [:]), "HH8 isActive is true for fresh marker")
+        expect(!SparkleInstallMarker.isActive(now: Date().addingTimeInterval(16 * 60), home: fakeHome, environment: [:]),
+               "HH8 isActive ignores markers older than 15 minutes")
+        SparkleInstallMarker.set(nil, home: fakeHome, environment: [:])
+    }
+
+    // HH9 SparkleRelaunchMarker: stateDir resolution, fresh consume once, stale expiry, and hold DELETE.
+    do {
+        let dir = tmpDir("sparkle-relaunch-marker")
+        let tokenPath = dir.appendingPathComponent("launcher-hold-token").path
+        let resolvedFromPlist = SparkleRelaunchMarker.stateDir(
+            info: ["KHHoldTokenFile": tokenPath],
+            home: dir.appendingPathComponent("unused-home"),
+            environment: [:])
+        expect(resolvedFromPlist.path == dir.path,
+               "HH9 stateDir derives from KHHoldTokenFile parent (\(resolvedFromPlist.path))")
+
+        let envOverride = dir.appendingPathComponent("override-state")
+        let resolvedFromEnv = SparkleRelaunchMarker.stateDir(
+            info: ["KHHoldTokenFile": tokenPath],
+            environment: [SparkleRelaunchMarker.stateDirEnv: envOverride.path])
+        expect(resolvedFromEnv.path == envOverride.path, "HH9 KHU_SPARKLE_STATE_DIR overrides plist")
+
+        let hold = LauncherHold(token: "relaunch-token-0123456789abcdef0123456789", busy: { [] })
+        try! hold.start(port: nil)
+        defer { hold.stop() }
+        expect(hold.waitUntilBound(timeout: 3), "HH9 hold binds for releaseHold test")
+        let hport = hold.boundPort!
+        _ = try? AtomicFile.write(Data("relaunch-token-0123456789abcdef0123456789".utf8),
+                                  to: URL(fileURLWithPath: tokenPath), permissions: 0o600)
+        _ = call(hport, "POST", token: "relaunch-token-0123456789abcdef0123456789")
+        expect(hold.paused(), "HH9 hold is paused after POST")
+
+        let holdURL = "http://127.0.0.1:\(hport)\(LauncherHold.path)"
+        SparkleRelaunchMarker.write(fromVersion: "0.1.84", holdURL: holdURL, tokenFile: tokenPath, in: dir)
+        let consumed = SparkleRelaunchMarker.consumeIfFresh(in: dir)
+        expect(consumed?.fromVersion == "0.1.84" && consumed?.holdURL == holdURL,
+               "HH9 fresh relaunch marker is consumed once with its fields")
+        expect(SparkleRelaunchMarker.consumeIfFresh(in: dir) == nil,
+               "HH9 second consume returns nil so a human open still shows the window")
+
+        let released = SparkleRelaunchMarker.releaseHold(urlString: holdURL, tokenFile: tokenPath)
+        expect(released && !hold.paused(),
+               "HH9 releaseHold sends DELETE with bearer token and resumes hold immediately")
+
+        // Stale marker (>60s) is removed and returns nil.
+        SparkleRelaunchMarker.write(fromVersion: "0.1.84", holdURL: holdURL, tokenFile: tokenPath, in: dir)
+        let stale = SparkleRelaunchMarker.consumeIfFresh(in: dir, now: Date().addingTimeInterval(120))
+        expect(stale == nil && !fm.fileExists(atPath: SparkleRelaunchMarker.fileURL(in: dir).path),
+               "HH9 stale relaunch marker expires and is removed without suppressing FrontDoor")
+    }
+
+    // HH10 SparkleCheckScheduler: deferral when busy/paused, non-overlap, cadence, waitUntilIdle.
+    do {
+        let dir = tmpDir("sparkle-scheduler")
+        let fakeApp = dir.appendingPathComponent("Studio Launcher KH.app")
+        let exec = fakeApp.appendingPathComponent("Contents/MacOS/Studio Launcher KH")
+        let fw = fakeApp.appendingPathComponent("Contents/Frameworks/Sparkle.framework")
+        try! fm.createDirectory(at: exec.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! fm.createDirectory(at: fw, withIntermediateDirectories: true)
+        try! "#!/bin/sh\nexit 0\n".write(to: exec, atomically: true, encoding: .utf8)
+        try! fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: exec.path)
+
+        let resolved = SparkleCheckScheduler.resolveLauncherBundle(
+            environment: [SparkleCheckScheduler.launcherAppEnv: fakeApp.path],
+            verify: { $0.path == fakeApp.path })
+        expect(resolved?.path == fakeApp.path, "HH10 resolveLauncherBundle accepts verified override with framework")
+        let rejected = SparkleCheckScheduler.resolveLauncherBundle(
+            environment: [SparkleCheckScheduler.launcherAppEnv: fakeApp.path],
+            verify: { _ in false })
+        expect(rejected == nil, "HH10 resolveLauncherBundle rejects unverified bundle")
+
+        final class Counter: @unchecked Sendable {
+            let lock = NSLock()
+            var runs = 0
+            let gate = DispatchSemaphore(value: 0)
+            let started = DispatchSemaphore(value: 0)
+        }
+        let counter = Counter()
+        let t0 = Date()
+        let scheduler = SparkleCheckScheduler(
+            startedAt: t0,
+            settleSeconds: 10,
+            intervalSeconds: 300,
+            findLauncher: { fakeApp },
+            runCheck: { _ in
+                counter.lock.lock(); counter.runs += 1; counter.lock.unlock()
+                counter.started.signal()
+                _ = counter.gate.wait(timeout: .now() + 5)
+                return 0
+            })
+
+        expect(!scheduler.triggerIfDue(now: t0.addingTimeInterval(5), paused: false, installInProgress: false, hasPendingInstalls: false),
+               "HH10 does not trigger before settleSeconds")
+        expect(!scheduler.triggerIfDue(now: t0.addingTimeInterval(15), paused: true, installInProgress: false, hasPendingInstalls: false),
+               "HH10 defers while hold is paused")
+        expect(!scheduler.triggerIfDue(now: t0.addingTimeInterval(15), paused: false, installInProgress: true, hasPendingInstalls: false),
+               "HH10 defers while install-in-progress marker is active")
+        expect(!scheduler.triggerIfDue(now: t0.addingTimeInterval(15), paused: false, installInProgress: false, hasPendingInstalls: true),
+               "HH10 defers while Helper has pending installs")
+
+        let launched = scheduler.triggerIfDue(now: t0.addingTimeInterval(15), paused: false, installInProgress: false, hasPendingInstalls: false)
+        let entered = counter.started.wait(timeout: .now() + 3) == .success
+        expect(launched && entered && scheduler.running, "HH10 triggers once idle and due")
+        expect(!scheduler.triggerIfDue(now: t0.addingTimeInterval(400), paused: false, installInProgress: false, hasPendingInstalls: false),
+               "HH10 never overlaps while a check is already running")
+
+        counter.gate.signal()
+        let stillRunning = scheduler.waitUntilIdle(limit: 3)
+        expect(!stillRunning && !scheduler.running, "HH10 waitUntilIdle wakes promptly when child exits")
+        expect(!scheduler.triggerIfDue(now: t0.addingTimeInterval(100), paused: false, installInProgress: false, hasPendingInstalls: false),
+               "HH10 honours intervalSeconds cadence before next check")
+        expect(counter.runs == 1, "HH10 ran exactly once (\(counter.runs))")
     }
 }

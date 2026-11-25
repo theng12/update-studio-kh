@@ -6,6 +6,12 @@ lines. The **release body is not this file**: `packaging/release-push.sh --summa
 two-or-three-sentence summary, because the feed row is composed from the body and the Launcher card
 shows it.
 
+## 0.1.84 — 2026-11-25
+
+- Studio Launcher KH can now update itself directly through its signed Sparkle 2 appcast channel without interrupting an install. The helper keeps its own bundle free of Sparkle and schedules headless checks on the verified packaged `Studio Launcher KH.app`, pausing new agent work while Sparkle holds port 8792 and deferring whenever another app is installing.
+- A background self-update relaunches silently: a short-lived relaunch marker clears the hold so queued work resumes right away and exits with zero visible windows, while opening the app yourself still opens the window as before.
+- Feed rows take their words from each app's own tagged metadata, and Wire's fallback words are retired from the registry now that its tag carries them.
+
 ## 0.1.83 — 2026-11-25
 
 - The Launcher's own updates now pause it instead of interrupting it. Its feed row carries the hold it already serves on 8792, so an update asks it to stop taking new work, waits for the job in hand to slide into a gap, installs and relaunches, and the app carries on by itself. Queued work stays queued and nothing in flight is cancelled.
@@ -88,12 +94,4 @@ shows it.
 - GitHub releases is now the built-in starting address when nothing is saved — it keeps working when Update Studio is off. A saved or typed address always wins over it, and Settings shows the address actually in use, marked as the default when it is that one.
 - An already-paired Mac can move to the public feed in one click: Settings has "Use GitHub releases instead". The mirror is checked against this Mac's own pinned key before it is saved; the saved sign-in is kept, so switching back is one address away. After the switch Settings says this Mac no longer reports to or takes orders from Update Studio.
 - The failure sentence names the real cause instead of a generic "could not be reached": a numeric IP says macOS blocks plain http to an IP; https typed for a publisher says it serves plain http on its own port; a tailnet name that does not resolve says Tailscale's DNS is not answering on this Mac. Each offers GitHub releases as the way out.
-
-## 0.1.73 — 2026-11-20
-
-- The version check now answers while transfers are running. The feed index sat in the same fixed slot count as a 1.48 GB download, so 46–65 Macs checking during a rollout were told the publisher was busy for about 18 seconds and then retried together. The index and the page are now served outside the transfer slots; a transfer started while every slot is full is still refused as busy, exactly as before.
-- Hub rollouts are staggered from now on, and the choice is made on each Mac, not at the publisher. A Mac starts a large pull at its own minute inside a 60-minute window, worked out from its own name and the version, so 65 Macs never pull 1.48 GB at once and a Mac that retries after a "busy" answer cannot re-form the stampede. It needs nothing from the publisher, and a Mac that has been offline for a day simply waits its own minute from when it sees the release. The window and the size it applies to are settings; 0 turns it off.
-- A security update never waits for a slot. An entry the publisher marks as a security update is pulled immediately, which is what a Mac that has been offline and is far behind needs; an app this Mac does not have yet is never staggered either.
-- A switch turned on in Update Studio now takes effect on a Mac that has no Hub too. The check that ends an already-queued update when Automatic is off read this Mac's own switch and stopped there, so a page switch set later was ignored and the Mac said "set on this Mac" about a switch set in the page. It now follows the same rule the automatic sweep uses, and the sentence names the switch that actually decided.
-- An automatic pull held for its slot says so in one line: which minute of the window it is waiting for and that nothing else is waiting on it.
 

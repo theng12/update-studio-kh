@@ -102,6 +102,7 @@ struct KHUMain {
               remove --state <dir> --machine <id>
               serve --feed <dir> --state <dir> [--key <keyfile>] --bind <ip> --port <p> [--feed-only]
               agent --config <file> [--once] [--install <app-id>]   (local install request runs once)
+              sparkle-check [--timeout <seconds>]   (headless Sparkle 2 self-update check inside Studio Launcher KH.app)
               rename-machine --state <dir> --from <device-id> --to <label>
               ssd-update --volume <path>   (update or repair installed apps from an SSD)
               ssd-index --volume <path> [--feed <dir>] [--changelog <id>=<repo or CHANGELOG.md>]...   (writes <path>/apps.json)
@@ -125,10 +126,13 @@ struct KHUMain {
             exit(1)
         }
         // Opened as Studio Launcher KH.app: show the helper's window, or set the helper up first.
-        if args.isEmpty, Bundle.main.bundlePath.hasSuffix(".app") { FrontDoor.run() }
+        // LaunchServices may pass a `-psn_...` argument on relaunch; treat it as an ordinary open.
+        if (args.isEmpty || (args.count == 1 && args[0].hasPrefix("-psn_"))), Bundle.main.bundlePath.hasSuffix(".app") { FrontDoor.run() }
         if args.first == "notify", args.count == 3, Bundle.main.bundlePath.hasSuffix(".app") { Notifier.post(title: args[1], body: args[2]) }
         if args.isEmpty { usage() }
         switch args[0] {
+        case "sparkle-check":
+            SparkleCheck.run(args: args)
         case "ssd-update":
             guard [3, 5].contains(args.count), args[1] == "--volume", args[2].hasPrefix("/") else { usage() }
             if args.count == 5, args[3] != "--index-sha256" { usage() }
@@ -754,6 +758,7 @@ struct KHUMain {
             // on 1301 each of 1,605 restarts logged the same count and nothing said why.
             agentLog.record("agent start: transfers=\(TransferMeter.completed) restarted-without-success=\(AgentRecycle.recycledSinceSuccess(stateDir: cfg.stateDir))")
             let menu = !cfg.once && HelperMenu.available ? HelperMenu(config: cfg, version: mine) : nil
+            var sparkleScheduler: SparkleCheckScheduler? = nil
             // The Launcher's own update hold: fixed loopback port, its own 0600 token. A taken port
             // is said and never stops the app.
             if let menu {
@@ -771,21 +776,27 @@ struct KHUMain {
                     FileHandle.standardError.write(Data("launcher hold: \(error)\n".utf8))
                 }
                 // Sparkle 2 self-update, started only now that the hold is listening: the shim posts
-                // to it before any check. The framework is weak-linked (docs/SPARKLE-INTEGRATION.md),
-                // so a mispackaged app still launches — and without this guard the shim would take
-                // the hold, fail to build its updater, and leave the hold to expire. Absent is said,
-                // never silent: every other path still updates this app through the feed.
-                if NSClassFromString("SPUUpdater") == nil {
-                    FileHandle.standardError.write(Data("sparkle: Sparkle.framework is not in Contents/Frameworks; self-update is off, this app still updates through the feed\n".utf8))
-                } else if let hold = menu.holdServer, hold.waitUntilBound() {
-                    SparkleProgress.shared.observe { line in agentLog.record(line) }
-                    kh_sparkle_set_state_callback(sparkleStateChanged)
-                    let started = kh_sparkle_start()
-                    if started != 0 {
-                        hold.release()
-                        let why = String(cString: kh_sparkle_last_error())
-                        FileHandle.standardError.write(Data("sparkle: self-update not started (\(why)); this app still updates through the feed\n".utf8))
+                // to it before any check. When the agent itself runs inside a Sparkle-carrying bundle,
+                // keep the in-process SPUUpdater path; in production Helper.app (which intentionally
+                // carries no Sparkle.framework so Sparkle targets Studio Launcher KH.app directly),
+                // delegate headless `sparkle-check` runs to the verified packaged Studio Launcher KH.app
+                // between Agent.runOnce runs on a bounded cadence.
+                if NSClassFromString("SPUUpdater") != nil {
+                    if let hold = menu.holdServer, hold.waitUntilBound() {
+                        SparkleProgress.shared.observe { line in agentLog.record(line) }
+                        kh_sparkle_set_state_callback(sparkleStateChanged)
+                        let started = kh_sparkle_start()
+                        if started != 0 {
+                            hold.release()
+                            let why = String(cString: kh_sparkle_last_error())
+                            FileHandle.standardError.write(Data("sparkle: self-update not started (\(why)); this app still updates through the feed\n".utf8))
+                        }
+                    } else {
+                        FileHandle.standardError.write(Data("sparkle: the Launcher's update hold did not bind; no update check was started, this app still updates through the feed\n".utf8))
                     }
+                } else if let hold = menu.holdServer, hold.waitUntilBound() {
+                    sparkleScheduler = SparkleCheckScheduler(log: { line in agentLog.record(line) })
+                    agentLog.record("sparkle: helper delegates self-update checks to packaged Studio Launcher KH.app")
                 } else {
                     FileHandle.standardError.write(Data("sparkle: the Launcher's update hold did not bind; no update check was started, this app still updates through the feed\n".utf8))
                 }
@@ -817,9 +828,10 @@ struct KHUMain {
                     // Sparkle and the feed are both installers of this same app. The shim takes the
                     // hold before its first action; no agent work starts until it resumes, so queued
                     // work waits rather than being quit or cancelled.
-                    if SparkleProgress.shared.busy || (menu?.holdServer?.paused() ?? false) {
+                    if SparkleProgress.shared.busy || (sparkleScheduler?.running ?? false) || (menu?.holdServer?.paused() ?? false) {
                         if let hold = menu?.holdServer { _ = hold.waitForResume(limit: 30) }
                         if SparkleProgress.shared.busy { _ = SparkleProgress.shared.waitForIdle(limit: 30) }
+                        if let sparkleScheduler, sparkleScheduler.running { _ = sparkleScheduler.waitUntilIdle(limit: 30) }
                         continue
                     }
                     var ranOK = false
@@ -865,7 +877,10 @@ struct KHUMain {
                         ?? AgentRecycle.afterTransfers
                     let runCap = ProcessInfo.processInfo.environment["KHU_RECYCLE_RUNS"].flatMap(Int.init)
                         ?? AgentRecycle.afterRuns
-                    if initialRequests.isEmpty {
+                    if initialRequests.isEmpty
+                        && !SparkleProgress.shared.busy
+                        && !(sparkleScheduler?.running ?? false)
+                        && !(menu?.holdServer?.paused() ?? false) {
                         let restartPending = AgentRecycle.recycledSinceSuccess(stateDir: cfg.stateDir)
                         if let why = AgentRecycle.due(transfers: TransferMeter.completed,
                                                       age: Date().timeIntervalSince(startedAt),
@@ -888,6 +903,15 @@ struct KHUMain {
                         }
                     }
                     rotateAgentLog()
+                    // Between runs, never inside one: kick off at most one headless `sparkle-check`
+                    // on the verified packaged Studio Launcher KH.app when idle, unheld, and due.
+                    if let sparkleScheduler, requested.isEmpty {
+                        _ = sparkleScheduler.triggerIfDue(
+                            paused: menu?.holdServer?.paused() ?? false,
+                            installInProgress: SparkleInstallMarker.isActive(),
+                            hasPendingInstalls: menu?.hasPendingWork ?? false
+                        )
+                    }
                     let seconds = Double(max(1, cfg.intervalMinutes) * 60)
                     if let menu { requested = menu.waitForNextRun(seconds: seconds) } else { Thread.sleep(forTimeInterval: seconds) }
                 } while true

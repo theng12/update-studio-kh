@@ -4,6 +4,14 @@ Retired from `CHANGELOG-launcher.md` on 2026-11-25, which keeps the ten most rec
 Newest first, the same order as the live file, so the top of this file continues from its
 bottom. Git history is the final record.
 
+## 0.1.73 — 2026-11-20
+
+- The version check now answers while transfers are running. The feed index sat in the same fixed slot count as a 1.48 GB download, so 46–65 Macs checking during a rollout were told the publisher was busy for about 18 seconds and then retried together. The index and the page are now served outside the transfer slots; a transfer started while every slot is full is still refused as busy, exactly as before.
+- Hub rollouts are staggered from now on, and the choice is made on each Mac, not at the publisher. A Mac starts a large pull at its own minute inside a 60-minute window, worked out from its own name and the version, so 65 Macs never pull 1.48 GB at once and a Mac that retries after a "busy" answer cannot re-form the stampede. It needs nothing from the publisher, and a Mac that has been offline for a day simply waits its own minute from when it sees the release. The window and the size it applies to are settings; 0 turns it off.
+- A security update never waits for a slot. An entry the publisher marks as a security update is pulled immediately, which is what a Mac that has been offline and is far behind needs; an app this Mac does not have yet is never staggered either.
+- A switch turned on in Update Studio now takes effect on a Mac that has no Hub too. The check that ends an already-queued update when Automatic is off read this Mac's own switch and stopped there, so a page switch set later was ignored and the Mac said "set on this Mac" about a switch set in the page. It now follows the same rule the automatic sweep uses, and the sentence names the switch that actually decided.
+- An automatic pull held for its slot says so in one line: which minute of the window it is waiting for and that nothing else is waiting on it.
+
 ## 0.1.72 — 2026-11-20
 
 - A refused update hold no longer locks a Mac out of that version for ever. When an app does not pause in time, the failure is remembered separately with its reason and time, retried after 15 minutes, and after three attempts tells you to quit or restart the app once — the update is already downloaded and installs as soon as the app closes, without waiting for another backoff.

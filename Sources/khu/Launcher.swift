@@ -79,6 +79,7 @@ enum LauncherBundle {
             // KHHoldURL above is the fourth. The token is LauncherHold's own 0600 file, not the agent's.
             "SUFeedURL": LauncherBundle.feedURL,
             "SUPublicEDKey": LauncherBundle.publicEDKey,
+            "SUEnableAutomaticChecks": true,
             "KHHoldTokenFile": "~/Library/KHUpdater/state/" + LauncherHold.tokenName,
             "NSHighResolutionCapable": true,
             // macOS 14+ applies ATS to numeric IPs; only the private tailnet may use HTTP. The
@@ -126,6 +127,10 @@ enum LauncherBundle {
 /// front door at a throwaway home and kit for isolated window checks; nobody sets them in real use.
 enum FrontDoor {
     static func run() -> Never {
+        // Silent relaunch after a background Sparkle self-update: consume the short-lived marker,
+        // release the Helper's hold, log the relaunch, and exit before touching AppKit or showing
+        // any window. A human opening Studio Launcher KH.app has no fresh marker and proceeds below.
+        if SparkleCheck.handleSilentRelaunchIfPending() { exit(0) }
         NSApplication.shared.setActivationPolicy(.accessory)
         LauncherMenus.install()
         let env = ProcessInfo.processInfo.environment
