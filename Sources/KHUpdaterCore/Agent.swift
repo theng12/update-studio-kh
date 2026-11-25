@@ -774,7 +774,7 @@ public enum Agent {
         return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"),
                                           wait: config.once || !requested.isEmpty) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
-                          control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
+                          control: control ?? { liveControl(app: $0, $1, shell: shell) }, executable: executable, now: now,
                           requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile,
                           appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: startingNotes + repairNotes,
                           configFile: configFile, loadedPaths: loadedPaths, startupWaitSeconds: startupWaitSeconds)
@@ -813,8 +813,13 @@ public enum Agent {
         return "\(app) \(shown): \(result.status) — \(result.reason ?? "no reason was given")"
     }
 
-    static func liveControl(_ cfg: AppConfig, shell: Shell) -> AppControl {
-        cfg.recipe == "gateway" ? LiveControl.gateway(cfg.bundlePath, shell: shell) : LiveControl.appDmg(cfg.bundlePath, shell: shell)
+    static func liveControl(app: String = "", _ cfg: AppConfig, shell: Shell) -> AppControl {
+        if cfg.recipe == "gateway" { return LiveControl.gateway(cfg.bundlePath, shell: shell) }
+        if app == "launcher" || cfg.bundleID == "com.khupdater.launcher"
+            || (try? BundleInfo.read(cfg.bundlePath).identifier) == "com.khupdater.launcher" {
+            return LiveControl.launcher(cfg.bundlePath, shell: shell)
+        }
+        return LiveControl.appDmg(cfg.bundlePath, shell: shell)
     }
 
     static func runLocked(config: AgentConfig, stateDir: URL, http: HTTPClient, shell: Shell,

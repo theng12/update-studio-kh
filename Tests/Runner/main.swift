@@ -4148,6 +4148,7 @@ struct RunnerMain {
             feedMirrorTests()
             feedHostRuntimeTests()
             feedLosslessTests()
+            feedProbeRetryTests()
             feedHostTests()
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
@@ -4286,6 +4287,11 @@ struct RunnerMain {
             print("TESTS: \(passed) passed, \(failed) failed")
             exit(failed == 0 ? 0 : 1)
         }
+        if ProcessInfo.processInfo.environment["LAUNCHER_HEALTH_ONLY"] == "1" {
+            launcherHealthTests()
+            print("TESTS: \(passed) passed, \(failed) failed")
+            exit(failed == 0 ? 0 : 1)
+        }
         if ProcessInfo.processInfo.environment["E_ONLY"] == "1" {
             enrolWindowTests()
             pairingTests()
@@ -4316,6 +4322,7 @@ struct RunnerMain {
         publicFeedTests()
         feedHostRuntimeTests()
         feedLosslessTests()
+        feedProbeRetryTests()
         // Signing basics stay covered.
         let key = Signing.generateKeyPair()
         let data = Data("hello".utf8)
@@ -4444,6 +4451,7 @@ r41HealthMustHold()
         spaceReclaimTests()
         launchOrderTests()
         healthRequirementTests()
+        launcherHealthTests()
         mirrorFeedTests()
         copyCompletenessTests()
         rollbackRetirementTests()
