@@ -6,6 +6,12 @@ lines. The **release body is not this file**: `packaging/release-push.sh --summa
 two-or-three-sentence summary, because the feed row is composed from the body and the Launcher card
 shows it.
 
+## 0.1.87 — 2026-11-25
+
+- The Extension tab now reads like every other tab: the same card, the same grid, the same detail window. A card carries the extension's icon, a picture of it, its name, version and what it does, a status and a Download button, and opens a window with the description, the size, the checksum and the Chrome steps.
+- The status is what this Mac can see rather than what we hope: **Downloaded 1.3.32** when the zip is in your Downloads folder, **Not downloaded** when it is not. The Launcher cannot add an extension to Chrome — Chrome has no way to do that without you — so the button stays Download, the window says so in one sentence, and nothing anywhere reads "Installed".
+- Size and checksum come from the published list. A release date is not published for extensions, and the window says "Not published" instead of showing an empty line as if it were a date.
+
 ## 0.1.86 — 2026-11-25
 
 - The app list has a Show control: All, Installed, or Not installed. Installed keeps what this Mac already has — including an app that exists here but never came from the feed, which gets its own "Installed on this Mac" group rather than a category it was never given. Not installed shows only what this Mac is still missing, and the choice is remembered the next time the window opens.
@@ -73,13 +79,3 @@ shows it.
 - The app list shows the verified feed’s app count and publish time, names fleet apps that the feed does not carry, and marks new feed apps it does not recognise yet.
 - Sort by **Type** in grid or list view. Publishers label apps Business, Entertainment, Media, System or Utility; older or unknown labels read **Unlabelled**.
 - **Extensions and plugins** is separate from apps. Open it to check for published downloads. Verified Chrome extensions show Download, which saves the file to Downloads, then checks its published size and checksum before keeping it and refuses a mismatch; a plugin with no download says so instead of a dead button.
-
-## 0.1.77 — 2026-11-21
-
-- Settings' "Where updates come from" now shows which route is chosen: the selected one is a pressed segment, not three identical buttons.
-- The footer's fleet button reads "Fleet" in full (it was cut to "Fleet…"); its tooltip keeps the full sentence.
-- In Settings, "Where updates come from" has its own spacing, "Check connection" sits under the address it checks, and the Join note is one line — so the route picker and the Join controls are visible without scrolling at the default window size.
-- Connecting from GitHub releases no longer fails on a Mac that has used Studio Launcher before: leftover updater state made the installer refuse a plain run ("KH Updater already exists"), and the app showed only "Local setup could not be completed". The app now asks for the installer's repair mode when anything is already there, and a real failure shows the installer's own last line.
-- The custom-address field says plainly that a numeric IP can never work: macOS refuses plain http to an IP address, so only the publisher's private-network host name (or an https feed link) can be used.
-- An app Studio Launcher knows but the feed it reads does not carry is now named in the list ("This feed does not carry …"), never a silent gap.
-- The refresh control moved to the top right beside the view toggles and reads "Scan drives", so what it checks is on the button; the footer keeps "Drives scanned … · Server …" and says "Drives not scanned yet" before the first scan.

@@ -45,6 +45,10 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
                 return ["status": "available", "note": note as Any, "entries": entries.map {
                     ["id": $0.id, "name": $0.name, "version": $0.version, "summary": $0.summary,
                      "kind": $0.kind, "download": $0.downloadURL != nil,
+                     // What the card and the modal are allowed to claim: the published size and
+                     // checksum, and the zip this Mac actually holds. No release date is published.
+                     "bytes": $0.bytes as Any, "sha256": $0.sha256 as Any,
+                     "saved": ExtensionCatalog.savedFile(for: $0)?.lastPathComponent as Any,
                      // Pictures are plain public addresses the page loads itself; nil is drawn as
                      // the tile's placeholder, never as a broken image.
                      "icon": $0.iconURL?.absoluteString as Any, "screenshot": $0.screenshotURL?.absoluteString as Any]

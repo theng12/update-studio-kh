@@ -4323,6 +4323,7 @@ struct RunnerMain {
         feedHostRuntimeTests()
         feedLosslessTests()
         feedProbeRetryTests()
+            renamedAppTests()
         // Signing basics stay covered.
         let key = Signing.generateKeyPair()
         let data = Data("hello".utf8)

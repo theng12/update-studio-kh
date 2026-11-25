@@ -101,6 +101,18 @@ public enum ExtensionCatalog {
         return entries
     }
 
+    /// The zip this Mac already holds for `entry`, if the download landed in Downloads.
+    /// The page may say "Downloaded" only for a file it can see here: Chrome loading the unpacked
+    /// folder is something the Launcher cannot observe, so it never claims it.
+    public static func savedFile(for entry: Entry, in folder: URL? = nil) -> URL? {
+        let dir = folder ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+        let name = (try? SafeName.component("kh-\(entry.id)-\(entry.version).zip", what: "download name"))
+            ?? "kh-\(entry.id)-\(entry.version).zip"
+        let file = dir.appendingPathComponent(name)
+        return FileManager.default.fileExists(atPath: file.path) ? file : nil
+    }
+
     /// Download one published file. Nothing is kept unless its bytes and SHA-256 match the index
     /// entry, so a truncated file or a swapped asset is refused in plain words rather than handed on.
     public static func fetch(_ entry: Entry, to file: URL, http: HTTPClient = URLSessionHTTPClient()) throws {

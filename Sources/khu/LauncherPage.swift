@@ -139,7 +139,7 @@ const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.k
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',tab=store.get('tab')||'all',inst=store.get('inst')||'all',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},joinAddr=null,joinCode=null,selected=new Set();
+let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',tab=store.get('tab')||'all',inst=store.get('inst')||'all',q='',detail=null,extDetail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},joinAddr=null,joinCode=null,selected=new Set();
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -301,7 +301,7 @@ function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filte
 const tickOnly=(k,v)=>k==='extensions'?undefined:k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
 // What the page would look like if it were drawn from the state it holds right now — transfer
 // counters excepted, since those are written in rather than redrawn.
-const signature=()=>JSON.stringify([view,sort,tab,inst,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
+const signature=()=>JSON.stringify([view,sort,tab,inst,q,showHidden,detail,extDetail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  if(!viewFromMac&&S.settings&&S.settings.viewMode){view=S.settings.viewMode;viewFromMac=true}
@@ -369,7 +369,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
     :inst=='missing'?'Every app on this feed is already installed here. Choose Installed to see them.':null;
    m.append(el('p',{class:'empty'},q?'No app matches “'+q+'”.':filterNote?filterNote:CATEGORIES.has(tab)?'No '+TABS.find(t=>t[0]==tab)[1]+' apps on this feed yet.'+(none?' '+none+' '+(none===1?'app has':'apps have')+' no category yet; they are under All.':''):'No app matches “'+q+'”.'));
   }
-  for(const [title,group] of [['Installed',mine],['Installed on this Mac',here],['Not installed',others]]){if(!group.length)continue;
+  for(const [title,group] of [['Installed',mine],['Not in the feed',here],['Not installed',others]]){if(!group.length)continue;
    m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
   if(unlabelledRows.length)m.append(el('h2',{},'No category yet · '+unlabelledRows.length),view=='grid'?el('div',{class:'grid'},unlabelledRows.map(card)):tableOf(unlabelledRows));
  }else{
@@ -411,13 +411,50 @@ function extPicture(x,src,cls,label,note,alt){
   ph.remove();img.hidden=false};
  img.onerror=()=>{try{clearTimeout(timer)}catch(e){}skip('The '+label.toLowerCase()+' could not be loaded, so the tile keeps its placeholder.')};
  img.src=src;return box}
-function extTile(x){const note=el('p',{class:'sub extNote'});
- return el('div',{class:'extRow extTile'},
-  extPicture(x,x.icon,'extIcon',(x.name.trim()[0]||'?').toUpperCase(),note,'Icon'),
-  el('div',{class:'extBody'},el('strong',{},x.name),' · ',x.version,el('p',{},x.summary),note),
+// An extension is drawn with the same card, the same modal and the same words as an app — except
+// where the truth differs: Chrome has no programmatic unpacked install, so the action is Download and
+// the status is what this Mac can see on disk. "Installed" is Chrome's word and is never ours.
+function extChip(x){return x.download?el('span',{class:'chip '+(x.saved?'ok':'')},x.saved?'Downloaded '+x.version:'Not downloaded')
+ :el('span',{class:'chip info'},'No public download yet')}
+function extMeta(x){const bits=[];if(mb(x.bytes))bits.push(mb(x.bytes));if(x.sha256)bits.push('SHA-256 '+x.sha256.slice(0,12)+'…');
+ return bits.length?el('span',{class:'ver sub'},bits.join(' · ')):null}
+function extButtons(x){return x.download?[el('button',{class:'btn primary','aria-label':(x.saved?'Download '+x.name+' again':'Download '+x.name),
+ onclick:e=>{e.stopPropagation();post({action:'downloadExtension',app:x.id})}},x.saved?'Download again':'Download')]:[]}
+const extById=id=>((S.extensions||{}).entries||[]).find(e=>e.id==id);
+function extCard(x){const note=el('p',{class:'sub extNote'});
+ return el('article',{class:'card click extCard',tabindex:0,'aria-label':x.name+' '+x.version,
+  onclick:()=>openExtDetail(x.id),onkeydown:e=>{if(e.key=='Enter'&&e.target===e.currentTarget){e.preventDefault();openExtDetail(x.id)}}},
+  el('div',{class:'head'},extPicture(x,x.icon,'extIcon',(x.name.trim()[0]||'?').toUpperCase(),note,'Icon'),
+   el('div',{class:'t'},el('div',{class:'name'},x.name),el('div',{class:'tag'},'Chrome extension · '+x.version),
+    x.summary?el('div',{class:'tag'},x.summary):null)),
+  // The picture is what the extension looks like in Chrome, so the card shows it rather than
+  // describing it; a card with none keeps the same height, exactly as an app card does.
   extPicture(x,x.screenshot,'extShot','Screenshot',note,'Screenshot'),
-  x.download?el('button',{class:'btn','aria-label':'Download '+x.name,onclick:()=>post({action:'downloadExtension',app:x.id})},'Download')
-            :el('span',{class:'tag'},'No public download yet'))}
+  el('div',{class:'meta'},extChip(x),extMeta(x)),note,
+  el('div',{class:'foot'},...extButtons(x)))}
+function openExtDetail(id){extDetail=id;drawExtDetail()}
+function drawExtDetail(){const x=extById(extDetail);if(!x){extDetail=null;return}
+ const again=!!document.querySelector('.scrim.d');
+ document.querySelectorAll('.scrim.d').forEach(n=>n.remove());
+ const facts=[['Version',x.version],['Size',mb(x.bytes)||'Not published'],
+  ['SHA-256',x.sha256?x.sha256.slice(0,24)+'…':'Not published'],['Released','Not published']];
+ const sheet=el('div',{class:'sheet',role:'dialog','aria-modal':true,'aria-label':x.name,style:again?'animation:none':'',onclick:e=>e.stopPropagation()},
+  el('div',{class:'top'},extPicture(x,x.icon,'extIcon',(x.name.trim()[0]||'?').toUpperCase(),el('p',{class:'sub'}),'Icon'),
+   el('div',{class:'t'},el('h3',{},x.name),el('div',{class:'sub'},'Chrome extension '+x.version),
+    el('div',{class:'meta',style:'margin-top:8px'},extChip(x),extMeta(x)),
+    el('div',{class:'foot',style:'margin-top:12px;max-width:340px'},...extButtons(x))),
+   el('div',{class:'nav'},el('button',{class:'btn icon',title:'Close','aria-label':'Close',onclick:()=>{extDetail=null;closeLayers()}},svg('M4 4l8 8M12 4l-8 8')))),
+  el('div',{class:'cols'},
+   el('div',{},extPicture(x,x.screenshot,'extShot','Screenshot',el('p',{class:'sub'}),'Screenshot'),
+    el('p',{class:'desc'},x.summary||'No description is published for this extension.'),
+    el('h4',{},'How to use it in Chrome'),
+    el('ol',{class:'feat'},['Download the zip, then unzip it.','Open chrome://extensions and switch on Developer mode.','Choose Load unpacked and pick the unzipped folder.'].map(t=>el('li',{},t))),
+    el('p',{class:'sub'},'The Launcher cannot load it for you — Chrome has no way to add an extension without you doing this step.')),
+   el('div',{},el('h4',{},'Release'),el('dl',{class:'facts'},facts.map(f=>el('div',{},el('dt',{},f[0]),el('dd',{class:'num'},f[1])))),
+    x.saved?el('p',{class:'sub'},'Saved as '+x.saved+' in your Downloads folder.'):
+     el('p',{class:'sub'},'Nothing is saved on this Mac yet; Download puts the zip in your Downloads folder.'))));
+ document.body.append(el('div',{class:'scrim d',onclick:()=>{extDetail=null;closeLayers()}},sheet));
+ sig=signature()}
 function drawExtensions(kind){const state=S.extensions||{status:'idle'};
  const box=$('extPanel');if(!box)return;
  const check=()=>post({action:'checkExtensions'});
@@ -428,9 +465,9 @@ function drawExtensions(kind){const state=S.extensions||{status:'idle'};
  const rows=(state.entries||[]).filter(x=>(x.kind==='plugin')===(kind==='plugin'));
  box.replaceChildren(el('p',{class:'sub'},kind==='plugin'
   ?'Published plugins. A plugin has no installer of its own; it arrives with the app that carries it.'
-  :'Download and unzip the file, then use Load unpacked in Chrome’s Extensions page.'));
+  :'Published Chrome extensions. Download one, unzip it, and load it from chrome://extensions — the Launcher cannot do that step for you.'));
  if(!rows.length)box.append(el('p',{},kind==='plugin'?'No published plugin yet.':'No published extension yet.'));
- for(const x of rows)box.append(extTile(x));
+ if(rows.length)box.append(el('div',{class:'grid'},rows.map(extCard)));
  if(state.note)box.append(el('p',{role:'status'},state.note));}
 /// One quiet notice per new version: no badge, no count, and a dismissal is remembered by version.
 function drawNotices(){const n=S.notices||[],box=$('notices');box.hidden=!n.length;
@@ -605,7 +642,7 @@ $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({act
 $('update').onclick=()=>post({action:'update',app:'updater'});$('support').onclick=()=>post({action:'support'});
 $('auto').onclick=()=>{if(S.settings.checkManually)return;post({action:'setting',key:'autoInstall',value:!autoOn()})};
 document.addEventListener('click',e=>{if(!e.target.closest('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove())});
-document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(whatsNewOpen){whatsNewOpen=false;closeLayers()}else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;if(selected.size){selected.clear();render()};closeLayers()}}
+document.addEventListener('keydown',e=>{if(e.key=='Escape'){if(document.querySelector('.menu'))document.querySelectorAll('.menu').forEach(x=>x.remove());else if(whatsNewOpen){whatsNewOpen=false;closeLayers()}else if(settingsOpen){settingsOpen=false;document.querySelectorAll('.scrim.s').forEach(x=>x.remove())}else{detail=null;extDetail=null;if(selected.size){selected.clear();render()};closeLayers()}}
  const editing=['INPUT','TEXTAREA','SELECT'].includes((e.target?.tagName||'').toUpperCase())||e.target?.isContentEditable;
  if(detail&&!settingsOpen&&!editing&&(e.key=='ArrowRight'||e.key=='ArrowLeft')){const l=visible()[0],i=l.findIndex(a=>a.id==detail.id),n=l[(i+(e.key=='ArrowRight'?1:-1)+l.length)%l.length];if(n){detail={id:n.id};drawDetail()}}
  if(e.metaKey&&e.key==','){e.preventDefault();settingsOpen=true;drawSettings()}

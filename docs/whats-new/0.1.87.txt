@@ -1,0 +1,5 @@
+Studio Launcher KH 0.1.87
+
+- The Extension tab now reads like every other tab: the same card, the same grid, the same detail window. A card carries the extension's icon, a picture of it, its name, version and what it does, a status and a Download button, and opens a window with the description, the size, the checksum and the Chrome steps.
+- The status is what this Mac can see rather than what we hope: **Downloaded 1.3.32** when the zip is in your Downloads folder, **Not downloaded** when it is not. The Launcher cannot add an extension to Chrome — Chrome has no way to do that without you — so the button stays Download, the window says so in one sentence, and nothing anywhere reads "Installed".
+- Size and checksum come from the published list. A release date is not published for extensions, and the window says "Not published" instead of showing an empty line as if it were a date.
