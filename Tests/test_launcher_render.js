@@ -144,6 +144,16 @@ for (const m of markup.matchAll(/(?:^|\s)id=(\w+)/g)) {
   node.setAttribute('id', m[1]);
   document.body.append(node);
 }
+// The Show filter is three named buttons in the real header. Built from that markup, so a label or a
+// value that changes in the page changes here too instead of the test quietly testing nothing.
+const segMarkup = markup.slice(markup.indexOf('id=instseg'), markup.indexOf('</div>', markup.indexOf('id=instseg')));
+const segButtons = [...segMarkup.matchAll(/data-inst=(\w+) aria-pressed=(\w+)>([^<]+)</g)];
+assert.equal(segButtons.length, 3, 'the header declares the three Show filters');
+for (const m of segButtons) {
+  const b = document.createElement('button');
+  b.setAttribute('data-inst', m[1]); b.setAttribute('aria-pressed', m[2]); b.textContent = m[3];
+  document.getElementById('instseg').append(b);
+}
 assert(document.getElementById('main') && document.getElementById('q') && document.getElementById('addr') === null,
   'the fixture must hand the page the controls its markup declares');
 
@@ -1037,4 +1047,40 @@ document.getElementById('tab-extension').fire('keydown',{key:'ArrowRight'});
 assert.equal(document.querySelectorAll('#tabs [aria-selected=true]')[0].textContent,'All','Right from the last tab wraps to All');
 run("tab='all';render()");
 
-console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback, the empty list’s reason, the feed’s missing apps and the Scan drives control');
+// F1 the Show filter: this Mac's apps, the feed's apps it does not have, or everything — with an
+// adopted app (installed here, never on the feed) counted as installed, because it is.
+const show = label => document.querySelectorAll('#instseg button').find(b => b.textContent == label);
+const names = () => document.querySelectorAll('.card .name').map(n => n.textContent);
+const three = state([
+  row({ id: 'story', name: 'Story KH', type: 'business', installed: '1.0.0', available: '1.1.0' }),
+  row({ id: 'hub', name: 'Hub KH', type: 'utility', installed: null, available: '0.6.260' }),
+  row({ id: 'mine', name: 'Mine KH', installed: '2.0.0', available: null, managed: false, adopted: true }),
+]);
+const groupHeads = () => document.querySelectorAll('#main h2').map(h => h.textContent);
+run("tab='all';inst='all';render()"); render(three);
+assert.deepEqual(groupHeads(), ['Installed · 1', 'Installed on this Mac · 1', 'Not installed · 1'],
+  'F1 All still groups the three kinds apart');
+assert.deepEqual(names().slice().sort(), ['Hub KH', 'Mine KH', 'Story KH'], 'F1 …and shows every one of them');
+show('Installed').fire('click');
+assert.deepEqual(names().slice().sort(), ['Mine KH', 'Story KH'],
+  'F1 Installed keeps what this Mac has, including an adopted app the feed never carried');
+assert.deepEqual(groupHeads(), ['Installed · 1', 'Installed on this Mac · 1'], 'F1 …and drops the group it emptied');
+assert.equal(document.querySelector('#instseg button[data-inst=installed]').getAttribute('aria-pressed'), 'true',
+  'F1 the chosen filter is the one marked selected');
+show('Not installed').fire('click');
+assert.deepEqual(names(), ['Hub KH'], 'F1 Not installed shows only what this Mac lacks');
+assert.equal(document.querySelectorAll('#main h2').length, 1, 'F1 one group, not three headings around one list');
+render(state([row({ id: 'story', installed: '1.0.0', available: '1.1.0' })]));
+assert.match(document.querySelector('.empty').textContent, /already installed here\. Choose Installed to see them\./,
+  'F1 an empty filter says what it hid and how to see it, rather than a blank panel');
+show('Installed').fire('click');
+render(state([row({ id: 'hub', installed: null, available: '0.6.260' })]));
+assert.match(document.querySelector('.empty').textContent, /Nothing from this feed is installed on this Mac yet\./,
+  'F1 the other empty side says its own sentence');
+show('All').fire('click');
+// F2 it is an app-list control, so the two non-app tabs do not offer it.
+run("tab='extension';render()");
+assert.equal(document.getElementById('instseg').hidden, true, 'F2 the filter is not offered where it would do nothing');
+run("tab='all';render()");
+
+console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback, the empty list’s reason, the feed’s missing apps, the Installed / Not installed / All filter and the Scan drives control');
