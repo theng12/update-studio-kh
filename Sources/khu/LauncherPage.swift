@@ -122,6 +122,7 @@ ul.changes{margin:0;padding-left:17px}ul.changes li{margin-bottom:6px}.more{back
  <div><h1>Studio Launcher KH</h1><p id=mac>Apps for this Mac</p></div></div>
  <button class="btn primary" id=all hidden></button>
  <label class=sr for=sort>Sort</label><select id=sort aria-label="Sort"><option value=name>Name</option><option value=type>Type</option><option value=recent>Recently updated</option></select>
+ <div class=seg id=instseg role=group aria-label="Show apps"><button data-inst=all aria-pressed=true>All</button><button data-inst=installed aria-pressed=false>Installed</button><button data-inst=missing aria-pressed=false>Not installed</button></div>
  <input type=search id=q placeholder="Search apps" aria-label="Search apps">
  <div class=viewTools><div class=seg id=viewseg role=group aria-label="View"><button id=vgrid title="Grid" aria-label="Grid"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=1 width=6 height=6 rx=1.5 /><rect x=9 y=1 width=6 height=6 rx=1.5 /><rect x=1 y=9 width=6 height=6 rx=1.5 /><rect x=9 y=9 width=6 height=6 rx=1.5 /></svg></button><button id=vlist title="List" aria-label="List"><svg viewBox="0 0 16 16" fill=currentColor><rect x=1 y=2 width=14 height=2.4 rx=1.2 /><rect x=1 y=6.8 width=14 height=2.4 rx=1.2 /><rect x=1 y=11.6 width=14 height=2.4 rx=1.2 /></svg></button></div>
  <button class="btn" id=check title="Check the saved feed and scan for installer drives" aria-label="Check the saved feed and scan for installer drives">Check sources</button><span id=hiddenNote></span><button class="btn icon" id=gear title="Settings" aria-label="Settings"><svg viewBox="0 0 16 16" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2M7.5 11.5H14"/><circle cx=10.8 cy=4.5 r=1.7 /><circle cx=5.8 cy=11.5 r=1.7 /></svg></button>
@@ -138,7 +139,7 @@ const S={apps:[],sources:[],settings:{}},post=m=>window.webkit.messageHandlers.k
 window.onerror=(msg,src,line)=>post({action:'log',text:msg+' (line '+line+')'});
 // The page has no origin of its own, so storage may refuse; the choice then lasts while the window is open.
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
-let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',tab=store.get('tab')||'all',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},joinAddr=null,joinCode=null,selected=new Set();
+let view=store.get('view')||'grid',viewFromMac=false,sort=store.get('sort')||'name',tab=store.get('tab')||'all',inst=store.get('inst')||'all',q='',detail=null,settingsOpen=false,whatsNewOpen=false,showHidden=false,showAll={},joinAddr=null,joinCode=null,selected=new Set();
 const $=id=>document.getElementById(id);
 function el(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
  if(k=='class')e.className=v;else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);else if(k=='style')e.style.cssText=v;else e.setAttribute(k,v===true&&!k.startsWith('aria-')?'':String(v))}
@@ -285,6 +286,11 @@ function tableOf(list){return el('div',{class:'tablewrap'},el('table',{},el('the
 function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filter(a=>showHidden||!a.hidden);
  // A category tab is the app list narrowed to that label; All is everything, unlabelled rows included.
  if(CATEGORIES.has(tab))list=list.filter(a=>a.type===tab);
+ // "This Mac has it" includes a row that exists only because the app is installed here: an adopted
+ // app is not a feed row, but it is installed, and it must not vanish when someone asks for installed.
+ const here=a=>installed(a)||adopted(a);
+ if(inst=='installed')list=list.filter(here);
+ else if(inst=='missing')list=list.filter(a=>!here(a));
  if(q)list=list.filter(a=>(a.name+' '+(a.tagline||'')).toLowerCase().includes(q));
  const key=a=>new Date(installed(a)?a.installedAt||0:a.released||0).getTime();
  list.sort((x,y)=>(sort=='recent'?key(y)-key(x):sort=='type'?byType(x,y):0)||x.name.localeCompare(y.name));return [list,hidden]}
@@ -295,7 +301,7 @@ function visible(){const hidden=S.apps.filter(a=>a.hidden);let list=S.apps.filte
 const tickOnly=(k,v)=>k==='extensions'?undefined:k=='progress'&&v?{c:v.done!=null,z:v.paused,x:v.cancelled,ph:v.phase,cp:v.copying||''}:v;
 // What the page would look like if it were drawn from the state it holds right now — transfer
 // counters excepted, since those are written in rather than redrawn.
-const signature=()=>JSON.stringify([view,sort,tab,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
+const signature=()=>JSON.stringify([view,sort,tab,inst,q,showHidden,detail,settingsOpen,whatsNewOpen,showAll,selected.size,S],tickOnly);
 let sig='';
 function render(state){if(state)Object.assign(S,state);
  if(!viewFromMac&&S.settings&&S.settings.viewMode){view=S.settings.viewMode;viewFromMac=true}
@@ -325,7 +331,7 @@ function drawTabs(){const appTab=appsTab();
     else if(e.key=='Home'||e.key=='End'){e.preventDefault();const n=(e.key=='Home'?TABS[0]:TABS[TABS.length-1])[0];selectTab(n);$('tab-'+n)?.focus()}}},label)}));
  // Extensions and plugins are not apps: the controls that only shape an app list would do nothing
  // on those tabs, so they are not offered there rather than offered and inert.
- $('sort').hidden=!appTab;$('q').hidden=!appTab;$('viewseg').hidden=!appTab}
+ $('sort').hidden=!appTab;$('q').hidden=!appTab;$('viewseg').hidden=!appTab;$('instseg').hidden=!appTab}
 function selectTab(id){if(tab===id)return;tab=id;store.set('tab',tab);detail=null;closeLayers();
  // Nothing polls: the published list is asked for when someone first opens a tab that holds it.
  if(!appsTab()&&(!S.extensions||S.extensions.status==='idle'))post({action:'checkExtensions'});
@@ -344,6 +350,7 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
  const n=S.apps.filter(a=>a.managed&&!a.statusOnly&&a.available&&(a.status=='Update available'||a.status=='Failed'||a.status=='Downloaded')).length;
  $('all').hidden=n==0||!appTab;$('all').textContent='Update all ('+n+')';
  $('vgrid').setAttribute('aria-pressed',view=='grid');$('vlist').setAttribute('aria-pressed',view=='list');$('sort').value=sort;
+ for(const b of document.querySelectorAll('#instseg button'))b.setAttribute('aria-pressed',String(b.getAttribute('data-inst')==inst));
  const m=$('main');m.replaceChildren();
  if(appTab){
   if(Number.isInteger(S.feedCount)&&S.feedPublishedAt){
@@ -357,7 +364,10 @@ function draw(){const active=document.activeElement||{},fk=active.id,selection=[
    // An empty category is a fact about the feed's labels, and the sentence says so instead of
    // leaving a blank panel that reads as a broken screen.
    const none=S.apps.filter(a=>!a.hidden&&unlabelled(a)).length;
-   m.append(el('p',{class:'empty'},q?'No app matches “'+q+'”.':CATEGORIES.has(tab)?'No '+TABS.find(t=>t[0]==tab)[1]+' apps on this feed yet.'+(none?' '+none+' '+(none===1?'app has':'apps have')+' no category yet; they are under All.':''):'No app matches “'+q+'”.'));
+   // A filter that hides everything is not a broken screen: it says what it hid and how to see it.
+   const filterNote=inst=='installed'?'Nothing from this feed is installed on this Mac yet. Choose All to see the feed.'
+    :inst=='missing'?'Every app on this feed is already installed here. Choose Installed to see them.':null;
+   m.append(el('p',{class:'empty'},q?'No app matches “'+q+'”.':filterNote?filterNote:CATEGORIES.has(tab)?'No '+TABS.find(t=>t[0]==tab)[1]+' apps on this feed yet.'+(none?' '+none+' '+(none===1?'app has':'apps have')+' no category yet; they are under All.':''):'No app matches “'+q+'”.'));
   }
   for(const [title,group] of [['Installed',mine],['Installed on this Mac',here],['Not installed',others]]){if(!group.length)continue;
    m.append(el('h2',{},title+' · '+group.length),view=='grid'?el('div',{class:'grid'},group.map(card)):tableOf(group))}
@@ -590,6 +600,7 @@ function drawSettings(){const again=!!document.querySelector('.scrim.s');documen
  document.body.append(el('div',{class:'scrim s',onclick:()=>{settingsOpen=false;closeLayers()}},sheet));sig=signature()}
 $('vgrid').onclick=()=>{view='grid';store.set('view',view);post({action:'setting',key:'viewMode',value:'grid'});render()};$('vlist').onclick=()=>{view='list';store.set('view',view);post({action:'setting',key:'viewMode',value:'list'});render()};
 $('sort').onchange=e=>{sort=e.target.value;store.set('sort',sort);render()};$('q').oninput=e=>{q=e.target.value.trim().toLowerCase();render()};
+for(const b of document.querySelectorAll('#instseg button'))b.onclick=()=>{inst=b.getAttribute('data-inst');store.set('inst',inst);render()};
 $('all').onclick=()=>post({action:'updateAll'});$('check').onclick=()=>post({action:'check'});$('gear').onclick=()=>{settingsOpen=true;drawSettings()};$('whatsNew').onclick=showWhatsNew;
 $('update').onclick=()=>post({action:'update',app:'updater'});$('support').onclick=()=>post({action:'support'});
 $('auto').onclick=()=>{if(S.settings.checkManually)return;post({action:'setting',key:'autoInstall',value:!autoOn()})};
