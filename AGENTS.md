@@ -62,6 +62,13 @@ credential-free agent kit per Mac.
   SSDs (ATLAS, NOVA, UGREEN, ORICO, and TERRA when attached) and hash-check the copies as specified
   in `docs/INSTALL.md` → Publish a release.
   This is a standard step for every KH app release; Updater serializes the SSD writes.
+  **The kit's `WHATS-NEW.txt` is a human step, not a generated one.** A drive pass replaces a stale
+  file with the feed row's short `notes`, so the release's own bullets have to be in place before
+  the refresh: from 0.1.87 they go in `docs/whats-new/<version>.txt` **inside the gated commit** (the
+  drive tool reads them from the tag, and a file committed after the gate is not the tagged tree);
+  until that tool change ships, copy the release folder's `WHATS-NEW.txt` onto each kit before the
+  pass. A kit carrying one version's installer beside another version's notes is the honest-states
+  defect the assertion in `ssd-refresh.sh` exists to catch.
 - **Roll out through Studio Hub, all Macs at once** (owner, 2026-10-25). The agent ships inside the
   Hub release and installs per user on launch; the Hub's own site-by-site rollout is the only
   pacing. No SSH, no per-Mac AirDrop, no staged pilot.
