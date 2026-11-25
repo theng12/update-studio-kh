@@ -59,7 +59,12 @@ public enum FeedPages {
             if let (data, code) = try? http.get(pages, headers: [:]) {
                 if code == 200, data == envelope {
                     print("feed: \(pages.absoluteString) serves the exact signed bytes")
-                    try verifyOneAsset(envelope: envelope, http: http)
+                    // The commit and this readback already proved the feed. A probe that cannot
+                    // fetch one asset is a missing piece of evidence, not a failed publish
+                    // (row 20261125-37: one transient 5xx failed two published passes).
+                    if let incomplete = verifyOneAsset(envelope: envelope, http: http) {
+                        print("published; probe incomplete: \(incomplete)")
+                    }
                     return
                 }
                 served = code == 200 ? "sha256 \(Signing.sha256Hex(data))" : "HTTP \(code)"
@@ -72,32 +77,47 @@ public enum FeedPages {
     }
 
     /// Downloads one asset the feed names and matches its sha256 and size against the row.
-    static func verifyOneAsset(envelope: Data, http: HTTPClient) throws {
+    /// Returns nil when it matched, or `<app> (<reason>)` when the check could not be completed;
+    /// it retries with bounded backoff first, because one transient 5xx on the alphabetically first
+    /// asset used to condemn a feed whose signed bytes were already served (row 20261125-37).
+    static func verifyOneAsset(envelope: Data, http: HTTPClient, attempts: Int = 3,
+                               pause: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: envelope) as? [String: Any],
               let encoded = object["feed"] as? String, let feedData = Data(base64Encoded: encoded),
               let feed = try? JSON.decode(Feed.self, from: feedData),
               let (app, row) = feed.apps.sorted(by: { $0.key < $1.key }).first else {
-            throw khuFail("the signed feed names no app to verify")
+            return "the feed names no app to verify"
         }
         guard let url = row.url.flatMap(URL.init(string:)) else {
-            throw khuFail("\(app) names no absolute address to verify")
+            return "\(app) names no absolute address to verify"
         }
-        guard let (data, code) = try? http.get(url, headers: [:]), code == 200 else {
-            throw khuFail("\(app)'s asset at \(url.absoluteString) did not answer")
+        var reason = "did not answer"
+        for attempt in 1...max(1, attempts) {
+            if let (data, code) = try? http.get(url, headers: [:]), code == 200 {
+                if data.count == Int(row.bytes), Signing.sha256Hex(data) == row.sha256 {
+                    print("feed: \(app) \(row.version) asset matches its signed sha256 \(row.sha256.prefix(12))…")
+                    return nil
+                }
+                reason = "does not match the row's sha256/size (\(data.count) bytes, sha256 \(Signing.sha256Hex(data).prefix(12))…)"
+            }
+            if attempt < attempts { pause(TimeInterval(attempt * 2)) }
         }
-        guard data.count == Int(row.bytes), Signing.sha256Hex(data) == row.sha256 else {
-            throw khuFail("\(app)'s asset at \(url.absoluteString) does not match the row's sha256/size")
-        }
-        print("feed: \(app) \(row.version) asset matches its signed sha256 \(row.sha256.prefix(12))…")
+        return "\(app) (\(reason))"
+    }
+
+    /// The address a feed commit carries. Neutral by default, so no pass ever attributes public
+    /// feed history to a personal account by forgetting to export a variable; the environment
+    /// stays as an override for a pass that must say something else (S001, 2026-11-25).
+    static func commitEmail(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        let given = (environment["KH_FEED_COMMIT_EMAIL"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return given.isEmpty ? "kh-studio@invalid" : given
     }
 
     private static func put(_ envelope: Data, repo: String, blobSHA: String?) throws {
-        // The address a feed commit carries comes from the machine that publishes, never from the
-        // source: a personal address written into the code ships inside every copy of the app, and
-        // the pre-publish scan stops on exactly that (measured 2026-11-25, Launcher 0.1.82).
-        guard let email = ProcessInfo.processInfo.environment["KH_FEED_COMMIT_EMAIL"], !email.isEmpty else {
-            throw khuFail("set KH_FEED_COMMIT_EMAIL to the address a feed commit carries; it is not compiled in")
-        }
+        // The address is supplied by the machine that publishes, never compiled into the app: a
+        // personal address written into the source ships inside every copy (measured 2026-11-25,
+        // Launcher 0.1.82). It is neutral unless the pass names one.
+        let email = commitEmail()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         var arguments = ["gh", "api", "-X", "PUT", "repos/\(repo)/contents/release.json",

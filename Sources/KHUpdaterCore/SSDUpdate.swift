@@ -107,8 +107,11 @@ public enum SSDUpdate {
                         guard digest.hex == pin, app.bytes.map({ $0 == digest.bytes }) ?? true else {
                             throw khuFail("The SSD installer does not match its checksum. Nothing was installed.")
                         }
-                        let ctl = control?(app, path) ?? ((app.id == "gateway" || apps[app.id]?.recipe == "gateway")
-                            ? LiveControl.gateway(path, shell: shell) : LiveControl.appDmg(path, shell: shell))
+                        let ctl: AppControl
+                        if let custom = control?(app, path) { ctl = custom }
+                        else if app.id == "gateway" || apps[app.id]?.recipe == "gateway" { ctl = LiveControl.gateway(path, shell: shell) }
+                        else if app.id == "launcher" || app.bundleID == "com.khupdater.launcher" { ctl = LiveControl.launcher(path, shell: shell) }
+                        else { ctl = LiveControl.appDmg(path, shell: shell) }
                         // No hardcoded list: any running app is refused, because this local action has no
                         // hold endpoint for it. Only the helper is exempt, and the Launcher is exempt
                         // because it is the process running this very action — it cannot ask itself to

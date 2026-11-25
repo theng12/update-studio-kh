@@ -69,19 +69,24 @@ public struct AppControl {
     /// How long the app must stay healthy without a break before an install is accepted: an app that
     /// launches and dies a moment later was once reported "updated" (live proof, 2026-10-25).
     public var healthSettle: TimeInterval
+    /// False for a one-shot FrontDoor bundle (Studio Launcher KH.app) that notifies its separately
+    /// managed helper and exits 0 immediately rather than staying alive as its own process.
+    public var staysRunning: Bool
     public init(isRunning: @escaping () -> Bool?, quit: @escaping () -> Bool, launch: @escaping () -> Void,
                 stopService: @escaping () -> Bool = { true }, healthy: @escaping (String) -> Bool,
                 healthRequirement: @escaping (String) -> String? = { _ in nil },
                 healthTimeout: TimeInterval = 60, pollInterval: TimeInterval = 1, healthSettle: TimeInterval = 10,
                 serviceLabels: @escaping () -> [String] = { [] }, restoreServices: @escaping ([String]) -> Void = { _ in },
                 resumeServices: @escaping () -> ServiceResume = { .none },
-                isTestInstance: @escaping () -> Bool = { false }) {
+                isTestInstance: @escaping () -> Bool = { false },
+                staysRunning: Bool = true) {
         self.isRunning = isRunning; self.quit = quit; self.launch = launch; self.stopService = stopService
         self.serviceLabels = serviceLabels; self.restoreServices = restoreServices; self.resumeServices = resumeServices
         self.healthy = healthy; self.healthRequirement = healthRequirement
         self.healthTimeout = healthTimeout; self.pollInterval = pollInterval
         self.healthSettle = healthSettle
         self.isTestInstance = isTestInstance
+        self.staysRunning = staysRunning
     }
 }
 
@@ -215,7 +220,9 @@ public enum Recipe {
         let paths = Paths(installedPath: installedPath, stateDir: stateDir, app: app)
         let recovered = try recover(paths, control: control, fileManager: fm)
         guard !fm.fileExists(atPath: paths.journal.path) else {
-            throw khuFail("the earlier install is unresolved; journal kept at \(paths.journal.path) — clear it only while the helper is stopped")
+            // The path is for the log; the sentence a screen shows stays plain (owner, 2026-11-25).
+            print("note: \(app) still has an unresolved install; journal kept at \(paths.journal.path)")
+            throw khuFail("An earlier install of \(app) did not finish. It will be tried again on the next check.")
         }
 
         // 2. Verify and stage while the old app keeps running.
@@ -741,8 +748,9 @@ public enum Recipe {
         // app's own start (measured on 1301, 2026-11-17: 127 s quit-to-healthy, the health clock
         // had already nearly expired).
         mark("appear-ceiling \(Int(appearCeiling))s")
-        // Only a process this install stopped has to come back; a first install has none to wait for.
-        let appeared = !reopens || waitForRunning(control, clock: clock, ceiling: appearCeiling)
+        // Only a process this install stopped has to come back; a first install or a one-shot
+        // FrontDoor bundle (Studio Launcher KH.app) has no resident process to wait for.
+        let appeared = !reopens || !control.staysRunning || waitForRunning(control, clock: clock, ceiling: appearCeiling)
         mark(appeared ? "appeared" : "did-not-appear")
         mark("health-window \(Int(control.healthTimeout))s")
         if appeared, waitHealthy(control, version: targetVersion, clock: clock) {
@@ -933,7 +941,8 @@ public enum Recipe {
         }
         control.launch()
         if waitHealthy(control, version: newVersion) {
-            return ("an interrupted install had finished putting \(newVersion) in place, and it is running and healthy", true)
+            let state = control.staysRunning ? "running and healthy" : "healthy"
+            return ("an interrupted install had finished putting \(newVersion) in place, and it is \(state)", true)
         }
         guard control.quit(), control.stopService() else {
             return ("\(newVersion) is not healthy and would not stop; both versions were kept (previous at "
@@ -1639,6 +1648,44 @@ public enum LiveControl {
         // stop. The clock now starts when the process appears, so this is the app's own start with
         // margin — 300 s, 2.3x the measurement. It is written into every result's timings line.
         control.healthTimeout = 300
+        return control
+    }
+
+    /// Studio Launcher KH.app is a one-shot FrontDoor bundle, not a long-lived process: opening it
+    /// notifies the separately managed Helper (`com.khupdater.agent`) to show its window and exits 0
+    /// immediately. Requiring `isRunning(installedPath) == true` therefore fails every first install
+    /// and every recovery with `app not running` while popping the Launcher window on every retry.
+    /// Healthy here means the expected version is on disk, its executable is runnable, and its code
+    /// signature verifies; `launch` only resumes owned services and never calls `open`.
+    public static func launcher(_ installedPath: String, shell: Shell, agentsDirectory: URL? = nil,
+                                quitWait: TimeInterval = 60) -> AppControl {
+        var control = appDmg(installedPath, shell: shell, agentsDirectory: agentsDirectory, quitWait: quitWait)
+        let resumeServices = control.resumeServices
+        // The system's own verdict on the bytes: this block is compiled on its own by the packaging
+        // fixtures, so it asks codesign directly rather than reaching into the install recipe.
+        func signatureVerifies() -> Bool {
+            (try? shell.run("/usr/bin/codesign", arguments: ["--verify", "--strict", installedPath], timeout: 60))?.exitCode == 0
+        }
+        control.staysRunning = false
+        control.launch = { _ = resumeServices() }
+        control.healthy = { expected in
+            guard let info = try? BundleInfo.read(installedPath),
+                  info.version == expected,
+                  info.executableIsRunnable(in: installedPath) else { return false }
+            return signatureVerifies()
+        }
+        control.healthRequirement = { expected in
+            guard let info = try? BundleInfo.read(installedPath) else {
+                return "version unknown on disk, expected \(expected)"
+            }
+            if info.version != expected { return "version \(info.version) on disk, expected \(expected)" }
+            if !info.executableIsRunnable(in: installedPath) { return "executable is missing or not runnable" }
+            if !signatureVerifies() { return "code signature did not verify" }
+            return nil
+        }
+        control.healthTimeout = 5
+        control.pollInterval = 0.5
+        control.healthSettle = 0
         return control
     }
 }

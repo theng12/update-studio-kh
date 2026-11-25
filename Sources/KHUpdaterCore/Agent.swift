@@ -774,7 +774,7 @@ public enum Agent {
         return try FileLock.withExclusive(stateDir.appendingPathComponent("agent.lock"),
                                           wait: config.once || !requested.isEmpty) {
             try runLocked(config: config, stateDir: stateDir, http: http, shell: shell,
-                          control: control ?? { liveControl($1, shell: shell) }, executable: executable, now: now,
+                          control: control ?? { liveControl(app: $0, $1, shell: shell) }, executable: executable, now: now,
                           requested: requested, installing: installing ?? { _ in }, ssd: ssd, connectionFile: connectionFile,
                           appFolders: appFolders, sparseConfig: sparseConfig, startingNotes: startingNotes + repairNotes,
                           configFile: configFile, loadedPaths: loadedPaths, startupWaitSeconds: startupWaitSeconds)
@@ -813,8 +813,13 @@ public enum Agent {
         return "\(app) \(shown): \(result.status) — \(result.reason ?? "no reason was given")"
     }
 
-    static func liveControl(_ cfg: AppConfig, shell: Shell) -> AppControl {
-        cfg.recipe == "gateway" ? LiveControl.gateway(cfg.bundlePath, shell: shell) : LiveControl.appDmg(cfg.bundlePath, shell: shell)
+    static func liveControl(app: String = "", _ cfg: AppConfig, shell: Shell) -> AppControl {
+        if cfg.recipe == "gateway" { return LiveControl.gateway(cfg.bundlePath, shell: shell) }
+        if app == "launcher" || cfg.bundleID == "com.khupdater.launcher"
+            || (try? BundleInfo.read(cfg.bundlePath).identifier) == "com.khupdater.launcher" {
+            return LiveControl.launcher(cfg.bundlePath, shell: shell)
+        }
+        return LiveControl.appDmg(cfg.bundlePath, shell: shell)
     }
 
     static func runLocked(config: AgentConfig, stateDir: URL, http: HTTPClient, shell: Shell,
@@ -2107,8 +2112,9 @@ public enum Agent {
         // An install this Mac could not finish or undo is not a settled app: an order for it must
         // not be answered "current" while a rollback is still owed. The next run picks it up.
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
-            return RecipeResult(status: "unresolved", reason: "an earlier install of \(app) could not be finished or undone; "
-                               + "\(Recipe.journalURL(stateDir: stateDir.path, app: app).path) is kept and the next run tries it again — clear it only while the helper is stopped")
+            // Said on a public screen: one plain sentence, no path and no operator instruction. The
+            // journal's own path belongs in the log, which recovery writes when it runs.
+            return RecipeResult(status: "unresolved", reason: "An earlier install of \(app) did not finish. It will be tried again on the next check.")
         }
         // The update gap (CONTRACT.md): a running app's queue is held before a byte moves. An app
         // with no trusted hold endpoint is refused rather than interrupted silently.
@@ -2321,7 +2327,7 @@ public enum Agent {
         let appControl = control(app, cfg)
         let itself = updatesItself(app: app, recipe: cfg.recipe, entry: catalogEntry)
         if Recipe.isUnresolved(stateDir: stateDir.path, app: app) {
-            return RecipeResult(status: "unresolved", reason: "An earlier installation still needs recovery. Both copies were kept; clear its journal only while the helper is stopped.")
+            return RecipeResult(status: "unresolved", reason: "An earlier installation did not finish. It will be tried again on the next check.")
         }
         // The same live check as a downloaded install: a stale report must not reinstall an equal
         // version from the SSD either.
