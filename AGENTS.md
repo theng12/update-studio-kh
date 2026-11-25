@@ -58,9 +58,9 @@ credential-free agent kit per Mac.
 - **Whole-cycle release.** A change is not finished until, in order: `./build.sh build`, the
   unfiltered test set below, a commit on its own branch, and an agent kit rebuilt from that same
   commit (`packaging/build-agent-kit.sh`) for the Studio Hub kit to carry. KH Updater has no remote;
-  the branch commit and the kit built from it are the release. Before closeout, refresh the three
-  active install SSD kits (ATLAS, NOVA and UGREEN; never ORICO, now the NAS data drive) and
-  hash-check the copies as specified in `docs/INSTALL.md` → Publish a release.
+  the branch commit and the kit built from it are the release. Before closeout, refresh the install
+  SSDs (ATLAS, NOVA, UGREEN, ORICO, and TERRA when attached) and hash-check the copies as specified
+  in `docs/INSTALL.md` → Publish a release.
   This is a standard step for every KH app release; Updater serializes the SSD writes.
 - **Roll out through Studio Hub, all Macs at once** (owner, 2026-10-25). The agent ships inside the
   Hub release and installs per user on launch; the Hub's own site-by-site rollout is the only
