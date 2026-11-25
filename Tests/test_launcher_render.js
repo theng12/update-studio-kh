@@ -985,15 +985,46 @@ extRows.push({id:'efficient-orchestration',name:'Efficient Orchestration',versio
   summary:'Coordinates work across Studio apps.',kind:'plugin',download:false});
 render(state(appRows,{extensions:{status:'available',entries:extRows}}));
 const extPanel = document.getElementById('extPanel');
-assert.equal(extPanel.querySelectorAll('.extRow').length,1,'the Plugin tab lists the plugin entry only');
-assert.match(extPanel.textContent,/EEfficient Orchestration · 0\.3\.204Coordinates work across Studio apps\.ScreenshotNo public download yet/);
+assert.equal(extPanel.querySelectorAll('.extCard').length,1,'the Plugin tab lists the plugin entry only');
+assert.match(extPanel.textContent,/Efficient Orchestration/);
+assert.match(extPanel.textContent,/No public download yet/,'a plugin with no published file says so rather than offering a dead button');
 assert.equal(extPanel.querySelectorAll('button').length,0,'a plugin without a download offers no dead button');
 run("tab='extension';render()");
-assert.equal(document.getElementById('extPanel').querySelectorAll('.extRow').length,3,'the Extension tab lists the extension entries only');
-assert.match(document.getElementById('extPanel').textContent,/Video generator · 10\.20\.0Make video in Chrome/);
+assert.equal(document.getElementById('extPanel').querySelectorAll('.extCard').length,3,'the Extension tab lists the extension entries only');
+assert.match(document.getElementById('extPanel').textContent,/Video generator/);
+assert.match(document.getElementById('extPanel').textContent,/Chrome extension · 10\.20\.0/,'an extension card carries its kind and version, the way an app card does');
 assert.equal(document.querySelectorAll('#extPanel button').length,3);
 assert.doesNotMatch(document.getElementById('main').textContent,/Efficient Orchestration/,'a plugin is not drawn as an app or an extension');
-assert.equal(document.querySelectorAll('#main .card').length,0,'extensions and plugins never become app cards');
+// The card is the app card: same article, same head, same meta line, same foot.
+const firstExt=document.querySelectorAll('#extPanel .extCard')[0];
+assert(firstExt.querySelector('.head .name'),'EXT-C1 the card has the app card head with the name');
+assert(firstExt.querySelector('.meta .chip'),'EXT-C1 and a status chip');
+assert.match(firstExt.querySelector('.meta .chip').textContent,/Not downloaded/,'EXT-C1 with no zip on disk it reads Not downloaded, never Installed');
+assert.equal(firstExt.getAttribute('tabindex'),'0','EXT-C1 the card is keyboard reachable');
+// EXT-C2 the modal opens from the card and carries everything an app modal carries.
+firstExt.fire('click');
+const extSheet=document.querySelector('.scrim.d .sheet');
+assert(extSheet,'EXT-C2 a click opens the detail modal');
+assert.equal(extSheet.getAttribute('role'),'dialog');
+assert.match(extSheet.textContent,/Video generator/);
+assert.match(extSheet.textContent,/Chrome extension 10\.20\.0/);
+assert.match(extSheet.textContent,/How to use it in Chrome/,'EXT-C2 it carries the Chrome steps');
+assert.match(extSheet.textContent,/chrome:\/\/extensions/);
+assert.match(extSheet.textContent,/SizeNot published/,'EXT-C2 an unpublished size reads not published, never 0');
+assert.match(extSheet.textContent,/SHA-256Not published/,'EXT-C2 and the same for the checksum');
+assert.match(extSheet.textContent,/ReleasedNot published/,'EXT-C2 no release date is published for an extension');
+assert.doesNotMatch(extSheet.textContent,/Installed/,'EXT-C2 the modal never claims Chrome loaded it');
+extSheet.querySelector('.nav button').fire('click');
+assert(!document.querySelector('.scrim.d'),'EXT-C2 Close removes the modal');
+// EXT-C3 a zip the Mac actually holds is the only thing that turns the status to Downloaded.
+render(state(appRows,{extensions:{status:'available',entries:extRows.map((x,i)=>i===1?{...x,saved:'kh-test-extension-1-10.20.1.zip'}:x)}}));
+run("tab='extension';render()");
+const savedCard=document.querySelectorAll('#extPanel .extCard')[1];
+assert.match(savedCard.querySelector('.meta .chip').textContent,/Downloaded 10\.20\.1/,'EXT-C3 a saved zip reads Downloaded with its version');
+assert.match(savedCard.textContent,/Download again/,'EXT-C3 and the button offers to fetch it again rather than pretending it is installed');
+savedCard.fire('click');
+assert.match(document.querySelector('.scrim.d .sheet').textContent,/Saved as kh-test-extension-1-10\.20\.1\.zip in your Downloads folder\./,'EXT-C3 the modal names the file it can see');
+run("extDetail=null;closeLayers()");
 posts.length=0;
 document.querySelectorAll('#extPanel button')[1].fire('click');
 assert.equal(posts.length,1);
@@ -1013,7 +1044,7 @@ const pictured=extRows.map((x,i)=>({...x,
   screenshot:'https://github.com/theng12/kh-extensions/releases/download/'+x.id+'/shot.png'}));
 run("tab='extension';render()");
 render(state(appRows,{extensions:{status:'available',entries:pictured}}));
-const tiles=document.getElementById('extPanel').querySelectorAll('.extRow');
+const tiles=document.getElementById('extPanel').querySelectorAll('.extCard');
 assert.equal(tiles.length,3,'EXT1 all three tiles are drawn at once, before any picture arrives');
 const icon=tiles[0].querySelector('.extIcon img'), shot=tiles[0].querySelector('.extShot img');
 assert(icon&&shot,'EXT1 each tile carries an icon and a screenshot node');
@@ -1032,7 +1063,7 @@ assert(!tiles[1].querySelector('.extIcon img'),'EXT3 an oversized picture is dro
 assert.match(tiles[1].querySelector('.extIcon').textContent,/I/,'EXT3 the placeholder stays');
 assert.match(tiles[1].querySelector('.extNote').textContent,/3000×900, over the 2048-pixel limit/, 'EXT3 and the page says why, in its own words');
 render(state(appRows,{extensions:{status:'available',entries:extRows}}));
-const bare=document.getElementById('extPanel').querySelectorAll('.extRow');
+const bare=document.getElementById('extPanel').querySelectorAll('.extCard');
 assert(!bare[0].querySelector('.extIcon img')&&!bare[0].querySelector('.extShot img'),'EXT4 a row without pictures has no image to break');
 assert.match(bare[0].querySelector('.extIcon').textContent,/V/,'EXT4 it keeps the placeholder, the app\'s own initial');
 assert.equal(bare[0].querySelector('.extNote').textContent,'','EXT4 and invents no complaint');
@@ -1083,4 +1114,4 @@ run("tab='extension';render()");
 assert.equal(document.getElementById('instseg').hidden, true, 'F2 the filter is not offered where it would do nothing');
 run("tab='all';render()");
 
-console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback, the empty list’s reason, the feed’s missing apps, the Installed / Not installed / All filter and the Scan drives control');
+console.log('PASS: Launcher rendering, list columns, update notice, adoption offers, grid and keyboard, source choices and refusal reasons, offline state, delta/fallback bytes, editing focus, Story/Hub routes, Automatic origin, data-flow limits, save feedback, the page’s own What’s New pop-up, the footer group, the fleet control, the click’s immediate feedback, the empty list’s reason, the feed’s missing apps, the Installed / Not installed / All filter, extension cards with their detail window and the Scan drives control');
