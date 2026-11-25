@@ -34,16 +34,6 @@
       "hold_since": "0.2.262",
       "kind": "app-dmg"
     },
-    "hub": {
-      "name": "Hub Studio KH",
-      "bundle_id": "local.studiohub.standalone",
-      "bundle_name": "Hub Studio KH.app",
-      "type": "media",
-      "tagline": "Runs AI models on this Mac for your other apps.",
-      "description": "Runs image, voice and subtitle models on this Mac and serves their results to your other apps over your network, from the window or the menu bar.",
-      "hold_url": "http://127.0.0.1:47873/api/maintenance/hold",
-      "hold_since": "0.6.238"
-    },
     "launcher": {
       "name": "Studio Launcher KH",
       "bundle_id": "com.khupdater.launcher",
