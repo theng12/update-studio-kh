@@ -681,7 +681,21 @@ def asset(path):
     return {"name": os.path.basename(path), "size": len(data),
             "digest": "" if os.environ.get("FAKE_GH_NO_DIGEST") else "sha256:" + digest}
 if args[0] == "api":
-    tag = args[1].rsplit("/", 1)[-1]
+    path = args[1]
+    if "/git/ref/tags/" in path:
+        tag = path.rsplit("/", 1)[-1]
+        sha = os.environ.get("FAKE_GH_TAG_SHA")
+        if not sha:
+            print(json.dumps({"message": "Not Found", "status": "404"})); sys.exit(1)
+        typ = "tag" if os.environ.get("FAKE_GH_ANNOTATED") else "commit"
+        print(json.dumps({"ref": "refs/tags/" + tag, "object": {"sha": sha, "type": typ}})); sys.exit(0)
+    if "/git/tags/" in path:
+        print(json.dumps({"object": {"sha": os.environ.get("FAKE_GH_TAG_COMMIT", ""), "type": "commit"}})); sys.exit(0)
+    if "/commits/" in path:
+        if os.environ.get("FAKE_GH_NO_COMMIT"):
+            print(json.dumps({"message": "No commit found", "status": "422"})); sys.exit(1)
+        print(json.dumps({"sha": path.rsplit("/", 1)[-1]})); sys.exit(0)
+    tag = path.rsplit("/", 1)[-1]
     found = [r for r in rels() if r["tag"] == tag]
     if not found:
         # Real gh prints the API error body on stdout and still exits non-zero.
@@ -747,8 +761,10 @@ else:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     asset_url = ("http://127.0.0.1:%d/theng12/push-app/releases/download/gateway-9.9.9/%s"
                  % (server.server_address[1], asset_name))
+    gated = "e19c0d5f9b3a7c2e4d6f8a0b1c3d5e7f9a1b3c5d"
     push_env = {**fake_env, "KHU_PUBLIC_REPO": "theng12/push-app",
                 "KHU_ASSET_BASE": "http://127.0.0.1:%d" % server.server_address[1],
+                "KHU_RELEASE_HEAD": gated,
                 "FAKE_GH_STATE": str(gh_state), "FAKE_GH_CALLS": str(push_gh_calls),
                 "FAKE_GH_ORDER": str(push_order)}
     push = packaging / "release-push.sh"
@@ -832,6 +848,40 @@ else:
     check(result.returncode == 0 and "GATE PASS" not in body
           and body.strip() == summary.read_text().strip(),
           "with no gate line named the body is the summary alone (%r)" % body[:70])
+
+    # The tag must name the gated commit (rows 20261123-166/-186, 20261125-47). Launcher 0.1.85's
+    # release was created while its branch was unpushed: the tag landed on main's tip six commits
+    # behind the gate and every record afterwards looked right. Each case is refused before an upload.
+    result = push_run(KHU_RELEASE_HEAD=None)
+    check(result.returncode == 2 and "no gated commit" in result.stderr and not push_gh_calls.exists(),
+          "a publish with no gated commit is refused (rc=%d)" % result.returncode)
+
+    result = push_run(FAKE_GH_NO_COMMIT="1")
+    check(result.returncode == 2 and "does not have the gated commit" in result.stderr
+          and not (push_order.exists() and push_order.read_text().strip()),
+          "a gated commit that is not on the remote is refused (rc=%d)" % result.returncode)
+
+    result = push_run(FAKE_GH_TAG_SHA="0" * 40)
+    check(result.returncode == 2 and "names commit" in result.stderr
+          and not (push_order.exists() and push_order.read_text().strip()),
+          "an existing tag on another commit is refused (rc=%d)" % result.returncode)
+
+    result = push_run(FAKE_GH_TAG_SHA="1" * 40, FAKE_GH_ANNOTATED="1", FAKE_GH_TAG_COMMIT=gated)
+    check(result.returncode == 0,
+          "an annotated tag is followed to its commit and accepted (rc=%d)" % result.returncode)
+
+    result = push_run()
+    calls = push_gh_calls.read_text() if push_gh_calls.exists() else ""
+    check(result.returncode == 0 and "--target\t%s" % gated in calls,
+          "the release is created against the gated commit, not a default branch")
+
+    # The retry is where the fault used to hide: asset already stored, tag wrong, and the reuse
+    # branch printed success. It must refuse instead.
+    first = push_run()
+    retry = run(push, "gateway", "9.9.9", dmg, changelog, "--scan-receipt", receipt,
+                "--summary", summary, env={**push_env, "FAKE_GH_TAG_SHA": "0" * 40})
+    check(first.returncode == 0 and retry.returncode == 2 and "names commit" in retry.stderr,
+          "a re-run with a wrong tag is refused instead of reporting reuse (rc=%d)" % retry.returncode)
 
     wrong = work / "wrong-app-GATE-PASS.txt"
     wrong.write_text("GATE PASS storage deadbeef 2026-11-23T12:45:04Z\n")

@@ -40,6 +40,40 @@ VISIBILITY=$(gh repo view "$REPO" --json visibility --jq .visibility 2>/dev/null
   exit 2
 }
 
+# The tag must name the commit that was gated and scanned (issue rows 20261123-166, 20261123-186,
+# 20261125-47). Launcher 0.1.85's release was created while its branch was unpushed, so GitHub
+# resolved `target_commitish` to the default branch and the tag landed six commits behind the gate
+# while the release record still read as correct — and `target_commitish` cannot repair it once a
+# tag exists. Every branch (create, attach, reuse) is checked here, before a byte moves, because a
+# re-run after a bad tag is exactly when the fault would otherwise report success.
+HEAD="${KHU_RELEASE_HEAD:-}"
+case "$HEAD" in
+  [0-9a-f]*) [ ${#HEAD} -eq 40 ] || { echo "github-asset: KHU_RELEASE_HEAD must be the gated commit, a 40-character sha, not $HEAD; nothing was uploaded" >&2; exit 2; } ;;
+  *) echo "github-asset: KHU_RELEASE_HEAD is not set — name the commit the gate passed (release-push takes it from the gate line's field 4); a guessed head is the fault this check exists for, so nothing was uploaded" >&2; exit 2 ;;
+esac
+gh api "repos/$REPO/commits/$HEAD" >/dev/null 2>&1 || {
+  echo "github-asset: $REPO does not have the gated commit $HEAD — push that commit before creating the release, or the tag lands on the default branch; nothing was uploaded" >&2
+  exit 2
+}
+# The commit a tag really names: an annotated tag's ref points at a tag object, not at a commit, and
+# comparing the tag object's own hash would call a correct tag wrong (row 20261123-186).
+tag_commit() {
+  local raw type sha
+  raw=$(gh api "repos/$REPO/git/ref/tags/$TAG" 2>/dev/null) || return 1
+  type=$(printf '%s' "$raw" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("object",{}).get("type",""))')
+  sha=$(printf '%s' "$raw" | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("object",{}).get("sha",""))')
+  if [ "$type" = "tag" ]; then
+    sha=$(gh api "repos/$REPO/git/tags/$sha" 2>/dev/null | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("object",{}).get("sha",""))')
+  fi
+  printf '%s\n' "$sha"
+}
+if EXISTING_TAG=$(tag_commit); then
+  [ "$EXISTING_TAG" = "$HEAD" ] || {
+    echo "github-asset: tag $TAG names commit $EXISTING_TAG, not the gated commit $HEAD (compared the commit the tag resolves to, following an annotated tag); an existing tag cannot be corrected by a release edit, so nothing was uploaded" >&2
+    exit 2
+  }
+fi
+
 # The signed `file` name is <sha12>-<basename>, and an artifact already carrying that prefix keeps
 # it (Publish.swift's `name`), so GitHub is given exactly the row's own name and never a second one.
 BASE=$(basename "$ART")
@@ -105,11 +139,11 @@ case "$DECISION" in
     # The release body is the card's own words: the feed's `notes` come from here, so a placeholder
     # body becomes a placeholder card (Wire 0.5.1 read "Signed release from the KH Studio feed.").
     if [ -n "$NOTES" ] && [ -s "$NOTES" ]; then
-      gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" \
+      gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" --target "$HEAD" \
         --notes-file "$NOTES" >/dev/null \
         || { echo "github-asset: creating release $TAG failed; nothing was published" >&2; exit 4; }
     else
-      gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" \
+      gh release create "$TAG" "$STAGE/$NAME" -R "$REPO" --title "$BASE" --target "$HEAD" \
         --notes "Signed release from the KH Studio feed." >/dev/null \
         || { echo "github-asset: creating release $TAG failed; nothing was published" >&2; exit 4; }
     fi

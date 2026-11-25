@@ -68,6 +68,27 @@ if [ -n "$GATE" ]; then
 else
   : > "$NOTES_TMP"
 fi
+# The commit this release's tag must name: the gate line's own sha — field 4 of
+# `GATE PASS <app> <sha> <timestamp>` — so the tag is tied to the commit that was actually built and
+# scanned, with no new parameter to drift. With no gate line, KHU_RELEASE_HEAD is required; a guess
+# is the fault 0.1.85 shipped (its release was created while the branch was unpushed, so the tag
+# landed on `main`'s tip six commits behind the gate).
+EXPECTED_HEAD=""
+if [ -n "$GATE" ]; then
+  EXPECTED_HEAD=$(printf '%s\n' "$GL" | awk '{print $4}')
+else
+  EXPECTED_HEAD="${KHU_RELEASE_HEAD:-}"
+fi
+case "$EXPECTED_HEAD" in
+  [0-9a-f]*) [ ${#EXPECTED_HEAD} -eq 40 ] || {
+    echo "release-push: the gated commit reads '$EXPECTED_HEAD', not a 40-character sha; nothing was published" >&2
+    exit 2
+  } ;;
+  *) echo "release-push: no gated commit — pass --gate-line <file written by the gate>, or set KHU_RELEASE_HEAD to the commit the gate passed; the tag must name that commit and a guess is what landed 0.1.85's tag on main; nothing was published" >&2
+     exit 2 ;;
+esac
+export KHU_RELEASE_HEAD="$EXPECTED_HEAD"
+
 # The body is a two-to-three-sentence summary of the top entry, never the entry and never the file
 # (RELEASE-POLICY; owner 2026-11-24). The feed row is composed from this body, so whatever is here is
 # what the Launcher card carries: 0.1.82 shipped the whole changelog and put 70,801 characters on it
