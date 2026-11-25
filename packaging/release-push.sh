@@ -60,10 +60,13 @@ if [ -n "$GATE" ]; then
   [ "$COUNT" = "1" ] || { echo "release-push: $GATE holds $COUNT 'GATE PASS' lines; the body takes exactly one" >&2; exit 2; }
   GL=$(grep '^GATE PASS ' "$GATE")
   GL_APP=$(printf '%s\n' "$GL" | awk '{print $3}')
-  [ "$GL_APP" = "$APP" ] || {
+  # The `updater` row is the helper sealed inside the Launcher, so the Launcher's gate line is its
+  # evidence; requiring KHU_RELEASE_HEAD there would mean copying a sha by hand, which is the same
+  # guessed-head fault this check exists to stop. Any other cross-app line stays a refusal.
+  if [ "$GL_APP" != "$APP" ] && ! { [ "$KIND" = "updater" ] && [ "$GL_APP" = "launcher" ]; }; then
     echo "release-push: $GATE is a gate line for $GL_APP, not $APP; another app's gate is not this release's evidence" >&2
     exit 2
-  }
+  fi
   printf '%s\n\n' "$GL" > "$NOTES_TMP"
 else
   : > "$NOTES_TMP"

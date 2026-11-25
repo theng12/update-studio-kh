@@ -883,6 +883,12 @@ else:
     check(first.returncode == 0 and retry.returncode == 2 and "names commit" in retry.stderr,
           "a re-run with a wrong tag is refused instead of reporting reuse (rc=%d)" % retry.returncode)
 
+    # The updater row is the helper sealed inside the Launcher, so the Launcher's own gate line is its
+    # evidence — requiring a hand-copied sha there is the guessed-head fault this guard exists to stop.
+    push_text = push.read_text()
+    check('"$KIND" = "updater"' in push_text and '"$GL_APP" = "launcher"' in push_text,
+          "a kind=updater publish accepts the Launcher's gate line as its evidence")
+
     wrong = work / "wrong-app-GATE-PASS.txt"
     wrong.write_text("GATE PASS storage deadbeef 2026-11-23T12:45:04Z\n")
     result = push_run(("--gate-line", str(wrong)))
