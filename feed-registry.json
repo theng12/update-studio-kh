@@ -78,19 +78,6 @@
       "hold_since": "0.1.11",
       "kind": "app-dmg"
     },
-    "story-studio": {
-      "name": "Story Studio KH",
-      "bundle_id": "com.storystudio.kh",
-      "bundle_name": "Story Studio KH.app",
-      "type": "entertainment",
-      "tagline": "Turns an idea into a finished, upload-ready YouTube episode.",
-      "description": "Produces long-form YouTube episodes end to end: scripts, generated images, narration, subtitles, video assembly, thumbnails and upload. Also installs signed Content Packs from the GenStudio Content Store.",
-      "_descriptionStatus": "new copy, awaiting the owner's read (M001, 2026-11-24)",
-      "hold_url": "http://127.0.0.1:8647/api/maintenance/hold",
-      "hold_since": "1.4.403",
-      "kind": "app-dmg",
-      "_until": "delete when story's next tag carries app-meta.json"
-    },
     "updater": {
       "asset": "khu",
       "name": "Studio Launcher KH Helper",
