@@ -59,6 +59,29 @@ func recycleTests() {
     AgentRecycle.recordRecycle(stateDir: state.path, transfers: 0)
     expect(AgentRecycle.runs(stateDir: state.path) == 0, "RC8c a restart starts its own count")
 
+    // RC9, the bound a public-feed Mac lost (2026-11-26): a public feed is never posted to, so
+    // `statusPosted` stays false by design and the guard below never let the helper restart. Measured
+    // on the live 0.1.87 helper: 255 runs this process, 367 on the counter, 21 h, zero recycle lines.
+    do {
+        let perRun = AgentRecycle.successfulRun(statusPosted: false, publicFeed: true, feedError: nil)
+        expect(perRun, "RC9 a public-feed run that read its feed counts as successful")
+        expect(AgentRecycle.due(transfers: 0, age: 0, successfulRun: perRun, runs: AgentRecycle.afterRuns) != nil,
+               "RC9 it lets the run bound fire, so a public-feed helper still recycles")
+        // The failures the churn guard exists for must not become "successful" by way of a public feed.
+        expect(!AgentRecycle.successfulRun(statusPosted: false, publicFeed: true, feedError: "the feed did not answer"),
+               "RC9 a public-feed run whose feed could not be read is still a failure")
+        expect(!AgentRecycle.successfulRun(statusPosted: false, publicFeed: false, feedError: nil),
+               "RC9 a run that never reached the publisher is still a failure")
+        expect(!AgentRecycle.successfulRun(statusPosted: false, publicFeed: false, feedError: "offline"),
+               "RC9 the offline SSD path stays a failure, so it never lifts the guard")
+        expect(AgentRecycle.successfulRun(statusPosted: true, publicFeed: false, feedError: nil),
+               "RC9 a posted run is successful exactly as before")
+        expect(AgentRecycle.due(transfers: 0, age: 0,
+                                successfulRun: AgentRecycle.successfulRun(statusPosted: false, publicFeed: false, feedError: nil),
+                                runs: AgentRecycle.afterRuns) == nil,
+               "RC9 the 1301 churn case is still guarded: a failed run at the cap does not restart")
+    }
+
     // RC5: the 0.1.63 Dock icon stays. 0.1.79 bounds the loop that made it appear 1,605 times, and a
     // later change that quietly takes the owner's reopen route away has to break this test first.
     let spec = StubRunner.agentHelperSpec(version: "0.1.79", icon: nil)

@@ -306,6 +306,14 @@ public enum AgentRecycle {
     /// 2026-11-22 every run failed at its first status POST, the cap fired anyway, and the helper
     /// restarted 1,605 times in a row — a failed run has nothing to preserve, so restarting it is
     /// pure churn. Two restarts with no successful run between them is the same churn one step on.
+    /// Whether a finished run counts as successful for the restart guard. A public-feed run has
+    /// nothing to post to by design (`statusPosted` stays false), so posting alone made the bound
+    /// inert on any Mac reading the public feed: 367 runs, 21 h, no recycle (2026-11-26). A feed it
+    /// could not read is still a failure, and so is a run that threw.
+    public static func successfulRun(statusPosted: Bool, publicFeed: Bool, feedError: String?) -> Bool {
+        statusPosted || (publicFeed && feedError == nil)
+    }
+
     public static func due(transfers: Int, age: TimeInterval,
                            successfulRun: Bool = true, recycledSinceSuccess: Bool = false,
                            runs: Int = 0,

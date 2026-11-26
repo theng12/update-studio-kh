@@ -840,7 +840,7 @@ struct KHUMain {
                         let r = try Agent.runOnce(config: current, requested: requested,
                                                   installing: { app in SparkleInstallMarker.set(app); menu?.installing(app) },
                                                   ssd: menu?.ssdSources ?? [], connectionFile: URL(fileURLWithPath: c), configFile: URL(fileURLWithPath: c))
-                        ranOK = r.statusPosted
+                        ranOK = AgentRecycle.successfulRun(statusPosted: r.statusPosted, publicFeed: r.publicFeed, feedError: r.feedError)
                         // A run that could not report says why on its own line: `updates=0` alone is
                         // what made a fifteen-runs-a-minute loop invisible until the process count
                         // showed it (measured 2026-11-23).
