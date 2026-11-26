@@ -6,6 +6,12 @@ lines. The **release body is not this file**: `packaging/release-push.sh --summa
 two-or-three-sentence summary, because the feed row is composed from the body and the Launcher card
 shows it.
 
+## 0.1.88 — 2026-11-27
+
+- The background helper now restarts itself on a Mac that reads the public feed, which it had never done. It is meant to start a fresh process after 150 checks — each check costs a little memory the system never gives back — but the rule also required a check to have reached a publisher, and a public feed has no publisher to reach, so the rule could never fire here. Measured on this Mac: 255 checks in one process, 21 hours old, and no restart ever.
+- A check that could not read the feed still does not count, and neither does one that ran from a drive while offline, so the 1,605-restarts-in-a-row failure stays fixed. What changed is only that a public-feed check which did read its feed is no longer treated as a failure.
+- After this install, a Mac with a long history behind it restarts its helper once, on the first check. That is the limit working for the first time: same process and same job, one line in the log, and nothing in flight is interrupted.
+
 ## 0.1.87 — 2026-11-25
 
 - The Extension tab now reads like every other tab: the same card, the same grid, the same detail window. A card carries the extension's icon, a picture of it, its name, version and what it does, a status and a Download button, and opens a window with the description, the size, the checksum and the Chrome steps.
