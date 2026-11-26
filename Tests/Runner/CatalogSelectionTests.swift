@@ -46,6 +46,22 @@ func catalogSelectionTests() {
     itself = app("1.0"); itself.updatesItself = true
     expect(row(itself)?.ssd == nil && row(itself)?.initialSSD?.version == "1.0",
            "CS14 an older SSD copy of an app that updates itself stays an explicit first-install choice")
+    // What's New belongs to the version on offer: a drive copy at a different version brings its
+    // own notes, and a drive copy at the feed's own version keeps the feed's notes (CS20, CS21).
+    do {
+        var noted = server; noted.notes = "feed notes for 2.0"
+        let notedFeed = Feed(published_at: feed.published_at, apps: ["fixture": noted])
+        func notedRow(_ version: String, notes: String) -> CatalogEntry? {
+            var a = app(version); a.notes = notes
+            return Catalog.build(feed: notedFeed, ssd: [SSDSource(volume: "Fixture SSD", root: root, index: SSDIndex(apps: [a]))]).first
+        }
+        let newerNotes = notedRow("3.0", notes: "drive notes for 3.0")?.notes
+        let sameNotes = notedRow("2.0", notes: "drive notes for 2.0")?.notes
+        expect(newerNotes == "drive notes for 3.0",
+               "CS20 a drive copy at another version brings its own What's New (\(newerNotes ?? "nil"))")
+        expect(sameNotes == "feed notes for 2.0",
+               "CS21 a drive copy at the feed's version keeps the feed's What's New (\(sameNotes ?? "nil"))")
+    }
     // The signed feed's own kind is the policy: no hard-coded app-id registry, no SSD needed.
     // `status` is the one kind that keeps an app out of the installer; Story and Hub publish as
     // `app-dmg` and install like every other app now.
