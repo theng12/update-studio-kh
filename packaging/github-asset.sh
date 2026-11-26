@@ -127,6 +127,31 @@ print("attach")
 PY
 ) || { echo "github-asset: could not read release $TAG; nothing was published" >&2; exit 4; }
 fi
+# One version, one release. A second release for the same version under another tag spelling is the
+# duplicate this guard stops: on 2026-11-27 `0.1.88` and `launcher-0.1.88` were both created from the
+# same gated bytes because a second publish ran without `KHU_GITHUB_TAG`, and `FeedGenerator.verdict`
+# accepts `<app>-<version>` as the app's own — so the feed would serve whichever GitHub calls latest
+# (row 20261127-2). Only on `create`: an existing tag is the normal reuse/attach path, which is how
+# the helper joins the Launcher's release.
+if [ "$DECISION" = create ]; then
+  WANT_VERSION="${TAG#[vV]}"; WANT_VERSION="${WANT_VERSION##*-}"
+  DUPLICATE=$(gh api "repos/$REPO/releases?per_page=100" 2>/dev/null | /usr/bin/python3 -I -c '
+import json, sys
+want = sys.argv[1]
+try: rels = json.load(sys.stdin)
+except Exception: rels = []
+for r in rels:
+    if r.get("draft"): continue
+    tag = r.get("tag_name") or ""
+    bare = tag[1:] if tag[:1] in ("v", "V") else tag
+    if "-" in bare: bare = bare.rsplit("-", 1)[1]
+    if bare == want: print(tag); break
+' "$WANT_VERSION")
+  [ -z "$DUPLICATE" ] || {
+    echo "github-asset: $REPO already publishes $WANT_VERSION as release '$DUPLICATE'; publishing it again as '$TAG' would be two releases for one version, so nothing was uploaded — reuse that release (pass its tag) or publish the next version" >&2
+    exit 2
+  }
+fi
 case "$DECISION" in
   draft) exit 3 ;;
   conflict) exit 5 ;;
