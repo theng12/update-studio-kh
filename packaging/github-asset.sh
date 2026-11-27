@@ -135,18 +135,23 @@ fi
 # the helper joins the Launcher's release.
 if [ "$DECISION" = create ]; then
   WANT_VERSION="${TAG#[vV]}"; WANT_VERSION="${WANT_VERSION##*-}"
+  # A listing that is not a list (an API error body, or a fixture that answers 404) means "nothing to
+  # compare", never a failed publish: under `set -o pipefail` the pipeline's status is the assignment's,
+  # so an unguarded reader exited 1 here with no sentence — measured 2026-11-27, the packaging fixture
+  # red on main. The duplicate guard still refuses when it can read the list.
   DUPLICATE=$(gh api "repos/$REPO/releases?per_page=100" 2>/dev/null | /usr/bin/python3 -I -c '
 import json, sys
 want = sys.argv[1]
 try: rels = json.load(sys.stdin)
 except Exception: rels = []
+if not isinstance(rels, list): rels = []
 for r in rels:
-    if r.get("draft"): continue
+    if not isinstance(r, dict) or r.get("draft"): continue
     tag = r.get("tag_name") or ""
     bare = tag[1:] if tag[:1] in ("v", "V") else tag
     if "-" in bare: bare = bare.rsplit("-", 1)[1]
     if bare == want: print(tag); break
-' "$WANT_VERSION")
+' "$WANT_VERSION" || true)
   [ -z "$DUPLICATE" ] || {
     echo "github-asset: $REPO already publishes $WANT_VERSION as release '$DUPLICATE'; publishing it again as '$TAG' would be two releases for one version, so nothing was uploaded — reuse that release (pass its tag) or publish the next version" >&2
     exit 2

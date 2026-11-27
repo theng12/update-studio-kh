@@ -194,13 +194,50 @@ public enum FeedPublisher {
         throw khuFail("refused: \(repo) publishes no release with a downloadable asset for \(version); nothing was published")
     }
 
+    /// The production publish: no address is ever passed. A row's address comes from the app's own
+    /// GitHub release via `khu feed`, so a caller that states one itself is a different, named entry
+    /// point (`publishAddressed`) rather than an optional argument every caller might set.
     public static func publish(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
                                kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil, words: AppWords? = nil, mainMacOnly: Bool? = nil,
                                meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
                                security: Bool = false, type: String? = nil,
                                keep: Int? = nil, now: Date = Date(),
-                               requireComplete: Bool = false, url: String? = nil,
+                               requireComplete: Bool = false,
                                retireArtifact: ((URL) throws -> Void)? = nil) throws {
+        try write(feedDir: feedDir, keyFile: keyFile, app: app, version: version, artifact: artifact,
+                  kind: kind, allowSame: allowSame, notes: notes, displayName: displayName, words: words,
+                  mainMacOnly: mainMacOnly, meta: meta, holdURL: holdURL, holdSince: holdSince,
+                  security: security, type: type, keep: keep, now: now, requireComplete: requireComplete,
+                  address: nil, retireArtifact: retireArtifact)
+    }
+
+    /// The deliberate exception: a caller that states the row's address itself. Fixtures name only a
+    /// folder, and the artifact is stored as `<sha12>-<name>`, so a folder address gets the file it
+    /// actually published appended.
+    public static func publishAddressed(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
+                                        kind: String?, allowSame: Bool, notes: String? = nil, displayName: String? = nil,
+                                        words: AppWords? = nil, mainMacOnly: Bool? = nil,
+                                        meta: ((String) throws -> AppMeta)? = { try AppMeta.read(dmg: $0) }, holdURL: String? = nil, holdSince: String? = nil,
+                                        security: Bool = false, type: String? = nil,
+                                        keep: Int? = nil, now: Date = Date(),
+                                        requireComplete: Bool = false,
+                                        retireArtifact: ((URL) throws -> Void)? = nil,
+                                        url: String) throws {
+        try write(feedDir: feedDir, keyFile: keyFile, app: app, version: version, artifact: artifact,
+                  kind: kind, allowSame: allowSame, notes: notes, displayName: displayName, words: words,
+                  mainMacOnly: mainMacOnly, meta: meta, holdURL: holdURL, holdSince: holdSince,
+                  security: security, type: type, keep: keep, now: now, requireComplete: requireComplete,
+                  address: url, retireArtifact: retireArtifact)
+    }
+
+    /// Both entry points, one publish: the row, its bytes, the pins and the commit are the same work
+    /// whichever way the address arrived.
+    private static func write(feedDir: URL, keyFile: URL, app: String, version: String, artifact: URL,
+                              kind: String?, allowSame: Bool, notes: String?, displayName: String?, words: AppWords?,
+                              mainMacOnly: Bool?, meta: ((String) throws -> AppMeta)?, holdURL: String?, holdSince: String?,
+                              security: Bool, type: String?, keep: Int?, now: Date,
+                              requireComplete: Bool, address: String?,
+                              retireArtifact: ((URL) throws -> Void)?) throws {
         _ = try SafeName.component(app, what: "app id")
         guard VersionCompare.isValid(version) else { throw khuFail("\(version) is not a dotted numeric version") }
         if let type { try FeedPublisher.validateAppType(type) }
@@ -344,8 +381,8 @@ public enum FeedPublisher {
             // wrote one to the production feed host and its receipt still said "published". The
             // estate's only producer is `khu feed`, which takes the address from the app's own
             // GitHub release; the words belong in the tag's app-meta.json. A caller that states the
-            // address itself (`url:`) is the deliberate exception, never a guess.
-            if let url, !url.isEmpty { entry.url = url }
+            // address itself is the deliberate exception (`publishAddressed`), never a guess.
+            if let address, !address.isEmpty { entry.url = address }
             // An address given as a folder means this row's own file: the artifact is stored as
             // `<sha12>-<name>`, which a caller cannot know in advance, so a fixture that names only
             // the folder gets an address that names the file actually published. A production

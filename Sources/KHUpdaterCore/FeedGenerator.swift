@@ -24,8 +24,11 @@ public struct RepoRelease: Sendable, Equatable {
     /// The release's own body: the app's changelog, used as the row's notes when it has none.
     public var body: String?
     public var assets: [Asset]
-    public init(tag: String, publishedAt: String?, body: String? = nil, assets: [Asset]) {
+    public var targetCommitish: String?
+    public init(tag: String, publishedAt: String?, body: String? = nil, assets: [Asset],
+                targetCommitish: String? = nil) {
         self.tag = tag; self.publishedAt = publishedAt; self.body = body; self.assets = assets
+        self.targetCommitish = targetCommitish
     }
 }
 
@@ -124,11 +127,43 @@ public struct FeedGeneration: Sendable {
     public var notes: [String]
     /// One line per app named on `--freeze`, so a held row is never silent.
     public var frozen: [String]
+    /// One line per app named on `--pin`: `<app> <version> (<reason>)`.
+    public var pinned: [String]
+    /// One line per row: `<app> <tag> -> <commit>`. A tag is a name; only this says which bytes
+    /// were built.
+    public var tags: [String]
     public init(feed: Feed, sources: [String: String] = [:], unpublished: [String] = [], stale: [String] = [],
-                wordChanges: [String] = [], wordSources: [String] = [], notes: [String] = [], frozen: [String] = []) {
+                wordChanges: [String] = [], wordSources: [String] = [], notes: [String] = [], frozen: [String] = [],
+                pinned: [String] = [], tags: [String] = []) {
         self.feed = feed; self.sources = sources; self.unpublished = unpublished; self.stale = stale
         self.wordChanges = wordChanges; self.wordSources = wordSources; self.notes = notes; self.frozen = frozen
+        self.pinned = pinned; self.tags = tags
     }
+}
+
+/// One `--pin <app>=<version>:<reason>`: which app's row is held, at which published version, and why.
+public struct FeedPin: Sendable, Equatable {
+    public var app: String
+    public var version: String
+    public var reason: String
+    public init(app: String, version: String, reason: String) {
+        self.app = app; self.version = version; self.reason = reason
+    }
+
+    /// `<app>=<version>:<reason>`. Every part is required: a pin without its reason is a hold nobody
+    /// can explain later, which is the thing a pin exists to prevent.
+    public static func parse(_ raw: String) -> FeedPin? {
+        guard let eqIndex = raw.firstIndex(of: "=") else { return nil }
+        let app = String(raw[raw.startIndex..<eqIndex]).trimmingCharacters(in: .whitespaces)
+        let rest = String(raw[raw.index(after: eqIndex)...])
+        guard let colon = rest.firstIndex(of: ":") else { return nil }
+        let version = String(rest[rest.startIndex..<colon]).trimmingCharacters(in: .whitespaces)
+        let reason = String(rest[rest.index(after: colon)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !app.isEmpty, !version.isEmpty, !reason.isEmpty else { return nil }
+        return FeedPin(app: app, version: version, reason: reason)
+    }
+
+    public var line: String { "\(app) \(version) (\(reason))" }
 }
 
 /// Proof that a row's asset really downloads: a tokenless GET whose bytes hash and count to what the
@@ -224,9 +259,14 @@ public enum FeedGenerator {
         let data: Data
         do { data = try gh.json("repos/\(repo)/releases/latest") }
         catch { return nil }   // GitHub answers 404 for a repo with nothing published
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              object["draft"] as? Bool != true,
-              let tag = object["tag_name"] as? String else { return nil }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return release(from: object)
+    }
+
+    /// One release from GitHub's own JSON: a draft is not a release, and a release with no tag is
+    /// no row.
+    static func release(from object: [String: Any]) -> RepoRelease? {
+        guard object["draft"] as? Bool != true, let tag = object["tag_name"] as? String else { return nil }
         let assets = (object["assets"] as? [[String: Any]] ?? []).compactMap { asset -> RepoRelease.Asset? in
             guard let name = asset["name"] as? String, let url = asset["browser_download_url"] as? String else { return nil }
             return RepoRelease.Asset(name: name, url: url, digest: asset["digest"] as? String,
@@ -234,7 +274,24 @@ public enum FeedGenerator {
         }
         return RepoRelease(tag: tag, publishedAt: object["published_at"] as? String,
                            body: (object["body"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                           assets: assets)
+                           assets: assets, targetCommitish: object["target_commitish"] as? String)
+    }
+
+    /// The release a `--pin` names, exactly: a published, non-draft release of that repo carrying
+    /// this version. `releases/latest` is checked first, then the repo's releases at
+    /// `per_page=100`, because the release a pin exists to hold is usually an older one.
+    static func publishedRelease(app: String, repo: String, version: String, gh: GitHubReader) throws -> RepoRelease {
+        if let latest = try latestRelease(repo: repo, gh: gh),
+           verdict(latest.tag, app: app, repo: repo).version == version { return latest }
+        guard let data = try? gh.json("repos/\(repo)/releases?per_page=100"),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw khuFail("refused: \(repo)'s releases could not be read, so \(version) cannot be pinned; nothing was generated")
+        }
+        for object in list {
+            guard let found = release(from: object), verdict(found.tag, app: app, repo: repo).version == version else { continue }
+            return found
+        }
+        throw khuFail("refused: \(repo) publishes no release for \(version), so it cannot be pinned; nothing was generated")
     }
 
     /// `owner/repo` from a GitHub release asset address, or nil when the address is not one.
@@ -286,18 +343,42 @@ public enum FeedGenerator {
     static func olderReleases(repo: String, gh: GitHubReader) throws -> [RepoRelease] {
         guard let data = try? gh.json("repos/\(repo)/releases?per_page=20"),
               let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
-        return list.compactMap { object -> RepoRelease? in
-            guard object["draft"] as? Bool != true,
-                  let tag = object["tag_name"] as? String else { return nil }
-            let assets = (object["assets"] as? [[String: Any]] ?? []).compactMap { asset -> RepoRelease.Asset? in
-                guard let name = asset["name"] as? String, let url = asset["browser_download_url"] as? String else { return nil }
-                return RepoRelease.Asset(name: name, url: url, digest: asset["digest"] as? String,
-                                         bytes: (asset["size"] as? NSNumber)?.int64Value ?? 0)
-            }
-            return RepoRelease(tag: tag, publishedAt: object["published_at"] as? String,
-                               body: (object["body"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                               assets: assets)
-        }
+        return list.compactMap { release(from: $0) }
+    }
+
+    /// The commit a tag points at. `git/ref/tags/<tag>` gives the loose ref; an annotated tag's
+    /// object is a `tag` object, so its `object.sha` is peeled from `git/tags/<sha>`.
+    static func tagCommit(repo: String, tag: String, gh: GitHubReader) -> String? {
+        struct Ref: Decodable { let object: Object; struct Object: Decodable { let sha: String?; let type: String? } }
+        guard let data = try? gh.json("repos/\(repo)/git/ref/tags/\(tag)"),
+              let ref = try? JSON.decode(Ref.self, from: data), let sha = ref.object.sha else { return nil }
+        guard ref.object.type == "tag" else { return sha }
+        struct Peeled: Decodable { let object: Ref.Object }
+        guard let peeled = try? gh.json("repos/\(repo)/git/tags/\(sha)"),
+              let inner = try? JSON.decode(Peeled.self, from: peeled) else { return nil }
+        return inner.object.sha
+    }
+
+    /// Whether `ancestor` is in `commit`'s history. GitHub answers 404 for two unrelated commits.
+    static func isAncestor(_ ancestor: String, of commit: String, repo: String, gh: GitHubReader) -> Bool? {
+        guard let data = try? gh.json("repos/\(repo)/compare/\(ancestor)...\(commit)"),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let status = object["status"] as? String else { return nil }
+        return ["ahead", "identical"].contains(status)
+    }
+
+    /// ISO dates as GitHub writes them; a comparison that cannot be made is nil, never a guess.
+    static func isLater(_ one: String?, than other: String?) -> Bool {
+        guard let one = one.flatMap(ISO.date), let other = other.flatMap(ISO.date) else { return false }
+        return one > other
+    }
+
+    /// `repos/<repo>`'s own `created_at`: a repository re-created under the same name is younger
+    /// than the release its row already serves.
+    static func repoCreatedAt(repo: String, gh: GitHubReader) -> String? {
+        guard let data = try? gh.json("repos/\(repo)"),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["created_at"] as? String
     }
 
     /// Which asset of the release becomes the row: a suffix (`.dmg`, the default) or an exact name.
@@ -406,13 +487,21 @@ public enum FeedGenerator {
     }
 
     /// One row, or nil when the repo has no published release.
+    ///
+    /// `pinned` names this app's published release to build the row from, instead of the newest
+    /// acceptable one. It is this run's only difference: the row keeps everything else as it is.
     public static func row(app: String, repo: String, registry: FeedRegistry?, served: FeedApp? = nil,
                            gh: GitHubReader, verifier: AssetVerifier = AnonymousAsset(),
-                           refreshNotes: Bool = false)
-        throws -> (row: FeedApp?, source: String?, stale: String?, changes: [String]) {
-        let chosen = try release(for: app, repo: repo, gh: gh)
+                           refreshNotes: Bool = false, pinned: String? = nil)
+        throws -> (row: FeedApp?, source: String?, stale: String?, changes: [String], tagLine: String?) {
         var repair: [String] = []
-        guard let release = chosen.release else { return (nil, nil, nil, chosen.notes) }
+        let chosen: (release: RepoRelease?, notes: [String])
+        if let pinned {
+            chosen = (try publishedRelease(app: app, repo: repo, version: pinned, gh: gh), [])
+        } else {
+            chosen = try release(for: app, repo: repo, gh: gh)
+        }
+        guard let release = chosen.release else { return (nil, nil, nil, chosen.notes, nil) }
         guard let version = verdict(release.tag, app: app, repo: repo).version else {
             throw khuFail("refused: \(repo) publishes \(release.tag); nothing was generated")
         }
@@ -424,6 +513,48 @@ public enum FeedGenerator {
         let sha = String(digest.dropFirst("sha256:".count))
         guard sha.count == 64, asset.bytes > 0 else {
             throw khuFail("refused: \(repo) \(release.tag)'s \(asset.name) names no usable digest or size; nothing was generated")
+        }
+        // A tag is a name; the commit behind it is what was actually built. The release body's own
+        // `GATE PASS <app> <sha>` line names the commit that passed the gate, so a tag that points
+        // anywhere else is a release whose bytes were never gated — refused, not published.
+        let tagCommit = tagCommit(repo: repo, tag: release.tag, gh: gh)
+        if let body = release.body, let commit = tagCommit {
+            let gateSha = body.split(separator: "\n").compactMap { line -> String? in
+                let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ").map(String.init)
+                guard parts.count >= 4, parts[0] == "GATE", parts[1] == "PASS", parts[2] == app,
+                      parts[3].count == 40, parts[3].allSatisfy(\.isHexDigit) else { return nil }
+                return parts[3]
+            }.first
+            if let gateSha, gateSha != commit {
+                throw khuFail("refused: \(repo) \(release.tag) points at \(commit) but its body says the gate passed \(gateSha); the bytes were never gated at that tag, so nothing was generated")
+            }
+        }
+        // A release that was deleted and re-created at the same version must not move the row it
+        // already serves. The bytes are the thing; a `released` date that moved on its own is the
+        // repo being re-created, which is a note. Anything else is a different artifact at a
+        // published version, which is refused.
+        if let served, served.version == version, let oldRel = served.released,
+           let published = release.publishedAt, oldRel != published {
+            // A row written before `url` existed has no stored name to compare; its sha and size
+            // still are the identity, so only those are judged.
+            let nameMatches = served.url == nil
+                || URL(string: served.url ?? "")?.lastPathComponent == URL(string: asset.url)?.lastPathComponent
+            let sameArtifact = served.sha256 == sha && served.bytes == asset.bytes && nameMatches
+            guard sameArtifact else {
+                throw khuFail("refused: \(repo) \(release.tag) carries a different artifact (\(asset.name), \(asset.bytes) B) than the row this feed already serves (\(served.file), \(served.bytes) B); a published version is one artifact, so nothing was generated")
+            }
+            let recreated = isLater(repoCreatedAt(repo: repo, gh: gh), than: served.released)
+            repair.append(recreated
+                ? "\(app): release re-created at \(published) (repo recreated), artifact unchanged"
+                : "\(app): release re-created at \(published), artifact unchanged")
+        }
+        // `target_commitish` names what GitHub says it released from. A release whose target is not
+        // an ancestor of the tag's commit is worth a note, never a refusal: the tag and its digest
+        // are the proof, and a note that turns out wrong must not stop the feed.
+        if let target = release.targetCommitish, target.count == 40, target.allSatisfy(\.isHexDigit),
+           let commit = tagCommit, target != commit, let ancestor = isAncestor(target, of: commit, repo: repo, gh: gh),
+           !ancestor {
+            repair.append("\(app): \(release.tag)'s release target \(target) is not in \(commit)'s history; the tag's own commit is what was built")
         }
         // `file` is the local artifact name and is never normalised: a row whose version did not move
         // keeps the served name exactly. A changed row takes the local name from the registry only
@@ -478,16 +609,21 @@ public enum FeedGenerator {
         // Byte for byte, not "looks like": the same words with one stray space are refused too, because
         // a comparison loose enough to accept them is loose enough to overwrite someone's sentence.
         let placeholder = refreshNotes && served?.notes == Self.placeholderNotes
-        if served?.version != version || placeholder, let body = release.body {
-            let prose = body.split(separator: "\n", omittingEmptySubsequences: false)
+        let prose = release.body.map { body in
+            body.split(separator: "\n", omittingEmptySubsequences: false)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("GATE PASS") }
                 .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !prose.isEmpty {
-                if placeholder, prose != served?.notes {
-                    repair = ["notes refreshed: \(app) — \"\(Self.firstLine(served?.notes))\" → \"\(Self.firstLine(prose))\""]
-                }
-                row.notes = prose
+        } ?? ""
+        if served?.version != version || placeholder, !prose.isEmpty {
+            if placeholder, prose != served?.notes {
+                repair = ["notes refreshed: \(app) — \"\(Self.firstLine(served?.notes))\" → \"\(Self.firstLine(prose))\""]
             }
+            row.notes = prose
+        } else if let served, !placeholder, !prose.isEmpty, prose != served.notes {
+            // An untouched row keeps its served notes by design. Silently is what it must not do: a
+            // body edited after its release reaches the row only at the next version, and the person
+            // who edited it needs to read that here rather than wonder for a release.
+            repair.append("\(app): keeps its served notes; the release body changed and reaches the row only at the next version")
         }
         // The row's summary source: what supplied the words it actually has. Fields no source had
         // are left out, so "tag" means every word came from the release, not just most of them.
@@ -497,7 +633,8 @@ public enum FeedGenerator {
         else if !used.isEmpty && used.allSatisfy({ $0 == "tag" }) { source = "tag:\(release.tag)" }
         else if used.contains("served") { source = "served" }
         else { source = "none" }
-        return (row, source, made.stale ?? fileNote, chosen.notes + made.changes + repair)
+        return (row, source, made.stale ?? fileNote, chosen.notes + made.changes + repair,
+                tagCommit.map { "\(app) \(release.tag) -> \($0)" })
     }
 
     /// The whole feed: one row per repo with a published release, no compatibility row. Every app
@@ -511,7 +648,7 @@ public enum FeedGenerator {
     public static func generate(apps: [String: String], registry: FeedRegistry? = nil, previous: Feed? = nil,
                                 gh: GitHubReader, verifier: AssetVerifier = AnonymousAsset(),
                                 refreshNotes: Set<String> = [], frozen: Set<String> = [],
-                                now: Date = Date()) throws -> FeedGeneration {
+                                pins: [FeedPin] = [], now: Date = Date()) throws -> FeedGeneration {
         // A held row is this run's own choice, per run: the row keeps every field the feed serves now
         // and its release is never looked up or hashed. Relay 0.3.39 was gated, published and proven
         // and then sat unserved for over an hour because one other app's row could not be built and
@@ -527,12 +664,37 @@ public enum FeedGenerator {
         if let unknown = refreshNotes.subtracting(apps.keys).sorted().first {
             throw khuFail("refused: --refresh-notes names \(unknown), which this run does not generate; nothing was generated")
         }
+        // A pin is validated with the same two questions `--freeze` gets: an app this run does not
+        // generate is a typo, and so is one pinned to twice.
+        var pinByApp: [String: String] = [:]
+        for pin in pins {
+            guard apps[pin.app] != nil else {
+                throw khuFail("refused: --pin names \(pin.app), which this run does not generate; nothing was generated")
+            }
+            guard VersionCompare.isValid(pin.version) else {
+                throw khuFail("refused: --pin names \(pin.version) for \(pin.app), which is not a dotted numeric version; nothing was generated")
+            }
+            guard pinByApp[pin.app] == nil else {
+                throw khuFail("refused: --pin names \(pin.app) twice; nothing was generated")
+            }
+            // A frozen row is what the feed already serves, verbatim; a pin is a release to build it
+            // from. Asking for both is a contradiction, and doing one of them silently is worse.
+            guard !frozen.contains(pin.app) else {
+                throw khuFail("refused: \(pin.app) is named on both --pin and --freeze; nothing was generated")
+            }
+            pinByApp[pin.app] = pin.version
+        }
         // Name what a row cannot be built from before a single byte is hashed (row 20261124-48):
         // a refusal that arrives after the hash pass reads from outside as a slow download, and
         // every watcher starts the whole run again. Same checks, same messages — just first. The
         // duplicate `releases/latest` read costs one cheap API call per app; the DMGs cost minutes.
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) where !frozen.contains(app) {
-            let found = try Self.release(for: app, repo: repo, gh: gh)
+            let found: (release: RepoRelease?, notes: [String])
+            if let pinned = pinByApp[app] {
+                found = (try Self.publishedRelease(app: app, repo: repo, version: pinned, gh: gh), [])
+            } else {
+                found = try Self.release(for: app, repo: repo, gh: gh)
+            }
             guard let foundRelease = found.release else { continue }
             _ = try Self.words(app: app, repo: repo, tag: foundRelease.tag, entry: registry?.apps[app],
                                served: previous?.apps[app], gh: gh)
@@ -543,6 +705,8 @@ public enum FeedGenerator {
         var wordSources: [String] = []
         var notes: [String] = []
         var frozenLines: [String] = []
+        var pinnedLines: [String] = []
+        var tagLines: [String] = []
         for (app, repo) in apps.sorted(by: { $0.key < $1.key }) {
             if frozen.contains(app), let held = previous?.apps[app] {
                 // Verbatim: a held row is what the world already reads, so nothing here can change it.
@@ -551,7 +715,8 @@ public enum FeedGenerator {
                 continue
             }
             let made = try row(app: app, repo: repo, registry: registry, served: previous?.apps[app], gh: gh,
-                               verifier: verifier, refreshNotes: refreshNotes.contains(app))
+                               verifier: verifier, refreshNotes: refreshNotes.contains(app), pinned: pinByApp[app])
+            if let line = made.tagLine { tagLines.append(line) }
             guard var row = made.row else {
                 // A withdrawal says why, and says it every time: measured 2026-11-23, a row vanished
                 // ten minutes after a receipt that said "done", and only the drop's own line can
@@ -593,9 +758,19 @@ public enum FeedGenerator {
             if let note = made.stale { stale.append(note) }
             wordSources += made.changes.filter { $0.hasPrefix("source: ") }
             wordChanges += made.changes.filter {
-                !$0.hasPrefix("notes refreshed:") && !$0.hasPrefix("source: ")
+                !$0.hasPrefix("notes refreshed:") && !$0.hasPrefix("source: ") && !$0.hasPrefix("\(app): release re-created")
+                    && !$0.hasPrefix("\(app): keeps its served notes") && !$0.contains("is not in its history")
             }
-            notes += made.changes.filter { $0.hasPrefix("stray release ignored:") || $0.hasPrefix("notes refreshed:") }
+            notes += made.changes.filter {
+                $0.hasPrefix("stray release ignored:") || $0.hasPrefix("notes refreshed:")
+                    || $0.hasPrefix("\(app): release re-created") || $0.hasPrefix("\(app): keeps its served notes")
+                    || $0.contains("is not in its history")
+            }
+        }
+        // A pin says so in one line, every run it is used: a held row that stays silent is the same
+        // defect as a skipped app that stays silent.
+        for pin in pins.sorted { $0.app < $1.app } where !frozen.contains(pin.app) {
+            pinnedLines.append("pinned: \(pin.line)")
         }
         if let previous {
             // A row may not disappear while its repo still publishes: an app dropped from the list
@@ -616,7 +791,8 @@ public enum FeedGenerator {
         }
         return FeedGeneration(feed: try feed.validated(), sources: sources, unpublished: unpublished,
                               stale: stale, wordChanges: wordChanges.filter { !$0.hasPrefix("stray release ignored:") },
-                              wordSources: wordSources, notes: notes, frozen: frozenLines)
+                              wordSources: wordSources, notes: notes, frozen: frozenLines,
+                              pinned: pinnedLines, tags: tagLines)
     }
 
     /// The feed alone, for callers that do not need the report.

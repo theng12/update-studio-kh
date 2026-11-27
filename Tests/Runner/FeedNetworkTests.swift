@@ -261,7 +261,7 @@ func feedNetworkTests() {
         expect((configured?.publishedAt ?? .distantPast) > (feed.publishedAt ?? .distantPast), "FN network publication advances date even with an older clock")
         let artifact = publisher.appendingPathComponent("helper.bin")
         try bytes.write(to: artifact)
-        try FeedPublisher.publish(feedDir: publisher, keyFile: keyFile, app: "updater", version: "1.0.0", artifact: artifact,
+        try FeedPublisher.publishAddressed(feedDir: publisher, keyFile: keyFile, app: "updater", version: "1.0.0", artifact: artifact,
                                   kind: "updater", allowSame: false, meta: nil, now: now, url: "https://example.test/artifacts/")
         let next = try FeedPublisher.loadVerifiedFeed(from: publisher, publicKey: key.publicKey)
         expect(next?.network == network, "FN later app publication keeps signed host and fallback settings")

@@ -26,7 +26,7 @@ func feedAppTypeTests() {
     }
     func publish(_ dir: URL, _ version: String, _ bytes: String, type: String? = nil,
                  allowSame: Bool = false, shown: String? = nil) throws {
-        try FeedPublisher.publish(feedDir: dir, keyFile: keyFile, app: "media", version: version,
+        try FeedPublisher.publishAddressed(feedDir: dir, keyFile: keyFile, app: "media", version: version,
                                   artifact: artifact(dir.lastPathComponent, bytes), kind: "app-dmg",
                                   allowSame: allowSame, displayName: shown, meta: nil, type: type,
                                   url: "https://example.test/artifacts/")

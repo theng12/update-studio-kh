@@ -69,7 +69,7 @@ func feedLosslessTests() {
         let seed = try JSON.decode(Feed.self, from: data)
         let artifact = root.appendingPathComponent("story.bin")
         try Data("story bytes".utf8).write(to: artifact)
-        try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "story", version: "1.4.418",
+        try FeedPublisher.publishAddressed(feedDir: feedDir, keyFile: keyFile, app: "story", version: "1.4.418",
                                   artifact: artifact, kind: "fake-for-tests", allowSame: false,
                                   url: "https://example.test/artifacts/")
         let after = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey)
@@ -79,7 +79,7 @@ func feedLosslessTests() {
                "FL4 a signed publish keeps another app's current and previous rows")
         expect(after?.apps["story"]?.version == "1.4.418", "FL4 the published row is written as usual")
 
-        try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "media-studio", version: "0.1.123",
+        try FeedPublisher.publishAddressed(feedDir: feedDir, keyFile: keyFile, app: "media-studio", version: "0.1.123",
                                   artifact: artifact, kind: "fake-for-tests", allowSame: false,
                                   url: "https://example.test/artifacts/")
         let updated = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: key.publicKey)

@@ -6,6 +6,16 @@ lines. The **release body is not this file**: `packaging/release-push.sh --summa
 two-or-three-sentence summary, because the feed row is composed from the body and the Launcher card
 shows it.
 
+## 0.1.89 — 2026-11-27
+
+- **A tag is tied to the commit it was built from.** `khu feed` resolves each release's tag to its commit (peeling annotated tags), prints `<app> <tag> -> <commit>` every run, and refuses the whole publish when the release body's own `GATE PASS <app> <sha>` line names a different commit — a tag pointing anywhere else is a release whose bytes were never gated. A release target that is not in that commit's history is a printed warning, never a refusal.
+- **A re-created release cannot move a row it already serves.** When the same version comes back with a new date, unchanged sha, size and asset name are a note (`release re-created at … , artifact unchanged`, and `(repo recreated)` when the repository itself is younger than the served release); a different artifact under a published version is refused, because one published version is one artifact.
+- **`khu feed --pin <app>=<version>:<reason>`** builds one app's row from that exact published release for that run only. The reason is required and printed as `pinned: <app> <version> (<reason>)`, so a held row is explained rather than remembered. `--pin` is per run and never persisted; refusals name an unknown app, an invalid version, a missing `:reason` or a blank one, and a version the repo does not publish.
+- **An edited release body on an unchanged version is reported.** The row keeps the notes it serves and the run says the new text reaches it at the next version; `--refresh-notes` remains the only replacement, and only over the tool's own placeholder.
+- **`khu feed --help`** prints that command's own usage and exits 0, instead of the whole tool's list at exit 64.
+- **`FeedPublisher.publish` no longer takes a `url`.** The production path cannot name a row's address, which `khu feed` produces; a caller that must state one is the separate, named `publishAddressed(…, url:)`. Both share one implementation.
+- `OPEN-WORK.md` at the repository root: the open work for this repo, in the estate's shared shape, safe to publish.
+
 ## 0.1.88 — 2026-11-27
 
 - The background helper now restarts itself on a Mac that reads the public feed, which it had never done. It is meant to start a fresh process after 150 checks — each check costs a little memory the system never gives back — but the rule also required a check to have reached a publisher, and a public feed has no publisher to reach, so the rule could never fire here. Measured on this Mac: 255 checks in one process, 21 hours old, and no restart ever.
@@ -69,12 +79,3 @@ shows it.
 ## 0.1.80 — 2026-11-22
 
 - Publisher diagnostics report free and total disk space, the exact served feed fingerprint and timestamp, and the two installed updater fingerprints. Unavailable values are reported as unknown without interrupting feed service.
-
-## 0.1.79 — 2026-11-22
-
-- The helper no longer restarts itself after a check that failed. A failed check leaves nothing to preserve, and on the Studio server every check was failing at its status report, so it restarted 1,605 times in a row — the app that kept appearing.
-- It cannot restart twice with no successful check in between: the second attempt is refused, with one line in the log saying so, instead of another restart.
-- The Dock icon added in 0.1.63 stays, and now appears at most once per genuine restart: the 1,605 appearances were one failing check restarting for ever, and that is what this release stops.
-- The agent log begins each process with its transfer count and whether the last restart had a successful check, so "did it reset?" is answered by a line instead of a guess.
-- The status report now has its own 15-second ceiling and a line naming the address and the reason when it fails, and the first check after a restart waits up to 30 seconds for the publisher's name before going ahead — a Mac that has just booted reaches its publisher instead of hanging on a name that is not answering yet.
-- The Download-previous-version control is scheduled for 0.1.80: this release is the restart fix alone, so a fault fix is not hidden behind a feature.

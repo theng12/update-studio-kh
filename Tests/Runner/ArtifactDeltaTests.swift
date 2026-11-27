@@ -58,9 +58,9 @@ func artifactDeltaTests() {
         try base.write(to: baseURL)
         try target.write(to: targetURL)
 
-        try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "fixture", version: "1.0.0",
+        try FeedPublisher.publishAddressed(feedDir: feedDir, keyFile: keyFile, app: "fixture", version: "1.0.0",
                                   artifact: baseURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/artifacts/")
-        try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "fixture", version: "1.0.1",
+        try FeedPublisher.publishAddressed(feedDir: feedDir, keyFile: keyFile, app: "fixture", version: "1.0.1",
                                   artifact: targetURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/artifacts/")
         let feed = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: pair.privateKey.publicKey)!
         let current = feed.apps["fixture"]!
@@ -298,9 +298,9 @@ func artifactDeltaTests() {
         let noiseBURL = root.appendingPathComponent("noise-b.dmg")
         try noiseA.write(to: noiseAURL)
         try noiseB.write(to: noiseBURL)
-        try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "noise", version: "1.0.0",
+        try FeedPublisher.publishAddressed(feedDir: feedDir, keyFile: keyFile, app: "noise", version: "1.0.0",
                                   artifact: noiseAURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/artifacts/")
-        try FeedPublisher.publish(feedDir: feedDir, keyFile: keyFile, app: "noise", version: "1.0.1",
+        try FeedPublisher.publishAddressed(feedDir: feedDir, keyFile: keyFile, app: "noise", version: "1.0.1",
                                   artifact: noiseBURL, kind: "fake-for-tests", allowSame: false, meta: nil, url: "https://example.test/artifacts/")
         let withNoise = try FeedPublisher.loadVerifiedFeed(from: feedDir, publicKey: pair.privateKey.publicKey)!
         expect(withNoise.apps["noise"]?.delta == nil, "AD11 a patch that saves nothing is not published")

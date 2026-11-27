@@ -93,7 +93,7 @@ struct KHUMain {
               keygen <dir>
               page --out <file> [--state <demo-state.json>]   (this build's Launcher page, with a state applied)
               publish --feed <dir> --key <keyfile> --app <id> --version <v> --artifact <path> --changelog <repo or CHANGELOG.md> [--note "<one extra line>"] [--kind <k>] [--type business|entertainment|extension|media|plugin|system|utility] [--name <shown name>] [--tagline <t>] [--description <d>] [--feature "Title|text"]... [--accent #hex] [--main-mac-only] [--allow-same] [--meta-only] [--keep <versions kept, 2 or more>] [--hold-url <loopback hold endpoint>] [--hold-since <first version serving it>] [--security] [--new-app]
-              feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>) [--refresh-notes <app>...] [--freeze <app>...]   (one row per app repo's latest published release, app=owner/repo per line; words from the tag's app-meta.json, else the registry; a row's asset comes from its registry entry, so one repo can publish two rows; --refresh-notes re-reads the release body of the named apps only, and only for a row whose notes are exactly the tool's placeholder; --freeze holds that app's row at the values the feed already serves, this run only)
+              feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>) [--refresh-notes <app>...] [--freeze <app>...] [--pin <app>=<version>:<reason>...]   (one row per app repo's latest published release, app=owner/repo per line; words from the tag's app-meta.json, else the registry; a row's asset comes from its registry entry, so one repo can publish two rows; --refresh-notes re-reads the release body of the named apps only, and only for a row whose notes are exactly the tool's placeholder; --freeze holds that app's row at the values the feed already serves, this run only; --pin builds that app's row from that exact published release, this run only, and states why; `khu feed --help` lists them all)
               retire --feed <dir> --key <keyfile> --app <id>   (removes the entry; its artifacts stay)
               network --feed <dir> --key <keyfile> --config <network.json>   (publish signed host/fallback settings)
               mirror --feed <dir> --key <keyfile> --out <file> --base <releases-url> --names <tsv> --apps <ids> [--current-only]   (a signed feed naming a release page's own assets; --current-only omits every previous entry)
@@ -124,6 +124,30 @@ struct KHUMain {
         func fail(_ message: String) -> Never {
             FileHandle.standardError.write(Data("error: \(message)\n".utf8))
             exit(1)
+        }
+        // `khu feed --help` answers the question without the whole tool's list, and exits 0: a help
+        // request is not an error.
+        func feedUsage() -> Never {
+            print("""
+            khu feed --repos <apps.txt> [--registry <words.json>] --key <keyfile> (--out <release.json> | --publish --repo <owner/name>)
+                     [--refresh-notes <app>...] [--freeze <app>...] [--pin <app>=<version>:<reason>...]
+
+              --repos <file>       app=owner/repo per line; `#` starts a comment
+              --registry <file>    words for an app whose tag carries no app-meta.json
+              --key <file>         signing key; the envelope is verified before it is written
+              --out <file>         write the signed feed here
+              --publish --repo <owner/name>
+                                   read the public feed, check the difference, then publish
+              --previous <file>    compare against this envelope instead of the public feed
+              --refresh-notes <app>...
+                                   re-read the release body for that app only, and only when its
+                                   notes are exactly the tool's placeholder
+              --freeze <app>...    hold that app's row at the values the feed already serves, this run
+              --pin <app>=<version>:<reason>
+                                   build that app's row from that exact published release, this run;
+                                   the reason is required and is printed, so a held row is explained
+            """)
+            exit(0)
         }
         // Opened as Studio Launcher KH.app: show the helper's window, or set the helper up first.
         // LaunchServices may pass a `-psn_...` argument on relaunch; treat it as an ordinary open.
@@ -307,11 +331,23 @@ struct KHUMain {
                     }
                     try FeedPublisher.verifyBacked(repo: repo, app: a, version: v, gh: GhReader())
                 }
-                try FeedPublisher.publish(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
-                                          version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
-                                          notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
-                                          holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep,
-                                          requireComplete: true, url: rowURL)
+                // `--url` names the row's address itself, which the production path never does: that
+                // is a different entry point, so the difference is visible at the call, not inside an
+                // optional argument. `khu feed` is the address's real producer.
+                if let rowURL {
+                    try FeedPublisher.publishAddressed(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
+                                                       version: v, artifact: URL(fileURLWithPath: art),
+                                                       kind: kind, allowSame: allowSame,
+                                                       notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
+                                                       holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep,
+                                                       requireComplete: true, url: rowURL)
+                } else {
+                    try FeedPublisher.publish(feedDir: feedDir, keyFile: URL(fileURLWithPath: k), app: a,
+                                              version: v, artifact: URL(fileURLWithPath: art), kind: kind, allowSame: allowSame,
+                                              notes: notes, displayName: shown, words: wordsGiven ? words : nil, mainMacOnly: mainOnly,
+                                              holdURL: hold, holdSince: holdSince, security: security, type: type, keep: keep,
+                                              requireComplete: true)
+                }
                 print("published \(a) \(v)")
             } catch { fail("\(error)") }
         case "feed":
@@ -322,6 +358,7 @@ struct KHUMain {
             var publishFlag = false
             var refreshNotes: Set<String> = []
             var frozen: Set<String> = []
+            var pins: [FeedPin] = []
             var i = 1
             while i < args.count {
                 switch args[i] {
@@ -333,6 +370,13 @@ struct KHUMain {
                 case "--publish": publishFlag = true
                 case "--repo": publishRepo = value("--repo", &i)
                 case "--freeze": frozen.insert(value("--freeze", &i))
+                case "--pin":
+                    let raw = value("--pin", &i)
+                    guard let pin = FeedPin.parse(raw) else {
+                        fail("--pin is <app>=<version>:<reason>, not \(raw) — every part is required, and the reason is why the row is held")
+                    }
+                    pins.append(pin)
+                case "--help", "-h": feedUsage()
                 case "--refresh-notes":
                     var named: [String] = []
                     while i + 1 < args.count, !args[i + 1].hasPrefix("--") { named.append(args[i + 1]); i += 1 }
@@ -380,8 +424,11 @@ struct KHUMain {
                         } catch { fail("refused: cannot read the public feed to compare against (\(error)); nothing was published") }
                     }
                     let made = try FeedGenerator.generate(apps: apps, registry: registry, previous: previousPublic,
-                                                          gh: GhReader(), refreshNotes: refreshNotes, frozen: frozen)
+                                                          gh: GhReader(), refreshNotes: refreshNotes, frozen: frozen,
+                                                          pins: pins)
                     let feed = made.feed
+                    for line in made.pinned { print(line) }
+                    for line in made.tags { print("tag: \(line)") }
                     for (app, row) in feed.apps.sorted(by: { $0.key < $1.key }) {
                         print("row: \(app) \(row.version) \(row.file); words \(made.sources[app] ?? "unknown")")
                     }
