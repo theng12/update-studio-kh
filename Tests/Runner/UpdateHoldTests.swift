@@ -1167,4 +1167,43 @@ func updateHoldTests() {
         expect(htmlAfter.contains("0 Macs below hold (0.6.240)"),
                "UH50 Fleet says when zero Macs remain below holdSince")
     }
+
+    // UH38–UH40 (issue `20261124-90`): six apps keep their own copy of the token, printed in their
+    // bundle's `KHHoldTokenFile`, and never read the Launcher's shared file — which the agent
+    // rotates on every start. The app's own file is presented, and a rotation of the shared one
+    // does not touch it; a missing own file falls back to the shared credential, never to none.
+    do {
+        // The rotation below is against this test's own temp file, never the live helper's token.
+        let sharedFile = tmpDir("hold-app-token-shared").appendingPathComponent("hold-token").path
+        setenv("KHU_HOLD_TOKEN_FILE", sharedFile, 1)
+        defer { setenv("KHU_HOLD_TOKEN_FILE", tokenPath, 1) }
+        let root = tmpDir("hold-app-token")
+        let app = root.appendingPathComponent("Gated.app")
+        try! fm.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        let own = root.appendingPathComponent("own-token")
+        let plist: [String: Any] = ["CFBundleIdentifier": "com.example.gated", "CFBundleExecutable": "Gated",
+                                    "CFBundleShortVersionString": "1.0.0", "KHHoldTokenFile": own.path]
+        try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Contents/Info.plist"))
+        _ = UpdateHold.localToken()
+        try! Data(String(repeating: "c", count: 64).utf8).write(to: own, options: .atomic)
+        let ownToken = String(repeating: "c", count: 64)
+        expect(UpdateHold.credentialHeaders(bundlePath: app.path)["X-Hub-Token"] == ownToken
+               && UpdateHold.credentialFile(bundlePath: app.path) == own,
+               "UH38 an app's own KHHoldTokenFile is the credential it is presented")
+        _ = UpdateHold.rotateToken()
+        expect(UpdateHold.credentialHeaders(bundlePath: app.path)["X-Hub-Token"] == ownToken,
+               "UH39 rotating the shared file does not change an app's own credential")
+        try! fm.removeItem(at: own)
+        expect(UpdateHold.credentialHeaders(bundlePath: app.path)["X-Hub-Token"] == UpdateHold.localToken()
+               && UpdateHold.credentialHeaders(bundlePath: nil)["X-Hub-Token"] == UpdateHold.localToken(),
+               "UH40 a missing own file falls back to the shared credential, and so does a bundle that names none")
+        let plain = root.appendingPathComponent("Plain.app")
+        try! fm.createDirectory(at: plain.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try! PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.plain"],
+                                           format: .xml, options: 0)
+            .write(to: plain.appendingPathComponent("Contents/Info.plist"))
+        expect(UpdateHold.credentialFile(bundlePath: plain.path) == UpdateHold.tokenFile,
+               "UH40 a bundle that names no KHHoldTokenFile uses the shared file")
+    }
 }

@@ -177,6 +177,20 @@ final class NoNetworkHTTP: HTTPClient, @unchecked Sendable {
     func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int { throw URLError(.cannotConnectToHost) }
 }
 
+/// Answers 404 to everything and remembers what was asked, so a test can prove a path made no
+/// request at all — a swallowed failure would otherwise look exactly like not trying.
+final class RequestLoggingHTTP: HTTPClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked: [String] = []
+    var requests: [String] { lock.lock(); defer { lock.unlock() }; return asked }
+    func get(_ url: URL, headers: [String: String]) throws -> (Data, Int) {
+        lock.lock(); asked.append(url.absoluteString); lock.unlock()
+        return (Data(), 404)
+    }
+    func post(_ url: URL, headers: [String: String], body: Data) throws -> (Data, Int) { (Data(), 404) }
+    func download(_ url: URL, headers: [String: String], to file: URL, limit: Int64) throws -> Int { 404 }
+}
+
 struct RecipeRig {
     let root: URL, apps: URL, installed: URL, mount: URL, state: URL
     let shell: RecordingShell
@@ -2549,7 +2563,8 @@ func launcherTests() {
         expect(media?.managed == false && media?.installed == nil && media?.available == "0.1.102" && media?.source == "KH-TEST" && media?.name == "Media Studio KH",
                "L4 an app on offer shows its name, newest version and source, and is not managed yet")
     }
-    // L7. After the SSD is unplugged, what it said stays: "updates itself" and the icon; nothing becomes installable.
+    // L7. After the SSD is unplugged, what it said stays: "updates itself" and its name; nothing becomes
+    // installable. The icon is the installed bundle now, so an SSD copy that is gone cannot blank the tile.
     do {
         let rig = Rig("seen")
         let apps = rig.root.appendingPathComponent("Applications")
@@ -2564,9 +2579,9 @@ func launcherTests() {
         _ = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server), ssd: [source], appFolders: [apps])
         let later = try? Agent.runOnce(config: cfg, http: InProcessClient(server: rig.server), appFolders: [apps])
         let gw = later?.apps.first { $0.app == "gateway" }
-        expect(gw?.statusOnly == true && gw?.name == "Gateway Studio KH" && gw?.icon?.hasSuffix("icons/com.t.gw.png") == true
-               && gw.flatMap { $0.icon.flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) } } == Data("icon".utf8),
-               "L7 with the SSD gone, an app it marked keeps updating itself, its name and its cached icon")
+        expect(gw?.statusOnly == true && gw?.name == "Gateway Studio KH"
+               && gw?.icon == apps.appendingPathComponent("Gw.app").path,
+               "L7 with the SSD gone, an app it marked keeps updating itself, its name, and its own icon")
         expect(later?.apps.contains { $0.app == "story" } == false, "L7 an app only an unplugged SSD had is not listed: there is nothing to install")
     }
     // L8. Pause holds a real download where it is; resume finishes it; cancel stops it and rejects nothing.
@@ -3124,6 +3139,73 @@ func helperTests() {
                                   stateDir: URL(fileURLWithPath: cfg9.stateDir))
         expect(rows.first { $0.app == "demo" }?.ssdNote == nil,
                "H9g a copy that can be used carries no refusal to show")
+    }
+    // H9h. Drawing the list never touches the network. A feed icon this Mac has not cached is fetched
+    // by the window after the rows are on screen; inside the run it was one request per row, so on a
+    // cold network the window showed nothing for minutes (measured 2026-11-27: 4.4 s here, but a
+    // request that hangs is allowed a minute each, and the rows are only sent at the end of the run).
+    do {
+        let rig = Rig("h9h")
+        var served = FeedApp(version: "2.0.0", file: "demo.dmg", sha256: String(repeating: "a", count: 64),
+                             bytes: 42, kind: "app-dmg")
+        served.url = "https://github.com/o/demo-kh/releases/download/2.0.0/demo.dmg"
+        served.name = "Demo Studio KH"; served.bundleID = "com.example.demo"; served.type = "utility"
+        served.tagline = "t"; served.description = "d"
+        served.icon = "a1b2dd8452e4-icon.png"
+        served.iconSha256 = "a1b2dd8452e4"
+        let stateDir = rig.root.appendingPathComponent("h9h-state")
+        try! fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let cfg = agentConfig(rig, token: "unused", apps: ["demo": AppConfig(bundlePath: rig.root.appendingPathComponent("H.app").path, recipe: "fake-for-tests")])
+        _ = makeApp(URL(fileURLWithPath: cfg.apps["demo"]!.bundlePath), version: "2.0.0", id: "com.example.demo")
+        // The client answers 404 to everything and records what it was asked: a request that was
+        // attempted is visible even though its failure would have been swallowed.
+        let recorder = RequestLoggingHTTP()
+        let rows = Agent.snapshot(config: cfg, feed: Feed(published_at: ISO.string(Date()), apps: ["demo": served]),
+                                  catalog: [], orders: CommandsReply(machine: "mac1", commands: [], automatic: [:]),
+                                  helper: HelperSettings(), memory: AgentMemory(), executable: nil,
+                                  http: recorder, serverBase: URL(string: "https://theng12.github.io/kh-releases")!,
+                                  stateDir: stateDir)
+        let row = rows.first { $0.app == "demo" }
+        expect(row?.icon?.contains("icons/a1b2dd8452e4-icon.png") == false,
+               "H9h a feed icon this Mac has not cached is not drawn while drawing the list (\(row?.icon ?? "nil"))")
+        expect(recorder.requests.isEmpty,
+               "H9h drawing the list made no request at all (\(recorder.requests))")
+        // And an icon this Mac does hold is still used, from disk, with no request: the cache is not lost.
+        let cached = stateDir.appendingPathComponent("icons").appendingPathComponent("a1b2dd8452e4-icon.png")
+        try! fm.createDirectory(at: cached.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        try! png.write(to: cached)
+        let sha = Signing.sha256Hex(png)
+        var known = served
+        known.icon = "a1b2dd8452e4-icon.png"; known.iconSha256 = sha
+        let again = Agent.snapshot(config: cfg, feed: Feed(published_at: ISO.string(Date()), apps: ["demo": known]),
+                                   catalog: [], orders: CommandsReply(machine: "mac1", commands: [], automatic: [:]),
+                                   helper: HelperSettings(), memory: AgentMemory(), executable: nil,
+                                   http: NoNetworkHTTP(), serverBase: URL(string: "https://theng12.github.io/kh-releases")!,
+                                   stateDir: stateDir)
+        // An app this Mac does not have, whose feed icon is already on disk: drawn from disk, no request.
+        let away = agentConfig(rig, token: "unused", apps: ["demo": AppConfig(bundlePath: rig.root.appendingPathComponent("NotHere.app").path, recipe: "fake-for-tests")])
+        let fromDisk = Agent.snapshot(config: away, feed: Feed(published_at: ISO.string(Date()), apps: ["demo": known]),
+                                      catalog: [], orders: CommandsReply(machine: "mac1", commands: [], automatic: [:]),
+                                      helper: HelperSettings(), memory: AgentMemory(), executable: nil,
+                                      http: NoNetworkHTTP(), serverBase: URL(string: "https://theng12.github.io/kh-releases")!,
+                                      stateDir: stateDir)
+        expect(fromDisk.first { $0.app == "demo" }?.icon == cached.path,
+               "H9h an icon this Mac already holds is used with no request (\(fromDisk.first { $0.app == "demo" }?.icon ?? "nil"))")
+        // H9i. What the window draws from: the installed bundle first, an icon path only while the
+        // file is really there (an unplugged SSD's path is not a picture), then the cached feed icon.
+        let gone = rig.root.appendingPathComponent("unplugged/ATLAS/.apps-icons/com.example.demo.png")
+        expect(Agent.iconFile(named: gone.path, bundle: nil, feed: known, stateDir: stateDir) == cached.path,
+               "H9i an icon path whose file is gone is not drawn; the cached feed icon is")
+        expect(Agent.iconFile(named: gone.path, bundle: cfg.apps["demo"]!.bundlePath, feed: known, stateDir: stateDir)
+                == cfg.apps["demo"]!.bundlePath,
+               "H9i an installed bundle is drawn from its own bundle, whatever the row's icon path says")
+        // An installed row carries the bundle's own icon, not a remembered path from a drive that left.
+        expect(again.first { $0.app == "demo" }?.icon == cfg.apps["demo"]!.bundlePath,
+               "H9i the installed row's icon is its bundle (\(again.first { $0.app == "demo" }?.icon ?? "nil"))")
+        // Nothing to draw is the placeholder, never a path that does not exist.
+        expect(Agent.iconFile(named: gone.path, bundle: nil, feed: nil, stateDir: stateDir) == nil,
+               "H9i with no bundle, no file and no feed icon the row draws the placeholder")
     }
     // H8. The apps that update themselves are listed under Apps & updates with the newest version a Mac has.
     do {

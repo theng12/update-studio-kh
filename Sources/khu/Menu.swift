@@ -35,6 +35,11 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
     var feedAppIDs: Set<String>?
     var feedPublishedAt: String?
     var checkedFeedSource: String?
+    /// Only the feed rows that name artwork, plus the base it was read from, so the window can
+    /// fetch an icon the run did not (it never asks the network while drawing the list — see
+    /// `Agent.cachedFeedIcon`). The rest of the feed is not kept: nothing draws from it.
+    var feedIcons: [String: FeedApp]?
+    var feedBase: URL?
     var lastDriveScan: Date?
     var window: LauncherWindow?
     var fleetWindow: FleetWindow?
@@ -125,6 +130,10 @@ final class HelperMenu: NSObject, NSMenuDelegate, NSApplicationDelegate, @unchec
         feedAppIDs = serverKnown ? result?.feedAppIDs : nil
         feedPublishedAt = serverKnown ? result?.feedPublishedAt : nil
         checkedFeedSource = serverKnown ? result?.checkedFeedSource : nil
+        // Kept only for a run that really read a signed feed: a window must never draw artwork a
+        // failed check did not prove.
+        feedIcons = serverKnown ? result?.feedIcons : nil
+        feedBase = serverKnown ? result?.feedBase : nil
         lastAttempt = Date()
         if serverKnown { lastRun = lastAttempt }
         let ready = apps.filter { $0.managed && !$0.statusOnly && $0.status == HelperApp.updateAvailable }

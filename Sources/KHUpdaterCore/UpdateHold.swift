@@ -95,8 +95,33 @@ public enum UpdateHold {
         return token
     }
 
-    static func credentialHeaders() -> [String: String] {
-        guard let token = localToken() else { return [:] }
+    /// The credential an app's own hold expects. Six apps keep their own copy of the token, printed
+    /// in their bundle's `KHHoldTokenFile`, and never read the Launcher's shared file — so the shared
+    /// one is rotated by every agent start while theirs stays put (issue `20261124-90`: after one
+    /// rotation each of those apps refused every hold). The app's own file is read first, with `~`
+    /// expanded; an app whose plist names none keeps the shared credential exactly as before.
+    public static func credentialFile(bundlePath: String?) -> URL {
+        guard let bundlePath, let plist = Bundle(path: bundlePath)?.infoDictionary,
+              let named = plist["KHHoldTokenFile"] as? String,
+              !named.trimmingCharacters(in: .whitespaces).isEmpty else { return tokenFile }
+        return URL(fileURLWithPath: (named as NSString).expandingTildeInPath)
+    }
+
+    static func token(at url: URL) -> String? {
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let mode = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.posixPermissions] as? NSNumber
+        if mode?.intValue != 0o600 { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        return text
+    }
+
+    static func credentialHeaders(bundlePath: String? = nil) -> [String: String] {
+        // The app's own file when its plist names one and the file is readable, else the shared one
+        // — the agreed fallback. A named file that is not there yet (Wire's is missing on this Mac,
+        // 2026-11-27) must not leave the hold with no credential at all.
+        let token = token(at: credentialFile(bundlePath: bundlePath)) ?? localToken()
+        guard let token else { return [:] }
         return ["X-Hub-Token": token, "Authorization": "Bearer \(token)"]
     }
 
@@ -121,11 +146,11 @@ public enum UpdateHold {
     /// `deadline` is the caller's own deadline (an install's window), not the contract's: with no
     /// deadline the request gets `answerAllowance`.
     public static func begin(_ endpoint: URL, http: HTTPClient, timeoutS: Int = 20, pauseS: Int = 120,
-                             deadline: Date? = nil) throws -> Reply {
+                             deadline: Date? = nil, bundlePath: String? = nil) throws -> Reply {
         let timeout = max(0, min(Int(settleWindow), timeoutS))
         let url = endpoint.appendingQuery("timeout_s", "\(timeout)").appendingQuery("pause_s", "\(max(1, pauseS))")
         let wait = max(1, min(answerAllowance, deadline?.timeIntervalSinceNow ?? answerAllowance))
-        let (data, code) = try http.post(url, headers: credentialHeaders(), body: Data(), timeout: wait)
+        let (data, code) = try http.post(url, headers: credentialHeaders(bundlePath: bundlePath), body: Data(), timeout: wait)
         guard code == 200 else { throw Refused(status: code) }
         guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
             throw khuFail("the app's update hold did not answer with the contract's reply; nothing was changed")
@@ -155,7 +180,7 @@ public enum UpdateHold {
 
     /// Best effort: the pause is in-memory and expires by itself, so a failed DELETE never leaves
     /// an app that has stopped taking work.
-    public static func resume(_ endpoint: URL, http: HTTPClient) {
-        _ = try? http.delete(endpoint, headers: credentialHeaders(), timeout: answerAllowance)
+    public static func resume(_ endpoint: URL, http: HTTPClient, bundlePath: String? = nil) {
+        _ = try? http.delete(endpoint, headers: credentialHeaders(bundlePath: bundlePath), timeout: answerAllowance)
     }
 }

@@ -6,6 +6,14 @@ lines. The **release body is not this file**: `packaging/release-push.sh --summa
 two-or-three-sentence summary, because the feed row is composed from the body and the Launcher card
 shows it.
 
+## 0.1.90 — 2026-11-27
+
+- **The app list no longer waits for artwork.** Each check used to fetch every feed icon it did not already hold, one after another, before the window could draw its first row: on a cold network that is a minute per missing icon, which is how a fresh Mac sat on “Checking…” for minutes. The list is now drawn from what the Mac already has, and the missing icons are fetched afterwards, one at a time, each with its own short ceiling. A slow or dead network costs a placeholder, never the list.
+- **An installed app always shows its own icon.** A remembered icon path from an unplugged drive, or one that no longer exists, was drawn as a blank tile even with the app sitting right there; the bundle that is really installed now comes first.
+- **An icon that arrives late replaces its placeholder.** The window keeps the picture it drew only while the same file backs it, so a row that started blank redraws itself when its artwork is fetched.
+- **Each app's update hold uses that app's own credential.** Six apps keep their token in the file their own bundle names, and the Launcher used to rotate a different shared file on every start — so those apps refused every automatic update after one rotation. The app's own file is read first (with `~` expanded); the shared credential is used when it is missing or the bundle names none. Storage 0.1.26 names no file and keeps the shared fallback.
+- **Relay updates under the id the feed publishes.** A kit can register Relay as `relay` while the feed calls it `relay-studio`; the old id was folded only for drawing, not for the run, so the update refused the same bundle as two apps. The same fold now happens before validation and before the work loop, dropping the old entry rather than adding a second, and the run processes the feed's id once.
+
 ## 0.1.89 — 2026-11-27
 
 - **A tag is tied to the commit it was built from.** `khu feed` resolves each release's tag to its commit (peeling annotated tags), prints `<app> <tag> -> <commit>` every run, and refuses the whole publish when the release body's own `GATE PASS <app> <sha>` line names a different commit — a tag pointing anywhere else is a release whose bytes were never gated. A release target that is not in that commit's history is a printed warning, never a refusal.

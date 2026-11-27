@@ -1,0 +1,7 @@
+Studio Launcher KH 0.1.90
+
+- The app list now appears straight away instead of waiting for every app's picture. Before, a fresh Mac could sit on “Checking…” for minutes while the picture for each app was fetched one after another; the list is drawn first and the missing pictures arrive afterwards, each with a short time limit of its own.
+- An installed app always shows its own icon now. A remembered icon from a drive that is no longer plugged in used to leave the tile blank even with the app sitting right there.
+- A tile that starts blank fills in by itself when its picture arrives, without the list being redrawn from scratch.
+- Apps that keep their own update credential use it now. The Launcher used to rotate a different credential at every start, which made those apps refuse their automatic updates after one restart; an app's own file is used first, and the shared one is the fallback when there is no own file.
+- Relay now updates under the same app id the feed publishes. An older setup registered the same app under a different name, so the update saw one bundle as two apps and refused; the old registration is folded away before the run, and the app updates once.
