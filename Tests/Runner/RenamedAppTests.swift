@@ -83,4 +83,82 @@ func renamedAppTests() {
            "RA6 the fold is saved: the old id is gone, the feed's id carries the entry, and the rest is untouched")
     expect(Agent.foldConfig(&persisted, stateDir: rig.state, ssd: []).isEmpty,
            "RA6 a second run finds nothing to fold")
+
+    // RA7 (owner via S001, 2026-11-27): the normal agent entry point, on a Mac whose seen-cache is
+    // cold, with a kit still keyed `relay`, a signed feed publishing `relay-studio`, and the
+    // person's Automatic switched off. One run must fold before the work and select the feed's id
+    // once — the old id is not a second app, and the explicit off survives the move.
+    do {
+        let runRig = Rig("fold-run")
+        let relay = makeApp(runRig.root.appendingPathComponent("Applications/Relay Studio KH.app"),
+                            version: "0.3.41", id: "kh.relay.desktop")
+        try! FeedPublisher.publishAddressed(feedDir: runRig.feed, keyFile: runRig.key, app: "relay-studio", version: "0.3.41",
+                                            artifact: runRig.artifact("relay.dmg", "relay-bytes"), kind: "app-dmg", allowSame: false,
+                                            meta: { _ in AppMeta(name: "Relay Studio KH", bundleID: "kh.relay.desktop",
+                                                                 bundleName: "Relay Studio KH.app", version: "0.3.41", iconPNG: Data()) },
+                                            holdURL: nil, url: "https://example.test/artifacts/")
+        let token = try! Enrolment.enrol(stateDir: runRig.state, machine: "mac1")
+        var cfg = agentConfig(runRig, token: token,
+                              apps: ["relay": AppConfig(bundlePath: relay.path, recipe: "app-dmg", automatic: false)])
+        cfg.stateDir = runRig.state.path
+        let file = runRig.root.appendingPathComponent("config.json")
+        try! JSONSerialization.data(withJSONObject: [
+            "feedURL": cfg.feedURL, "publicKey": cfg.publicKey, "machine": "mac1", "stateDir": cfg.stateDir,
+            "token": token, "intervalMinutes": 5, "once": true,
+            "apps": ["relay": ["bundlePath": relay.path, "recipe": "app-dmg", "automatic": false]],
+        ], options: [.prettyPrinted]).write(to: file)
+        let result = try! Agent.runOnce(config: cfg, http: InProcessClient(server: runRig.server), ssd: [],
+                                        appFolders: [], configFile: file)
+        let saved = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]
+        let savedApps = saved?["apps"] as? [String: [String: Any]]
+        expect(result.notes.contains { $0.hasPrefix("relay: folded") }
+               && result.apps.filter { $0.app == "relay" }.isEmpty
+               && result.apps.first { $0.app == "relay-studio" }?.installed == "0.3.41",
+               "RA7 one normal run selects the feed's id once on a cold seen-cache")
+        expect(savedApps?["relay"] == nil && savedApps?["relay-studio"]?["bundlePath"] as? String == relay.path
+               && savedApps?["relay-studio"]?["automatic"] as? Bool == false,
+               "RA7 the fold is saved and an explicit Automatic off survives it")
+    }
+
+    // RA8 the collision: the kit's `relay` and the feed's `relay-studio` both configured for the same
+    // bundle, with the older entry's explicit Automatic off and the target's entry set to on. One
+    // run must keep the feed's id and the person's off — not the registration's on.
+    do {
+        let runRig = Rig("fold-collision")
+        let relay = makeApp(runRig.root.appendingPathComponent("Applications/Relay Studio KH.app"),
+                            version: "0.3.41", id: "kh.relay.desktop")
+        try! FeedPublisher.publishAddressed(feedDir: runRig.feed, keyFile: runRig.key, app: "relay-studio", version: "0.3.41",
+                                            artifact: runRig.artifact("relay.dmg", "relay-bytes"), kind: "app-dmg", allowSame: false,
+                                            meta: { _ in AppMeta(name: "Relay Studio KH", bundleID: "kh.relay.desktop",
+                                                                 bundleName: "Relay Studio KH.app", version: "0.3.41", iconPNG: Data()) },
+                                            holdURL: nil, url: "https://example.test/artifacts/")
+        try! AtomicFile.writeJSON(["kh.relay.desktop": SSDApp(id: "relay-studio", name: "Relay Studio KH",
+                                                          version: "0.3.41", bundleID: "kh.relay.desktop",
+                                                          updatesItself: false)],
+                              to: Catalog.seenFile(in: runRig.state))
+        let token = try! Enrolment.enrol(stateDir: runRig.state, machine: "mac1")
+        var cfg = agentConfig(runRig, token: token, apps: [
+            "relay": AppConfig(bundlePath: relay.path, recipe: "app-dmg", automatic: false),
+            "relay-studio": AppConfig(bundlePath: relay.path, recipe: "app-dmg", automatic: true),
+        ])
+        cfg.stateDir = runRig.state.path
+        let file = runRig.root.appendingPathComponent("config.json")
+        try! JSONSerialization.data(withJSONObject: [
+            "feedURL": cfg.feedURL, "publicKey": cfg.publicKey, "machine": "mac1", "stateDir": cfg.stateDir,
+            "token": token, "intervalMinutes": 5, "once": true,
+            "apps": ["relay": ["bundlePath": relay.path, "recipe": "app-dmg", "automatic": false],
+                     "relay-studio": ["bundlePath": relay.path, "recipe": "app-dmg", "automatic": true]],
+        ], options: [.prettyPrinted]).write(to: file)
+        let result = try! Agent.runOnce(config: cfg, http: InProcessClient(server: runRig.server), ssd: [],
+                                        appFolders: [], configFile: file)
+        let saved = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file))) as? [String: Any]
+        let savedApps = saved?["apps"] as? [String: [String: Any]]
+        expect(result.notes.contains { $0.hasPrefix("relay: folded") }
+               && result.apps.filter { $0.app == "relay" }.isEmpty
+               && result.apps.first { $0.app == "relay-studio" }?.installed == "0.3.41",
+               "RA8 one run keeps the feed's id when both ids are configured for the bundle")
+        expect(savedApps?["relay"] == nil && savedApps?["relay-studio"]?["automatic"] as? Bool == false
+               && savedApps?["relay-studio"]?["bundlePath"] as? String == relay.path,
+               "RA8 the older entry's explicit Automatic off survives onto the feed's id")
+    }
 }

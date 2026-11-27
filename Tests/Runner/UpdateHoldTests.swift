@@ -985,7 +985,7 @@ func updateHoldTests() {
         _ = try? UpdateHold.begin(endpoint, http: client, timeoutS: 0)
         expect(client.seenURL?.query?.contains("timeout_s=0") == true && client.seen <= UpdateHold.answerAllowance,
                "UH11 a renew sends timeout_s=0 and is still bounded (\(client.seenURL?.query ?? "nil"))")
-        UpdateHold.resume(endpoint, http: client)
+        try? UpdateHold.resume(endpoint, http: client)
     }
 
     // UH51 a real endpoint that settles for 20.2 s and refuses reaches the caller as the app's own
@@ -1170,40 +1170,92 @@ func updateHoldTests() {
 
     // UH38–UH40 (issue `20261124-90`): six apps keep their own copy of the token, printed in their
     // bundle's `KHHoldTokenFile`, and never read the Launcher's shared file — which the agent
-    // rotates on every start. The app's own file is presented, and a rotation of the shared one
-    // does not touch it; a missing own file falls back to the shared credential, never to none.
+    // rotates on every start. The rule is three-way: no key means the shared file; a key means that
+    // file only; a key whose file is missing or unusable makes no request and names the file.
     do {
         // The rotation below is against this test's own temp file, never the live helper's token.
         let sharedFile = tmpDir("hold-app-token-shared").appendingPathComponent("hold-token").path
         setenv("KHU_HOLD_TOKEN_FILE", sharedFile, 1)
         defer { setenv("KHU_HOLD_TOKEN_FILE", tokenPath, 1) }
         let root = tmpDir("hold-app-token")
-        let app = root.appendingPathComponent("Gated.app")
-        try! fm.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        func bundle(_ name: String, plist: [String: Any]) -> URL {
+            let app = root.appendingPathComponent(name)
+            try! fm.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+            try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+                .write(to: app.appendingPathComponent("Contents/Info.plist"))
+            return app
+        }
         let own = root.appendingPathComponent("own-token")
-        let plist: [String: Any] = ["CFBundleIdentifier": "com.example.gated", "CFBundleExecutable": "Gated",
-                                    "CFBundleShortVersionString": "1.0.0", "KHHoldTokenFile": own.path]
-        try! PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-            .write(to: app.appendingPathComponent("Contents/Info.plist"))
+        let app = bundle("Gated.app", plist: ["CFBundleIdentifier": "com.example.gated", "CFBundleExecutable": "Gated",
+                                              "CFBundleShortVersionString": "1.0.0", "KHHoldTokenFile": own.path])
         _ = UpdateHold.localToken()
         try! Data(String(repeating: "c", count: 64).utf8).write(to: own, options: .atomic)
         let ownToken = String(repeating: "c", count: 64)
-        expect(UpdateHold.credentialHeaders(bundlePath: app.path)["X-Hub-Token"] == ownToken
-               && UpdateHold.credentialFile(bundlePath: app.path) == own,
+        func declaredFile(_ path: String?) -> URL? {
+            if case .success(.some(let url)) = UpdateHold.credentialFile(bundlePath: path) { return url }
+            return nil
+        }
+        expect((try? UpdateHold.credentialHeaders(bundlePath: app.path))?["X-Hub-Token"] == ownToken
+               && declaredFile(app.path) == own,
                "UH38 an app's own KHHoldTokenFile is the credential it is presented")
         _ = UpdateHold.rotateToken()
-        expect(UpdateHold.credentialHeaders(bundlePath: app.path)["X-Hub-Token"] == ownToken,
+        expect((try? UpdateHold.credentialHeaders(bundlePath: app.path))?["X-Hub-Token"] == ownToken,
                "UH39 rotating the shared file does not change an app's own credential")
+
+        // UH39b a declared but missing file makes no request at all, and says which file. The shared
+        // token is never sent in its place — the app only checks its own file, so that would hide it.
+        let r = Rig("hold-app-token-endpoint")
+        let client = HoldClient(InProcessClient(server: r.server))
+        let endpoint = URL(string: holdURL)!
         try! fm.removeItem(at: own)
-        expect(UpdateHold.credentialHeaders(bundlePath: app.path)["X-Hub-Token"] == UpdateHold.localToken()
-               && UpdateHold.credentialHeaders(bundlePath: nil)["X-Hub-Token"] == UpdateHold.localToken(),
-               "UH40 a missing own file falls back to the shared credential, and so does a bundle that names none")
-        let plain = root.appendingPathComponent("Plain.app")
-        try! fm.createDirectory(at: plain.appendingPathComponent("Contents"), withIntermediateDirectories: true)
-        try! PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.plain"],
-                                           format: .xml, options: 0)
-            .write(to: plain.appendingPathComponent("Contents/Info.plist"))
-        expect(UpdateHold.credentialFile(bundlePath: plain.path) == UpdateHold.tokenFile,
-               "UH40 a bundle that names no KHHoldTokenFile uses the shared file")
+        var missing: URL?
+        do { _ = try UpdateHold.begin(endpoint, http: client, bundlePath: app.path) }
+        catch UpdateHold.HoldCredential.unreadable(let url) { missing = url }
+        catch {}
+        expect(missing == own && client.calls.isEmpty,
+               "UH39b a declared but missing own credential makes no request and names the file")
+        // A symlink is never followed, and a directory is not a token file.
+        let real = root.appendingPathComponent("real-token")
+        try! Data(ownToken.utf8).write(to: real, options: .atomic)
+        try! fm.createSymbolicLink(at: own, withDestinationURL: real)
+        expect((try? UpdateHold.begin(endpoint, http: client, bundlePath: app.path)) == nil && client.calls.isEmpty,
+               "UH39b a symlinked credential file is refused without a request")
+        try! fm.removeItem(at: own)
+        try! fm.createDirectory(at: own, withIntermediateDirectories: true)
+        expect((try? UpdateHold.begin(endpoint, http: client, bundlePath: app.path)) == nil && client.calls.isEmpty,
+               "UH39b a directory named as the credential is refused without a request")
+        try! fm.removeItem(at: own)
+
+        // UH40b the value itself must be exactly one 64-hex token; every invalid shape makes no
+        // request, so a malformed file can never be presented as a credential.
+        for (name, value) in [("short", String(repeating: "a", count: 63)),
+                              ("non-hex", String(repeating: "z", count: 64)),
+                              ("internal-space", String(repeating: "a", count: 32) + " " + String(repeating: "a", count: 31)),
+                              ("oversize", String(repeating: "a", count: 513))] {
+            try! Data(value.utf8).write(to: own, options: .atomic)
+            let before = client.calls.count
+            expect((try? UpdateHold.begin(endpoint, http: client, bundlePath: app.path)) == nil
+                   && client.calls.count == before,
+                   "UH40b a \(name) credential value makes no request")
+        }
+        try! fm.removeItem(at: own)
+
+        // UH40 no key at all keeps the shared credential, and `~` in a declared path is expanded.
+        let plain = bundle("Plain.app", plist: ["CFBundleIdentifier": "com.example.plain"])
+        let namesNoFile: Bool
+        if case .success(nil) = UpdateHold.credentialFile(bundlePath: plain.path) { namesNoFile = true } else { namesNoFile = false }
+        expect(namesNoFile
+               && (try? UpdateHold.credentialHeaders(bundlePath: plain.path))?["X-Hub-Token"] == UpdateHold.localToken()
+               && (try? UpdateHold.credentialHeaders(bundlePath: nil))?["X-Hub-Token"] == UpdateHold.localToken(),
+               "UH40 a bundle that names no KHHoldTokenFile uses the shared file, and so does no bundle")
+        let tilde = bundle("Tilde.app", plist: ["CFBundleIdentifier": "com.example.tilde",
+                                                "KHHoldTokenFile": "~/Library/App Support/tok"])
+        if let expanded = declaredFile(tilde.path) {
+            expect(!expanded.path.hasPrefix("~")
+                   && expanded.path.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path + "/Library/App Support"),
+                   "UH40 a `~/` credential path is expanded before it is opened")
+        } else {
+            expect(false, "UH40 a `~/` credential path is expanded before it is opened")
+        }
     }
 }

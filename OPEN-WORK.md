@@ -21,9 +21,12 @@ History belongs in git log and receipts; failure patterns belong to the plugin's
   the list waiting on them and draws an installed app from its own bundle; it cannot invent artwork.
   **Next:** the feed producer publishes the icons the rows name — either beside each release's own
   assets or beside the feed, which `Agent.feedIcon` now tries — and rows with no icon field get one
-  from their app's bundle at publish time.
+  from their app's bundle at publish time. The feed build should also print one line per row whose
+  icon address does not answer anonymously (`icon: <app> <name> does not answer (404); its card
+  shows a placeholder`), so a row pointing at nothing is never silent.
 - [ ] **A rotate-then-hold readback on 1301 is still owed** — 0.1.90 reads each app's own
-  `KHHoldTokenFile` and falls back to the shared file when it is missing, but this Mac's config keys
-  only the updater, so nothing here proves the apps that keep their own credential still answer 200
-  after the shared token rotates. **Next:** on the Gateway testing Mac, rotate the shared token and
-  hold each of those apps with its own credential, then read back 200.
+  `KHHoldTokenFile`, refuses with the file's path when a declared file is missing, and uses the
+  shared file only when the plist names none. This Mac's config keys only the updater, so nothing
+  here proves the apps that keep their own credential still answer 200 after the shared token
+  rotates. **Next:** on the Gateway testing Mac, rotate the shared token and hold each of those
+  apps with its own credential, then read back 200.

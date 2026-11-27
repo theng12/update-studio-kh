@@ -81,7 +81,7 @@ func updateHoldLiveTests() {
         let reply = try beginLive(endpoint)
         expect(reply.safe && reply.inFlight == 2 && reply.pausedSeconds == 120,
                "HL2 the real client reads the contract's reply (\(reply))")
-        UpdateHold.resume(endpoint, http: URLSessionHTTPClient())
+        try? UpdateHold.resume(endpoint, http: URLSessionHTTPClient())
     } catch { expect(false, "HL2 the live hold failed: \(error)") }
     let deadline = Date().addingTimeInterval(5)
     while server.seen.count < 2, Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
