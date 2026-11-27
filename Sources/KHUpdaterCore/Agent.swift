@@ -18,6 +18,11 @@ public struct AgentRunResult: Sendable, Equatable {
     public var feedAppIDs: Set<String>?
     public var feedPublishedAt: String?
     public var checkedFeedSource: String?
+    /// Only the feed rows that name artwork, and the base it was read from: the window fetches an
+    /// icon this Mac does not hold after the rows are already on screen. The whole feed is not kept
+    /// — the window needs nothing else from it, and a list is not a reason to hold every note.
+    public var feedIcons: [String: FeedApp]?
+    public var feedBase: URL?
     /// Each app as the menu-bar icon shows it, from what is on disk after the run.
     public var apps: [HelperApp] = []
     public init(statusPosted: Bool = false, commandsRun: Int = 0, updates: Int = 0) {
@@ -758,11 +763,15 @@ public enum Agent {
         // Apps installed by hand since this Mac was set up are found by bundle ID and managed too.
         let stateURL = URL(fileURLWithPath: config.stateDir)
         var config = config
+        // Before anything counts or merges the config: an entry under an id the feed does not
+        // publish is folded onto the id that publishes its bundle, so a saved registration under
+        // the feed's id does not collide with it as "one app per bundle" (relay, 1301 2026-11-27).
+        let foldNotes = foldConfig(&config, stateDir: stateURL, ssd: ssd, file: configFile)
         // Saved registrations join the config before discovery, so an app adopted last run is not
         // found (and announced) again on every cycle.
         let savedRegistrations = try mergeRegistrations(config: config, stateDir: stateURL)
         config = savedRegistrations.config
-        let startingNotes = savedRegistrations.notes
+        let startingNotes = foldNotes + savedRegistrations.notes
         var repairNotes: [String] = [], adoptedIDs: [String] = []
         config.apps = Catalog.adopting(config.apps,
                                        discovered: Catalog.discover(config: config, known: Catalog.known(in: stateURL, ssd: ssd), folders: appFolders),
@@ -839,6 +848,9 @@ public enum Agent {
                           startupWaitSeconds: TimeInterval = StartupWait.maximumSeconds) throws -> AgentRunResult {
         DownloadControl.reset()
         var config = config
+        // The same fold as the pre-run, and before the registrations merge: a registration this Mac
+        // saved under the feed's id must not be refused as colliding with a kit's older id.
+        let foldNotes = foldConfig(&config, stateDir: stateDir, ssd: ssd, file: configFile)
         let mergedRegistrations = try mergeRegistrations(config: config, stateDir: stateDir)
         config = mergedRegistrations.config
         try validate(config)
@@ -884,7 +896,7 @@ public enum Agent {
             try AtomicFile.writeJSON(memory, to: memoryFile)
         }
         var result = AgentRunResult()
-        result.notes = startingNotes + registrationNotes + healed + startupNotes
+        result.notes = startingNotes + foldNotes + registrationNotes + healed + startupNotes
 
         // 0. Finish or undo any install a killed run left half done, before anything else.
         var interruptedOrders: [String: (app: String, journal: InstallJournal)] = [:]
@@ -1068,6 +1080,8 @@ public enum Agent {
                                   executable: executable, serverBase: serverBase, now: now, installing: installing, appFolders: appFolders, reinstall: reinstall, rollbacks: rollbacks, initialSSD: initialSSD, previousResult: result)
         }
         let feed = selected.feed
+        // The window fetches an uncached icon from these two after the rows are on screen.
+        result.feedIcons = feed.apps.filter { $0.value.icon != nil }; result.feedBase = selected.base
         result.feedAppIDs = Set(feed.apps.keys)
         result.feedPublishedAt = feed.published_at
         result.checkedFeedSource = Connect.sourceName(selected.base)
@@ -1124,6 +1138,24 @@ public enum Agent {
             }
         }
         Catalog.remember(ssd, feed: feed, in: stateDir)
+        // The signed feed's own ids, in hand at last: a run whose saved cache was cold could not
+        // fold a kit's older id before `validate`, so it is folded here, before registration and
+        // the update loop. The maps already built under the old id move with it — a folded app must
+        // not read as not installed and be installed a second time.
+        let preFold = config.apps
+        let lateFold = foldConfig(&config, stateDir: stateDir, ssd: ssd, file: configFile, feed: feed)
+        if !lateFold.isEmpty {
+            result.notes += lateFold
+            for (old, cfg) in preFold where config.apps[old] == nil {
+                guard let new = config.apps.first(where: { $0.value == cfg })?.key else { continue }
+                func move(_ map: inout [String: String]) {
+                    guard let value = map[old] else { return }
+                    map[new] = value
+                    map[old] = nil
+                }
+                move(&installed); move(&installedBuild); move(&installedExecutableSha256); move(&health)
+            }
+        }
         result.notes += adoptInstalledApps(config: &config, feed: feed, folders: appFolders, sparseConfig: sparseConfig,
                                            stateDir: stateDir)
         result.notes += repairConfiguredPaths(config: &config, feed: feed, folders: appFolders, stateDir: stateDir,
@@ -1590,17 +1622,118 @@ public enum Agent {
     /// installed" — the same app twice, both lines false (owner, 2026-11-25).
     static func foldRenamed(_ configs: [String: AppConfig], feed: Feed,
                             bundleID: (AppConfig) -> String?) -> [String: AppConfig] {
-        var feedIDByBundle: [String: String] = [:]
-        for (id, row) in feed.apps where row.bundleID != nil && feedIDByBundle[row.bundleID!] == nil {
-            feedIDByBundle[row.bundleID!] = id
+        foldRenamed(configs, feedIDs: Set(feed.apps.keys),
+                    feedIDByBundle: feed.apps.reduce(into: [:]) { map, row in
+                        guard let b = row.value.bundleID, map[b] == nil else { return }
+                        map[b] = row.key
+                    }, bundleID: bundleID)
+    }
+
+    /// The ids the signed feed publishes for each bundle, as this Mac last saw them: written by
+    /// `Catalog.remember` on every run that read a feed. Read this way because the fold has to happen
+    /// before the run validates and before the work loop iterates the config, and the feed itself is
+    /// not read until later in the run.
+    static func feedIDsByBundle(stateDir: URL, ssd: [SSDSource]) -> [String: String] {
+        var map: [String: String] = [:]
+        // Only ids this Mac saw from a verified feed or an SSD: `launcher-apps.json` also holds
+        // hand-saved aliases, and a stale one must not be mistaken for the id the feed publishes.
+        for app in Catalog.seen(in: stateDir) + ssd.flatMap(\.index.apps)
+        where !app.bundleID.isEmpty && map[app.bundleID] == nil {
+            map[app.bundleID] = app.id
         }
+        return map
+    }
+
+    /// The one fold: an entry under an id the feed does not publish is moved onto the id that
+    /// publishes its bundle, so one installed app is one row — and one piece of work. When both ids
+    /// are already there (a kit's old id beside the feed's own) the old one is dropped, so the run is
+    /// not refused as "one app per bundle"; the entry left is the one whose bundle is really here.
+    static func foldRenamed(_ configs: [String: AppConfig], feedIDs: Set<String>, feedIDByBundle: [String: String],
+                            bundleID: (AppConfig) -> String?) -> [String: AppConfig] {
         var folded = configs
-        for (id, cfg) in configs where feed.apps[id] == nil {
-            guard let bundle = bundleID(cfg), let target = feedIDByBundle[bundle], folded[target] == nil else { continue }
-            folded[target] = cfg
+        for (id, cfg) in configs where !feedIDs.contains(id) {
+            guard let bundle = bundleID(cfg), let target = feedIDByBundle[bundle] else { continue }
+            if let existing = folded[target] {
+                // The older entry carries the person's settings (including an explicit Automatic
+                // off); keep those, and only borrow the target's bundle path when the old one is
+                // gone. The feed's id is where the one surviving entry lives.
+                var merged = cfg
+                if !FileManager.default.fileExists(atPath: merged.bundlePath),
+                   FileManager.default.fileExists(atPath: existing.bundlePath) {
+                    merged.bundlePath = existing.bundlePath
+                }
+                if merged.bundleID == nil { merged.bundleID = existing.bundleID }
+                folded[target] = merged
+            } else {
+                folded[target] = cfg
+            }
             folded.removeValue(forKey: id)
         }
         return folded
+    }
+
+    /// The fold applied where the work happens, before anything validates or counts the config, and
+    /// written back into the saved config so it happens once rather than every run. Says what moved,
+    /// so a folded app is never a silent rename.
+    @discardableResult
+    static func foldConfig(_ config: inout AgentConfig, stateDir: URL, ssd: [SSDSource], file: URL? = nil,
+                           feed: Feed? = nil) -> [String] {
+        let before = config.apps
+        let idsByBundle: [String: String]
+        let feedIDs: Set<String>
+        if let feed {
+            // The signed feed in hand is the only authority: a stale cache entry for a bundle the
+            // feed does not publish is not a target to fold onto, and must not remove a local app.
+            feedIDs = Set(feed.apps.keys)
+            idsByBundle = feed.apps.reduce(into: [:]) { map, row in
+                if let bundle = row.value.bundleID { map[bundle] = row.key }
+            }
+        } else {
+            idsByBundle = feedIDsByBundle(stateDir: stateDir, ssd: ssd)
+            feedIDs = Set(idsByBundle.values)
+        }
+        config.apps = foldRenamed(config.apps, feedIDs: feedIDs, feedIDByBundle: idsByBundle) {
+            (try? BundleInfo.read($0.bundlePath))?.identifier
+        }
+        let moved = Set(before.keys).subtracting(config.apps.keys).sorted()
+        guard !moved.isEmpty else { return [] }
+        persistFolded(moved: moved, before: before, after: config.apps, file: file)
+        return moved.map {
+            "\($0): folded onto the id the feed publishes for its bundle, so it is one app and updates once"
+        }
+    }
+
+    /// The folded ids written into the live config: the old key goes and the feed's key takes that
+    /// entry, with every other key and the file's own mode untouched. A write that cannot be made
+    /// leaves the file as it was — the next run simply folds again.
+    static func persistFolded(moved: [String], before: [String: AppConfig], after: [String: AppConfig], file: URL?) {
+        let fm = FileManager.default
+        guard let file, fm.fileExists(atPath: file.path),
+              let data = try? Data(contentsOf: file),
+              var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              var apps = root["apps"] as? [String: [String: Any]] else { return }
+        for old in moved {
+            guard let entry = apps.removeValue(forKey: old),
+                  let target = after.first(where: { $0.value.bundlePath == before[old]?.bundlePath })?.key else { continue }
+            if var targetEntry = apps[target] {
+                // The older entry's policy wins over a feed registration's defaults; the raw target
+                // keeps every other key it already carried.
+                for key in ["recipe", "automatic", "bundleID", "idleProbe", "appearCeilingSeconds"] where entry[key] != nil {
+                    targetEntry[key] = entry[key]
+                }
+                if let path = entry["bundlePath"] as? String, FileManager.default.fileExists(atPath: path) {
+                    targetEntry["bundlePath"] = path
+                }
+                apps[target] = targetEntry
+            } else {
+                apps[target] = entry
+            }
+        }
+        root["apps"] = apps
+        guard let out = try? JSONSerialization.data(withJSONObject: root,
+                                                    options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return }
+        let mode = (try? fm.attributesOfItem(atPath: file.path))?[.posixPermissions] as? NSNumber
+        try? AtomicFile.write(out, to: file, permissions: mode?.uint16Value ?? 0o600)
     }
 
     /// Each app as it stands on disk now, for the menu-bar icon.
@@ -1715,8 +1848,13 @@ public enum Agent {
                 row.canRollBack = !only && FileManager.default.fileExists(atPath: Recipe.Paths(installedPath: cfg.bundlePath, stateDir: stateDir.path, app: app).rollback.path)
             }
             if let cfg, installed != nil, cfg.recipe != "updater" { row.bundlePath = cfg.bundlePath }
-            // The icon read from the app's own bundle (cached from an SSD or the feed), else the installed copy's.
-            row.icon = entry?.icon ?? feedIcon(feed.apps[app], http: http, serverBase: serverBase, stateDir: stateDir) ?? row.bundlePath
+            // The installed bundle wins, then a picture the row names while it still exists, then
+            // the feed icon already cached. A feed icon this Mac has not cached yet is never fetched
+            // here: one request per row inside
+            // the run, at up to a minute each on a cold network, is how the window showed nothing for
+            // minutes before its first row (measured 2026-11-27). `LauncherWindow` fetches those after
+            // the rows are on screen, so the list is never behind an icon.
+            row.icon = iconFile(named: entry?.icon, bundle: row.bundlePath, feed: feed.apps[app], stateDir: stateDir)
             // A retired app is not presented as current: the row says what it is, offers no update and
             // no Automatic switch, and is drawn only on a Mac that still has the bundle. Nothing is
             // removed for anyone — Uninstall stays a person's own click.
@@ -1741,18 +1879,43 @@ public enum Agent {
 
     /// The feed's icon for an app this Mac does not have, kept under `state/icons/` once its
     /// signed SHA-256 matches. Nil (a plain placeholder) when there is none or it does not match.
-    static func feedIcon(_ entry: FeedApp?, http: HTTPClient, serverBase: URL, stateDir: URL) -> String? {
+    public static func feedIcon(_ entry: FeedApp?, http: HTTPClient, serverBase: URL, stateDir: URL) -> String? {
         guard let name = entry?.icon, let sha = entry?.iconSha256, let safe = try? SafeName.component(name, what: "icon") else { return nil }
         let file = stateDir.appendingPathComponent("icons").appendingPathComponent(safe)
         if (try? Signing.sha256Hex(fileAt: file).hex) == sha { return file.path }
-        // A mirror feed keeps its icon beside the artifact it names; otherwise both sit beside the feed.
-        let source = entry?.url.flatMap(URL.init(string:))?.deletingLastPathComponent()
-            ?? serverBase.appendingPathComponent("artifacts")
-        guard let (data, code) = try? http.get(source.appendingPathComponent(safe), headers: [:]),
-              code == 200, data.count < 1 << 20, Signing.sha256Hex(data) == sha else { return nil }
-        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: file, options: .atomic)
-        return file.path
+        // A mirror feed keeps its icon beside the artifact it names; a generated feed's icons sit
+        // beside the feed itself. Both are tried: measured 2026-11-27, every row names an icon asset
+        // that its release does not carry, so the feed's own address is the one that can hold them.
+        var sources: [URL] = []
+        if let dir = entry?.url.flatMap(URL.init(string:))?.deletingLastPathComponent() { sources.append(dir) }
+        let besideFeed = serverBase.appendingPathComponent("artifacts")
+        if !sources.contains(besideFeed) { sources.append(besideFeed) }
+        for source in sources {
+            guard let (data, code) = try? http.get(source.appendingPathComponent(safe), headers: [:]),
+                  code == 200, data.count < 1 << 20, Signing.sha256Hex(data) == sha else { continue }
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
+            return file.path
+        }
+        return nil
+    }
+
+    /// Which file the Launcher draws a row's icon from, in one place so it can be proven: the bundle
+    /// that is really installed here, else the icon the row names when this Mac still holds it (an
+    /// unplugged SSD's path is not a picture), else the feed icon already cached. Nil is the
+    /// placeholder the page draws.
+    public static func iconFile(named: String?, bundle: String?, feed: FeedApp?, stateDir: URL) -> String? {
+        if let bundle, FileManager.default.fileExists(atPath: bundle) { return bundle }
+        if let named, FileManager.default.fileExists(atPath: named) { return named }
+        return cachedFeedIcon(feed, stateDir: stateDir)
+    }
+
+    /// The same icon, only when this Mac already holds it. No request: the list is drawn from this,
+    /// and `LauncherWindow` fills the rest in after the rows are on screen.
+    public static func cachedFeedIcon(_ entry: FeedApp?, stateDir: URL) -> String? {
+        guard let name = entry?.icon, let sha = entry?.iconSha256, let safe = try? SafeName.component(name, what: "icon") else { return nil }
+        let file = stateDir.appendingPathComponent("icons").appendingPathComponent(safe)
+        return (try? Signing.sha256Hex(fileAt: file).hex) == sha ? file.path : nil
     }
 
     static func verifiedFeed(http: HTTPClient, serverBase: URL, config: AgentConfig, memory: inout AgentMemory, now: Date) throws -> Feed {
@@ -1867,18 +2030,20 @@ public enum Agent {
             let exempt = cfg.recipe == "updater"
             if let http {
                 let hold = beginUpdateHold(app: app, holdURL: holdURL, http: http, control: ctl, exempt: exempt,
-                                           installed: installed, holdSince: holdSince)
+                                           installed: installed, holdSince: holdSince, bundlePath: cfg.bundlePath)
                 if let refusal = hold.refusal { return refusal }
                 endpoint = hold.endpoint
             } else if ctl.isRunning() != false, !exempt {
                 return RecipeResult(status: "refused", reason: "\(app) is running and does not offer an update hold; nothing was changed. It keeps working, and its release must serve an update hold before it can be rolled back while running.")
             }
-            defer { if let endpoint, let http { UpdateHold.resume(endpoint, http: http) } }
+            // The credential is the app's own, read from that bundle's `KHHoldTokenFile`.
+            let bundle = cfg.bundlePath
+            defer { if let endpoint, let http { try? UpdateHold.resume(endpoint, http: http, bundlePath: bundle) } }
             let beforeStop: (() throws -> Void)? = endpoint.flatMap { url in
                 guard let http else { return nil }
                 return {
                     guard ctl.isRunning() != false else { return }
-                    let renewed = try UpdateHold.begin(url, http: http, timeoutS: 0)
+                    let renewed = try UpdateHold.begin(url, http: http, timeoutS: 0, bundlePath: bundle)
                     guard renewed.safe else {
                         let names = (renewed.unsettled ?? []).joined(separator: ", ")
                         throw khuFail("\(app)'s update hold is no longer safe (still in flight: \(names)); nothing was changed")
@@ -1967,19 +2132,20 @@ public enum Agent {
     }
 
     static func beginUpdateHold(app: String, holdURL: String?, http: HTTPClient, control: AppControl,
-                                exempt: Bool, installed: String? = nil, holdSince: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
+                                exempt: Bool, installed: String? = nil, holdSince: String? = nil,
+                                bundlePath: String? = nil) -> (endpoint: URL?, note: String?, refusal: RecipeResult?) {
         guard control.isRunning() != false, !exempt else { return (nil, nil, nil) }
         guard let raw = holdURL, let endpoint = UpdateHold.trusted(raw) else {
             return holdRefusal(app: app, endpoint: nil, "\(app) is running and the feed does not name an update-hold endpoint; nothing was changed. It cannot be updated while it runs until its release serves an update hold; the app itself still works.")
         }
         let window = Date().addingTimeInterval(UpdateHold.answerAllowance)
         do {
-            var reply = try UpdateHold.begin(endpoint, http: http, deadline: window)
+            var reply = try UpdateHold.begin(endpoint, http: http, deadline: window, bundlePath: bundlePath)
             // A second settle is worth asking for only when a whole window still fits: a retry that
             // runs out mid-wait replaces the app's honest "still unsettled" answer with a timeout.
             if !reply.safe, window.timeIntervalSinceNow > UpdateHold.settleWindow + 3 {
                 Thread.sleep(forTimeInterval: 2)
-                reply = try UpdateHold.begin(endpoint, http: http, deadline: window)
+                reply = try UpdateHold.begin(endpoint, http: http, deadline: window, bundlePath: bundlePath)
             }
             guard reply.safe else {
                 let names = (reply.unsettled ?? []).joined(separator: ", ")
@@ -1990,6 +2156,21 @@ public enum Agent {
             }
             return (endpoint, reply.summary, nil)
         } catch {
+            // The app's own credential file is declared but missing or unusable: no request was
+            // made, and the reason names the app and the file instead of blaming the app for
+            // refusing a credential it never asked for.
+            if let credential = error as? UpdateHold.HoldCredential {
+                let reason: String
+                switch credential {
+                case .unreadable(let url):
+                    reason = "\(app)'s own hold credential file is missing or unusable (\(url.path)); nothing was changed."
+                case .invalid(let detail):
+                    reason = "\(app)'s hold credential declaration is unusable (\(detail)); nothing was changed."
+                case .sharedUnavailable:
+                    reason = "the shared hold credential file is missing or unusable (\(UpdateHold.tokenFile.path)); nothing was changed."
+                }
+                return holdRefusal(app: app, endpoint: endpoint, reason)
+            }
             // The feed names an endpoint the installed build does not serve: a first hold-capable
             // release needs one normal install while the app is closed. Say that, not a bare -1004.
             if let refused = error as? UpdateHold.Refused {
@@ -2199,7 +2380,7 @@ public enum Agent {
             DownloadControl.updateProgress("held")
             let hold = beginUpdateHold(app: app, holdURL: feed.apps[app]?.holdURL, http: http,
                                        control: appControl, exempt: exempt, installed: installed,
-                                       holdSince: feed.apps[app]?.holdSince)
+                                       holdSince: feed.apps[app]?.holdSince, bundlePath: cfg.bundlePath)
             // A build that predates its hold has no hold route to ask, so it is quit only when its
             // own probe says it has nothing running or queued. The 2026-11-16 temporary force path
             // skipped that probe; on macmini-angkor (2026-11-19) that quit Story with nine jobs
@@ -2233,7 +2414,7 @@ public enum Agent {
         defer {
             if let holdEndpoint {
                 DownloadControl.updateProgress("resumed")
-                UpdateHold.resume(holdEndpoint, http: http)
+                try? UpdateHold.resume(holdEndpoint, http: http, bundlePath: cfg.bundlePath)
             }
         }
         // At the mutation boundary the app is sampled again: one opened while the installer was
@@ -2248,7 +2429,7 @@ public enum Agent {
             }
             guard let endpoint = holdEndpoint else { return }
             let renewed: UpdateHold.Reply
-            do { renewed = try UpdateHold.begin(endpoint, http: http, timeoutS: 0) }
+            do { renewed = try UpdateHold.begin(endpoint, http: http, timeoutS: 0, bundlePath: cfg.bundlePath) }
             catch { throw HoldUnavailable(reason: "\(app)'s update hold could not be taken at the swap (\(error)); nothing was changed") }
             guard renewed.safe else {
                 let names = (renewed.unsettled ?? []).joined(separator: ", ")

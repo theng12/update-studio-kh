@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// The app-side update hold every KH app implements (`_orchestra/youtube-stack/update-hold/CONTRACT.md`):
 /// POST pauses dispatch and settles in-flight work within a bounded window, DELETE resumes. The
@@ -95,9 +96,77 @@ public enum UpdateHold {
         return token
     }
 
-    static func credentialHeaders() -> [String: String] {
-        guard let token = localToken() else { return [:] }
-        return ["X-Hub-Token": token, "Authorization": "Bearer \(token)"]
+    /// Why a hold could not be presented. Typed so a caller can say what is wrong in plain words
+    /// instead of trying a credential the app never asked for (issue `20261124-90`).
+    public enum HoldCredential: Error {
+        /// The app declares its own credential file, but that file cannot be read as a token.
+        case unreadable(URL)
+        /// The app declares `KHHoldTokenFile` with a value that is not a usable path.
+        case invalid(String)
+        /// No app file is declared and the Launcher's own shared file cannot be read either.
+        case sharedUnavailable
+    }
+
+    /// The credential an app's own hold expects. Six apps keep their own copy of the token, printed
+    /// in their bundle's `KHHoldTokenFile`, and never read the Launcher's shared file — so the shared
+    /// one is rotated by every agent start while theirs stays put (issue `20261124-90`: after one
+    /// rotation each of those apps refused every hold). The rule, once: a plist that names no file
+    /// keeps the shared credential exactly as before; a plist that names one uses that file only, and
+    /// a named file that is missing or unusable refuses the hold with the path — never the shared
+    /// token, which the app would reject anyway and which would hide the fault.
+    public static func credentialFile(bundlePath: String?) -> Result<URL?, HoldCredential> {
+        guard let bundlePath, let plist = Bundle(path: bundlePath)?.infoDictionary else { return .success(nil) }
+        guard let raw = plist["KHHoldTokenFile"] else { return .success(nil) }
+        guard let named = raw as? String, !named.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return .failure(.invalid("KHHoldTokenFile is not a usable path")) }
+        return .success(URL(fileURLWithPath: (named as NSString).expandingTildeInPath))
+    }
+
+    /// A read-only, bounded read of an app's own credential: a regular file only (a symlink is never
+    /// followed), never more than 512 bytes, and never a value that is not one token. This path is
+    /// never created, chmodded or replaced — the app owns its own file.
+    static func token(at url: URL) -> String? {
+        var info = stat()
+        // `S_IFMT`/`S_IFREG` as octal: `stat.st_mode` is `mode_t` here, so the C macros' own type
+        // would not match without a cast that hides what is being asked.
+        guard Darwin.lstat(url.path, &info) == 0, info.st_mode & 0o170000 == 0o100000 else { return nil }
+        let fd = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else { return nil }
+        defer { Darwin.close(fd) }
+        var opened = stat()
+        guard Darwin.fstat(fd, &opened) == 0, opened.st_mode & 0o170000 == 0o100000 else { return nil }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 512)
+        while data.count <= 512 {
+            let n = buffer.withUnsafeMutableBytes { raw in Darwin.read(fd, raw.baseAddress, raw.count) }
+            if n == 0 { break }
+            if n < 0 { if errno == EINTR { continue }; return nil }
+            data.append(contentsOf: buffer[0..<n])
+        }
+        guard data.count <= 512, let raw = String(data: data, encoding: .utf8) else { return nil }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A hold credential is exactly one 64-hex token (issue `20261123-39`): an empty, short,
+        // non-hex, whitespace-bearing or oversized value is not a credential to present.
+        let hex = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        guard text.count == 64, text.unicodeScalars.allSatisfy(hex.contains) else { return nil }
+        return text
+    }
+
+    /// The credential headers for one app's hold. Declared file → that file only; no declaration →
+    /// the shared file; declared but missing or unusable → throw, so no request is made at all.
+    static func credentialHeaders(bundlePath: String? = nil) throws -> [String: String] {
+        let credential: String
+        switch credentialFile(bundlePath: bundlePath) {
+        case .failure(let error):
+            throw error
+        case .success(.some(let url)):
+            guard let own = token(at: url) else { throw HoldCredential.unreadable(url) }
+            credential = own
+        case .success(.none):
+            guard let shared = localToken() else { throw HoldCredential.sharedUnavailable }
+            credential = shared
+        }
+        return ["X-Hub-Token": credential, "Authorization": "Bearer \(credential)"]
     }
 
     /// The endpoint answered but refused the request: kept typed so the caller can say whether the
@@ -121,11 +190,11 @@ public enum UpdateHold {
     /// `deadline` is the caller's own deadline (an install's window), not the contract's: with no
     /// deadline the request gets `answerAllowance`.
     public static func begin(_ endpoint: URL, http: HTTPClient, timeoutS: Int = 20, pauseS: Int = 120,
-                             deadline: Date? = nil) throws -> Reply {
+                             deadline: Date? = nil, bundlePath: String? = nil) throws -> Reply {
         let timeout = max(0, min(Int(settleWindow), timeoutS))
         let url = endpoint.appendingQuery("timeout_s", "\(timeout)").appendingQuery("pause_s", "\(max(1, pauseS))")
         let wait = max(1, min(answerAllowance, deadline?.timeIntervalSinceNow ?? answerAllowance))
-        let (data, code) = try http.post(url, headers: credentialHeaders(), body: Data(), timeout: wait)
+        let (data, code) = try http.post(url, headers: try credentialHeaders(bundlePath: bundlePath), body: Data(), timeout: wait)
         guard code == 200 else { throw Refused(status: code) }
         guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
             throw khuFail("the app's update hold did not answer with the contract's reply; nothing was changed")
@@ -154,8 +223,9 @@ public enum UpdateHold {
     }
 
     /// Best effort: the pause is in-memory and expires by itself, so a failed DELETE never leaves
-    /// an app that has stopped taking work.
-    public static func resume(_ endpoint: URL, http: HTTPClient) {
-        _ = try? http.delete(endpoint, headers: credentialHeaders(), timeout: answerAllowance)
+    /// an app that has stopped taking work. The credential is still the app's own when it declares
+    /// one, and an unreadable one makes no request rather than sending a credential the app rejects.
+    public static func resume(_ endpoint: URL, http: HTTPClient, bundlePath: String? = nil) throws {
+        _ = try http.delete(endpoint, headers: try credentialHeaders(bundlePath: bundlePath), timeout: answerAllowance)
     }
 }

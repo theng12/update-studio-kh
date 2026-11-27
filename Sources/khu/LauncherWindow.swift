@@ -9,7 +9,13 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     let window: NSWindow
     private let web: WKWebView
     private var loaded = false
-    private var iconCache: [String: String] = [:]
+    /// One rendered data URI per app, keyed by the app id and remembering which file it was drawn
+    /// from, so an icon that arrives later (fetched after the rows are on screen) replaces it.
+    private var iconCache: [String: (path: String, uri: String)] = [:]
+    /// Feed icons already being fetched or already tried, so a redraw never starts the same request
+    /// twice: `app|sha256` → attempts made.
+    private var iconAttempts: [String: Int] = [:]
+    private let iconQueue = DispatchQueue(label: "kh.launcher.icons", qos: .utility)
     private var progressTimer: Timer?
     /// The exact state the page already holds, and whether a render is already queued. The page
     /// rebuilds whatever a render touches, so a second push of the same state is a flash for no
@@ -145,6 +151,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         let apps = helper.apps, busy = helper.installingApp, pending = helper.active.union(helper.requested), ssd = helper.ssd, error = helper.lastError, last = helper.lastRun, attempt = helper.lastAttempt, serverKnown = helper.serverKnown
         let feedAppIDs = helper.feedAppIDs, lastDriveScan = helper.lastDriveScan
         let feedPublishedAt = helper.feedPublishedAt, checkedFeedSource = helper.checkedFeedSource
+        let feedIcons = helper.feedIcons, feedBase = helper.feedBase
         helper.lock.unlock()
         let settings = HelperSettings.load(from: helper.stateDir)
         let cleanup = try? HelperRetirementSettings.load(from: helper.stateDir)
@@ -174,7 +181,7 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             // Whole lines up to the cap, with one line naming what was left in the release: a 30 KB
             // body is the feed's problem, and rendering all of it is this screen's (owner, 2026-11-24).
             row["notes"] = NotesClamp.lines(app.notes)
-            row["icon"] = icon(for: app)
+            row["icon"] = icon(for: app, entry: feedIcons?[app.app])
             if busy == app.app {
                 row["progress"] = progress(app)
                 // A row being worked on right now: whatever failure it carries is from the attempt
@@ -240,6 +247,8 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]), let json = String(data: data, encoding: .utf8) else { return }
         publish(json, busy: busy)
+        // Only now, with the rows already pushed: the missing artwork arrives later and redraws itself.
+        fetchMissingIcons(entries: feedIcons, base: feedBase, apps: apps)
     }
 
     /// A push means the page rebuilds whatever it touches, so it has to mean something changed:
@@ -282,16 +291,50 @@ final class LauncherWindow: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         return p
     }
 
-    private func icon(for app: HelperApp) -> String {
-        let key = app.app == "updater" ? "updater" : (app.icon ?? "")
-        if let hit = iconCache[key] { return hit }
+    private func icon(for app: HelperApp, entry: FeedApp?) -> String {
+        let file = app.app == "updater" ? nil
+            : Agent.iconFile(named: app.icon, bundle: app.bundlePath, feed: entry, stateDir: helper.stateDir)
+        let path = app.app == "updater" ? "updater" : (file ?? "")
+        if let hit = iconCache[app.app], hit.path == path { return hit.uri }
         let png: Data?
         if app.app == "updater" { png = (try? LauncherBundle.icns()).flatMap { NSImage(data: $0) }.flatMap(Self.png) }
-        else if let path = app.icon, path.hasSuffix(".app") { png = AppMeta.iconPNG(forFile: path) }
-        else { png = app.icon.flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) } }
+        else if let file, file.hasSuffix(".app") { png = AppMeta.iconPNG(forFile: file) }
+        else { png = file.flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) } }
         let uri = png.map { "data:image/png;base64," + $0.base64EncodedString() } ?? ""
-        iconCache[key] = uri
+        iconCache[app.app] = (path, uri)
         return uri
+    }
+
+    /// The icons this Mac does not hold yet are fetched after the rows are already on screen, one
+    /// per app, at most once each. A cold or dead network then costs a placeholder, never the list:
+    /// inside the run these were serial requests before the first row (measured 2026-11-27).
+    private func fetchMissingIcons(entries: [String: FeedApp]?, base: URL?, apps: [HelperApp]) {
+        guard let entries, let base else { return }
+        var missing: [FeedApp] = []
+        for app in apps where app.app != "updater" {
+            guard let entry = entries[app.app], let sha = entry.iconSha256, entry.icon != nil,
+                  Agent.cachedFeedIcon(entry, stateDir: helper.stateDir) == nil else { continue }
+            let key = "\(app.app)|\(sha)"
+            guard iconAttempts[key] == nil else { continue }
+            iconAttempts[key] = 1
+            missing.append(entry)
+        }
+        guard !missing.isEmpty else { return }
+        let stateDir = helper.stateDir
+        iconQueue.async { [weak self] in
+            var client = URLSessionHTTPClient()
+            // A placeholder is the whole cost of a slow icon, so each try is bounded well inside a
+            // run's own allowance; a failed fetch is not retried until the feed names new artwork.
+            client.timeout = 15; client.totalTimeout = 20
+            // Every missing one is tried: `contains` would stop at the first hit and leave the rest
+            // as placeholders until the next run.
+            var fetched = false
+            for entry in missing where Agent.feedIcon(entry, http: client, serverBase: base, stateDir: stateDir) != nil {
+                fetched = true
+            }
+            guard fetched else { return }
+            DispatchQueue.main.async { self?.reload() }
+        }
     }
 
     static func png(_ image: NSImage) -> Data? {
