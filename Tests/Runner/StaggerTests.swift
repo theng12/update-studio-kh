@@ -152,11 +152,11 @@ func staggerTests() {
     // SG7: the publisher can mark a release as a security update, and a routine re-publish keeps it.
     do {
         let rig = Rig("stagger-publish")
-        try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "2.0.0",
+        try! FeedPublisher.publishAddressed(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "2.0.0",
                                    artifact: rig.artifact("hub.dmg", "AAAA"), kind: "app-dmg",
                                    allowSame: false, meta: nil, security: true, url: "https://example.test/artifacts/")
         let marked = FeedPublisher.loadFeed(from: rig.feed)?.apps["hub"]?.security
-        try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "2.1.0",
+        try! FeedPublisher.publishAddressed(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "2.1.0",
                                    artifact: rig.artifact("hub-2.1.dmg", "BBBB"), kind: "app-dmg",
                                    allowSame: false, meta: nil, url: "https://example.test/artifacts/")
         let kept = FeedPublisher.loadFeed(from: rig.feed)?.apps["hub"]?.security

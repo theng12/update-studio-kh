@@ -86,7 +86,7 @@ func rollbackRetirementTests() {
         try! rig.publish("managed", "1.0.0", rig.artifact("managed.zip", "managed"), kind: "fake-for-tests")
         // Hub is offered by the feed (with its identity, as a real publish has) but is not
         // installed here: its rollback copy buys nothing.
-        try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "0.6.246",
+        try! FeedPublisher.publishAddressed(feedDir: rig.feed, keyFile: rig.key, app: "hub", version: "0.6.246",
                                    artifact: rig.artifact("hub.dmg", "hub"), kind: "app-dmg", allowSame: false, meta: { _ in AppMeta(name: "Hub Studio KH", bundleID: "com.example.hub",
                                                         bundleName: "Hub Studio KH.app", version: "0.6.246") }, url: "https://example.test/artifacts/")
         let cfg = agentConfig(rig, token: token, apps: ["managed": AppConfig(bundlePath: managed.path, recipe: "fake-for-tests")])

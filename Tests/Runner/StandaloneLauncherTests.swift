@@ -82,7 +82,7 @@ func standaloneLauncherTests() {
         let mount = rig.root.appendingPathComponent("mount")
         _ = makeApp(mount.appendingPathComponent("New KH.app"), version: "2.0", id: bundleID)
         let artifact = rig.artifact("New KH.dmg", "signed installer target bytes")
-        try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: id, version: "2.0", artifact: artifact,
+        try! FeedPublisher.publishAddressed(feedDir: rig.feed, keyFile: rig.key, app: id, version: "2.0", artifact: artifact,
                                    kind: "app-dmg", allowSame: false,
                                    meta: { _ in
             AppMeta(name: "New KH", bundleID: bundleID, bundleName: "New KH.app", version: "2.0", iconPNG: nil)
@@ -194,7 +194,7 @@ func standaloneLauncherTests() {
     }
     do {
         let (rig, cfg, folder, _, shell, http) = setup("batch-registration")
-        try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: "bad", version: "1.0", artifact: rig.artifact("bad.dmg", "legacy metadata missing"), kind: "app-dmg", allowSame: false, meta: nil, url: "https://example.test/artifacts/")
+        try! FeedPublisher.publishAddressed(feedDir: rig.feed, keyFile: rig.key, app: "bad", version: "1.0", artifact: rig.artifact("bad.dmg", "legacy metadata missing"), kind: "app-dmg", allowSame: false, meta: nil, url: "https://example.test/artifacts/")
         let result = try? Agent.runOnce(config: cfg, http: http, shell: shell, control: { _, _ in control }, requested: ["bad", id], appFolders: [folder])
         expect(result?.commandsRun == 2 && result?.apps.first(where: { $0.app == id })?.installed == "2.0" && http.downloads == 1,
                "SL7 one refused first install does not stop the next app")
@@ -264,7 +264,7 @@ func standaloneLauncherTests() {
             let mount = rig.root.appendingPathComponent("mount")
             _ = makeApp(mount.appendingPathComponent(name), version: version, id: bundle)
             let artifact = rig.artifact("\(label).dmg", bytes)
-            try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: app, version: version, artifact: artifact,
+            try! FeedPublisher.publishAddressed(feedDir: rig.feed, keyFile: rig.key, app: app, version: version, artifact: artifact,
                                        kind: kind, allowSame: false, meta: { _ in
                 AppMeta(name: label, bundleID: bundle, bundleName: name, version: version, iconPNG: nil)
             }, url: "https://example.test/artifacts/")
@@ -298,7 +298,7 @@ func standaloneLauncherTests() {
             expect(installed?.apps.first { $0.app == appID }?.installed == "2.0" && http.downloads == 1,
                    "SL10 the person chooses it: it installs from the signed feed")
             // Automatic is on for everything else, and still leaves this app alone.
-            try! FeedPublisher.publish(feedDir: rig.feed, keyFile: rig.key, app: appID, version: "3.0",
+            try! FeedPublisher.publishAddressed(feedDir: rig.feed, keyFile: rig.key, app: appID, version: "3.0",
                                        artifact: rig.artifact("Story 3.dmg", "story three bytes"), kind: "status",
                                        allowSame: false, meta: { _ in
                 AppMeta(name: "Story Studio KH", bundleID: storyBundle, bundleName: storyName, version: "3.0", iconPNG: nil)

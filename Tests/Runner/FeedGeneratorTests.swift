@@ -689,6 +689,180 @@ func feedGeneratorTests() {
                    "FG18 the refusal says the asset is missing (\(error))")
         }
     }
+
+    // FG24 `--pin` builds an app's row from an exact published release, and every malformed pin is
+    // refused by name: a hold nobody can explain later is the thing a pin exists to prevent.
+    do {
+        let older = releaseJSON(repo: hubRepo, tag: "0.6.257", body: "What 0.6.257 changed.",
+                                assets: [("Hub-0.6.257.dmg", sha, 7, digest)])
+        let newest = releaseJSON(repo: hubRepo, tag: "0.6.258", assets: [("Hub-0.6.258.dmg", sha, 9, digest)])
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": newest,
+            "repos/\(hubRepo)/releases?per_page=100": try! JSONSerialization.data(withJSONObject: [
+                try! JSONSerialization.jsonObject(with: newest),
+                try! JSONSerialization.jsonObject(with: older),
+            ]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        let pin = FeedPin(app: "hub", version: "0.6.257", reason: "0.6.258 broke the card")
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset(), pins: [pin])
+        expect(made.feed.apps["hub"]?.version == "0.6.257" && made.feed.apps["hub"]?.bytes == 7,
+               "FG24 a pinned row is the pinned release, not the newest one (\(made.feed.apps["hub"]?.version ?? "nil"))")
+        expect(made.pinned == ["pinned: hub 0.6.257 (0.6.258 broke the card)"],
+               "FG24 the run prints the pin and its reason (\(made.pinned))")
+        expect(made.feed.apps["hub"]?.notes == "What 0.6.257 changed.",
+               "FG24 a pinned row that differs from the served version takes that release's body")
+
+        struct Missing: AssetVerifier {
+            func prove(url: String, repo: String, tag: String, asset: String,
+                       expectedSha: String, expectedBytes: Int64) throws { throw khuFail("answered 404") }
+        }
+        do {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: Missing(), pins: [pin])
+            expect(false, "FG24 an undownloadable pinned asset must refuse")
+        } catch {
+            expect("\(error)".contains("404"), "FG24 the refusal carries the download's own answer (\(error))")
+        }
+        do {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset(),
+                                           pins: [FeedPin(app: "hub", version: "0.6.100", reason: "gone")])
+            expect(false, "FG24 pinning a version the repo does not publish must refuse")
+        } catch {
+            expect("\(error)".contains("publishes no release for 0.6.100"),
+                   "FG24 the refusal names the version it could not find (\(error))")
+        }
+        expectThrows("FG24 pinning an app this run does not generate is refused", contains: "which this run does not generate") {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: gh, verifier: UnverifiedAsset(),
+                                           pins: [FeedPin(app: "nope", version: "0.6.257", reason: "why")])
+        }
+        expect(FeedPin.parse("hub=0.6.257:0.6.258 broke the card")?.version == "0.6.257",
+               "FG24 a well-formed pin parses")
+        expect(FeedPin.parse("hub=0.6.257") == nil, "FG24 a pin without its reason is refused")
+        expect(FeedPin.parse("hub=0.6.257:   ") == nil, "FG24 a blank reason is refused")
+        expect(FeedPin.parse("hub:0.6.257") == nil, "FG24 a pin without = is refused")
+        expect(FeedPin.parse("=0.6.257:why") == nil, "FG24 a pin without an app is refused")
+    } catch { expect(false, "FG24 fixture: \(error)") }
+
+    // FG25 a release re-created at the same version must not move the row the feed already serves:
+    // the same artifact is a note, a different artifact is a refusal.
+    do {
+        var served = FeedApp(version: "0.6.257", file: "Hub-0.6.257.dmg", sha256: sha, bytes: 7, kind: "app-dmg")
+        served.url = "https://github.com/\(hubRepo)/releases/download/0.6.257/Hub-0.6.257.dmg"
+        served.released = "2026-11-01T00:00:00Z"
+        served.name = "Hub Studio KH"
+        let before = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": served])
+        let same = releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub-0.6.257.dmg", sha, 7, digest)])
+        let recreated = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": same,
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+            "repos/\(hubRepo)": Data("{\"created_at\":\"2026-11-20T00:00:00Z\"}".utf8),
+        ])
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: recreated, verifier: UnverifiedAsset())
+        expect(made.notes.contains { $0.contains("release re-created at 2026-11-23T02:00:00Z (repo recreated), artifact unchanged") },
+               "FG25 a newer repository than the served release says the repo was re-created (\(made.notes))")
+        expect(made.feed.apps["hub"]?.released == "2026-11-23T02:00:00Z",
+               "FG25 the row moves to the re-created release's own date")
+        let quiet = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": same,
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        let plain = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: quiet, verifier: UnverifiedAsset())
+        expect(plain.notes.contains { $0.contains("release re-created at 2026-11-23T02:00:00Z, artifact unchanged") },
+               "FG25 with no repository answer the note drops the (repo recreated) clause (\(plain.notes))")
+        let otherSha = String(repeating: "d", count: 64)
+        let changed = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257",
+                                                            assets: [("Hub-0.6.257.dmg", otherSha, 7, "sha256:\(otherSha)")]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        expectThrows("FG25 a different artifact under the same version is refused", contains: "one artifact") {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: changed, verifier: UnverifiedAsset())
+        }
+    } catch { expect(false, "FG25 fixture: \(error)") }
+
+    // FG26 the tag is tied to the commit that was built: recorded every run, and refused when the
+    // release body's own GATE PASS line names a different commit.
+    do {
+        let commit = String(repeating: "a", count: 40), other = String(repeating: "b", count: 40)
+        func ref(_ sha: String, _ type: String) -> Data {
+            Data("{\"ref\":\"refs/tags/0.6.257\",\"object\":{\"sha\":\"\(sha)\",\"type\":\"\(type)\"}}".utf8)
+        }
+        let plain = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+            "repos/\(hubRepo)/git/ref/tags/0.6.257": ref(commit, "commit"),
+        ])
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: plain, verifier: UnverifiedAsset())
+        expect(made.tags == ["hub 0.6.257 -> \(commit)"],
+               "FG26 each row records the commit its tag points at (\(made.tags))")
+
+        let annotated = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+            "repos/\(hubRepo)/git/ref/tags/0.6.257": ref(String(repeating: "c", count: 40), "tag"),
+            "repos/\(hubRepo)/git/tags/\(String(repeating: "c", count: 40))": ref(commit, "commit"),
+        ])
+        let peeled = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: annotated, verifier: UnverifiedAsset())
+        expect(peeled.tags == ["hub 0.6.257 -> \(commit)"],
+               "FG26 an annotated tag is peeled to its commit (\(peeled.tags))")
+
+        let mismatch = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257",
+                                                            body: "GATE PASS hub \(other) 2026-11-23T02:00:00Z",
+                                                            assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+            "repos/\(hubRepo)/git/ref/tags/0.6.257": ref(commit, "commit"),
+        ])
+        expectThrows("FG26 a GATE PASS naming another commit is refused", contains: "never gated") {
+            _ = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: mismatch, verifier: UnverifiedAsset())
+        }
+        let matching = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257",
+                                                            body: "GATE PASS hub \(commit) 2026-11-23T02:00:00Z\nWhat changed.",
+                                                            assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+            "repos/\(hubRepo)/git/ref/tags/0.6.257": ref(commit, "commit"),
+        ])
+        let agreed = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: matching, verifier: UnverifiedAsset())
+        expect(agreed.feed.apps["hub"]?.notes == "What changed.",
+               "FG26 a matching GATE PASS line is audit, and never reaches the card")
+
+        // A mock with no tag ref keeps working, and says nothing it did not measure.
+        let silent = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", assets: [("Hub.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        let unsaid = try FeedGenerator.generate(apps: ["hub": hubRepo], gh: silent, verifier: UnverifiedAsset())
+        expect(unsaid.tags.isEmpty, "FG26 a GitHub that cannot answer the tag ref records no line (\(unsaid.tags))")
+    } catch { expect(false, "FG26 fixture: \(error)") }
+
+    // FG27 an edited release body on an unchanged version never rewrites served notes, and the run
+    // says where the new text will land instead of staying silent.
+    do {
+        var served = FeedApp(version: "0.6.257", file: "Hub-0.6.257.dmg", sha256: sha, bytes: 7, kind: "app-dmg")
+        served.url = "https://github.com/\(hubRepo)/releases/download/0.6.257/Hub-0.6.257.dmg"
+        served.name = "Hub Studio KH"; served.notes = "A sentence a person wrote."
+        served.released = "2026-11-23T02:00:00Z"
+        let before = Feed(published_at: "2026-11-22T00:00:00Z", apps: ["hub": served])
+        let gh = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.257", body: "Rewritten after release.",
+                                                            assets: [("Hub-0.6.257.dmg", sha, 7, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.257": hubMeta,
+        ])
+        let made = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: gh, verifier: UnverifiedAsset())
+        expect(made.feed.apps["hub"]?.notes == "A sentence a person wrote.",
+               "FG27 a changed body does not overwrite the served notes")
+        expect(made.notes.contains { $0.contains("keeps its served notes; the release body changed") },
+               "FG27 the run says the new body reaches the row at the next version (\(made.notes))")
+        let bumped = FakeGitHub(paths: [
+            "repos/\(hubRepo)/releases/latest": releaseJSON(repo: hubRepo, tag: "0.6.258", body: "Rewritten after release.",
+                                                            assets: [("Hub-0.6.258.dmg", sha, 9, digest)]),
+            "repos/\(hubRepo)/contents/app-meta.json?ref=0.6.258": hubMeta,
+        ])
+        let next = try FeedGenerator.generate(apps: ["hub": hubRepo], previous: before, gh: bumped, verifier: UnverifiedAsset())
+        expect(next.feed.apps["hub"]?.notes == "Rewritten after release.",
+               "FG27 the next version takes its own body")
+    } catch { expect(false, "FG27 fixture: \(error)") }
 }
 
 /// Drops the first N requests, then serves `body` — the flaky connection a publish actually met.

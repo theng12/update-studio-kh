@@ -1,0 +1,6 @@
+Studio Launcher KH 0.1.89
+
+- The feed now proves that a release's tag points at the commit its own release notes say passed the gate. A tag pointing anywhere else is refused before anything is published, and every run prints the tag and the commit it resolved to, so "released" is no longer only a name.
+- A release deleted and re-created at the same version no longer moves the row it already serves: if the bytes are unchanged the feed says the repository was re-created and keeps serving the same artifact, and if the bytes differ it refuses outright. One published version stays one artifact.
+- A row can be held at an exact older release for one publish, with a reason: `khu feed --pin app=version:reason`. The reason is required and printed, so a held row is never a mystery the next morning. It applies to that run only; nothing is saved.
+- Editing a release's notes after it shipped no longer sits in silence. The run says the row keeps the notes it serves and that the new text arrives with the next version. `khu feed --help` now lists every option for that command.
